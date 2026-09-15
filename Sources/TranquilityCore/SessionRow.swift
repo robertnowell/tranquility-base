@@ -169,6 +169,20 @@ public struct SessionRow: Equatable, Sendable {
     /// unchanged.
     public let door: Door
 
+    /// **When this agent last did something.** The sort key for lit rows.
+    ///
+    /// Added 14 Sep 2026 (#454), and it is the field whose absence caused two
+    /// sessions to rule opposite ways on ordering within hours: #428 ranked by
+    /// read-state, #439 reverted that under the title "Green orders by
+    /// recency" and then tied every lit row, because ordering by recency was
+    /// not something the row could do. A tie falls back to arrival order,
+    /// arrival order is BAND order, and band 5 is last — which is why a remote
+    /// agent could never win a slot however recently it had spoken.
+    ///
+    /// `nil` means the band had nothing to offer, and those rows keep their
+    /// arrival order at the end rather than being flung to 1970.
+    public let lastActivity: Date?
+
     public enum Door: Equatable, Sendable {
         /// A tmux pane this Mac owns. Every local agent.
         case terminal
@@ -196,13 +210,15 @@ public struct SessionRow: Equatable, Sendable {
     public init(id: String, name: String, aux: String, lamp: Lamp,
                revivable: Bool = false, read: ReadState = .none,
                switchedOff: Bool = false, detail: String? = nil,
-               harness: String? = nil, door: Door = .terminal) {
+               harness: String? = nil, door: Door = .terminal,
+               lastActivity: Date? = nil) {
         self.id = id
         self.name = name
         self.aux = aux
         self.lamp = lamp
         self.revivable = revivable
         self.read = read
+        self.lastActivity = lastActivity
         self.switchedOff = switchedOff
         self.detail = detail
         self.harness = harness
@@ -318,7 +334,17 @@ public struct SessionRow: Equatable, Sendable {
         // three lamps above; making them green under the three-lamp ruling
         // stranded it. A row that carries a page has somewhere to go, and that
         // is true whatever colour it is.
-        case .ready: return row.door.isPage ? goTo(row) : .announce
+        // A green row ANNOUNCES only when there is something to announce.
+        // Announce reads a turn out of the local store, and a row with
+        // `read: .none` has no turn there — it is green because its agent
+        // finished (the three-lamp ruling, and right), not because it said
+        // anything. Robert, 15 Sep, on 29 such rows in Past Agents: "clicking
+        // on them does nothing. It's very weird that they're there." Every
+        // one was a probe session that had never spoken. So: the door if it
+        // has one, otherwise nothing, and never an announce that finds nothing.
+        case .ready:
+            if row.door.isPage { return goTo(row) }
+            return row.read == .none ? .none : .announce
         case .unlit: return row.revivable ? .revive : .none
         }
     }
@@ -461,7 +487,40 @@ public struct SessionRow: Equatable, Sendable {
             case .unlit: return 3
             }
         }
-        return (0...3).flatMap { rank in rows.filter { band($0) == rank } }
+        // **The lit band orders by recency** (#454), which is the field the
+        // comment above says it was waiting for.
+        //
+        // The local bands already arrive in recency order, so for them this is
+        // a no-op that happens to be explicit. What it adds is the fifth band:
+        // a remote agent is enumerated last by construction, and without a
+        // timestamp of its own it could never join the order however recently
+        // it had spoken. Measured before this landed: 0 of 12 panel rows were
+        // remote, and the crobot row was not in the grid at all.
+        //
+        // Read-state is deliberately not consulted. Hearing a row must not
+        // move it — that is the rule this replaces a read-state tiebreak with,
+        // not a rule it overturns.
+        //
+        // A row whose band could not say when keeps its arrival position at
+        // the end of the lit band rather than sorting to 1970: "I don't know"
+        // is not "never".
+        // One pass. `sorted(by:)` is not stable in Swift, so the arrival index
+        // is the tiebreak — otherwise rows with equal timestamps, or none at
+        // all, would shuffle between repaints.
+        func byRecency(_ lit: [SessionRow]) -> [SessionRow] {
+            lit.enumerated().sorted { a, b in
+                switch (a.element.lastActivity, b.element.lastActivity) {
+                case let (x?, y?): return x == y ? a.offset < b.offset : x > y
+                case (_?, nil): return true
+                case (nil, _?): return false
+                case (nil, nil): return a.offset < b.offset
+                }
+            }.map(\.element)
+        }
+        return (0...3).flatMap { rank -> [SessionRow] in
+            let inBand = rows.filter { band($0) == rank }
+            return rank == 0 ? byRecency(inBand) : inBand
+        }
     }
 
     /// A session id in the shape of a commit hash: the leading eight,

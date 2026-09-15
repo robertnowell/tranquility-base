@@ -316,6 +316,9 @@ public extension GridAssembler {
                 // blocked row spends the column on its reason, like every other
                 // amber row on the panel.
                 aux: blocked?.reason ?? SessionRow.shortId(event.sessionId),
+                // The transcript's own mtime when we have it, and otherwise
+                // when the turn arrived. Both are "when this agent last did
+                // something"; the file is simply the better witness.
                 lamp: gone ? .unlit : (blocked?.lamp
                     ?? (!resumed
                         && (evidence?.activity == .working
@@ -333,7 +336,12 @@ public extension GridAssembler {
                 // The hover carries the whole sentence, as it does on every
                 // other amber row — the column can only hold a clause.
                 detail: blocked?.detail,
-                harness: input.liveById[event.sessionId]?.harness)
+                harness: input.liveById[event.sessionId]?.harness,
+                // The transcript's own mtime when we have it, and otherwise
+                // when the turn arrived. Both are "when this agent last did
+                // something"; the file is simply the better witness.
+                lastActivity: evidence?.modifiedAt
+                    ?? Date(timeIntervalSince1970: Double(event.createdAtMs) / 1000))
         }
 
         // BAND 2: live sessions with nothing waiting. Quiet rows, so a skipped
@@ -364,7 +372,9 @@ public extension GridAssembler {
                 id: stored.sessionId,
                 name: GridAssembler.tabDisplayName(for: stored, live: live),
                 aux: storedLamp.reason ?? SessionRow.shortId(stored.sessionId),
-                lamp: storedLamp.lamp, detail: storedLamp.detail, harness: live.harness))
+                lamp: storedLamp.lamp, detail: storedLamp.detail, harness: live.harness,
+                lastActivity: evidence?.modifiedAt
+                    ?? Date(timeIntervalSince1970: Double(stored.createdAtMs) / 1000)))
         }
 
         // BAND 3: live sessions with no stored events yet. Nothing to rank them
@@ -389,7 +399,8 @@ public extension GridAssembler {
                 id: live.sessionId,
                 name: GridAssembler.tabDisplayName(live: live, callsign: nil),
                 aux: liveLamp.reason ?? SessionRow.shortId(live.sessionId),
-                lamp: liveLamp.lamp, detail: liveLamp.detail, harness: live.harness))
+                lamp: liveLamp.lamp, detail: liveLamp.detail, harness: live.harness,
+                lastActivity: evidence?.modifiedAt ?? live.startedAtDate))
         }
 
         // BAND 4: the sessions that are not awake (ruled 11 Aug). Everything
@@ -432,7 +443,8 @@ public extension GridAssembler {
                 // whole second band for this line.
                 detail: found.activity?.fullReason
                     ?? (found.harness == CodexAdapter().id ? "Codex session" : nil),
-                harness: found.harness))
+                harness: found.harness,
+                lastActivity: found.lastActivityAt))
         }
 
         // BAND 5: agents running somewhere else.
@@ -484,7 +496,11 @@ public extension GridAssembler {
                 // The provider said where this agent lives, or said it lives
                 // nowhere you can open. Either way the row carries the answer
                 // and nothing downstream asks what kind of agent it is.
-                door: agent.url.map { .page($0) } ?? SessionRow.Door.none))
+                door: agent.url.map { .page($0) } ?? SessionRow.Door.none,
+                // The provider's own answer, which is the whole point: this
+                // band is enumerated last, so without a timestamp it could
+                // never join the order however recently the agent spoke.
+                lastActivity: agent.updatedAt))
         }
 
         // The user's own switch, applied last and to every band at once.

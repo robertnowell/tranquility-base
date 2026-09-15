@@ -317,8 +317,17 @@ final class GridRowsTests: XCTestCase {
     func testHearingARowDoesNotMoveItBelowAnUnreadOne() {
         var agent = AgentSession.of("remote-1", provider: "crobot", state: .completed)
         agent.title = "the cloud one"
+        agent.updatedAt = Date(timeIntervalSinceNow: -600)
+        // The local row needs a REAL time since #454. `waiting(_:)` stamps
+        // `createdAtMs: 0`, so under recency ordering this fixture's local row
+        // sat in 1970 and the remote one led on merit — which would have been
+        // this test reporting a fixture's clock rather than its own claim.
+        // Its claim is that HEARING a row does not move it, and that holds at
+        // any timestamp; it just needs the two rows to be comparable.
+        var local = waiting(A, heardThrough: 9)
+        local.createdAtMs = Int64(Date().timeIntervalSince1970 * 1000)
         let verdict = GridAssembler.rows(inputs(
-            waiting: [waiting(A, heardThrough: 9)], live: [A: live(A)],
+            waiting: [local], live: [A: live(A)],
             remote: .init(agents: [agent], unread: [agent.id])))
         XCTAssertEqual(verdict.rows.map(\.read), [.opened, .unread],
                        "the local row is heard and the remote one is not")

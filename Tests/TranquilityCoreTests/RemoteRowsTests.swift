@@ -228,9 +228,11 @@ extension RemoteRowsTests {
     }
 
     /// And a green LOCAL row still announces, which is the app's daily loop
-    /// and must not have been traded away for the fix above.
+    /// and must not have been traded away for the fix above. A local green row
+    /// always carries a read state — band 1 stamps one — which is what makes
+    /// announce meaningful.
     func testAGreenLocalRowStillAnnounces() {
-        let local = SessionRow(id: "local", name: "n", aux: "a", lamp: .ready)
+        let local = SessionRow(id: "local", name: "n", aux: "a", lamp: .ready, read: .unread)
         XCTAssertEqual(SessionRow.action(for: local), .announce)
     }
 
@@ -243,8 +245,22 @@ extension RemoteRowsTests {
     /// So the door decides only whether there is somewhere BETTER to go, and
     /// announce stays the fallback rather than being traded away.
     func testAGreenRemoteAgentWithNoPageStillAnnounces() {
-        let row = rows(.init(agents: [remote("a", state: .completed)])).first
+        let agent = remote("a", state: .completed)
+        let row = rows(.init(agents: [agent], unread: [agent.id])).first
         XCTAssertEqual(row?.door, SessionRow.Door.none)
         XCTAssertEqual(SessionRow.action(for: row!), .announce)
+    }
+
+    /// **And one that has never spoken does nothing rather than announcing
+    /// nothing.** Robert, 15 Sep, on twenty-nine such rows in Past Agents:
+    /// "clicking on them does nothing. It's very weird that they're there."
+    /// They were probe sessions that had finished a turn (green, correctly)
+    /// and never written a line to the store (nothing to announce). The verb
+    /// says so now instead of pretending.
+    func testAGreenRemoteAgentThatNeverSpokeDoesNotAnnounce() {
+        let row = rows(.init(agents: [remote("a", state: .completed)])).first
+        XCTAssertEqual(row?.read, ReadState.none)
+        XCTAssertEqual(SessionRow.action(for: row!), SessionRow.RowAction.none,
+                       "announce would read a turn that does not exist")
     }
 }
