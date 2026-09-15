@@ -109,6 +109,21 @@ cleanup_and_restore() {
 # not pulled would otherwise relaunch the commit it already had.
 git fetch -q origin
 TARGET=$(git rev-parse --verify "$REF^{commit}")
+automatic_activation_guard() {
+  [ "${TB_DEPLOY_AUTOMATIC:-0}" = 1 ] || return 0
+  if app_at_path_running "$PROD_APP"; then
+    APP_MUTATED=0
+    echo "deployment deferred: Prod is selected; choose Dev explicitly before retrying" >&2
+    exit 75
+  fi
+  if ! app_running; then
+    APP_MUTATED=0
+    echo "deployment deferred: app is stopped; automatic delivery does not undo Quit" >&2
+    exit 75
+  fi
+}
+tb_before_app_stop() { automatic_activation_guard; }
+automatic_activation_guard
 UNMERGED=1
 git merge-base --is-ancestor "$TARGET" origin/main && UNMERGED=0
 tb_deployment_authorize relaunch "$TARGET" dev "$UNMERGED"
@@ -245,6 +260,7 @@ if [ -d "$INSTALLED" ]; then
   # binary out from under the old one.
   # A merge should never evict somebody who deliberately selected the exact
   # production release for testing. Only stop the Dev path being replaced.
+  automatic_activation_guard
   APP_MUTATED=1
   app_stop_path "$INSTALLED"
   echo "→ updating the installed copy"
@@ -274,6 +290,7 @@ fi
 # real stop on a machine with no installed copy (the worktree-build path).
 # Two instances racing for one global hotkey is its own bug, so the old one
 # goes down immediately before the new one comes up, not before the build.
+if [ "$APP_MUTATED" -eq 0 ]; then automatic_activation_guard; fi
 APP_MUTATED=1
 app_stop
 
@@ -397,3 +414,8 @@ if ! "$CLEAN_WORKTREE/.build/debug/tbase" doctor; then
   echo "✗ the build is fine, but the archive and the hubs disagree — see above." >&2
   echo "  \`tbase homebase <session-id>\` rewrites one hub; \`tbase doctor\` re-checks." >&2
 fi
+
+# A receipt is written under the same mutation lock only after a fresh process,
+# full source stamp and passing launch drills have been established.
+python3 scripts/delivery.py record-running --pid "$$" --lock-token "$TB_DEPLOY_LOCK_TOKEN" \
+  --sha "$TARGET" --bundle "$APP_PATH" --launched-at "$LAUNCHED_AT"

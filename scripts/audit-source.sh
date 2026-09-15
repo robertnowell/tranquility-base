@@ -28,6 +28,7 @@ echo "→ source audit $EXPECTED_COMMIT"
 # Exercise the boundary with disposable repositories and stubbed build tools.
 python3 scripts/tests/test_source_audit.py
 python3 scripts/tests/test_deployment_state.py
+python3 scripts/tests/test_delivery.py
 
 # Cheap, and it catches a class the panel's own drills cannot: a bare modifier
 # glyph in text a human reads. The existing drill guards ONE string; this

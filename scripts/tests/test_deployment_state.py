@@ -282,6 +282,22 @@ tb_deployment_authorize fixture "''' + A + '''" dev 1
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertFalse(self.state.lock_dir.exists())
 
+    def test_automatic_delivery_preserves_quit_and_selected_prod(self):
+        helper = self.repo / "scripts/lib/app-process.sh"
+        for prod in (False, True):
+            with self.subTest(prod=prod):
+                if prod:
+                    helper.write_text('''app_at_path_running() { [[ "$1" == *"Tranquility Base.app" ]]; }
+app_running() { return 0; }
+''')
+                result = subprocess.run(["bash", "scripts/relaunch.sh", "origin/main"],
+                                        cwd=self.repo, env=dict(self.env, TB_DEPLOY_AUTOMATIC="1"),
+                                        text=True, capture_output=True, timeout=15)
+                self.assertEqual(result.returncode, 75, result.stdout + result.stderr)
+                self.assertIn("Prod is selected" if prod else "does not undo Quit", result.stderr)
+                self.assertFalse((self.root / "mutations").exists())
+                self.assertFalse(self.state.lock_dir.exists())
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
