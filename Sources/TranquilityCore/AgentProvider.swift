@@ -83,6 +83,24 @@ public protocol AgentProvider: Sendable {
     /// because there is no id to hand back when it did not happen.
     func start(_ brief: Brief) async throws -> AgentSession.ID
 
+    /// **What this provider must ask before it can start.**
+    ///
+    /// Some agents need a fact the app does not have yet — crobot cannot make a
+    /// task without a repository, and the next vendor will want something else.
+    /// Rather than a picker bolted onto New Agent for each one, the provider
+    /// says what it needs as ORDINARY QUESTIONS, and the app renders them with
+    /// the same machinery it already uses for a running agent's questions (a
+    /// Claude `AskUserQuestion`, an OpenCode permission). Robert, 15 Sep, on
+    /// crobot's Slack picker: *"this is just one more question from the agent,
+    /// and it could be anything ... ideally it's just the same as any other
+    /// agent. We initiated a connection, we sent a request, it asks us, oh
+    /// great, which repo should this go to."*
+    ///
+    /// The default is none: most agents start with nothing to ask, and a
+    /// provider that overrides this is declaring a custom need, not a new UI.
+    /// The answers come back folded into the `Brief` passed to `start`.
+    func startQuestions(for brief: Brief) async throws -> [PendingRequest.Question]
+
     /// Stop an agent. Gated by `can.canCancel`.
     ///
     /// Added 13 Sep, because `canCancel` shipped in the first draft with no
@@ -103,6 +121,11 @@ public protocol AgentProvider: Sendable {
 /// once the adapter exists. Deliberately an instance rather than a global
 /// singleton so a test and the app can hold different sets, which is the same
 /// reasoning `Coordinator` gives for injecting everything it uses.
+public extension AgentProvider {
+    /// Most agents ask nothing before they start.
+    func startQuestions(for brief: Brief) async throws -> [PendingRequest.Question] { [] }
+}
+
 public struct AgentProviderRegistry: Sendable {
     public let providers: [any AgentProvider]
     /// Providers this app spawns itself, which need no address: an installed

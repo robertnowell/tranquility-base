@@ -39,6 +39,11 @@ final class CrobotProviderTests: XCTestCase {
             created.append((repo, prompt, baseBranch))
             return "0de592c1-382e-4760-8e39-b95206cec31c"
         }
+        var repoList: [String] = ["Coframe/crobot", "Coframe/jarvis"]
+        var repoDefault: String? = "Coframe/jarvis"
+        func repos() async throws -> (repos: [String], preselect: String?) {
+            (repoList, repoDefault)
+        }
         func taskURL(_ id: String) -> URL? {
             URL(string: "https://crobot.coframe.com/tasks/\(id)")
         }
@@ -284,5 +289,59 @@ final class CrobotProviderTests: XCTestCase {
         g.detail[a] = task(a, status: "running")
         g.openCodeRoutes["GET /session"] = (200, "[]")
         try await AgentProviderConformance.run(provider(g), egress: true)
+    }
+}
+
+// MARK: - crobot asks for a repo before it starts (#374 gap, 15 Sep 2026)
+
+extension CrobotProviderTests {
+
+    /// **The gap Robert hit: starting a crobot task from the app just errored.**
+    /// The app sent `start(Brief(prompt: ""))` with no repository, crobot threw
+    /// `repositoryRequired`, and the raw error surfaced. crobot needs a repo, so
+    /// now it ASKS for one — the same way any agent asks a question — instead of
+    /// failing.
+    func testCrobotAsksWhichRepoWhenTheBriefHasNone() async throws {
+        let g = Gateway()
+        g.repoList = ["Coframe/crobot", "Coframe/jarvis", "Coframe/darwin"]
+        let questions = try await provider(g).startQuestions(for: Brief(prompt: "fix the build"))
+        XCTAssertEqual(questions.count, 1)
+        let q = questions.first
+        XCTAssertEqual(q?.asked, "Which repository should I work in?")
+        XCTAssertEqual(q?.options.map(\.id),
+                       ["Coframe/crobot", "Coframe/jarvis", "Coframe/darwin"],
+                       "the options are the repos this key can reach, from GET /repos")
+        XCTAssertTrue(q?.allowsMultiple == true, "a task can span repos — tick one or more")
+        XCTAssertTrue(q?.allowsCustom == true, "and a repo not listed can still be typed")
+    }
+
+    /// A brief that already names a repo asks nothing — a deep link, or the
+    /// second time round after the question was answered.
+    func testCrobotAsksNothingWhenTheRepoIsAlreadyChosen() async throws {
+        var brief = Brief(prompt: "go")
+        brief.repository = "Coframe/crobot"
+        let questions = try await provider(Gateway()).startQuestions(for: brief)
+        XCTAssertTrue(questions.isEmpty)
+    }
+
+    /// The general seam: a provider that needs nothing asks nothing, with no
+    /// code of its own. This is what keeps "custom workflow for crobot" from
+    /// becoming "every provider reimplements start".
+    func testMostProvidersAskNothingByDefault() async throws {
+        struct Bare: AgentProvider {
+            let id = "bare"; let can = Capabilities()
+            func changes() -> AsyncStream<AgentEvent>? { nil }
+            func mine() async throws -> [AgentSession] { [] }
+            func refine(_ id: AgentSession.ID) async throws -> AgentSession { .of(id, provider: "bare") }
+            func request(_ id: AgentSession.ID) async throws -> PendingRequest? { nil }
+            func transcript(_ id: AgentSession.ID) async throws -> [Turn] { [] }
+            func send(_ t: String, to id: AgentSession.ID) async throws -> SendOutcome { .accepted }
+            func respond(to r: PendingRequest, with response: Response) async throws -> SendOutcome { .accepted }
+            func start(_ brief: Brief) async throws -> AgentSession.ID { "x" }
+            func cancel(_ id: AgentSession.ID) async throws -> SendOutcome { .accepted }
+            func url(for id: AgentSession.ID) -> URL? { nil }
+        }
+        let asked = try await Bare().startQuestions(for: Brief(prompt: "hi"))
+        XCTAssertTrue(asked.isEmpty, "the default is to ask nothing")
     }
 }

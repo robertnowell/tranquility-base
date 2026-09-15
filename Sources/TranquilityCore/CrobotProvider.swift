@@ -150,6 +150,30 @@ public struct CrobotProvider: AgentProvider {
         return try await send(words, to: request.session)
     }
 
+    /// **crobot cannot make a task without a repository, so it asks for one.**
+    ///
+    /// Not a picker special-cased into New Agent: the seam is
+    /// `AgentProvider.startQuestions`, and this is crobot's answer to it. The
+    /// options are the repos this key can reach (`GET /repos`, the same list
+    /// crobot's Slack bot shows), with the org's default pre-selected. A repo
+    /// already on the brief means nothing to ask — a deep link or a repeat.
+    ///
+    /// `allowsMultiple` because a crobot task can span repositories (the Slack
+    /// picker says "tick one or more"); `allowsCustom` so a repo the list does
+    /// not surface can still be typed, the same escape hatch every question has.
+    public func startQuestions(for brief: Brief) async throws -> [PendingRequest.Question] {
+        if let repo = brief.repository, !repo.isEmpty { return [] }
+        let listing = try await transport.repos()
+        let options = listing.repos.map {
+            PendingRequest.Option(id: $0, label: $0)
+        }
+        return [PendingRequest.Question(
+            asked: "Which repository should I work in?",
+            options: options,
+            allowsMultiple: true,
+            allowsCustom: true)]
+    }
+
     public func start(_ brief: Brief) async throws -> AgentSession.ID {
         guard let repository = brief.repository else {
             // A task without a repository is not a thing crobot can make, and
@@ -243,6 +267,9 @@ public protocol CrobotTransport: Sendable {
     func task(_ id: String) async throws -> CrobotTask
     func prompt(_ id: String, text: String) async throws -> SendOutcome
     func create(repo: String, prompt: String, baseBranch: String?) async throws -> String
+    /// The repositories this key may start a task in, and the one to
+    /// pre-select. What crobot's own Slack picker is built from.
+    func repos() async throws -> (repos: [String], preselect: String?)
     func taskURL(_ id: String) -> URL?
     /// An `OpenCodeClient` transport pointed at this task's proxy.
     func opencode(_ id: String) -> any OpenCodeClient.Transport

@@ -142,6 +142,12 @@ public struct CrobotHTTPTransport: CrobotTransport {
         return id
     }
 
+    public func repos() async throws -> (repos: [String], preselect: String?) {
+        struct Reply: Decodable { var repos: [String]?; var defaultRepo: String? }
+        let reply = try await call("GET", "api/v1/repos", as: Reply.self)
+        return (reply.repos ?? [], reply.defaultRepo)
+    }
+
     public func taskURL(_ id: String) -> URL? {
         base.appendingPathComponent("tasks").appendingPathComponent(id)
     }

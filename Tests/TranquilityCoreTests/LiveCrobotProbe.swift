@@ -89,3 +89,42 @@ final class LiveCrobotProbe: XCTestCase {
         XCTAssertTrue(who?.contains("@") == true)
     }
 }
+
+extension LiveCrobotProbe {
+
+    /// **Against the live gateway: crobot asks the real repo question, then a
+    /// chosen repo actually creates a task.** This is the path that only ever
+    /// errored from the app.
+    func testStartAsksForARealRepoAndThenCreates() async throws {
+        try XCTSkipIf(ProcessInfo.processInfo.environment["TB_CROBOT_SEND"] == nil,
+                      "set TB_CROBOT_SEND=1 — this CREATES a live task")
+        let p = provider
+
+        let questions = try await p.startQuestions(for: Brief(prompt: "warm-up"))
+        let repos = questions.first?.options.map(\.id) ?? []
+        print("LIVE crobot repo question: \(questions.first?.asked ?? "none")")
+        print("LIVE crobot repos: \(repos.joined(separator: ", "))")
+        XCTAssertFalse(repos.isEmpty, "the live gateway returned no repos to choose from")
+
+        // Choose the repo the org itself defaults to, so the created task lands
+        // where a person's own New task page would put it.
+        guard let repo = repos.first(where: { $0.hasSuffix("/crobot") }) ?? repos.first else {
+            throw XCTSkip("no repo offered")
+        }
+        var brief = Brief(prompt: "Tranquility Base connectivity check "
+            + "\(Int(Date().timeIntervalSince1970)). No action needed; you may stop.")
+        brief.repository = repo
+        let id = try await p.start(brief)
+        print("LIVE crobot created task: \(id.prefix(12)) in \(repo)")
+        XCTAssertFalse(id.isEmpty, "start returned no task id")
+
+        // And it is real: it shows up as one of my tasks.
+        var found = false
+        for _ in 1...8 where !found {
+            try await Task.sleep(nanoseconds: 3_000_000_000)
+            found = (try? await p.mine())?.contains { $0.id == id } ?? false
+        }
+        print("LIVE crobot new task visible in mine(): \(found)")
+        XCTAssertTrue(found, "the created task never appeared in this key's task list")
+    }
+}
