@@ -49,6 +49,54 @@ public final class LiveAudioCapture: @unchecked Sendable {
 
     public let utteranceId: String
     public let url: URL
+
+    // MARK: - Partial transcript sidecar
+    //
+    // The streamed transcript used to live only in the AssemblyAI session
+    // object until a clean close, so a process death mid-hold kept the audio
+    // and lost every word already recognised (the "still open" line of the
+    // 10 Sep ruling, built 15 Sep 2026). Now each partial the stream reports
+    // is written beside the live audio as `<id>.partial`, atomically, and a
+    // boot that adopts the audio adopts the words with it. The sidecar is
+    // consumed on adoption and removed when the capture finishes or is
+    // discarded, so it never outlives the file it describes.
+
+    public static let partialExtension = "partial"
+
+    public static func partialURL(for utteranceId: String, in directory: URL) -> URL {
+        directory.appendingPathComponent("\(utteranceId).\(partialExtension)")
+    }
+
+    /// The sidecar for a live or finished audio file at `url`.
+    public static func partialURL(beside url: URL) -> URL {
+        partialURL(for: AudioStore.utteranceId(of: url), in: url.deletingLastPathComponent())
+    }
+
+    public var partialURL: URL { Self.partialURL(for: utteranceId, in: url.deletingLastPathComponent()) }
+
+    /// Record the stream's accumulated text so far. Whole-file atomic write
+    /// of a few kilobytes at most, on the provider's callback thread; a
+    /// capture that has already closed writes nothing, so a late partial
+    /// cannot resurrect a sidecar the close removed.
+    public func notePartial(_ text: String) {
+        lock.lock(); defer { lock.unlock() }
+        guard !closed else { return }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        try? trimmed.write(to: partialURL, atomically: true, encoding: .utf8)
+        PrivateStorage.protect(partialURL)
+    }
+
+    /// The words a dead process had already heard, if any. Reads and REMOVES
+    /// the sidecar: the caller is putting the text on a row, and a sidecar
+    /// with no live file beside it is exactly the orphan this must not leave.
+    public static func takePartialTranscript(beside url: URL) -> String? {
+        let sidecar = partialURL(beside: url)
+        defer { try? FileManager.default.removeItem(at: sidecar) }
+        guard let text = try? String(contentsOf: sidecar, encoding: .utf8) else { return nil }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
     private let sampleRate: Double
     private let handle: FileHandle
     private let lock = NSLock()
@@ -160,6 +208,9 @@ public final class LiveAudioCapture: @unchecked Sendable {
         try rewriteSizes()
         try handle.close()
         closed = true
+        // The live stream still holds the same words in memory and the
+        // ordinary path takes them from there.
+        try? FileManager.default.removeItem(at: partialURL)
 
         let target = url.deletingPathExtension()
         if FileManager.default.fileExists(atPath: target.path) {
@@ -216,6 +267,7 @@ public final class LiveAudioCapture: @unchecked Sendable {
         closed = true
         if keep { return .kept(url) }
         try? FileManager.default.removeItem(at: url)
+        try? FileManager.default.removeItem(at: partialURL)
         return .removed
     }
 

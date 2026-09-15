@@ -1406,6 +1406,10 @@ public final class QueueStore: Sendable {
                         // recoverable — promote it and let it transcribe by the
                         // ordinary path. Discarding here would be the durability
                         // feature undone by the cleanup feature.
+                        if let partial = LiveAudioCapture.takePartialTranscript(beside: url) {
+                            u.transcriptText = partial
+                            u.transcriptProvider = "streamed-partial"
+                        }
                         if let promoted = try? LiveAudioCapture.adopt(
                             LiveAudioCapture.Interrupted(
                                 utteranceId: u.id, url: url,
@@ -1526,6 +1530,8 @@ public final class QueueStore: Sendable {
     /// One row for one kept file, whichever sweep found it.
     private func adopt(_ interrupted: LiveAudioCapture.Interrupted,
                        outcome: String, trace: String) throws -> String {
+        // Read before the move: the sidecar is named for the live file.
+        let partial = LiveAudioCapture.takePartialTranscript(beside: interrupted.url)
         let url = try LiveAudioCapture.adopt(interrupted)
         let data = (try? Data(contentsOf: url)) ?? Data()
         var row = Utterance(
@@ -1537,9 +1543,19 @@ public final class QueueStore: Sendable {
             audioSha256: SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined(),
             audioDurationMs: interrupted.durationMs())
         row.transcriptionOutcome = outcome
+        if let partial {
+            // The words the stream had heard before the process died: on the
+            // row now, as the floor. Still `.recorded`, so the one unasked
+            // pass over the audio can replace them with a full transcript,
+            // and a pass that fails leaves them standing.
+            row.transcriptText = partial
+            row.transcriptProvider = "streamed-partial"
+        }
         try update(utterance: row)
         Self.trace?("\(trace): adopted kept capture \(row.id.prefix(16)) "
-            + "(\(interrupted.durationMs() / 1000)s) into Recents")
+            + "(\(interrupted.durationMs() / 1000)s"
+            + (partial.map { ", \($0.count) chars of partial transcript" } ?? "")
+            + ") into Recents")
         return row.id
     }
 
@@ -1550,6 +1566,9 @@ public final class QueueStore: Sendable {
             at: directory, includingPropertiesForKeys: nil) else { return [] }
         let known = Set(try dbQueue.read { db in try String.fetchAll(db, sql: "SELECT id FROM utterances") })
         return files
+            // Audio only: a `.partial` sidecar is not an orphan recording, and
+            // a `.partial` whose audio is gone is cleaned by the reap.
+            .filter { $0.pathExtension == "wav" || $0.pathExtension == LiveAudioCapture.liveExtension }
             // Through AudioStore, not by hand: a bare deletingPathExtension turns
             // `u4.wav.live` into `u4.wav`, which matches no row id, so every
             // interrupted capture reported as an orphan forever — breaking the one
@@ -1634,7 +1653,19 @@ public final class QueueStore: Sendable {
                 .contentModificationDate ?? .distantPast
             guard modified < cutoff else { continue }
             try? fm.removeItem(at: url)
+            try? fm.removeItem(at: LiveAudioCapture.partialURL(beside: url))
             deleted += 1
+        }
+        // A sidecar with no audio beside it in either state describes
+        // nothing. Adoption consumes sidecars, finish and discard remove
+        // them, so one here is a crash between two writes; it goes.
+        for url in files where url.pathExtension == LiveAudioCapture.partialExtension {
+            let id = url.deletingPathExtension().lastPathComponent
+            let finished = directory.appendingPathComponent("\(id).wav")
+            let live = finished.appendingPathExtension(LiveAudioCapture.liveExtension)
+            if !fm.fileExists(atPath: finished.path), !fm.fileExists(atPath: live.path) {
+                try? fm.removeItem(at: url)
+            }
         }
         return deleted
     }

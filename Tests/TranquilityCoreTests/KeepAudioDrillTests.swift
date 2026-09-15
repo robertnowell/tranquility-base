@@ -9,7 +9,7 @@ import XCTest
 final class KeepAudioDrillTests: XCTestCase {
     func testEveryCheckPasses() throws {
         let groups = try KeepAudioDrill.run()
-        XCTAssertEqual(groups.map(\.name), ["keepAudio", "bootAdopt", "keptNow", "dismissKeeps"])
+        XCTAssertEqual(groups.map(\.name), ["keepAudio", "bootAdopt", "keptNow", "dismissKeeps", "partialsSurvive"])
         for group in groups {
             for check in group.checks {
                 XCTAssertTrue(check.passed, "\(group.name).\(check.name) must pass")

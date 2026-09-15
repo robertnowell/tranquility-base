@@ -148,5 +148,12 @@ Three changes:
    worse than a lost reply. Rule 3's "not transcribed unasked" is amended to
    this; the 13 Aug rule against re-spending on failed rows stands.
 
-Still open: partials durable as they arrive (a process death mid-hold still
-recovers from the file, not the words already recognised).
+8. **Partials are durable as they arrive** (15 Sep 2026). Each partial the
+   stream reports is written beside the live audio as `<id>.partial`, and a
+   boot that adopts the audio puts those words on the row as its floor
+   (`transcriptProvider: streamed-partial`, still `.recorded`). The unasked
+   pass of rule 7 may replace them with a full transcript; a pass that fails
+   leaves them standing. Finish, discard, adoption and the reap each remove
+   the sidecar, so it never outlives the file it describes.
+
+Nothing from the 10 Sep list is open.

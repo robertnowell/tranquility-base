@@ -268,6 +268,31 @@ final class QueueStoreTests: XCTestCase {
         XCTAssertEqual(row.audioDurationMs, 1_000)
     }
 
+    /// A crash mid-hold keeps the audio (10 Sep) and, since 15 Sep 2026, the
+    /// words the stream had already recognised: they ride beside the live
+    /// file as a sidecar and land on the adopted row as its floor.
+    func testADeadCapturesPartialTranscriptIsAdoptedWithItsAudio() throws {
+        let audio = tmpDir.appendingPathComponent("audio", isDirectory: true)
+        let capture = try LiveAudioCapture(utteranceId: "capture-heard", sampleRate: 16000, directory: audio)
+        var spoken = Data(capacity: 16000 * 4)
+        for _ in 0..<32000 { withUnsafeBytes(of: Int16(2000).littleEndian) { spoken.append(contentsOf: $0) } }
+        try capture.append(pcm16: spoken)
+        capture.notePartial("what if the computer shut down")
+        capture.notePartial("what if the computer shut down and I'm halfway talking")
+        // No close: the process is gone.
+
+        let report = try store.reconcileOnBoot(audioDirectory: audio, soleOwner: true)
+
+        XCTAssertEqual(report.adoptedAudio, ["capture-heard"])
+        let row = try XCTUnwrap(try store.utterance(id: "capture-heard"))
+        XCTAssertEqual(row.transcriptText, "what if the computer shut down and I'm halfway talking")
+        XCTAssertEqual(row.transcriptProvider, "streamed-partial")
+        XCTAssertEqual(row.status, .recorded, "still a floor: the unasked pass may replace it")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: capture.partialURL.path),
+                       "consumed on adoption, never an orphan")
+        XCTAssertTrue(report.orphanedAudio.isEmpty)
+    }
+
     func testAShortOrphanLiveCaptureIsLeftForTheReap() throws {
         // A press that died in the arm window: one second of digital
         // silence, no speech. Offering it back would be worse than silence.
