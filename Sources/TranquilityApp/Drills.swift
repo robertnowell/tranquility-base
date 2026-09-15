@@ -1237,6 +1237,15 @@ extension StatusHUD {
             SessionRow(id: id, name: id, aux: id,
                                    lamp: lamp, revivable: revivable)
         }
+        // A green LOCAL row always carries its turn: band 1 stamps `.unread`
+        // or `.opened` and nothing else builds one. Since #458 a green row
+        // with no read state gets its door rather than an announce (there is
+        // nothing in the store to read out), so a fixture asserting "green
+        // announces" has to be the row production actually makes. This drill
+        // was red on every launch from 14:02 to 14:53 on 15 Sep for saying
+        // otherwise, alongside `terminate` (#483).
+        let liveGreen = SessionRow(id: "live", name: "live", aux: "live",
+                                   lamp: .ready, read: .unread)
         let unlit = Lamp.unlit
 
         // The row is drawn by presence, not by a fifth colour: nothing in the
@@ -1248,7 +1257,7 @@ extension StatusHUD {
         // Every drill row goes through showIdle so the grid actually builds
         // one — a row that sorts correctly and then fails to render is the
         // failure this layer exists to catch.
-        showIdle(rows: [row("live", .ready), row("dead", unlit, revivable: true),
+        showIdle(rows: [liveGreen, row("dead", unlit, revivable: true),
                         row("unproven", unlit)])
         let built = waitingRows.arrangedSubviews.compactMap { $0 as? GridRowView }
 
@@ -1256,7 +1265,7 @@ extension StatusHUD {
             ("unlitHasNoFill", noFill),
             ("unlitRingIsFainterThanQuiet", fainterRing),
             ("unlitDimsTheRow", unlit.rowAlpha < 1 && Lamp.running.rowAlpha == 1),
-            ("liveRowAnnounces", SessionRow.action(for: row("live", .ready)) == .announce),
+            ("liveRowAnnounces", SessionRow.action(for: liveGreen) == .announce),
             // Amber does not speak, it points (18 Aug). A blocked session is
             // not in the waiting set, so the announcement it used to trigger
             // had nothing to say and left the panel sitting on Preparing.
@@ -1281,7 +1290,7 @@ extension StatusHUD {
             ("quietRowIsStillLive", SessionRow.isLive(row("quiet", .running))),
             // Green is the only lamp left that speaks.
             ("greenIsTheOnlyLampThatAnnounces",
-             SessionRow.action(for: row("live", .ready)) == .announce
+             SessionRow.action(for: liveGreen) == .announce
              && SessionRow.action(for: row("quiet", .running)) != .announce),
             ("revivableRowRevives",
              SessionRow.action(for: row("dead", unlit, revivable: true)) == .revive),
