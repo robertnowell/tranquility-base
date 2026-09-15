@@ -155,6 +155,7 @@ final class ACPProviderTests: XCTestCase {
 
         let outcome = try await provider.send("and today?", to: id)
         XCTAssertEqual(outcome, .accepted)
+        try await Task.sleep(for: .milliseconds(200))
         XCTAssertEqual(pipe.methods.filter { $0.hasPrefix("session/") },
                        ["session/list", "session/load", "session/prompt", "session/list"],
                        "loaded once, prompted, then re-listed for the model's title")
@@ -177,6 +178,7 @@ final class ACPProviderTests: XCTestCase {
         let id = try XCTUnwrap(found.first?.id)
         _ = try await provider.send("one", to: id)
         _ = try await provider.send("two", to: id)
+        try await Task.sleep(for: .milliseconds(200))
         XCTAssertEqual(pipe.methods.filter { $0 == "session/load" }.count, 1)
     }
 
@@ -197,6 +199,7 @@ final class ACPProviderTests: XCTestCase {
         let (provider, _) = registered(ledger: ledger())
         let id = try await provider.start(Brief(prompt: ""))
         _ = try await provider.send("Add a docstring to greet()\nand nothing else", to: id)
+        try await Task.sleep(for: .milliseconds(100))
         let session = try await provider.refine(id)
         XCTAssertEqual(session.title, "Add a docstring to greet()")
     }
@@ -299,16 +302,37 @@ final class ACPProviderTests: XCTestCase {
     }
 
     /// A message chunk becomes a Turn, which is what reaches the spool line.
-    func testAMessageChunkBecomesSomethingTheAgentSaid() async throws {
+    /// Chunks accumulate; the turn's words are said ONCE, when it ends. A
+    /// `.said` per chunk was a spool line per chunk, and every spool line is
+    /// a turn the panel announces.
+    func testATurnsChunksAreSaidOnceWhenTheTurnEnds() async throws {
         let (provider, pipe) = try await connected()
-        pipe.emit(#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"ses_x","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"working on it"}}}}"#)
-        let events = await drain(provider, upTo: 2)
+        pipe.before["session/prompt"] = [
+            #"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"ses_live","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"working "}}}}"#,
+            #"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"ses_live","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"on it"}}}}"#,
+        ]
+        let id = try await provider.start(Brief(prompt: ""))
+        let outcome = try await provider.send("go", to: id)
+        XCTAssertEqual(outcome, .accepted, "accepted when the prompt is taken, not when the turn ends")
+        let events = await drain(provider, upTo: 12, within: .milliseconds(400))
         let said = events.compactMap { event -> Turn? in
             if case .said(let turn) = event.kind { return turn }
             return nil
         }
-        XCTAssertEqual(said.first?.text, "working on it")
+        XCTAssertEqual(said.map(\.text), ["working on it"])
         XCTAssertEqual(said.first?.role, .agent)
+        // The ending precedes the words, so the session's latest line carries them.
+        let kinds = events.map { event -> String in
+            switch event.kind {
+            case .said: return "said"
+            case .changed(let s) where s.state == .completed: return "completed"
+            default: return "other"
+            }
+        }
+        XCTAssertLessThan(try XCTUnwrap(kinds.firstIndex(of: "completed")),
+                          try XCTUnwrap(kinds.firstIndex(of: "said")))
+        let session = try await provider.refine(id)
+        XCTAssertEqual(session.state, .completed)
     }
 }
 

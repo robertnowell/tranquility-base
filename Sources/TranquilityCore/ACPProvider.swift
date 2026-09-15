@@ -35,6 +35,15 @@ public actor ACPProvider: AgentProvider {
     /// Text accumulated per session from `agent_message_chunk`, which is the
     /// only transcript ACP gives without `session/load`.
     private var saidSoFar: [String: String] = [:]
+    /// What the agent has said in the turn now running, per session. Emitted
+    /// ONCE, when the turn ends: a `.said` per chunk became a spool line per
+    /// chunk, and a spool line is a turn the panel announces.
+    private var turnText: [String: String] = [:]
+    /// The turn in flight per session. `session/prompt` returns when the turn
+    /// ENDS, and a `send` that waited on it would hold the dispatcher for as
+    /// long as the agent takes; the HTTP providers return the moment the
+    /// message is accepted, and this one does the same.
+    private var turns: [String: Task<Void, Never>] = [:]
     /// Permission prompts the agent is waiting on, keyed by our request id so
     /// `respond` can answer the right JSON-RPC call.
     private var asking: [AgentSession.ID: (rpcID: Int, request: PendingRequest)] = [:]
@@ -169,8 +178,7 @@ public actor ACPProvider: AgentProvider {
             return
         }
         saidSoFar[raw, default: ""] += text
-        emit(session.id, .said(Turn(id: "\(raw)-\(saidSoFar[raw]?.count ?? 0)",
-                                    at: Date(), role: .agent, text: text)))
+        turnText[raw, default: ""] += text
     }
 
     @discardableResult
@@ -277,10 +285,34 @@ public actor ACPProvider: AgentProvider {
             sessions[raw] = titled
             emit(titled.id, .changed(titled))
         }
-        let result = try await client.prompt(text, session: raw)
-        _ = seen(raw: raw, state: result.state)
-        try? await adoptListed()
+        turnText[raw] = ""
+        _ = seen(raw: raw, state: .submitted)
+        turns[raw]?.cancel()
+        turns[raw] = Task { [weak self] in await self?.run(turn: text, in: raw) }
         return .accepted
+    }
+
+    /// One prompt turn, start to stop reason.
+    private func run(turn text: String, in raw: String) async {
+        do {
+            let result = try await client.prompt(text, session: raw)
+            let said = turnText[raw] ?? ""
+            turnText[raw] = nil
+            // The ending first, then the words, so the latest line in the
+            // spool for this session is the one that carries what was said:
+            // the announcer speaks a session's latest stop, and a bare
+            // "finished a turn" after the words would be the one it read.
+            let session = seen(raw: raw, state: result.state)
+            if !said.isEmpty {
+                emit(session.id, .said(Turn(id: "\(raw)-\(saidSoFar[raw]?.count ?? 0)",
+                                            at: Date(), role: .agent, text: said)))
+            }
+            try? await adoptListed()
+        } catch {
+            turnText[raw] = nil
+            let session = seen(raw: raw, state: .failed)
+            emit(session.id, .failed(reason: "\(error)"))
+        }
     }
 
     /// The first line of what was said, cut to a row's width.
