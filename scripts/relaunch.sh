@@ -19,6 +19,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 . "$(dirname "$0")/lib/paths.sh"
 . "$(dirname "$0")/lib/app-process.sh"
+. "$(dirname "$0")/lib/deployment.sh"
 
 REF="${1:-origin/main}"
 CLEAN_WORKTREE="/private/tmp/tb-clean"
@@ -35,6 +36,7 @@ APP="$VD_APP_NAME.app"
 APP_PATH="$(tb_bundle_dir debug "$CLEAN_WORKTREE")/$APP"
 PROD_APP="/Applications/Tranquility Base.app"
 PROD_WAS_RUNNING=0
+APP_MUTATED=0
 app_at_path_running "$PROD_APP" && PROD_WAS_RUNNING=1
 
 # Never exit leaving the app down.
@@ -48,39 +50,18 @@ app_at_path_running "$PROD_APP" && PROD_WAS_RUNNING=1
 # Being one build behind is recoverable. Being gone is the failure this whole
 # script exists to prevent, so put back whatever is on disk before leaving.
 restore_if_down() {
-  if ! app_running && [ -d "$APP_PATH" ]; then
+  if [ "$APP_MUTATED" -eq 1 ] && ! app_running && [ -d "$APP_PATH" ]; then
     echo "→ interrupted mid-relaunch; bringing the app back up" >&2
     open "$APP_PATH" 2>/dev/null || true
   fi
 }
 
-# One deployer at a time (ruled 13 Aug, after the 05:06 race).
-#
-# Two concurrent relaunches interleave worse than they collide: one script's
-# app_stop killed the other's freshly-drilled instance, and the other's
-# restore_if_down then resurrected the app WITHOUT --selftest-hud — so the
-# correct build ran unverified behind a log full of true lines from an
-# instance that was already dead. The hotkey race is loud; this one is
-# silent, which is why the second deployer is refused outright rather than
-# queued. mkdir is the atomic primitive (macOS ships no flock); the pid
-# inside lets a crashed deployer's lock be stolen instead of wedging
-# deploys forever.
-LOCKDIR="/tmp/tb-relaunch.lock"
-if ! mkdir "$LOCKDIR" 2>/dev/null; then
-  HOLDER=$(cat "$LOCKDIR/pid" 2>/dev/null || echo "")
-  if [ -n "$HOLDER" ] && kill -0 "$HOLDER" 2>/dev/null; then
-    echo "✗ another relaunch (pid $HOLDER) is mid-flight — refusing to stack a second." >&2
-    echo "  Wait for its deploy note, then rerun if your ref still is not live." >&2
-    exit 1
-  fi
-  echo "→ clearing a stale relaunch lock (holder ${HOLDER:-unknown} is gone)"
-  rm -rf "$LOCKDIR"
-  if ! mkdir "$LOCKDIR" 2>/dev/null; then
-    echo "✗ lost the lock race to another relaunch that started this instant." >&2
-    exit 1
-  fi
-fi
-echo $$ > "$LOCKDIR/pid"
+# All installers and lane switches share this owner and preview policy.
+tb_deployment_lock
+trap tb_deployment_unlock EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 141' PIPE
 
 # The deploy ledger: every run records WHO invoked it, before it does anything.
 # Rule 6's announcement is a promise a session makes; this line is a fact the
@@ -120,16 +101,20 @@ printf '%s pid=%s ppid=%s invoker=%q session=%s\n' \
 # The lock releases on ANY exit, and restore_if_down still runs: holding the
 # lock must never become a way to leave the app down.
 cleanup_and_restore() {
-  rm -rf "$LOCKDIR"
   restore_if_down
+  tb_deployment_unlock
 }
-trap cleanup_and_restore EXIT INT TERM PIPE
 
 # Resolve against the remote, not the local branch: a session that has merged but
 # not pulled would otherwise relaunch the commit it already had.
 git fetch -q origin
-TARGET=$(git rev-parse --short "$REF")
-echo "→ target: $TARGET  $(git log -1 --format=%s "$REF")"
+TARGET=$(git rev-parse --verify "$REF^{commit}")
+UNMERGED=1
+git merge-base --is-ancestor "$TARGET" origin/main && UNMERGED=0
+tb_deployment_authorize relaunch "$TARGET" dev "$UNMERGED"
+# Denial exits through unlock only; it must never launch a refused preview.
+trap cleanup_and_restore EXIT
+echo "→ target: $TARGET  $(git log -1 --format=%s "$TARGET")"
 # Second ledger line, same pid: what the run above actually resolved to.
 printf '%s pid=%s ref=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$$" "$TARGET" >> "$LEDGER"
 
@@ -154,7 +139,7 @@ printf '%s pid=%s ref=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$$" "$TARGET" >> "
 # came from happens to match.
 SELF_PATH="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 SELF_HASH=$(git hash-object "$SELF_PATH" 2>/dev/null || echo "")
-REF_HASH=$(git rev-parse "$REF:scripts/relaunch.sh" 2>/dev/null || echo "")
+REF_HASH=$(git rev-parse "$TARGET:scripts/relaunch.sh" 2>/dev/null || echo "")
 if [ -n "$SELF_HASH" ] && [ -n "$REF_HASH" ] && [ "$SELF_HASH" != "$REF_HASH" ]; then
   if [ "${TB_ALLOW_STALE_SCRIPT:-0}" = "1" ]; then
     echo "⚠ this relaunch.sh differs from $REF; continuing because TB_ALLOW_STALE_SCRIPT=1" >&2
@@ -209,7 +194,9 @@ wait_for_microphone "before building"
 # running process; that is safe here because this app loads nothing from its
 # bundle after launch — it draws its whole interface programmatically — and the
 # process is replaced seconds later anyway.
-APP_PATH=$(scripts/build-clean.sh "$REF")
+APP_PATH=$(scripts/build-clean.sh "$TARGET")
+BUILT_SHA=$(/usr/libexec/PlistBuddy -c "Print :TBSourceCommit" "$APP_PATH/Contents/Info.plist")
+[ "$BUILT_SHA" = "$TARGET" ] || { echo "✗ built source differs from reserved target" >&2; exit 1; }
 "$CLEAN_WORKTREE/scripts/audit-dev.sh" "$APP_PATH"
 
 # Deploy INTO the installed copy when there is one.
@@ -258,6 +245,7 @@ if [ -d "$INSTALLED" ]; then
   # binary out from under the old one.
   # A merge should never evict somebody who deliberately selected the exact
   # production release for testing. Only stop the Dev path being replaced.
+  APP_MUTATED=1
   app_stop_path "$INSTALLED"
   echo "→ updating the installed copy"
   rm -rf "$INSTALLED"
@@ -286,6 +274,7 @@ fi
 # real stop on a machine with no installed copy (the worktree-build path).
 # Two instances racing for one global hotkey is its own bug, so the old one
 # goes down immediately before the new one comes up, not before the build.
+APP_MUTATED=1
 app_stop
 
 echo "→ launching (with panel self-tests)"

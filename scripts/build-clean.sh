@@ -26,11 +26,20 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 . "$(dirname "$0")/lib/paths.sh"
+. "$(dirname "$0")/lib/app-process.sh"
 
 REF="${1:-origin/main}"
 CLEAN_WORKTREE="/private/tmp/tb-clean"
 APP="${VD_APP_NAME:-Tranquility Base}.app"
 APP_PATH="$(tb_bundle_dir debug "$CLEAN_WORKTREE")/$APP"
+
+# This shared build cache can be the running bundle on an uninstalled machine.
+# Rebuilding that executable in place can crash its process before any installer
+# reaches its stop guard. Use the persistent installed lane first in that case.
+if app_at_path_running "$APP_PATH"; then
+  echo "✗ the shared build bundle is running; install it at the persistent Dev path before rebuilding" >&2
+  exit 1
+fi
 
 # /private/tmp is fine for a build CACHE — it is reaped, and everything here can
 # be rebuilt. It was only ever wrong as the app's only home, which is what
@@ -38,7 +47,7 @@ APP_PATH="$(tb_bundle_dir debug "$CLEAN_WORKTREE")/$APP"
 # script unable to proceed, which is the state that broke the only sanctioned
 # relaunch path on 11 Aug.
 git fetch -q origin
-TARGET=$(git rev-parse --short "$REF")
+TARGET=$(git rev-parse --verify "$REF^{commit}")
 echo "→ target: $TARGET  $(git log -1 --format=%s "$REF")" >&2
 
 if [ ! -d "$CLEAN_WORKTREE" ]; then
@@ -50,7 +59,7 @@ if [ ! -d "$CLEAN_WORKTREE" ]; then
   # Pruning is a no-op when nothing is stale, so it costs nothing when healthy.
   git worktree prune
   echo "→ creating $CLEAN_WORKTREE" >&2
-  git worktree add --detach "$CLEAN_WORKTREE" "$REF" >/dev/null
+  git worktree add --detach "$CLEAN_WORKTREE" "$TARGET" >/dev/null
 else
   # The reaper takes files out of an EXISTING worktree too, and it does not
   # stop at the tracked ones. Seen 17 Aug: /private/tmp/tb-clean survived as a
@@ -76,7 +85,7 @@ else
     echo "→ $CLEAN_WORKTREE is past repairing — rebuilding it from scratch" >&2
     rm -rf "$CLEAN_WORKTREE"
     git worktree prune
-    git worktree add --detach "$CLEAN_WORKTREE" "$REF" >/dev/null
+    git worktree add --detach "$CLEAN_WORKTREE" "$TARGET" >/dev/null
   fi
   # Restore before fetching: a reaped tree can be missing the scripts this
   # very run is about to call.

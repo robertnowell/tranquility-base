@@ -94,6 +94,12 @@ Multiple Claude sessions work this repo in parallel. The rules that keep it safe
    freshly-drilled instance, and the restore trap resurrected the app bare,
    with no drills — the correct build running unverified behind a
    green-looking log, quieter and therefore worse than a loud collision.
+   **Reserve unmerged previews before installing them.** The shared deployment
+   policy requires an owner token, full commit SHA, channel, and expiry. Main
+   and other branches defer while the preview is reserved. All four mutation
+   scripts use the same lock; a denied request must not be worked around by
+   copying or opening a bundle manually. See `docs/preview-ownership.md` for
+   reserve, handoff, release, pending intent, and the live hook cutover boundary.
 7. **`swift test` is not evidence about the panel.** `Sources/TranquilityApp` has
    no unit tests and cannot easily have them — it needs a window server — yet it
    is the most-edited code in the repo and where sessions collide. Its evidence
