@@ -493,6 +493,11 @@ public final class Recorder: @unchecked Sendable {
         if openingStream {
             stream = streamFactory?()
             stream?.diagnosticCaptureID = diagnosticCaptureID
+            // Every partial lands beside the audio as it arrives, so a death
+            // mid-hold loses no word the stream had already heard.
+            if let capture = liveCapture {
+                stream?.partialSink = { text in capture.notePartial(text) }
+            }
             if let s = stream { Task { await s.start() } }
         }
         lock.unlock()
