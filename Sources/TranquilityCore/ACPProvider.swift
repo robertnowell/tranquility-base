@@ -226,6 +226,7 @@ public actor ACPProvider: AgentProvider {
         // The place, so an untitled row reads as the agent in its workspace
         // rather than as eight hex characters (#470).
         fresh.repository = URL(fileURLWithPath: cwd).lastPathComponent
+        fresh.directory = cwd
         fresh.shell = door(raw)
         sessions[raw] = fresh
         emit(fresh.id, .appeared(fresh))
@@ -279,8 +280,10 @@ public actor ACPProvider: AgentProvider {
                 // how the list says "never prompted"; the model names a
                 // session at its first turn. One started in THIS process is
                 // already known here and is not touched by this rule.
-                guard ACPWire.SessionList.Item.name(item.title) != nil else { continue }
+                guard ACPWire.SessionList.Item.name(item.title) != nil,
+                      ledger?.forgotten(item.sessionId, provider: id) != true else { continue }
                 var session = item.agentSession(provider: id)
+                session.directory = item.cwd ?? cwd
                 session.shell = door(item.sessionId)
                 sessions[item.sessionId] = session
                 emit(session.id, .appeared(session))
@@ -364,7 +367,7 @@ public actor ACPProvider: AgentProvider {
     /// (Robert, 15 Sep: a row titled "[assistant]: How should we get
     /// started?"). The user's own words are the title; the framing is not.
     static func headline(_ text: String) -> String {
-        let spoken = text.range(of: HeardContext.userLabel).map { String(text[$0.upperBound...]) } ?? text
+        let spoken = HeardContext.spokenPart(text)
         let line = spoken.split(whereSeparator: \.isNewline)
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .first { !$0.isEmpty } ?? spoken
@@ -423,6 +426,19 @@ public actor ACPProvider: AgentProvider {
         try await client.cancel(session: raw)
         _ = seen(raw: raw, state: .canceled)
         return .accepted
+    }
+
+    /// End Agent: the turn is cancelled if one is running, the session is
+    /// dropped here and remembered as ended so the next launch's list does
+    /// not bring it back. OpenCode keeps the session in its own store.
+    public func forget(_ id: AgentSession.ID) async {
+        guard let raw = providerID(of: id) else { return }
+        turns[raw]?.cancel()
+        if connected { _ = try? await client.cancel(session: raw) }
+        sessions[raw] = nil
+        loaded.remove(raw)
+        asking[id] = nil
+        ledger?.forget(raw, provider: self.id)
     }
 
     /// A local agent has no page to open. `SessionRow.Door` already knows how

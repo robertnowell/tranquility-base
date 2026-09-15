@@ -168,6 +168,23 @@ final class ACPProviderTests: XCTestCase {
                        "nothing replayed was announced")
     }
 
+    /// End Agent: forgotten here, and not adopted again at the next launch.
+    func testAForgottenSessionIsGoneAndStaysGoneAcrossALaunch() async throws {
+        let ledger = ledger()
+        ledger.mark("opencode")
+        let listing = #"{"sessions":[{"sessionId":"ses_live","title":"Three planet paragraphs","cwd":"/x"}]}"#
+        let (provider, pipe) = registered(ledger: ledger, listing: listing)
+        let found = try await provider.mine()
+        let id = try XCTUnwrap(found.first?.id)
+        await provider.forget(id)
+        let after = try await provider.mine()
+        XCTAssertEqual(after.map(\.providerID), [], "the list still has it; this provider does not")
+        XCTAssertTrue(pipe.methods.contains("session/cancel"))
+        let (relaunched, _) = registered(ledger: ledger, listing: listing)
+        let next = try await relaunched.mine()
+        XCTAssertEqual(next.map(\.providerID), [], "End Agent survives a relaunch, or the row refuses to end")
+    }
+
     /// A second prompt does not load again.
     func testASessionIsLoadedOnce() async throws {
         let ledger = ledger()

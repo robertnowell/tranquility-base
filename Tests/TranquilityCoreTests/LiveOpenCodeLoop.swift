@@ -120,5 +120,24 @@ final class LiveOpenCodeLoop: XCTestCase {
                                read: .none, harness: row.harness, door: row.door)
         XCTAssertEqual(SessionRow.action(for: heard), .openShell(open, directory: toy))
         print("LOOP: row name=\(row.name) lamp=\(row.lamp) words=\(words.prefix(60))")
+
+        // 5. Read state: the grid's unread set comes from the waiting list, which
+        // joins the heard cursor. Hearing the turn clears it.
+        func unread() throws -> Set<String> {
+            Set(try coordinator.waiting().filter { !$0.heard }.map(\.sessionId))
+        }
+        XCTAssertTrue(try unread().contains(id), "unread before it is heard")
+        try store.advanceCursor(sessionId: id, heardThrough: latest!.latestId)
+        XCTAssertFalse(try unread().contains(id), "heard clears the read state")
+        XCTAssertEqual(try store.firstUtteranceText(to: id).map(HeardContext.spokenPart), said,
+                       "the opening the summary asks with")
+        let spooled = try XCTUnwrap(latest?.cwd)
+        XCTAssertEqual(spooled, toy, "the event carries the agent's real directory")
+
+        // 6. End Agent: gone from the snapshot, and not adopted by a fresh provider.
+        await poller.end(id)
+        XCTAssertNil(poller.snapshot.agent(id))
+        XCTAssertFalse(try coordinator.waiting().map(\.sessionId).contains(id),
+                       "no longer live once ended")
     }
 }

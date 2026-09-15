@@ -111,7 +111,9 @@ public enum RemoteSpool {
             // repository, and "importer" is a better name than eight hex
             // characters. Nil for a provider with no repository, which
             // projectLabel already handles by falling back to the id.
-            self.cwd = agent?.repository
+            // A real directory when the agent has one on this Mac (an ACP
+            // child's cwd): the summary request and the branch lookup read it.
+            self.cwd = agent?.directory ?? agent?.repository
             self.lastAssistantMessage = text.isEmpty ? nil : text
             self.notificationMatcher = matcher
         }

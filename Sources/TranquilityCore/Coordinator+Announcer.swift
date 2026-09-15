@@ -392,10 +392,23 @@ extension Coordinator {
         let lexicon = Lexicon.harvest(
             store: store, liveSessionNames: liveSessions?.compactMap(\.name) ?? [])
 
+        // A REMOTE TURN NEEDS ITS OPENING TOO. With no first user message the
+        // model was asked to recap an answer to a question it could not see,
+        // said `recap: null`, and the gateway called that a provider failure:
+        // every OpenCode turn fell to the deterministic floor and was read
+        // out verbatim with no ladder (reproduced against the model, 15 Sep;
+        // with the opening supplied the same message got a recap and a
+        // goal). The utterance this app dispatched is the opening, from the
+        // other side; the panel's framing is stripped the way the row's title
+        // strips it.
+        let opening = context?.firstUserMessage
+            ?? (isRemote(event.sessionId)
+                ? (try? store.firstUtteranceText(to: event.sessionId))?.flatMap(HeardContext.spokenPart)
+                : nil)
         let summary = await summarizer.summarize(SummaryRequest(
             lastAssistantMessage: lastMessage,
             projectLabel: event.projectLabel,
-            firstUserMessage: context?.firstUserMessage,
+            firstUserMessage: opening,
             // The transcript first, then the working directory. A session
             // whose own cwd is not a repository records "HEAD" for every
             // entry while doing all of its work inside worktrees that are each

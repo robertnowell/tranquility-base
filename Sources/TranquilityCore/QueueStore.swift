@@ -730,6 +730,19 @@ public final class QueueStore: Sendable {
         try dbQueue.read { db in try Utterance.fetchOne(db, key: id) }
     }
 
+    /// The first thing the user said to a session through this app, or nil.
+    /// A remote agent has no transcript on this Mac to read an opening from;
+    /// the utterance the app dispatched is the same fact from the other side.
+    public func firstUtteranceText(to sessionId: String) throws -> String? {
+        try dbQueue.read { db in
+            try String.fetchOne(db, sql: """
+                SELECT transcriptText FROM utterances
+                WHERE targetSessionId = ? AND transcriptText IS NOT NULL AND transcriptText != ''
+                ORDER BY createdAtMs ASC LIMIT 1
+                """, arguments: [sessionId])
+        }
+    }
+
     public func utterances(status: UtteranceStatus? = nil, limit: Int = 50) throws -> [Utterance] {
         try dbQueue.read { db in
             var request = Utterance.order(Column("createdAtMs").desc).limit(limit)
