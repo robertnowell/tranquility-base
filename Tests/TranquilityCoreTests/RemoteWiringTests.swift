@@ -20,6 +20,52 @@ final class RemoteWiringTests: XCTestCase {
 
     /// Absent means not connected. A machine with no provider draws no remote
     /// rows and starts no poller, which is most machines.
+    override func setUp() {
+        super.setUp()
+        // Not this Mac's binaries. The registry now spawns every installed
+        // catalog entry, and a test that read the real search paths would pass
+        // or fail by what happens to be installed here (recorded three times
+        // on 14 Sep). Each test says what is installed.
+        AgentProviders.installedACP = { [] }
+    }
+    override func tearDown() { AgentProviders.installedACP = { ACPCatalog.installed() }; super.tearDown() }
+
+    private func opencodeInstalled() -> [(entry: ACPCatalog.Entry, command: [String])] {
+        [(ACPCatalog.published.first { $0.id == "opencode" }!, ["/fake/bin/opencode", "acp"])]
+    }
+
+    /// **One vendor, one route.** With the binary installed, OpenCode is the
+    /// protocol provider this app spawns, and it counts as configured with no
+    /// base URL at all: the binary is its address.
+    func testAnInstalledAgentIsRegisteredAndConfiguredWithNoAddress() throws {
+        AgentProviders.installedACP = opencodeInstalled
+        let url = try config(#"{"app":{"base_url":"https://hq.example.test"}}"#)
+        let registry = AgentProviders.registry(config: url, secret: { _ in nil })
+        XCTAssertEqual(registry.providers.map(\.id), ["opencode"])
+        XCTAssertTrue(registry.providers[0] is ACPProvider)
+        XCTAssertEqual(registry.configured(config: url).map(\.id), ["opencode"],
+                       "a spawnable provider needs no base URL to be polled")
+    }
+
+    /// And with the binary installed, a base URL for the same vendor does NOT
+    /// add a second provider under the same id: `RemoteDispatchTransport`
+    /// resolves by id and would answer through whichever it found first.
+    func testTheHTTPRouteYieldsToTheSpawnableOneUnderOneId() throws {
+        AgentProviders.installedACP = opencodeInstalled
+        let url = try config(#"{"providers":{"opencode":{"base_url":"http://127.0.0.1:4096"}}}"#)
+        let built = AgentProviders.registry(config: url, secret: { _ in nil }).providers
+        XCTAssertEqual(built.map(\.id), ["opencode"])
+        XCTAssertTrue(built[0] is ACPProvider, "the app spawns it; the address is for machines that cannot")
+    }
+
+    /// Registering costs nothing: no process runs until a session is started.
+    func testARegisteredProtocolProviderRunsNoProcessUntilStarted() throws {
+        AgentProviders.installedACP = { [(ACPCatalog.published[0], ["/definitely/not/a/binary", "acp"])] }
+        let url = try config(#"{"app":{"base_url":"https://hq.example.test"}}"#)
+        // A missing binary would throw on spawn; building the registry must not spawn.
+        XCTAssertNoThrow(AgentProviders.registry(config: url, secret: { _ in nil }))
+    }
+
     func testAMachineWithNothingConfiguredGetsAnEmptyRegistry() throws {
         let url = try config(#"{"app":{"base_url":"https://hq.example.test"}}"#)
         XCTAssertTrue(AgentProviders.registry(config: url, secret: { _ in nil })

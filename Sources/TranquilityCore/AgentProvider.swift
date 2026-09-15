@@ -105,9 +105,15 @@ public protocol AgentProvider: Sendable {
 /// reasoning `Coordinator` gives for injecting everything it uses.
 public struct AgentProviderRegistry: Sendable {
     public let providers: [any AgentProvider]
+    /// Providers this app spawns itself, which need no address: an installed
+    /// binary is their address. Named here rather than as a capability on the
+    /// provider, because a capability nothing reads is rule 5's failure and
+    /// this set is read in exactly one place, `configured()`.
+    public let spawnable: Set<String>
 
-    public init(_ providers: [any AgentProvider]) {
+    public init(_ providers: [any AgentProvider], spawnable: Set<String> = []) {
         self.providers = providers
+        self.spawnable = spawnable
     }
 
     public func provider(_ id: String) -> (any AgentProvider)? {
@@ -119,7 +125,7 @@ public struct AgentProviderRegistry: Sendable {
     /// does, and conflating them puts a row on the panel for a service nobody
     /// here has heard of.
     public func configured(config: URL = HubApp.configPath) -> [any AgentProvider] {
-        let addressed = Set(ProviderConfig.configured(config: config))
+        let addressed = Set(ProviderConfig.configured(config: config)).union(spawnable)
         return providers.filter { addressed.contains($0.id) }
     }
 }
