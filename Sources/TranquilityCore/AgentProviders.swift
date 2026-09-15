@@ -38,11 +38,13 @@ public enum AgentProviders {
         let workspace = AgentDefaults.fallbackDirectory
         for (entry, command) in installedACP() {
             let transport = ACPProcessTransport(command: command, cwd: workspace)
+            let binary = command[0]
             built.append(ACPProvider(id: entry.id,
                                      client: ACPClient(transport: transport),
                                      cwd: workspace,
                                      start: { try transport.start() },
-                                     ledger: ledger))
+                                     ledger: ledger,
+                                     open: { entry.openLine(session: $0, binary: binary) }))
         }
         let spawnable = Set(built.map(\.id))
 

@@ -58,6 +58,27 @@ final class RemoteSpoolTests: XCTestCase {
         }
     }
 
+    /// **Only the transition is a turn.** A change while already finished (a
+    /// title arriving, a list re-read) wrote a bare stop line AFTER the words,
+    /// and the announcer reads a session's latest: Robert's first OpenCode
+    /// turn was spoken as "finished a turn" (15 Sep). The poller stamps what
+    /// it knew before; unknown fails open.
+    func testAChangeWhileAlreadyFinishedIsNotASecondTurn() {
+        var finished = agent(state: .completed)
+        finished.title = "Recent work recap"
+        var again = event(.changed(finished))
+        again.previously = .completed
+        XCTAssertEqual(RemoteSpool.lines(for: again, agent: finished), [])
+
+        var ending = event(.changed(finished))
+        ending.previously = .working
+        XCTAssertEqual(RemoteSpool.lines(for: ending, agent: finished).count, 1)
+
+        let unknown = event(.changed(finished))
+        XCTAssertEqual(RemoteSpool.lines(for: unknown, agent: finished).count, 1,
+                       "with no memory of before, the ending is written rather than lost")
+    }
+
     func testAFailureCarriesItsReason() {
         let lines = RemoteSpool.lines(for: event(.failed(reason: "the sandbox died")),
                                       agent: agent())

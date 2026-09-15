@@ -26,11 +26,27 @@ public struct ACPCatalog: Sendable {
         /// because a catalog must not hard-code where somebody installed
         /// something.
         public let command: [String]
+        /// The vendor's own interface on this Mac, opened on one session:
+        /// argv with `{session}` where the agent's session id goes, and the
+        /// same binary as `command`. Nil when the vendor has no such door,
+        /// which is honest rather than a gap. OpenCode: `--session`, verified
+        /// against 1.18.31's `--help` on 15 Sep.
+        public let open: [String]?
 
-        public init(id: String, name: String, command: [String]) {
+        public init(id: String, name: String, command: [String], open: [String]? = nil) {
             self.id = id
             self.name = name
             self.command = command
+            self.open = open
+        }
+
+        /// The shell line that opens `session` in the vendor's interface,
+        /// with the binary at `resolved` (the first element of the resolved
+        /// `command`). Nil when the vendor has no door.
+        public func openLine(session: String, binary: String) -> String? {
+            guard let open else { return nil }
+            let argv = [binary] + open.dropFirst().map { $0 == "{session}" ? session : $0 }
+            return argv.map(SessionLauncher.shellQuoted).joined(separator: " ")
         }
     }
 
@@ -41,7 +57,8 @@ public struct ACPCatalog: Sendable {
     /// machine has them: `installed()` answers that, and a table that hid what
     /// it did not find would make "which agents could I use" unanswerable.
     public static let published: [Entry] = [
-        Entry(id: "opencode",     name: "OpenCode",      command: ["opencode", "acp"]),
+        Entry(id: "opencode",     name: "OpenCode",      command: ["opencode", "acp"],
+              open: ["opencode", "--session", "{session}"]),
         Entry(id: "cursor",       name: "Cursor",        command: ["cursor-agent", "acp"]),
         Entry(id: "devin",        name: "Devin",         command: ["devin", "acp"]),
         Entry(id: "gemini",       name: "Gemini CLI",    command: ["gemini", "--experimental-acp"]),

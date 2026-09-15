@@ -43,7 +43,8 @@ public enum RemoteSpool {
                               text: request.asked, agent: agent,
                               matcher: "agent_question")]
 
-        case .changed(let session) where session.state.isFinished:
+        case .changed(let session) where session.state.isFinished
+            && event.previously?.isFinished != true:
             // A TURN THAT ENDED HAS TO BE WRITTEN, and this is the part that is
             // easy to miss: the green lamp comes from an undismissed stop event
             // in the local database, not from the provider's verdict. Without a
@@ -65,6 +66,13 @@ public enum RemoteSpool {
             // A state change that is not an ending is not news either: the row
             // already shows it from the poller's snapshot, and a spool line
             // would speak every transition from working to idle out loud.
+            //
+            // Nor is a change while ALREADY finished: a title arriving, a list
+            // re-read. Only the transition into finished is a turn ending, and
+            // `AgentEvent.previously` is how that is told apart. Robert's
+            // first OpenCode turn (15 Sep) was announced as "finished a turn"
+            // because the title update that followed the words wrote a bare
+            // stop line after them, and the announcer reads the latest.
             return []
 
         case .appeared, .answered:

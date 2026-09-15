@@ -199,6 +199,9 @@ public struct SessionRow: Equatable, Sendable {
         case terminal
         /// A page in the provider's own interface. crobot has one per task.
         case page(URL)
+        /// A program on this Mac that opens the agent: OpenCode's own TUI on
+        /// the session. Run in a Terminal window in `directory`.
+        case shell(String, directory: String)
         /// Neither, and that is honest rather than a gap: a local
         /// `opencode serve` has no web page and no terminal of ours. Go to
         /// Agent has nowhere to go, so it is not offered.
@@ -208,6 +211,15 @@ public struct SessionRow: Equatable, Sendable {
         public var isPage: Bool {
             if case .page = self { return true }
             return false
+        }
+
+        /// Opens somewhere, and it is not a pane this Mac owns: a page or a
+        /// program. The card offers Go to Agent for either.
+        public var isRemote: Bool {
+            switch self {
+            case .page, .shell: return true
+            case .terminal, .none: return false
+            }
         }
 
         /// The page, when there is one. The card asks for this to decide
@@ -320,6 +332,8 @@ public struct SessionRow: Equatable, Sendable {
         /// Go to Agent for a row whose agent lives on a web page rather than
         /// in a pane. Same verb to the user, different door.
         case openPage(URL)
+        /// A remote agent whose interface is a program on this Mac.
+        case openShell(String, directory: String)
         /// Proven gone, and its directory is still there: bring it back.
         case revive
         /// Unlit but unproven — the probe could not answer, or the
@@ -364,7 +378,7 @@ public struct SessionRow: Equatable, Sendable {
         // page still lands on `.none`, through `goTo`, for the reason stated
         // there.
         case .ready:
-            if row.door.isPage || row.read == .none { return goTo(row) }
+            if row.door.isRemote || row.read == .none { return goTo(row) }
             return .announce
         case .unlit: return row.revivable ? .revive : .none
         }
@@ -379,6 +393,7 @@ public struct SessionRow: Equatable, Sendable {
         switch row.door {
         case .terminal: return .goToAgent
         case .page(let url): return .openPage(url)
+        case .shell(let command, let directory): return .openShell(command, directory: directory)
         // Offering a door that opens on nothing is worse than offering none:
         // it reads as broken rather than as absent.
         case .none: return .none
@@ -448,7 +463,7 @@ public struct SessionRow: Equatable, Sendable {
         // same verb through a different door, and an agent you can open is an
         // agent that exists. Listing it here rather than defaulting, because a
         // default is what let the menu and the left-click drift apart before.
-        case .announce, .goToAgent, .openPage: return true
+        case .announce, .goToAgent, .openPage, .openShell: return true
         case .revive, .none: return false
         }
     }

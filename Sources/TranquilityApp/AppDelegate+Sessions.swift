@@ -242,6 +242,8 @@ extension AppDelegate {
         case .agentTerminal:
             guard let resolved else { return }
             goToSession(resolved)
+        case .agentShell(let command, let directory):
+            openShell(command, in: directory)
         case .agentPage(let url):
             // The remote half of `agentTerminal`. `goToSession` focuses a pane
             // this Mac owns, and a remote agent has none; its provider already
@@ -1524,6 +1526,32 @@ extension AppDelegate {
                 "because": .token(reason),
                 "detail": .prose(verdict.summary
                     + (verdict.evidence.isEmpty ? "" : ", " + verdict.evidence))])
+        }
+    }
+
+    /// Go to Agent for an agent whose interface is a program on this Mac:
+    /// a Terminal window running it in the agent's directory. OpenCode's TUI
+    /// opens the same session the protocol provider is driving
+    /// (`opencode --session`), so what you see there is what you have been
+    /// talking to. Off the main thread, like every other AppleScript here.
+    func openShell(_ command: String, in directory: String) {
+        let line = SessionLauncher.manualLaunch(directory: directory, command: command)
+        Permissions.log("door: shell in \(directory): \(command)")
+        Task.detached(priority: .userInitiated) {
+            // Every dynamic piece goes through `quoted form of`, never
+            // Swift-side escaping (the rule `TerminalTabFocus` records).
+            let literal = line.replacingOccurrences(of: "\\", with: "\\\\")
+                .replacingOccurrences(of: "\"", with: "\\\"")
+            let script = """
+                tell application "Terminal"
+                  activate
+                  do script "\(literal)"
+                end tell
+                """
+            if case .failure(let error) = AppleScript.run(script: script) {
+                Failures.report(.launchFailed, reason: "shell door: \(error)",
+                                card: "Couldn't open a Terminal for that agent: \(error)")
+            }
         }
     }
 

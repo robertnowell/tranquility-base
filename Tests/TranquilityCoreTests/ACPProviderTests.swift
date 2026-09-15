@@ -208,6 +208,9 @@ final class ACPProviderTests: XCTestCase {
         XCTAssertEqual(ACPProvider.headline("  short  "), "short")
         XCTAssertEqual(ACPProvider.headline(String(repeating: "x", count: 80)).count, 60)
         XCTAssertEqual(ACPProvider.headline("first\nsecond"), "first")
+        XCTAssertEqual(ACPProvider.headline("[assistant]: How should we get started?\n\n[user]: Tell me about recent work."),
+                       "Tell me about recent work.",
+                       "the panel's framing is not the title; the user's words are")
     }
 
     /// **Capabilities come off the wire, not out of the catalog.** Before the

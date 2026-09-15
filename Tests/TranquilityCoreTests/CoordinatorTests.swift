@@ -220,6 +220,32 @@ final class CoordinatorTests: XCTestCase {
             lastAssistantMessage: "a turn finished", tty: "ttys001"))
     }
 
+    // MARK: - A remote agent is live by its provider's word
+
+    /// It has no pid on this Mac and is in no registry, so both liveness
+    /// probes say gone: never announced on its own, and swept 120 s after it
+    /// was started (15 Sep, Robert's first OpenCode agent). The poller's
+    /// snapshot is its liveness, and `isRemote` is how the coordinator asks.
+    func testARemoteAgentIsWaitingWithoutALocalProcess() throws {
+        let remote = AgentSession.id("ses_live", provider: "opencode")
+        try appendWithTranscript(session: remote, entrypoint: "cli", at: 3_000)
+        let coordinator = Coordinator(
+            store: store,
+            summarizer: SummarizerChain(providers: [FixedSummary()]),
+            speech: SpeechChain(preferred: SilentSpeech(), fallback: SilentSpeech()),
+            gate: InterruptGate(minimumIdleSeconds: 0, signals: .quiescent),
+            tmuxTransport: RecordingTransport(),
+            isRemote: { $0 == remote },
+            enrolment: EnrolmentRegistry(url: tmpDir.appendingPathComponent("e3.json")),
+            agents: FakeAgents(live: []),
+            sweep: SessionSweep(),
+            recovery: RecoveryChain(providers: [FixedTranscript(text: "x")],
+                                    maxAttemptsPerProvider: 1, backoff: [0]),
+            readinessGrace: 0)
+        let waiting = try coordinator.waiting().map { $0.sessionId }
+        XCTAssertEqual(waiting, [remote])
+    }
+
     // MARK: - Only sessions a person started are announced
 
     /// Liveness used to do this job by accident, and the accident held only

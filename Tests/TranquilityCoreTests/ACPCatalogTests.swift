@@ -3,14 +3,27 @@ import XCTest
 
 final class ACPCatalogTests: XCTestCase {
 
-    /// **An entry is a name and a command, and nothing else.** The moment a
+    /// **An entry is a name and commands, and nothing else.** The moment a
     /// capability column appears here it is a copy of somebody else's fact
     /// that goes stale on their next release, which is precisely what the
-    /// handshake exists to prevent. This test is the tripwire.
+    /// handshake exists to prevent. This test is the tripwire. `open` is the
+    /// second command (the vendor's own interface on a session), argv like
+    /// `command` and the same kind of fact: where a binary is and what to
+    /// pass it, which no handshake can tell us.
     func testAnEntryDeclaresNoCapabilities() {
         let mirror = Mirror(reflecting: ACPCatalog.published[0])
-        XCTAssertEqual(Set(mirror.children.compactMap(\.label)), ["id", "name", "command"],
+        XCTAssertEqual(Set(mirror.children.compactMap(\.label)), ["id", "name", "command", "open"],
                        "a catalog entry grew a field; capabilities come from the handshake")
+    }
+
+    /// The door opens the same binary the protocol runs, on the session.
+    func testTheOpenLineIsTheSameBinaryOnTheSession() {
+        let entry = ACPCatalog.published.first { $0.id == "opencode" }!
+        XCTAssertEqual(entry.openLine(session: "ses_1", binary: "/x/bin/opencode"),
+                       "'/x/bin/opencode' '--session' 'ses_1'")
+        let cursor = ACPCatalog.published.first { $0.id == "cursor" }!
+        XCTAssertNil(cursor.openLine(session: "s", binary: "/x/cursor-agent"),
+                     "a vendor with no known door offers none rather than a guess")
     }
 
     func testEveryPublishedEntryHasAUniqueIdAndANonEmptyCommand() {

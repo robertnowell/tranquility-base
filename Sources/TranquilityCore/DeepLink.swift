@@ -62,6 +62,8 @@ public enum DeepLink {
         case agentTerminal
         /// The agent's own page, for one that has no pane of ours.
         case agentPage(URL)
+        /// The agent's own program on this Mac, for one that has no pane of ours.
+        case agentShell(String, directory: String)
         case revive
         case refused
         case invitation
@@ -87,6 +89,7 @@ public enum DeepLink {
         // destination in meaning as a terminal, different door, and the enum
         // says which so no caller has to ask what kind of agent it was.
         case .openPage(let url): return .agentPage(url)
+        case .openShell(let command, let directory): return .agentShell(command, directory: directory)
         case .revive:    return .revive
         case .none?:     return .refused
         case nil:        return hasCompletedTurn ? .conversationCard : .invitation

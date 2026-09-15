@@ -65,6 +65,18 @@ public struct AgentSession: Sendable, Equatable, Identifiable {
     public var pullRequest: URL?
     /// Where a person looks at this agent in the provider's own interface.
     public var url: URL?
+    /// The provider's own interface on THIS Mac, when it is a program rather
+    /// than a page: OpenCode's TUI opens a session with `opencode --session`.
+    /// Go to Agent for a row with no pane and no page (#470).
+    public var shell: ShellDoor?
+
+    public struct ShellDoor: Sendable, Equatable {
+        public var command: String
+        public var directory: String
+        public init(command: String, directory: String) {
+            self.command = command; self.directory = directory
+        }
+    }
 
     public init(id: ID, provider: String, title: String = "",
                 state: AgentSessionState = .unknown, updatedAt: Date = Date(),
@@ -436,6 +448,15 @@ public struct AgentEvent: Sendable, Equatable {
     public var session: AgentSession.ID
     public var at: Date
     public var kind: Kind
+    /// What the poller knew this agent's state to be BEFORE this event, or
+    /// nil when it knew nothing. Stamped by the poller on the way out, never
+    /// by a provider: a provider reports what is, the poller is the one that
+    /// remembers what was. It exists so a spool writer can tell a turn ENDING
+    /// from any later change while the agent sits finished (a title arriving,
+    /// a list re-read): the first is a turn, the second is not, and writing
+    /// the second as a bare stop line put "finished a turn" over the words
+    /// the agent had just said (15 Sep, Robert's first OpenCode turn).
+    public var previously: AgentSessionState?
 
     public enum Kind: Sendable, Equatable {
         /// First sight of an agent, carrying everything known about it.

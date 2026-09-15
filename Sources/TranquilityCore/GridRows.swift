@@ -526,7 +526,9 @@ public extension GridAssembler {
                 // The provider said where this agent lives, or said it lives
                 // nowhere you can open. Either way the row carries the answer
                 // and nothing downstream asks what kind of agent it is.
-                door: agent.url.map { .page($0) } ?? SessionRow.Door.none,
+                door: agent.url.map { .page($0) }
+                    ?? agent.shell.map { .shell($0.command, directory: $0.directory) }
+                    ?? SessionRow.Door.none,
                 // The provider's own answer, which is the whole point: this
                 // band is enumerated last, so without a timestamp it could
                 // never join the order however recently the agent spoke.

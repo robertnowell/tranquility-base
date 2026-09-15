@@ -22,6 +22,9 @@ public actor ACPProvider: AgentProvider {
     /// provider built by hand (tests, probes), which then never spawns on a
     /// list and never survives one either.
     private let ledger: ProviderLedger?
+    /// The vendor's own interface on this session, as a shell line, or nil.
+    /// Go to Agent for a row with no pane and no page.
+    private let open: @Sendable (String) -> String?
 
     /// What the agent declared at handshake, translated. `.none` until the
     /// handshake lands: a provider that claimed abilities before asking would
@@ -63,12 +66,14 @@ public actor ACPProvider: AgentProvider {
 
     public init(id: String, client: ACPClient, cwd: String,
                 start: @escaping @Sendable () throws -> Void = {},
-                ledger: ProviderLedger? = nil) {
+                ledger: ProviderLedger? = nil,
+                open: @escaping @Sendable (String) -> String? = { _ in nil }) {
         self.id = id
         self.client = client
         self.cwd = cwd
         self.start = start
         self.ledger = ledger
+        self.open = open
         // The stream is opened HERE, not in a separate async call, so a
         // synchronous registry can build the provider at launch and hand
         // `changes()` to the poller before any process exists. The continuation
@@ -195,6 +200,7 @@ public actor ACPProvider: AgentProvider {
         // The place, so an untitled row reads as the agent in its workspace
         // rather than as eight hex characters (#470).
         fresh.repository = URL(fileURLWithPath: cwd).lastPathComponent
+        fresh.shell = door(raw)
         sessions[raw] = fresh
         emit(fresh.id, .appeared(fresh))
         return fresh
@@ -239,7 +245,8 @@ public actor ACPProvider: AgentProvider {
         guard supportsList else { return }
         for item in (try? await client.listSessions(cwd: cwd)) ?? [] {
             if sessions[item.sessionId] == nil {
-                let session = item.agentSession(provider: id)
+                var session = item.agentSession(provider: id)
+                session.shell = door(item.sessionId)
                 sessions[item.sessionId] = session
                 emit(session.id, .appeared(session))
             } else if let title = ACPWire.SessionList.Item.name(item.title),
@@ -315,9 +322,16 @@ public actor ACPProvider: AgentProvider {
         }
     }
 
-    /// The first line of what was said, cut to a row's width.
+    /// The first line of what the USER said, cut to a row's width. A reply
+    /// through the panel is framed as `[assistant]: <heard>` then
+    /// `[user]: <said>` (`HeardContext`); the row wore the first half
+    /// (Robert, 15 Sep: a row titled "[assistant]: How should we get
+    /// started?"). The user's own words are the title; the framing is not.
     static func headline(_ text: String) -> String {
-        let line = text.split(whereSeparator: \.isNewline).first.map(String.init) ?? text
+        let spoken = text.range(of: HeardContext.userLabel).map { String(text[$0.upperBound...]) } ?? text
+        let line = spoken.split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .first { !$0.isEmpty } ?? spoken
         let trimmed = line.trimmingCharacters(in: .whitespaces)
         return trimmed.count <= 60 ? trimmed : String(trimmed.prefix(59)) + "…"
     }
@@ -378,6 +392,10 @@ public actor ACPProvider: AgentProvider {
     /// A local agent has no page to open. `SessionRow.Door` already knows how
     /// to mean "nowhere", which is better than inventing a URL that 404s.
     public nonisolated func url(for id: AgentSession.ID) -> URL? { nil }
+
+    private func door(_ raw: String) -> AgentSession.ShellDoor? {
+        open(raw).map { AgentSession.ShellDoor(command: $0, directory: cwd) }
+    }
 
     private func providerID(of id: AgentSession.ID) -> String? {
         sessions.first(where: { $0.value.id == id })?.key
