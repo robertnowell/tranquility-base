@@ -6,6 +6,14 @@
     <description>Updates for Tranquility Base.</description>
     <language>en</language>
     <item>
+      <title>Version 0.3.1223</title>
+      <sparkle:version>1223</sparkle:version>
+      <sparkle:shortVersionString>0.3.1223</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <pubDate>Tue, 15 Sep 2026 22:54:43 +0000</pubDate>
+      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1223-804b71b89/TranquilityBase-0.3.1223.dmg" type="application/octet-stream" length="15482954" sparkle:edSignature="pCOSYXzwyymebDA/erUFA4yflh9VIS3xXKpFsKdwqa9ThiikHGh0M2CH861F8ZDhI3mtzwt2gitRjyh0t+neDw==" />
+    </item>
+    <item>
       <title>Version 0.3.1222</title>
       <sparkle:version>1222</sparkle:version>
       <sparkle:shortVersionString>0.3.1222</sparkle:shortVersionString>
@@ -77,16 +85,8 @@
       <pubDate>Tue, 15 Sep 2026 17:31:19 +0000</pubDate>
       <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1211-893d89e25/TranquilityBase-0.3.1211.dmg" type="application/octet-stream" length="15435187" sparkle:edSignature="62f3IUTrobn10yQ+83qxXILhRyAWJO5iw7QKzatXKbYyx7evTOUr1qAFTSjY6oIito1osK3iNoc14OrJKkKlDw==" />
     </item>
-    <item>
-      <title>Version 0.3.1210</title>
-      <sparkle:version>1210</sparkle:version>
-      <sparkle:shortVersionString>0.3.1210</sparkle:shortVersionString>
-      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <pubDate>Tue, 15 Sep 2026 17:16:30 +0000</pubDate>
-      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1210-81c6e12ce/TranquilityBase-0.3.1210.dmg" type="application/octet-stream" length="15422687" sparkle:edSignature="Gh6jAWZK8a5P5pYheFoKbTjw7KwE04D8RYkVLqqvzoeWkXMCLNkySJxPiyS5dvtcG/fa47RA9TU6scT1+wKEDg==" />
-    </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: nJUbpSV0CBY3Q7VWNP09NENhhhpBunO8q/TuBFugc30OvEapBFmBsRQUtdHuDiY+BQjfa0NXUAaGb6EODOYnCg==
+edSignature: Enar+glnDXKWebqKxnGm1Bagwn/Igyqv3PkfuVPq8/d+biPipcxM6jVQhP6H9F3OdZqqMfB7YbSYWe8ZtWM1BQ==
 length: 6457
 -->
