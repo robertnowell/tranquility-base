@@ -867,7 +867,7 @@ extension AppDelegate {
     @objc func editKey(_ sender: NSMenuItem) {
         guard let raw = sender.representedObject as? String,
               let key = Secrets.Key(rawValue: raw) else { return }
-        KeySheet.prompt(for: key) { status in
+        KeySheet.prompt(for: key) { status, _ in
             // The menu is gone by the time a verdict lands, so it goes to the
             // HUD, which is where this app already says things that outlive the
             // click that caused them.

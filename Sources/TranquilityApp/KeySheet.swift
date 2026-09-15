@@ -22,7 +22,7 @@ enum KeySheet {
     /// again with the verdict. Saving and verifying are separate on purpose --
     /// see `save` below.
     static func prompt(for key: Secrets.Key,
-                       onStatus: @escaping @MainActor (String) -> Void) {
+                       onStatus: @escaping @MainActor (_ status: String, _ settled: Bool) -> Void) {
         NSApp.activate(ignoringOtherApps: true)
         let stored = Secrets.read(key) != nil
 
@@ -75,7 +75,7 @@ enum KeySheet {
     /// failure than leaving a bad one in place. They can retype it; they cannot
     /// un-delete it.
     private static func save(_ key: Secrets.Key, value: String,
-                             onStatus: @escaping @MainActor (String) -> Void) {
+                             onStatus: @escaping @MainActor (_ status: String, _ settled: Bool) -> Void) {
         // Forget the old verdict FIRST. It is about a credential that is no
         // longer stored, and leaving it in place would keep a lamp amber over a
         // key that has just been replaced.
@@ -85,11 +85,11 @@ enum KeySheet {
         } catch {
             // Said out loud, never swallowed: a key that silently failed to save
             // looks exactly like a key that was never typed.
-            onStatus("could not save. \(error.localizedDescription)")
+            onStatus("could not save. \(error.localizedDescription)", true)
             Permissions.log("keys: write failed for \(key.rawValue) -- \(error)")
             return
         }
-        onStatus("checking with \(key.provider)...")
+        onStatus("checking with \(key.provider)...", false)
         Task.detached {
             let outcome = await KeyCheck.verify(key, value: value)
             await MainActor.run {
@@ -98,10 +98,10 @@ enum KeySheet {
                 // key the provider had just refused kept a green lamp beside
                 // the refusal. See `KeyVerdict`.
                 KeyVerdict.record(outcome, for: key)
-                onStatus(outcome.summary)
+                onStatus(outcome.summary, true)
                 // The verdict, never the value.
                 Permissions.log("keys: \(key.rawValue) -- \(outcome.summary)")
-                if outcome.isBad { announceRejection(key, outcome) }
+                if outcome.isBad { announceRejection(key, outcome, onStatus: onStatus) }
             }
         }
     }
@@ -112,7 +112,11 @@ enum KeySheet {
     /// different: it is the one verdict that means the thing the user just did
     /// did not take, and the cost of missing it is silence hours later in the
     /// away-channel, where nothing on screen connects the symptom to the cause.
-    private static func announceRejection(_ key: Secrets.Key, _ outcome: KeyCheck.Outcome) {
+    /// The retry keeps the caller's status closure. It used to re-prompt with
+    /// `{ _ in }`, so a key pasted right on the second try reported nothing to
+    /// the row that had just shown the rejection.
+    private static func announceRejection(_ key: Secrets.Key, _ outcome: KeyCheck.Outcome,
+                                          onStatus: @escaping @MainActor (_ status: String, _ settled: Bool) -> Void) {
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = "\(key.provider) did not accept that key"
@@ -128,7 +132,7 @@ enum KeySheet {
         alert.addButton(withTitle: "Try again")
         alert.addButton(withTitle: "Leave it")
         if alert.runModal() == .alertFirstButtonReturn {
-            prompt(for: key) { _ in }
+            prompt(for: key, onStatus: onStatus)
         }
     }
 }
