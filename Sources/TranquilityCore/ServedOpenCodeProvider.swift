@@ -149,15 +149,32 @@ public actor ServedOpenCodeProvider: AgentProvider {
         _ = seen(raw: raw, state: .working)
     }
 
-    /// The turn ended: the ending, then the words, once, from what the server stored.
+    /// The turn ended: the ending, then the words, from what the server
+    /// stored. EVERY agent message the turn produced, in order, keyed by
+    /// its own id: the last one is what the announcer speaks, and the ones
+    /// before it are what the hub page shows. With only the last message
+    /// carried, a research session's hub had the app's own lines and none
+    /// of the agent's (Robert, 16 Sep 2:15 PM: "still nothing in the hub").
     private func finished(_ raw: String) async {
         let session = seen(raw: raw, state: .completed)
-        if let last = (try? await client.transcript(raw))?.last(where: { $0.role == .agent }),
-           lastSaid[raw] != last.id {
-            lastSaid[raw] = last.id
-            emit(session.id, .said(last))
-        }
+        await sayNewTurns(raw, session: session)
         await retitled(raw)
+    }
+
+    /// The agent messages not yet said for this session, oldest first.
+    private func sayNewTurns(_ raw: String, session: AgentSession) async {
+        guard let turns = try? await client.transcript(raw) else { return }
+        let agentTurns = turns.filter { $0.role == .agent }
+        let fresh: [Turn]
+        if let last = lastSaid[raw], let index = agentTurns.lastIndex(where: { $0.id == last }) {
+            fresh = Array(agentTurns[(index + 1)...])
+        } else {
+            fresh = agentTurns
+        }
+        for turn in fresh {
+            lastSaid[raw] = turn.id
+            eventContinuation?.yield(AgentEvent(provider: id, session: session.id, at: turn.at, kind: .said(turn)))
+        }
     }
 
     private func asked(_ raw: String) async {
@@ -234,17 +251,12 @@ public actor ServedOpenCodeProvider: AgentProvider {
                 decorate(&session, raw: raw)
                 sessions[raw] = session
                 emit(session.id, .appeared(session))
-                // Adopted WITH its last turn, so the row is the same kind of
-                // row a local one is: a turn in the store to read on a tap,
-                // rather than a door because there is nothing to say. Stamped
-                // with the turn's own time, so the spool's stable id is the
-                // same at every launch and the store keeps one copy; the
-                // heard cursor persists, so a turn heard once stays heard.
-                if let last = (try? await client.transcript(raw))?.last(where: { $0.role == .agent }) {
-                    lastSaid[raw] = last.id
-                    eventContinuation?.yield(AgentEvent(provider: id, session: session.id,
-                                                        at: last.at, kind: .said(last)))
-                }
+                // Adopted WITH its turns, so the row is the same kind of row
+                // a local one is (a turn in the store to read on a tap) and
+                // the hub has the conversation. Keyed by each turn's own id,
+                // so the store keeps one copy across launches; the heard
+                // cursor persists, so a turn heard once stays heard.
+                await sayNewTurns(raw, session: session)
             } else if let title = OpenCodeTitles.name(listed.title), sessions[raw]?.title != title {
                 sessions[raw]?.title = title
                 if let s = sessions[raw] { emit(s.id, .changed(s)) }

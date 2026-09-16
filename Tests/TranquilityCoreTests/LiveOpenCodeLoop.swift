@@ -241,7 +241,8 @@ final class LiveOpenCodeLoop: XCTestCase {
         }
         let replay = await bag.items
         let saidAgain = replay.compactMap { e -> Turn? in if case .said(let t) = e.kind, e.session == id { return t } else { return nil } }
-        XCTAssertEqual(saidAgain.count, 1, "adopted with its last turn")
+        XCTAssertGreaterThanOrEqual(saidAgain.count, 2, "adopted with its turns (PING PONG and DONE), oldest first, for the hub")
+        XCTAssertEqual(saidAgain.last?.text.contains("DONE"), true, "the latest is what the announcer reads")
         if let again = saidAgain.first, let e = replay.first(where: { if case .said = $0.kind { return $0.session == id } else { return false } }) {
             let before = try store.allKnownSessions().count
             RemoteSpool.append(RemoteSpool.lines(for: e, agent: poller.snapshot.agent(id)), to: spool)
