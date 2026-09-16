@@ -97,6 +97,7 @@ wait_for_microphone() {
 app_stop_path() {
   if app_at_path_running "$1"; then
     wait_for_microphone "stopping $1"
+    if declare -F tb_before_app_stop >/dev/null; then tb_before_app_stop; fi
     echo "→ stopping $1"
     pkill -f "$1/Contents/MacOS/TranquilityApp" || true
     sleep 1
@@ -112,6 +113,7 @@ app_stop_path() {
 app_stop() {
   if app_running; then
     wait_for_microphone "stopping the running instance"
+    if declare -F tb_before_app_stop >/dev/null; then tb_before_app_stop; fi
     echo "→ stopping the running instance"
     pkill -f "$APP_PROC_PATTERN" || true
     sleep 1

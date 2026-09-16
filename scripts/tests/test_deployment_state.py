@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import plistlib
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -147,7 +148,7 @@ sys.stdin.readline()
 '''
         child = subprocess.Popen(
             [sys.executable, "-c", program, str(TOOL), str(self.state.state_dir), str(self.state.lock_dir)],
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True,
         )
         try:
             self.assertTrue(child.stdout.readline().strip())
@@ -157,6 +158,37 @@ sys.stdin.readline()
             child.communicate("exit\n", timeout=5)
         self.lock = self.state.acquire(self.pid)
         self.assertEqual(self.state.read()["preview"]["token"], token)
+
+    def test_orphaned_install_child_retains_mutation_authority(self):
+        self.state.unlock(self.pid, self.lock)
+        program = '''import importlib.util, os, sys
+spec=importlib.util.spec_from_file_location("state", sys.argv[1])
+m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
+s=m.DeploymentState(sys.argv[2], sys.argv[3]);s.acquire(os.getpid())
+child=os.fork()
+if child == 0:
+    os.close(1);os.close(2)
+    sys.stdin.readline()
+    os._exit(0)
+print(child, flush=True)
+os._exit(0)
+'''
+        parent = subprocess.Popen([sys.executable, "-c", program, str(TOOL),
+                                   str(self.state.state_dir), str(self.state.lock_dir)],
+                                  stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                  text=True, start_new_session=True)
+        try:
+            child = int(parent.stdout.readline())
+            parent.wait(timeout=5)
+            os.kill(child, 0)
+            with self.assertRaisesRegex(Blocked, "children"):
+                self.state.acquire(self.pid)
+        finally:
+            try:
+                os.killpg(parent.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            parent.communicate(timeout=5)
 
 
 class EntrypointTests(unittest.TestCase):
@@ -281,6 +313,22 @@ tb_deployment_authorize fixture "''' + A + '''" dev 1
                                 text=True, capture_output=True, timeout=15)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertFalse(self.state.lock_dir.exists())
+
+    def test_automatic_delivery_preserves_quit_and_selected_prod(self):
+        helper = self.repo / "scripts/lib/app-process.sh"
+        for prod in (False, True):
+            with self.subTest(prod=prod):
+                if prod:
+                    helper.write_text('''app_at_path_running() { [[ "$1" == *"Tranquility Base.app" ]]; }
+app_running() { return 0; }
+''')
+                result = subprocess.run(["bash", "scripts/relaunch.sh", "origin/main"],
+                                        cwd=self.repo, env=dict(self.env, TB_DEPLOY_AUTOMATIC="1"),
+                                        text=True, capture_output=True, timeout=15)
+                self.assertEqual(result.returncode, 75, result.stdout + result.stderr)
+                self.assertIn("Prod is selected" if prod else "does not undo Quit", result.stderr)
+                self.assertFalse((self.root / "mutations").exists())
+                self.assertFalse(self.state.lock_dir.exists())
 
 
 if __name__ == "__main__":
