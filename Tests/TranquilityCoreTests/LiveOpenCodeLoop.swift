@@ -166,6 +166,20 @@ final class LiveOpenCodeLoop: XCTestCase {
             XCTAssertTrue(asked.hasPrefix("The agent is asking permission"), "the question is the latest turn: \(asked.prefix(80))")
             XCTAssertTrue(try unread().contains(id), "a question is unread until heard")
             XCTAssertEqual(poller.snapshot.agent(id)?.state, .inputRequired)
+            // Held under the tool-call updates that keep arriving, and amber
+            // on the grid with the tap bringing the decision back.
+            try await Task.sleep(for: .milliseconds(500))
+            XCTAssertEqual(poller.snapshot.agent(id)?.state, .inputRequired, "a pending ask is not flipped back to working")
+            let asking = GridAssembler.rows(GridAssembler.RowInputs(
+                waiting: try store.waitingSessions(), known: try store.allKnownSessions(),
+                discovered: [], liveById: [:], boundaries: [:], switchedOff: [], switchedOn: [],
+                evidence: { _, _ in nil }, isHeadless: { _ in false }, family: { [$0] },
+                supersedesWaiting: { _, _ in false }, isInFlight: { _ in false },
+                remote: .init(agents: poller.snapshot.agents, requests: poller.snapshot.requests,
+                              unread: [], unreachable: poller.snapshot.unreachable))).rows
+            let askingRow = try XCTUnwrap(asking.first { $0.id == id })
+            XCTAssertEqual(askingRow.lamp, .fault, "blocked on a permission is amber")
+            XCTAssertEqual(SessionRow.action(for: askingRow), .announce, "the tap brings the decision, however often it was heard")
             let yes = Utterance(status: .ready, transcriptText: "[assistant]: \(asked) [user]: Yes, go ahead.", targetSessionId: id)
             try store.update(utterance: yes)
             guard case .dispatched = try await coordinator.confirmAndSend(utteranceId: yes.id) else {

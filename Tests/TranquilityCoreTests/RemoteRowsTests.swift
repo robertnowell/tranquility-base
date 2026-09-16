@@ -26,15 +26,19 @@ final class RemoteRowsTests: XCTestCase {
 
     // MARK: - Lamps
 
-    /// **A question is GREEN** (ruled 14 Sep). Amber is for the unanticipated,
-    /// not for the agent doing the one thing this app exists to carry.
-    func testAnAgentAskingSomethingIsGreenAndSpendsItsColumnOnTheQuestion() {
+    /// **A pending permission is AMBER** (revised 15 Sep 7:47 PM; a question
+    /// that ends a turn is still green, 14 Sep). The agent is blocked on it
+    /// the way a local agent is blocked on a dialog, and local dialogs are
+    /// amber with the reason in the column. Robert: "it seems hung, and the
+    /// lamp is not amber, and there is no decision or anything."
+    func testAnAgentBlockedOnAPermissionIsAmberAndSpendsItsColumnOnTheQuestion() {
         let agent = remote("a", state: .inputRequired)
         let out = rows(.init(agents: [agent],
                              requests: [agent.id: PendingRequest(
                                 id: "q", session: agent.id, asked: "Merge to main?")]))
-        XCTAssertEqual(out.first?.lamp, .ready)
+        XCTAssertEqual(out.first?.lamp, .fault)
         XCTAssertEqual(out.first?.aux, "Merge to main?")
+        XCTAssertEqual(out.first?.read, .unread, "unread until answered, so the tap brings the decision back")
     }
 
     func testSomethingUnreadIsGreenAndReadsAsUnread() {
@@ -81,7 +85,7 @@ final class RemoteRowsTests: XCTestCase {
                              requests: [agent.id: PendingRequest(id: "q", session: agent.id,
                                                                  asked: "?")],
                              unread: [agent.id]))
-        XCTAssertEqual(out.first?.lamp, .ready)
+        XCTAssertEqual(out.first?.lamp, .fault, "a permission outranks working, and it is amber")
     }
 
     /// **The tripwire.** Three lamps light a remote row and there is no fourth:
@@ -180,8 +184,8 @@ final class RemoteRowsTests: XCTestCase {
         let out = rows(.init(agents: [done, working, asking],
                              requests: [asking.id: PendingRequest(id: "q", session: asking.id,
                                                                   asked: "?")]))
-        XCTAssertEqual(out.map(\.lamp), [.ready, .ready, .working],
-                       "green above blue, and under the three-lamp ruling "
+        XCTAssertEqual(out.map(\.lamp), [.ready, .fault, .working],
+                       "green and amber above blue, and under the three-lamp ruling "
                        + "a finished agent is lit rather than sunk")
         XCTAssertEqual(out.map(\.lamp), SessionRow.quietRowsLast(out).map(\.lamp),
                        "and the band is already in the shared rule's order")

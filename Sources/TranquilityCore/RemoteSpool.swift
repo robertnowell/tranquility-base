@@ -101,6 +101,20 @@ public enum RemoteSpool {
         return "The agent is asking permission: \(asked).\(choices)"
     }
 
+    /// The brief for a question, built from the words `question(_:)` wrote,
+    /// without a model: the ask is the recap, the choices are the proposal.
+    public static func decision(from words: String, projectLabel: String) -> SessionBrief {
+        var asked = words
+        var choices: String?
+        if let range = words.range(of: " Options: ") {
+            asked = String(words[..<range.lowerBound])
+            choices = String(words[range.upperBound...]).trimmingCharacters(in: CharacterSet(charactersIn: ". "))
+        }
+        let proposal = choices.map { "\($0). Which?" } ?? "Allow, or reject?"
+        return SessionBrief(topic: "Permission", happened: asked, question: proposal,
+                            recap: asked, proposal: proposal)
+    }
+
     /// One spool line, in the wire shape `SpoolDrainer` already decodes.
     public struct SpoolLine: Sendable, Equatable {
         public var id: String

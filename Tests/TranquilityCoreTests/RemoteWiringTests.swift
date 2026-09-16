@@ -197,7 +197,8 @@ final class RemoteWiringTests: XCTestCase {
                           unread: [], unreachable: snapshot.unreachable))).rows
 
         XCTAssertEqual(rows.count, 1)
-        XCTAssertEqual(rows[0].lamp, .ready, "an agent asking you something shows green")
+        XCTAssertEqual(rows[0].lamp, .fault, "an agent blocked on a permission shows amber, like a local dialog")
+        XCTAssertEqual(rows[0].read, .unread, "a pending request stays unread until answered")
         XCTAssertEqual(rows[0].aux, "Merge?")
     }
 }
