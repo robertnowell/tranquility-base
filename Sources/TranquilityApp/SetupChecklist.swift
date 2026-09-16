@@ -323,7 +323,11 @@ final class SetupChecklistView: NSStackView {
         case .anthropicKey, .elevenLabsKey, .assemblyAIKey, .openAIKey, .provider:
             promptForKey(item)
 
-        case .hub:
+        case .hub, .credits:
+            // One door for both rows. Credits ride the same sign-in: pairing
+            // again is also what enrols this Mac's key, which is what a Mac
+            // connected before credits existed needs. The note lands on
+            // whichever row was pressed.
             // The browser is where signing in happens; the app never asks for
             // a password or a code and never receives a token through a link.
             // This Mac invents a secret, shows the phrase derived from it on
@@ -332,7 +336,7 @@ final class SetupChecklistView: NSStackView {
             // one here. See HubConnect and Core's HubPairing.
             HubConnect.shared.onChange = { [weak self] in
                 guard let self else { return }
-                self.prereqNote[.hub] = HubConnect.shared.note
+                self.prereqNote[item] = HubConnect.shared.note
                 self.renderPrerequisites()
                 // Same repair as the keys (14 Sep): the note said "connected
                 // as garys-macbook-pro" under a lamp that still read the
@@ -340,7 +344,7 @@ final class SetupChecklistView: NSStackView {
                 self.scanPrerequisites()
             }
             HubConnect.shared.begin()
-            prereqNote[.hub] = HubConnect.shared.note
+            prereqNote[item] = HubConnect.shared.note
             renderPrerequisites()
         }
     }

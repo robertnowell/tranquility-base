@@ -1167,8 +1167,24 @@ final class StatusHUD: NSObject {
     private var breadcrumbIsADoor: Bool {
         switch state {
         case .speaking, .preparing: return true
-        default: return false
+        // The amber credits line lives in the grid's placard and is a door to
+        // the Settings row that says how to resolve it (ruled 15 Sep).
+        default: return state.name == "idle" && creditStanding != nil
         }
+    }
+
+    /// Where this Mac stands with credits, when that is worth a line: the
+    /// last managed summary fell back, or this Mac needs connecting again.
+    /// Persistent, unlike a notice: it stays until the standing changes,
+    /// because the condition it names has not gone away. Set by the app from
+    /// `CreditStanding.observe`; written nowhere else.
+    private(set) var creditStanding: String?
+
+    func setCreditStanding(_ line: String?) {
+        guard line != creditStanding else { return }
+        creditStanding = line
+        Permissions.log("credits: standing \(line ?? "clear")")
+        render()
     }
 
     @objc nonisolated func breadcrumbClicked() {
@@ -1180,7 +1196,10 @@ final class StatusHUD: NSObject {
             // change your mind, so it gets the same pill and the same verb.
             switch state {
             case .speaking, .preparing: onBreadcrumbHome?()
-            default: return
+            default:
+                guard state.name == "idle", creditStanding != nil else { return }
+                Track.record("door_opened", ["door": "credits"])
+                showSetupSettings()
             }
         }
     }
@@ -2633,6 +2652,18 @@ final class StatusHUD: NSObject {
                 setHint("▶ plays the capture · ⋯ copy, retry, reveal")
                 rebuildAudioRows(face.audioEvents ?? [])
             }
+        }
+
+        // The credits standing takes the grid's placard, in amber, for as
+        // long as it holds; a transient notice below still wins for its five
+        // seconds, because it is newer.
+        if notice == nil, state.name == "idle", let creditStanding {
+            stateLabel.isHidden = false
+            stateLabel.textColor = StateLegend.Lens.fault.color
+            stateLabel.attributedStringValue = Widgets.placardText(
+                "\(StateLegend.Glyph.needsYou) \(creditStanding) · Settings ›",
+                color: StateLegend.Lens.fault.color)
+            stateLabel.isADoor = true
         }
 
         // A card's notice uses the strip beneath it; a grid notice uses the
