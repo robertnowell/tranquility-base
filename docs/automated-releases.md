@@ -1,7 +1,9 @@
 # Automated releases
 
-Every commit pushed to `main` is one release. In the normal path each commit is
-a merged pull request, so there is no separate version-bump or release PR.
+A push to `main` requests a release. The running release finishes; newer pushes
+replace the pending release so its combined changes go next. There is no
+separate version-bump PR, and not every intermediate commit gets a published
+artifact. Any skipped main commit remains buildable through manual recovery.
 
 ## Contract
 
@@ -27,11 +29,13 @@ A failed release remains an unpublished draft. Rerunning the workflow can
 replace that draft. Once public, the release path treats the asset as immutable:
 a rerun downloads and audits it but never overwrites it.
 
-Runs share `concurrency: release-main` with `queue: max`. GitHub serializes the
-signing jobs while retaining up to 100 waiting runs. Ordering is not guaranteed,
-so only the job whose SHA is the current `origin/main` receives Latest. A
-manually dispatched run with a full main-branch SHA is the recovery path for a
-lost event, queue overflow, or repaired operational failure.
+Runs share `concurrency: release-main` with the default single pending slot.
+A new arrival replaces the pending run without canceling the running release.
+This prevents the obsolete-release backlog measured on 15 September (#506).
+Arrival ordering is not guaranteed, so only the job whose SHA is the current
+`origin/main` receives Latest. A manually dispatched run with a full main-branch
+SHA is the recovery path for a skipped commit, lost event or repaired failure;
+it shares that pending slot, so coordinate recovery with normal publishing.
 
 Release identity is mechanical. For ancestry count `1024` at source commit
 `abcdef123...`, the default is:
@@ -44,6 +48,28 @@ tag      v0.3.1024-abcdef123
 `TBSourceCommit` in the app's Info.plist carries the full source SHA. The tag is
 created at that same SHA, not at whichever commit happens to be the tip of main
 when a slower notarization finishes.
+
+## Swift build reuse
+
+The required macOS source audit and the unsigned release build cache SwiftPM's
+native debug compilation state and downloaded dependencies. Cache identity
+includes architecture, macOS build, Xcode, SDK, Swift version, package manifest,
+resolved dependencies and the candidate SHA. A candidate can restore an older
+entry only within the same environment and dependency prefix; SwiftPM still
+checks its inputs and recompiles changed sources.
+
+Every restore is followed by the full source audit. A cache hit never skips
+building, either test framework, count floors, packaging checks or transport
+drills. A missing cache builds normally; a failed restore discards partial
+state before building. Cache restore is bounded to two minutes, with a
+one-minute stalled-segment limit.
+
+GitHub scopes PR-created caches to their merge ref. The default-branch unsigned
+release build seeds caches that other PRs can read; it cannot restore caches
+from their child refs. The credentialed signing job does not use build caches.
+Final bundles, release artifacts, keychains and signing state are excluded.
+The Intel compile job is unchanged. Compare whole required-job duration,
+including restore/save overhead, before attributing a speedup to cache hits.
 
 ## One-time repository setup
 
@@ -80,7 +106,7 @@ After the `Source audit` job has appeared on one pull request, protect `main`:
 - block force pushes and deletion.
 
 Keep squash merge as the only merge method. One merged pull request then maps to
-one first-parent commit and therefore one release. If merge queue is enabled,
+one first-parent commit and a distinct potential release identity. If merge queue is enabled,
 the existing `merge_group` trigger keeps `Source audit` available to the queue.
 
 GitHub currently gives workflow tokens read-only access by default in this
@@ -111,8 +137,8 @@ into a flaky product verdict.
   job checks out and audits that source SHA; the signing job keeps the current
   default-branch tooling and accepts only the source-stamped prebuilt app. The
   script independently requires both commits to be contained in `origin/main`.
-- `queue: max` retains 100 pending releases. More than 100 is an explicit
-  reconciliation event, not a silently supported backlog.
+- Pending releases can be superseded intentionally. Reconcile against the
+  latest successful published source SHA, not a count of one artifact per PR.
 
 Each release carries four immutable evidence assets: the DMG, its SHA-256 file,
 the clean app notarization log, and the clean DMG notarization log.
