@@ -203,6 +203,38 @@ final class LiveOpenCodeLoop: XCTestCase {
             print("LOOP: the agent ran the command without asking; leg skipped")
         }
 
+        // 5b. A second app instance on the same server (a relaunch) adopts the
+        // session WITH its last turn, keyed so the store keeps one copy, and
+        // never lists a subagent.
+        let second = ServedOpenCodeProvider(
+            binary: command[0], directory: toy,
+            ledger: ProviderLedger(url: dir.appendingPathComponent("agents-used.json")),
+            port: provider.baseURL.port)
+        // A child session on the server, as a research subagent would leave.
+        var mk = URLRequest(url: provider.baseURL.appendingPathComponent("session"))
+        mk.httpMethod = "POST"; mk.setValue("application/json", forHTTPHeaderField: "content-type")
+        mk.httpBody = Data("{\"parentID\":\"\(poller.snapshot.agent(id)!.providerID)\",\"title\":\"Verify a claim (@general subagent)\"}".utf8)
+        _ = try await URLSession.shared.data(for: mk)
+        let adopted = try await second.mine()
+        XCTAssertTrue(adopted.contains { $0.id == id }, "the session comes back")
+        XCTAssertFalse(adopted.contains { $0.title.contains("subagent") }, "a subagent is not a row")
+        actor Bag { var items: [AgentEvent] = []; func add(_ e: AgentEvent) { items.append(e) } }
+        let bag = Bag()
+        if let stream = second.changes() {
+            let collect = Task { for await e in stream { await bag.add(e) } }
+            try await Task.sleep(for: .milliseconds(400)); collect.cancel()
+        }
+        let replay = await bag.items
+        let saidAgain = replay.compactMap { e -> Turn? in if case .said(let t) = e.kind, e.session == id { return t } else { return nil } }
+        XCTAssertEqual(saidAgain.count, 1, "adopted with its last turn")
+        if let again = saidAgain.first, let e = replay.first(where: { if case .said = $0.kind { return $0.session == id } else { return false } }) {
+            let before = try store.allKnownSessions().count
+            RemoteSpool.append(RemoteSpool.lines(for: e, agent: poller.snapshot.agent(id)), to: spool)
+            _ = try drainer.drain()
+            XCTAssertEqual(try store.allKnownSessions().count, before, "the same turn is one event, not two")
+            _ = again
+        }
+
         // 6. End Agent: gone from the snapshot, and not adopted by a fresh provider.
         await poller.end(id)
         XCTAssertNil(poller.snapshot.agent(id))
