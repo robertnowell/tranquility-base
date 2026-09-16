@@ -44,8 +44,10 @@ unset TB_PREVIEW_TOKEN
 Status hides the token and shows owner, commit, channel, expiry, and pending
 requests. A session crash leaves its preview reserved until explicit release or
 expiry. It does not permanently retain the app mutation lock: a later command
-can recover a lock whose process has exited. Never delete a live lock directory
-or the state file to get around a preview.
+can recover a supervised lock after its whole install process group exits. A
+legacy or manually invoked writer without a dedicated process group needs
+operator inspection of remaining children before its stale lock is released.
+Never delete a live lock directory or the state file to get around a preview.
 
 ## Deferred work and rollout boundary
 

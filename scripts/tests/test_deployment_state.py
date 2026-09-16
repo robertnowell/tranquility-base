@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import plistlib
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -147,7 +148,7 @@ sys.stdin.readline()
 '''
         child = subprocess.Popen(
             [sys.executable, "-c", program, str(TOOL), str(self.state.state_dir), str(self.state.lock_dir)],
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True,
         )
         try:
             self.assertTrue(child.stdout.readline().strip())
@@ -157,6 +158,37 @@ sys.stdin.readline()
             child.communicate("exit\n", timeout=5)
         self.lock = self.state.acquire(self.pid)
         self.assertEqual(self.state.read()["preview"]["token"], token)
+
+    def test_orphaned_install_child_retains_mutation_authority(self):
+        self.state.unlock(self.pid, self.lock)
+        program = '''import importlib.util, os, sys
+spec=importlib.util.spec_from_file_location("state", sys.argv[1])
+m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
+s=m.DeploymentState(sys.argv[2], sys.argv[3]);s.acquire(os.getpid())
+child=os.fork()
+if child == 0:
+    os.close(1);os.close(2)
+    sys.stdin.readline()
+    os._exit(0)
+print(child, flush=True)
+os._exit(0)
+'''
+        parent = subprocess.Popen([sys.executable, "-c", program, str(TOOL),
+                                   str(self.state.state_dir), str(self.state.lock_dir)],
+                                  stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                  text=True, start_new_session=True)
+        try:
+            child = int(parent.stdout.readline())
+            parent.wait(timeout=5)
+            os.kill(child, 0)
+            with self.assertRaisesRegex(Blocked, "children"):
+                self.state.acquire(self.pid)
+        finally:
+            try:
+                os.killpg(parent.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            parent.communicate(timeout=5)
 
 
 class EntrypointTests(unittest.TestCase):

@@ -90,7 +90,7 @@ class DeploymentState:
     def acquire(self, pid, token=""):
         with self.transaction():
             owner = self.lock_owner()
-            if token and owner == {"pid": pid, "token": token}:
+            if self.owns(pid, token):
                 return token  # install-dev execs switch-app without changing pid.
             if self.lock_dir.exists():
                 if self.lock_dir.is_symlink() or not self.lock_dir.is_dir():
@@ -101,6 +101,13 @@ class DeploymentState:
                     holder = 0
                 if holder > 0 and self.alive(holder):
                     raise Blocked(f"another app mutation (pid {holder}) is in progress")
+                if holder > 0:
+                    # A dead shell can leave build children alive. Supervised
+                    # installs own a group, so check that whole group first.
+                    if not isinstance(owner, dict) or owner.get("group") != holder:
+                        raise Blocked("exited legacy/manual writer has unknown children; inspect before releasing its lock")
+                    if self.group_alive(holder):
+                        raise Blocked(f"app mutation children in process group {holder} are still running")
                 # An older writer may be between mkdir and publishing its pid.
                 # Missing metadata is never immediate permission to steal it.
                 if holder == 0 and self.now() - self.lock_dir.stat().st_mtime < 120:
@@ -116,11 +123,28 @@ class DeploymentState:
                 raise Blocked("another app mutation acquired the lock") from error
             token = secrets.token_hex(16)
             (self.lock_dir / "pid").write_text(str(pid) + "\n")
-            (self.lock_dir / "owner.json").write_text(json.dumps({"pid": pid, "token": token}))
+            group = os.getpgid(pid)
+            (self.lock_dir / "owner.json").write_text(json.dumps({
+                "pid": pid, "token": token, "group": group if group == pid else None,
+            }))
             return token
 
+    def owns(self, pid, token):
+        owner = self.lock_owner()
+        return bool(token) and isinstance(owner, dict) and owner.get("pid") == pid and owner.get("token") == token
+
+    @staticmethod
+    def group_alive(group):
+        try:
+            os.killpg(group, 0)
+            return True
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+
     def require_lock(self, pid, token):
-        if not token or self.lock_owner() != {"pid": pid, "token": token}:
+        if not self.owns(pid, token):
             raise Blocked("this process does not own the app mutation lock")
 
     def unlock(self, pid, token):

@@ -66,6 +66,9 @@ request has a private log beside it. A per-PR lock prevents competing supervised
 attempts, while all PRs and installers share the app mutation lock. Interrupted
 attempts retain their intent. Timeouts stop the install process group instead
 of leaving a build child to race the next attempt.
+Recovery checks the whole supervised process group even if its original shell
+has died. A stale legacy/manual lock with unknown children requires operator
+inspection before release; absence of the shell alone is not sufficient.
 
 ## Hook and deployment checkout cutover
 
