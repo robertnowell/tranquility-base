@@ -36,11 +36,19 @@ public enum RemoteSpool {
             return [SpoolLine(kind: .stop, event: event, text: turn.text, agent: agent)]
 
         case .asks(let request):
-            // A question is a Notification, which is what the local path uses
-            // for a session that has stopped and needs somebody. The matcher
-            // carries WHY, the same way a permission prompt does locally.
-            return [SpoolLine(kind: .notification, event: event,
-                              text: request.asked, agent: agent,
+            // A question is a TURN, not a Notification. Locally a permission
+            // prompt is a Notification because the answer is typed into the
+            // pane: the row goes amber with the reason and the tap opens the
+            // terminal. A remote agent's answer goes through this app, by
+            // voice, so the question has to be what the announcer reads, what
+            // the returned earcon fires on, what the row's unread state is,
+            // and what the reply target points at. `waitingSessions` counts a
+            // session only when its LATEST event is a Stop; as a Notification
+            // the question was in none of those (Robert, 15 Sep 5:20 PM: a
+            // green row nobody spoke, and the tap opened a Terminal). The
+            // matcher still says why, for the hover and the brief.
+            return [SpoolLine(kind: .stop, event: event,
+                              text: Self.question(request), agent: agent,
                               matcher: "agent_question")]
 
         case .changed(let session) where session.state.isFinished
@@ -81,6 +89,16 @@ public enum RemoteSpool {
             // watermark past content nobody has seen.
             return []
         }
+    }
+
+    /// The question as a turn's words: what it asks and what the choices
+    /// are, so the brief has something to recap and the person hears the
+    /// options before answering.
+    static func question(_ request: PendingRequest) -> String {
+        let asked = request.asked.trimmingCharacters(in: .whitespacesAndNewlines)
+        let options = request.questions.first?.options.map(\.label).filter { !$0.isEmpty } ?? []
+        let choices = options.isEmpty ? "" : " Options: " + options.joined(separator: ", ") + "."
+        return "The agent is asking permission: \(asked).\(choices)"
     }
 
     /// One spool line, in the wire shape `SpoolDrainer` already decodes.
