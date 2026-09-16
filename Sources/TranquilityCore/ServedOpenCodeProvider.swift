@@ -42,8 +42,8 @@ public actor ServedOpenCodeProvider: AgentProvider {
     private nonisolated let streamBox = Box<AsyncStream<AgentEvent>?>(nil)
 
     public init(binary: String, directory: String, ledger: ProviderLedger? = nil,
-                port: Int? = nil, trace: (@Sendable (String) -> Void)? = nil) {
-        self.server = OpenCodeServer(binary: binary, directory: directory, port: port)
+                port: Int? = nil, pidFile: URL? = nil, trace: (@Sendable (String) -> Void)? = nil) {
+        self.server = OpenCodeServer(binary: binary, directory: directory, port: port, pidFile: pidFile)
         self.transport = HTTPTransport(base: server.baseURL, password: nil, trace: trace)
         self.client = OpenCodeClient(transport: transport, provider: "opencode")
         self.ledger = ledger

@@ -2095,6 +2095,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        // The OpenCode server this instance started goes with it (a child
+        // does not die with its parent on macOS; a stale one is reaped at
+        // the next launch by its pid file).
+        OpenCodeServer.stopAll()
         DistributedNotificationCenter.default().removeObserver(self,
                                                                name: Self.forwardedDeepLink,
                                                                object: nil)

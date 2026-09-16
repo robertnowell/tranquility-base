@@ -47,8 +47,10 @@ public enum AgentProviders {
             // `opencode serve` is one session seen from two places, and Go to
             // Agent attaches a terminal to it. See ServedOpenCodeProvider.
             if entry.id == "opencode" {
-                built.append(ServedOpenCodeProvider(binary: command[0], directory: workspace,
-                                                    ledger: ledger, trace: { Failures.trace?($0) }))
+                built.append(ServedOpenCodeProvider(
+                    binary: command[0], directory: workspace, ledger: ledger,
+                    pidFile: QueueStore.supportDirectory.appendingPathComponent("opencode-serve.pid"),
+                    trace: { Failures.trace?($0) }))
                 continue
             }
             let transport = ACPProcessTransport(command: command, cwd: workspace)
