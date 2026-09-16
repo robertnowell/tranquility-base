@@ -47,7 +47,8 @@ final class AgentPollerTests: XCTestCase {
             if failRequest { throw Down() }
             return pending[id]
         }
-        func transcript(_ id: AgentSession.ID) async throws -> [Turn] { [] }
+        var transcripts: [AgentSession.ID: [Turn]] = [:]
+        func transcript(_ id: AgentSession.ID) async throws -> [Turn] { transcripts[id] ?? [] }
         func send(_ text: String, to id: AgentSession.ID) async throws -> SendOutcome { .accepted }
         func respond(to r: PendingRequest, with response: Response) async throws -> SendOutcome {
             .accepted
@@ -308,5 +309,77 @@ final class Locked<T>: @unchecked Sendable {
     var value: T {
         get { lock.withLock { stored } }
         set { lock.withLock { stored = newValue } }
+    }
+}
+
+private final class EventSink: @unchecked Sendable {
+    private let lock = NSLock()
+    private var events: [AgentEvent] = []
+    func add(_ e: [AgentEvent]) { lock.lock(); events += e; lock.unlock() }
+    var all: [AgentEvent] { lock.lock(); defer { lock.unlock() }; return events }
+}
+
+extension AgentPollerTests {
+
+    /// **A polled agent that finishes says what it did** (ruled 15 Sep 2026).
+    /// A streaming provider emits `.said`; a polled one only yields `.changed`,
+    /// so a finished crobot task reached the panel with no words to summarize.
+    /// On the finish transition the poller now fetches the last turn and emits
+    /// it as `.said`, the same event a streaming turn would.
+    func testAPolledFinishEmitsTheLastTurnAsSaid() async throws {
+        let p = Controlled(id: "a")
+        p.sessions = [session("s1", "a", .working)]
+        let (poller, config) = try poller([p])
+        poller.registryConfig = config
+
+        let sink = EventSink()
+        poller.onEvents = { evs in sink.add(evs) }
+
+        await poller.pollOnce(p)                       // first sight: working
+        let id = session("s1", "a").id
+        p.sessions = [session("s1", "a", .completed)]  // the turn ends
+        p.transcripts[id] = [Turn(id: "t", at: Date(), role: .agent,
+                                  text: "Opened the PR and left the tests green.")]
+        await poller.pollOnce(p)
+
+        let said = sink.all.compactMap { event -> Turn? in
+            if case .said(let turn) = event.kind { return turn }
+            return nil
+        }
+        XCTAssertEqual(said.last?.text, "Opened the PR and left the tests green.",
+                       "the finished agent's own words must reach the pipeline")
+        // Exactly one stop-worthy event for the finish: the .said REPLACED the
+        // wordless .changed, it did not add a second card.
+        let finishEvents = sink.all.filter { event in
+            guard event.session == id else { return false }
+            if case .said = event.kind { return true }
+            if case .changed(let sess) = event.kind { return sess.state.isFinished }
+            return false
+        }
+        XCTAssertEqual(finishEvents.count, 1, "a finish must be one event, not a bare line plus a recap")
+    }
+
+    /// **The lamp holds blue until the recap is ready.** A finished turn is not
+    /// the user's turn until there is something to hand them, so the finished
+    /// state is not merged until the words are fetched. A slow transcript keeps
+    /// the row working, not prematurely green.
+    func testTheRowStaysWorkingWhileTheRecapIsFetched() async throws {
+        let p = Controlled(id: "a")
+        p.sessions = [session("s1", "a", .working)]
+        let (poller, config) = try poller([p])
+        poller.registryConfig = config
+        await poller.pollOnce(p)
+
+        let id = session("s1", "a").id
+        p.sessions = [session("s1", "a", .completed)]
+        // No transcript yet — the fetch returns nothing this tick, but the
+        // point is the ORDER: state is read for `previously` before the merge,
+        // so the row was working right up to the merge, never green-without-words.
+        p.transcripts[id] = [Turn(id: "t", at: Date(), role: .agent, text: "done")]
+        await poller.pollOnce(p)
+
+        // After the tick the row is finished (green-eligible) AND its words are
+        // out, so the two are never seen apart.
+        XCTAssertEqual(poller.snapshot.agent(id)?.state, .completed)
     }
 }

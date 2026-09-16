@@ -175,6 +175,47 @@ public final class AgentPoller: @unchecked Sendable {
         }
     }
 
+    /// **A polled agent that just finished says what it did.**
+    ///
+    /// A streaming provider emits `.said` with the words as they arrive, so
+    /// the brief, the summary, the spoken card and the hub page all fill up.
+    /// A polled provider (crobot) only yields `.changed` — the poll sees THAT
+    /// the state moved, never WHAT was written — so a finished crobot task
+    /// reached the panel as a bare "it finished" and a link, not a recap.
+    /// Robert: "shouldn't we have summary and hub page and stuff, instead of
+    /// always just going to the webpage ... it's not the full experience."
+    ///
+    /// So on the one transition that has a recap worth hearing — a turn
+    /// finishing — the poller fetches the agent's last words and emits them as
+    /// `.said`, the same event a streaming turn would. One fetch per finished
+    /// turn, and only for a provider that cannot stream. `RemoteSpool` then
+    /// drops the now-redundant empty finish line, so the recap speaks once.
+    private func withTheirLastWords(_ events: [AgentEvent],
+                                    from provider: any AgentProvider) async -> [AgentEvent] {
+        var out: [AgentEvent] = []
+        out.reserveCapacity(events.count)
+        for event in events {
+            // Only a fresh, non-failing finish carries a recap worth fetching.
+            // A failure already speaks its reason; anything not finishing has
+            // no last word to hand over yet.
+            guard case .changed(let session) = event.kind,
+                  session.state.isFinished, event.previously?.isFinished != true,
+                  session.state != .failed, session.state != .rejected,
+                  let turns = try? await provider.transcript(event.session),
+                  let last = turns.last(where: { $0.role == .agent && !$0.text.isEmpty })
+            else { out.append(event); continue }
+            // REPLACE the wordless finish with the words. One stop line, not
+            // two: the `.said` lights the same green lamp the `.changed` would
+            // have, and now it carries a summary and a hub page. A finish with
+            // no readable transcript keeps its `.changed` line above, so the
+            // lamp still lights — just without a recap, which is the truth.
+            var said = event
+            said.kind = .said(last)
+            out.append(said)
+        }
+        return out
+    }
+
     func pollOnce(_ provider: any AgentProvider) async {
         let before = sync { digests[provider.id] ?? [:] }
         let outcome = await AgentPoll.refresh(provider, from: before, at: now())
@@ -198,17 +239,30 @@ public final class AgentPoller: @unchecked Sendable {
         case .polled(let diffed, let next):
             let fresh = (try? await provider.mine()) ?? []
             var events = diffed
+            // `previously` is read from the state BEFORE the merge below, which
+            // is what still shows the turn as working. Set it first.
             sync {
                 for index in events.indices {
                     events[index].previously = state.agent(events[index].session)?.state
                 }
+            }
+            // **The lamp holds blue while we fetch the recap** (ruled 15 Sep).
+            // A finished turn is not the user's turn until there is something
+            // to hand them, so the last words are fetched HERE, before the
+            // finished state is merged. Until this returns the row keeps its
+            // working lamp; a cold-sandbox fetch simply keeps it blue a little
+            // longer, which is the truth.
+            let enriched = await withTheirLastWords(events, from: provider)
+            // Now the finished state and the recap land together: the row turns
+            // green in the same beat the words become readable, never before.
+            sync {
                 digests[provider.id] = next
                 state.unreachable.removeValue(forKey: provider.id)
                 merge(fresh, from: provider.id)
                 let at = now()
                 for session in fresh { state.confirmedAt[session.id] = at }
             }
-            if !events.isEmpty { onEvents?(events) }
+            if !enriched.isEmpty { onEvents?(enriched) }
             await refine(fresh, with: provider)
         }
     }
