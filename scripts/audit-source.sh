@@ -87,6 +87,9 @@ swift build >/dev/null
 echo "→ isolated Past Agents search UI"
 scripts/test-past-agents-search.sh
 
+echo "→ isolated credits onboarding UI"
+scripts/test-credits-onboarding.sh
+
 echo "→ testing"
 # Captured, never piped. `... | grep -q ...` under `set -o pipefail` reports a
 # FAILED pipeline on success: grep exits the moment it matches, the writer takes

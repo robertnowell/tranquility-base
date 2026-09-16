@@ -35,10 +35,11 @@ and a fresh balance can. A failed balance request never discards a successful
 paid operation's receipt. The row says “at last balance check”, not a promise
 that another device has not spent since.
 
-This adds a balance read to summary completion. It introduces no new polling
-loop and no additional provider call. A network delay in that read currently
-uses the existing transport timeout; quantify it in live acceptance before
-release, alongside the original latency checks.
+The balance check runs after delivery, never on the spoken-summary critical
+path. There is at most one background check and one newest queued follow-up,
+not an unbounded task per summary. This introduces no polling loop and no
+additional provider call. Sign-in preparation still waits for verified account
+readiness. Live acceptance must measure this against the original budgets.
 
 ## Validation
 
@@ -50,8 +51,12 @@ responses, exhausted-wallet replay, and balance-read failure after payment.
 replacement/removal against the actual authority implementation.
 
 The app's `--selftest-credits-onboarding` route runs the real checklist with
-fixture services before AppDelegate exists: no microphone, hotkey, browser,
-real credentials, production requests, or installed-app replacement.
+fixture services before AppDelegate exists. It adopts a synthetic pairing
+through `HubPairing.adopt`, the actual secret writer, and the same identity
+notification observer as the app. There is no microphone, hotkey, browser,
+real credential, production request, or installed-app replacement. Its wrapper
+provides a temporary secret store; direct invocation without isolation refuses.
+The drill is wired into the shared source audit, not left as a manual-only test.
 
 Remaining separate acceptance: signed-app browser pairing/key enrollment,
 live provider completion, multi-device/revocation-while-spending and deployment

@@ -42,6 +42,14 @@ public actor ManagedCreditSession: SummaryProvider {
     private var sequence: Int64 = -1
     private var nextTicket: UInt64 = 0
     private var statusTicket: UInt64 = 0
+    private struct BalanceCheck: Sendable {
+        let client: ManagedSummaryClient
+        let context: Context
+        let ticket: UInt64
+        let mayRecover: Bool
+    }
+    private var queuedBalance: BalanceCheck?
+    private var balanceTask: Task<Void, Never>?
 
     public init(identity: @escaping IdentitySource, outboxURL: URL,
                 connect: @escaping Connect,
@@ -59,7 +67,7 @@ public actor ManagedCreditSession: SummaryProvider {
             let ctx = try currentContext()
             do {
                 let client = try await client(ctx)
-                try await updateBalance(client, context: ctx, ticket: ticket, mayRecover: false)
+                try await updateBalance(client, context: ctx, ticket: ticket, mayRecover: true)
             } catch { record(error, context: ctx, ticket: ticket) }
         } catch { recordPreparation(error) }
     }
@@ -78,15 +86,8 @@ public actor ManagedCreditSession: SummaryProvider {
             let result = try await ManagedSummaryProvider(client: client).delivery(for: request)
             // The client has saved A's settled receipt before this check.
             try requireCurrent(ctx)
-            do {
-                try await updateBalance(client, context: ctx, ticket: ticket,
-                                        mayRecover: !result.receiptWasReplayed)
-            } catch {
-                // A balance read failing cannot turn paid, delivered work into
-                // an unpaid failure. Keep its receipt and mark only readiness.
-                record(error, context: ctx, ticket: ticket)
-            }
-            try requireCurrent(ctx)
+            scheduleBalance(.init(client: client, context: ctx, ticket: ticket,
+                                  mayRecover: !result.receiptWasReplayed))
             return result
         } catch {
             guard isCurrent(ctx) else { throw CancellationError() }
@@ -96,6 +97,30 @@ public actor ManagedCreditSession: SummaryProvider {
     }
 
     private func ticket() -> UInt64 { nextTicket &+= 1; return nextTicket }
+
+    /// One balance request in flight and one newest follow-up, never an
+    /// unbounded task per summary. Display freshness cannot delay delivery.
+    private func scheduleBalance(_ check: BalanceCheck) {
+        queuedBalance = check
+        guard balanceTask == nil else { return }
+        balanceTask = Task {
+            while let check = queuedBalance {
+                queuedBalance = nil
+                guard isCurrent(check.context) else { continue }
+                do {
+                    try await updateBalance(check.client, context: check.context,
+                                            ticket: check.ticket, mayRecover: check.mayRecover)
+                } catch {
+                    // Paid work already succeeded. Only readiness changes.
+                    record(error, context: check.context, ticket: check.ticket)
+                }
+            }
+            balanceTask = nil
+        }
+    }
+
+    /// Deterministic local acceptance can await display work; delivery never does.
+    func waitForBalanceUpdates() async { await balanceTask?.value }
 
     private func currentContext() throws -> Context {
         let current = identity()

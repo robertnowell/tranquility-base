@@ -137,6 +137,7 @@ final class ManagedCreditSessionTests: XCTestCase {
             creditStanding: { display.current })
         XCTAssertTrue(Prerequisites.allRequiredSatisfied(Prerequisites.snapshot(probes)))
         let summary = await chain.summarize(request())
+        await session.waitForBalanceUpdates()
         XCTAssertEqual(summary.provider, "tranquility-gateway")
         XCTAssertEqual(summary.managedReceipt?.accountId, a)
         XCTAssertEqual(summary.managedReceipt?.chargedMicros, "20000")
@@ -180,6 +181,7 @@ final class ManagedCreditSessionTests: XCTestCase {
         let original = try await session.delivery(for: request())
         await gateway.setBalance(8_200_000, sequence: 100)
         let replay = try await session.delivery(for: request())
+        await session.waitForBalanceUpdates()
         XCTAssertEqual(replay.receipt, original.receipt)
         XCTAssertTrue(replay.receiptWasReplayed)
         XCTAssertEqual(balance(display), "8200000")
@@ -192,13 +194,16 @@ final class ManagedCreditSessionTests: XCTestCase {
         identity.set("A")
         let session = make(identity, display, gateway)
         _ = try await session.delivery(for: request())
+        await session.waitForBalanceUpdates()
         await gateway.refuse("insufficient_credit")
         do { _ = try await session.delivery(for: request("two")); XCTFail("expected refusal") } catch {}
         XCTAssertEqual(display.current.line, "Out of credits")
         _ = try await session.delivery(for: request())
+        await session.waitForBalanceUpdates()
         XCTAssertEqual(display.current.line, "Out of credits")
         await gateway.refuse(nil)
         _ = try await session.delivery(for: request("three"))
+        await session.waitForBalanceUpdates()
         XCTAssertNil(display.current.line, "new successful work plus fresh balance can restore readiness")
     }
 
@@ -261,6 +266,7 @@ final class ManagedCreditSessionTests: XCTestCase {
         let session = make(identity, display, gateway)
         await gateway.failBalance()
         let delivery = try await session.delivery(for: request())
+        await session.waitForBalanceUpdates()
         XCTAssertEqual(delivery.receipt?.chargedMicros, "20000")
         XCTAssertEqual(display.current.line, "Credits unavailable right now")
     }
@@ -269,5 +275,19 @@ final class ManagedCreditSessionTests: XCTestCase {
         let probes = Prerequisites.Probes(tmuxPath: { "/fixture/tmux" }, hooksProblem: { _ in nil },
             hasSecret: { _ in false }, hubStatus: { .init(connected: true, detail: "signed in") }, creditStanding: { .onCredits })
         XCTAssertFalse(Prerequisites.allRequiredSatisfied(Prerequisites.snapshot(probes)))
+    }
+
+    func testAStalledBalanceReadCannotDelayADeliveredSummary() async throws {
+        let identity = Identity(), display = Display(), gateway = Gateway(a), gate = Gate()
+        identity.set("A")
+        let session = make(identity, display, gateway)
+        await session.refresh()
+        await gateway.holdBalance(gate)
+        let delivered = try await session.delivery(for: request())
+        await gate.waitForEntry()
+        XCTAssertEqual(delivered.receipt?.chargedMicros, "20000", "delivery returned before the balance response existed")
+        await gate.open()
+        await session.waitForBalanceUpdates()
+        XCTAssertEqual(balance(display), "9980000")
     }
 }

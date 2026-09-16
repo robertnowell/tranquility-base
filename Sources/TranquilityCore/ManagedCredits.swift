@@ -14,6 +14,15 @@ import Foundation
 /// The standing explains exhaustion; it is not a second sign-in requirement.
 public enum ManagedCredits {
 
+    /// Shared by the app and the isolated onboarding drill. Notification
+    /// payloads contain no credentials; the session reads its identity itself.
+    public static func observeIdentityChanges(_ session: ManagedCreditSession,
+                                              center: NotificationCenter = .default) -> NSObjectProtocol {
+        center.addObserver(forName: Secrets.hubIdentityDidChange, object: nil, queue: nil) { _ in
+            Task { await session.refresh() }
+        }
+    }
+
     /// The Gateway this build spends at. `gateway.base_url` in hq.json when
     /// it says, else the one built in. Same file and same rule as the hub's
     /// own address: one place, never a link's idea of where money goes.

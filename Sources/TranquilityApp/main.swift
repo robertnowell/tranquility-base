@@ -598,10 +598,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // coordinator and its immutable provider chain do not need replacing.
             let managed = ManagedCredits.session(log: { Permissions.log($0) })
             self.managedCredits = managed
-            creditIdentityObserver = NotificationCenter.default.addObserver(
-                forName: Secrets.hubIdentityDidChange, object: nil, queue: nil) { _ in
-                    Task { await managed.refresh() }
-                }
+            creditIdentityObserver = ManagedCredits.observeIdentityChanges(managed)
             Task { await managed.refresh() }
             self.coordinator = Coordinator(
                 store: store,
