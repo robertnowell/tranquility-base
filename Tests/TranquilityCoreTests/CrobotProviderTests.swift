@@ -329,3 +329,35 @@ extension CrobotProviderTests {
         XCTAssertNil(Local().composeURL(for: Brief(prompt: "hi")))
     }
 }
+
+// MARK: - A crobot row has a door (15 Sep 2026) — through the provider, not a fixture
+
+extension CrobotProviderTests {
+
+    /// **Robert clicked a crobot row and the card said "nowhere to land."**
+    /// Every real crobot session came through `mine()` with `url == nil`, so
+    /// its row's door was `.none`. `CrobotTask.agentSession` builds from wire
+    /// fields and has no base URL; the provider sets it.
+    ///
+    /// This test goes THROUGH `mine()` on purpose. #459's test set `url` on a
+    /// hand-built fixture and passed while production was broken — the exact
+    /// "verify the artifact, not the fixture" trap. A row's door is only real
+    /// if the provider put it there.
+    func testEveryCrobotSessionFromMineCarriesItsPageURL() async throws {
+        let g = Gateway()
+        g.list = [task("api-abc", status: "idle")]
+        let session = try await provider(g).mine().first
+        XCTAssertEqual(session?.url?.absoluteString, "https://crobot.coframe.com/tasks/api-abc",
+                       "a crobot row with no url has no door and cannot be opened")
+    }
+
+    /// And refine — the detail path — carries it too, so a poller's second tier
+    /// does not strip the door off a row the list gave one.
+    func testRefineAlsoCarriesThePageURL() async throws {
+        let g = Gateway()
+        g.list = [task("api-def", status: "running")]     // so rawID resolves the id
+        g.detail["api-def"] = task("api-def", status: "running")
+        let refined = try await provider(g).refine(AgentSession.id("api-def", provider: "crobot"))
+        XCTAssertEqual(refined.url?.absoluteString, "https://crobot.coframe.com/tasks/api-def")
+    }
+}
