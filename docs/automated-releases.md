@@ -49,28 +49,6 @@ tag      v0.3.1024-abcdef123
 created at that same SHA, not at whichever commit happens to be the tip of main
 when a slower notarization finishes.
 
-## Swift build reuse
-
-The required macOS source audit and the unsigned release build cache SwiftPM's
-native debug compilation state and downloaded dependencies. Cache identity
-includes architecture, macOS build, Xcode, SDK, Swift version, package manifest,
-resolved dependencies and the candidate SHA. A candidate can restore an older
-entry only within the same environment and dependency prefix; SwiftPM still
-checks its inputs and recompiles changed sources.
-
-Every restore is followed by the full source audit. A cache hit never skips
-building, either test framework, count floors, packaging checks or transport
-drills. A missing cache builds normally; a failed restore discards partial
-state before building. Cache restore is bounded to two minutes, with a
-one-minute stalled-segment limit.
-
-GitHub scopes PR-created caches to their merge ref. The default-branch unsigned
-release build seeds caches that other PRs can read; it cannot restore caches
-from their child refs. The credentialed signing job does not use build caches.
-Final bundles, release artifacts, keychains and signing state are excluded.
-The Intel compile job is unchanged. Compare whole required-job duration,
-including restore/save overhead, before attributing a speedup to cache hits.
-
 ## One-time repository setup
 
 Create a GitHub Environment named `release`, restrict deployment branches to
@@ -106,8 +84,9 @@ After the `Source audit` job has appeared on one pull request, protect `main`:
 - block force pushes and deletion.
 
 Keep squash merge as the only merge method. One merged pull request then maps to
-one first-parent commit and a distinct potential release identity. If merge queue is enabled,
-the existing `merge_group` trigger keeps `Source audit` available to the queue.
+one first-parent commit and a distinct potential release identity. If merge
+queue is enabled, the existing `merge_group` trigger keeps `Source audit`
+available to the queue.
 
 GitHub currently gives workflow tokens read-only access by default in this
 repository. The release workflow asks narrowly for `contents: write`, which is
