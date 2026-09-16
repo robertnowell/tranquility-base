@@ -82,6 +82,15 @@ final class LiveOpenCodeLoop: XCTestCase {
         try store.update(utterance: utterance)
         let outcome = try await coordinator.confirmAndSend(utteranceId: utterance.id)
         guard case .dispatched = outcome else { return XCTFail("dispatch was \(outcome)") }
+        // 2b. While the turn runs the row is BLUE: the provider reports working
+        // and the snapshot carries it. Robert, 15 Sep 5:20 PM, on a row that
+        // stayed green through a whole turn: "the lamps are not working."
+        var seenWorking = false
+        for _ in 0..<100 {
+            if let s = poller.snapshot.agent(id)?.state, s == .working || s == .submitted { seenWorking = true; break }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        XCTAssertTrue(seenWorking, "the snapshot never showed the agent working during its turn; state=\(String(describing: poller.snapshot.agent(id)?.state))")
 
         // 3. The turn ends; the drainer (on its own beat in the app) lands the lines.
         let drainer = SpoolDrainer(store: store, spoolURL: spool)
@@ -133,6 +142,49 @@ final class LiveOpenCodeLoop: XCTestCase {
                        "the opening the summary asks with")
         let spooled = try XCTUnwrap(latest?.cwd)
         XCTAssertEqual(spooled, toy, "the event carries the agent's real directory")
+
+        // 7. A permission: the agent asks, the question is a turn you hear,
+        // "yes" answers it, and the turn finishes. Robert, 15 Sep 5:20 PM: a
+        // green row with a question nobody spoke, whose tap opened a Terminal.
+        let ask = Utterance(status: .ready,
+                            transcriptText: "[assistant]: PING PONG. [user]: Run the shell command `mkdir -p /tmp/tb-permission-probe && date > /tmp/tb-permission-probe/stamp` with your bash tool, then reply with exactly the word DONE.",
+                            targetSessionId: id)
+        try store.update(utterance: ask)
+        guard case .dispatched = try await coordinator.confirmAndSend(utteranceId: ask.id) else {
+            return XCTFail("second dispatch refused")
+        }
+        var pending: PendingRequest?
+        for _ in 0..<600 {
+            _ = try drainer.drain()
+            pending = poller.snapshot.requests[id]
+            if pending != nil { break }
+            if try store.latestStop(for: id)?.lastAssistantMessage?.contains("DONE") == true { break }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        if let pending {
+            let asked = try XCTUnwrap(try store.latestStop(for: id)?.lastAssistantMessage)
+            XCTAssertTrue(asked.hasPrefix("The agent is asking permission"), "the question is the latest turn: \(asked.prefix(80))")
+            XCTAssertTrue(try unread().contains(id), "a question is unread until heard")
+            XCTAssertEqual(poller.snapshot.agent(id)?.state, .inputRequired)
+            let yes = Utterance(status: .ready, transcriptText: "[assistant]: \(asked) [user]: Yes, go ahead.", targetSessionId: id)
+            try store.update(utterance: yes)
+            guard case .dispatched = try await coordinator.confirmAndSend(utteranceId: yes.id) else {
+                return XCTFail("the answer was refused")
+            }
+            XCTAssertNil(poller.snapshot.requests[id], "answered")
+            var done: WaitingSession?
+            for _ in 0..<600 {
+                _ = try drainer.drain()
+                done = try store.latestStop(for: id)
+                if done?.lastAssistantMessage?.contains("DONE") == true { break }
+                try await Task.sleep(for: .milliseconds(100))
+            }
+            XCTAssertTrue(done?.lastAssistantMessage?.contains("DONE") == true,
+                          "after the answer the turn finished: \(done?.lastAssistantMessage?.prefix(80) ?? "nil")")
+            print("LOOP: permission asked=\(pending.asked.prefix(60)) answered; words=\(done?.lastAssistantMessage?.prefix(40) ?? "")")
+        } else {
+            print("LOOP: the agent ran the command without asking; leg skipped")
+        }
 
         // 6. End Agent: gone from the snapshot, and not adopted by a fresh provider.
         await poller.end(id)

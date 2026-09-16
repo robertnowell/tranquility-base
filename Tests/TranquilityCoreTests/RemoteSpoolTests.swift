@@ -35,13 +35,20 @@ final class RemoteSpoolTests: XCTestCase {
         XCTAssertTrue(RemoteSpool.lines(for: event(.said(turn)), agent: agent()).isEmpty)
     }
 
-    func testAQuestionBecomesANotificationCarryingWhy() {
-        let request = PendingRequest(id: "q", session: agent().id, asked: "Which branch?")
+    /// A question is a TURN (a Stop line), because the answer goes through
+    /// this app: only a Stop is waiting, unread, announced, and a reply
+    /// target. As a Notification it was none of those (15 Sep, 5:20 PM). The
+    /// matcher still says why.
+    func testAQuestionIsATurnCarryingWhyAndTheChoices() {
+        let request = PendingRequest(id: "q", session: agent().id, asked: "Run cat hq.json?",
+                                     options: [.init(id: "allow_once", label: "Allow once", kind: .allowOnce),
+                                               .init(id: "reject_once", label: "Reject", kind: .rejectOnce)])
         let lines = RemoteSpool.lines(for: event(.asks(request)), agent: agent())
         XCTAssertEqual(lines.count, 1)
-        XCTAssertEqual(lines[0].hookEvent, .notification)
+        XCTAssertEqual(lines[0].hookEvent, .stop)
         XCTAssertEqual(lines[0].notificationMatcher, "agent_question")
-        XCTAssertEqual(lines[0].lastAssistantMessage, "Which branch?")
+        XCTAssertEqual(lines[0].lastAssistantMessage,
+                       "The agent is asking permission: Run cat hq.json?. Options: Allow once, Reject.")
     }
 
     /// **The one that is easy to miss.** The green lamp comes from an
