@@ -160,6 +160,37 @@ public struct OpenCodeClient: Sendable {
     /// with `edit: ask` sat blocked for 240 s reading as `working` because
     /// this client asked the wrong route. Same for the reply: the scoped
     /// route answers PermissionNotFoundError, the unscoped one clears it.
+    /// The prompt, accepted rather than finished: `POST .../prompt_async`
+    /// answers 204 the moment the message is queued, where `/message` holds
+    /// the connection for the whole turn. The turn's words arrive on the
+    /// event stream, which is where a provider that owns the server reads
+    /// them.
+    public func sendAsync(_ text: String, to session: String) async throws -> SendOutcome {
+        let payload: [String: Any] = ["parts": [["type": "text", "text": text]]]
+        guard let body = try? JSONSerialization.data(withJSONObject: payload) else {
+            return .failed(reason: "could not encode the message")
+        }
+        do {
+            _ = try await call("POST", "/session/\(esc(session))/prompt_async", body: body)
+            return .accepted
+        } catch ClientError.asleep {
+            return .busy
+        } catch {
+            return .failed(reason: String(describing: error))
+        }
+    }
+
+    /// Stop the turn that is running, if one is.
+    public func abort(_ session: String) async throws {
+        _ = try await call("POST", "/session/\(esc(session))/abort")
+    }
+
+    /// One session, as the server has it now: the model's title lands here
+    /// after the first turn.
+    public func session(_ raw: String) async throws -> AgentSession? {
+        try await sessions().first { $0.providerID == raw }
+    }
+
     public func pendingRequest(_ session: String) async throws -> PendingRequest? {
         if let question = try await questions(session).first { return question }
         return try await permissions(session).first

@@ -350,14 +350,14 @@ public struct SessionRow: Equatable, Sendable {
         // means needs you, and the terminal is where; nothing on a card can
         // repair a usage limit or a permission prompt.
         //
-        // Except a REMOTE permission, which the card is the only place to
-        // answer: there is no pane, and the door (OpenCode's own screen)
-        // cannot take the answer this app holds. An amber remote row with
-        // something unread is an agent blocked on a question this app can
-        // answer, and the tap brings the decision, however often it was
-        // heard. Unreachable and failed remote rows have nothing to answer
-        // and keep the door.
-        case .fault where row.read == .unread && row.door.isRemote: return .announce
+        // A REMOTE row too, since 15 Sep 9:11 PM: its door is a terminal
+        // attached to the same served session, where the permission is on
+        // screen and Enter answers it (OpenCodeServer). For one afternoon the
+        // tap on an amber remote row announced a card with the decision
+        // instead, because the door of the day (a second OpenCode on the
+        // stored session) could not show the question. Robert: "Amber goes
+        // to agent. When you go to agent, it should work to answer the
+        // question." It does now, so amber is one verb again.
         case .fault: return goTo(row)
         // Blue and quiet open the card when they have one (ruled 15 Sep,
         // reversing 24 Aug's "blue joined amber"). Robert, on the Past

@@ -91,6 +91,28 @@ public enum RemoteSpool {
         }
     }
 
+    /// **A question that died with the process.** The ask lives in the
+    /// agent's child process; a relaunch kills the child, and OpenCode marks
+    /// the turn interrupted. The next launch adopts the session as finished
+    /// (green) with no request, while this app's last word on it is still the
+    /// question: the row reads as done, the tap opens the door, and the person
+    /// waits on an answer nobody will ask for again (Robert, 15 Sep 8:26 PM:
+    /// "same issue with this one, seems stuck, no questions, green lamp").
+    /// So when an agent appears with no request and the store's latest turn
+    /// for it is an unanswered question, the truth is written as a turn.
+    public static func expiredQuestion(for event: AgentEvent, agent: AgentSession?,
+                                       latest: WaitingSession?) -> [SpoolLine] {
+        guard case .appeared = event.kind,
+              let latest, latest.notificationMatcher == "agent_question"
+        else { return [] }
+        var stamped = event
+        stamped.at = max(event.at, Date(timeIntervalSince1970: Double(latest.createdAtMs) / 1000 + 1))
+        return [SpoolLine(kind: .stop, event: stamped,
+                          text: "The permission it was waiting on expired when the app restarted, "
+                              + "and that turn was interrupted. Say what to do next and it will continue.",
+                          agent: agent, matcher: "agent_question_expired")]
+    }
+
     /// The question as a turn's words: what it asks and what the choices
     /// are, so the brief has something to recap and the person hears the
     /// options before answering.

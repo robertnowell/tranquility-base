@@ -53,6 +53,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         "com.robertnowell.tranquilitybase.forwarded-deep-link")
     var permissionTimer: Timer?
     var intakeTimer: Timer?
+    /// The intake beat, callable out of turn (a remote turn landing).
+    var intakeBeat: (@Sendable () -> Void)?
     var inFlightTimer: Timer?
     var utteranceWasInFlight = false
     let onboarding = OnboardingWindow()
@@ -644,12 +646,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 poller.onEvents = { [weak self] events in
                     guard let self else { return }
                     let snapshot = self.agents?.snapshot
-                    let lines = events.flatMap {
-                        RemoteSpool.lines(for: $0, agent: snapshot?.agent($0.session))
+                    let lines = events.flatMap { event -> [RemoteSpool.SpoolLine] in
+                        let agent = snapshot?.agent(event.session)
+                        var out = RemoteSpool.lines(for: event, agent: agent)
+                        // An adopted agent whose last word here was a question
+                        // nobody can answer any more: say so, as a turn.
+                        if case .appeared = event.kind, snapshot?.requests[event.session] == nil,
+                           let latest = try? self.store?.latestStop(for: event.session) {
+                            out += RemoteSpool.expiredQuestion(for: event, agent: agent, latest: latest)
+                        }
+                        return out
+                    }
+                    // A question answered elsewhere (the attached terminal,
+                    // with Enter) is done here too: the "asking permission"
+                    // turn is dismissed, or the row would stay unread for a
+                    // decision already made.
+                    for event in events {
+                        if case .answered = event.kind, let store = self.store,
+                           let latest = try? store.latestStop(for: event.session),
+                           latest.notificationMatcher == "agent_question" {
+                            try? store.advanceCursor(sessionId: event.session,
+                                                     heardThrough: latest.latestId,
+                                                     dismissedThrough: latest.latestId)
+                        }
                     }
                     guard !lines.isEmpty else { return }
                     RemoteSpool.append(lines, to: QueueStore.supportDirectory
                         .appendingPathComponent("spool.jsonl"))
+                    // Now, not on the next tick: the turn is a row to read
+                    // the moment it lands.
+                    self.intakeBeat?()
                     // The drainer runs on the same beat the hooks' lines are
                     // picked up on, so nothing new schedules it.
                 }
@@ -703,7 +729,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 CaptureMarker.settle(inFlight: inFlight)
             }
         }
-        intakeTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+        // One intake beat: drain the spool, prepare the next brief, repaint
+        // the grid, sound the arrival. On the five-second timer, and ALSO the
+        // moment a remote turn lands in the spool (`intakeBeat`): a remote
+        // agent's answer is appended by the poller and used to wait for the
+        // next tick, so for up to five seconds the row was green with nothing
+        // to read and a tap went to the door instead of the card (Robert,
+        // 15 Sep 8:37 PM, six seconds after OpenCode answered: "green lamp
+        // went to agent with no summary, no card").
+        let beat: @Sendable () -> Void = { [weak self] in
             Task { @MainActor in
                 guard let self, let coordinator = self.coordinator else { return }
                 // A dead tap is a mic that cannot be closed and gestures that
@@ -795,7 +829,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // Identity, not count: a turn replacing an older turn on the same
                 // session leaves both the count and the membership unchanged, and
                 // that is exactly the case that should not make a noise.
-                let waitingIds = Set(rows.filter { $0.lamp == .ready }.map(\.id))
+                let waitingIds = EarconGate.arrivalKeys(rows)
                 let primed = self.lastWaitingIds
                 self.lastWaitingIds = waitingIds
                 let newlyWaiting = EarconGate.hasNewArrival(waiting: waitingIds, previous: primed)
@@ -841,6 +875,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
         }
+        intakeBeat = beat
+        intakeTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { _ in beat() }
 
         // Lifted ABOVE the hotkey on purpose (ruled 18 Aug). A screenshot
         // tool has no business installing a global event tap: `--pose-shot`
@@ -2059,6 +2095,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        // The OpenCode server this instance started goes with it (a child
+        // does not die with its parent on macOS; a stale one is reaped at
+        // the next launch by its pid file).
+        OpenCodeServer.stopAll()
         DistributedNotificationCenter.default().removeObserver(self,
                                                                name: Self.forwardedDeepLink,
                                                                object: nil)

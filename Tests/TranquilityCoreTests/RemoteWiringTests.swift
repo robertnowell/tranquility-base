@@ -47,7 +47,7 @@ final class RemoteWiringTests: XCTestCase {
         let url = try config(#"{"app":{"base_url":"https://hq.example.test"}}"#)
         let registry = AgentProviders.registry(config: url, secret: { _ in nil }, ledger: ledger)
         XCTAssertEqual(registry.providers.map(\.id), ["opencode"])
-        XCTAssertTrue(registry.providers[0] is ACPProvider)
+        XCTAssertTrue(registry.providers[0] is ServedOpenCodeProvider, "OpenCode is served, not piped (15 Sep 9:11 PM)")
         XCTAssertEqual(registry.configured(config: url).map(\.id), ["opencode"],
                        "a spawnable provider needs no base URL to be polled")
     }
@@ -60,7 +60,7 @@ final class RemoteWiringTests: XCTestCase {
         let url = try config(#"{"providers":{"opencode":{"base_url":"http://127.0.0.1:4096"}}}"#)
         let built = AgentProviders.registry(config: url, secret: { _ in nil }, ledger: ledger).providers
         XCTAssertEqual(built.map(\.id), ["opencode"])
-        XCTAssertTrue(built[0] is ACPProvider, "the app spawns it; the address is for machines that cannot")
+        XCTAssertTrue(built[0] is ServedOpenCodeProvider, "the app serves it; the address is for machines that cannot")
     }
 
     /// Registering costs nothing: no process runs until a session is started.

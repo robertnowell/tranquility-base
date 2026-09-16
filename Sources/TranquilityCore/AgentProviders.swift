@@ -41,6 +41,18 @@ public enum AgentProviders {
             // read the same way (#471). Fixed for the life of the process,
             // which is the child's cwd and the list's filter.
             let workspace = AgentDefaults.directory(for: entry.id)
+            // OPENCODE IS SERVED, NOT PIPED (revised 15 Sep 9:11 PM). The
+            // pipe could drive it but not share it: a permission asked over
+            // the pipe was invisible to the terminal opened on the session.
+            // `opencode serve` is one session seen from two places, and Go to
+            // Agent attaches a terminal to it. See ServedOpenCodeProvider.
+            if entry.id == "opencode" {
+                built.append(ServedOpenCodeProvider(
+                    binary: command[0], directory: workspace, ledger: ledger,
+                    pidFile: QueueStore.supportDirectory.appendingPathComponent("opencode-serve.pid"),
+                    trace: { Failures.trace?($0) }))
+                continue
+            }
             let transport = ACPProcessTransport(command: command, cwd: workspace)
             let binary = command[0]
             built.append(ACPProvider(id: entry.id,

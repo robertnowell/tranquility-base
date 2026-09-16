@@ -1809,6 +1809,7 @@ extension StatusHUD {
             spoken: SpokenTextSanitizer().sanitize("Nobody knows this one."),
             sessionId: "remote-2", pid: nil, project: "elsewhere", cwd: "/tmp")
         checks.append(("anUnknownRemoteAgentStillHasNoDoor", goButton.isHidden))
+
         agentDoorForSession = realDoor
 
         SelfTest.report("revivedDoor", checks)

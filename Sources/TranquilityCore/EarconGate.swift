@@ -86,4 +86,21 @@ extension EarconGate {
         guard let previous else { return false }
         return !waiting.subtracting(previous).isEmpty
     }
+
+    /// What counts as an arrival for the returned chime: every green row,
+    /// and every amber row with something unread, which is a remote agent
+    /// blocked on a question this app can answer. Keyed so a question on a
+    /// row that was ALREADY green (a fresh agent is green, waiting for you)
+    /// is a new arrival: the chime is for "something needs you now", and an
+    /// ask is that even when the row was lit before. Robert, 15 Sep 7:47 PM:
+    /// an agent sat 27 minutes on a permission and nothing chimed, because
+    /// the row had been green since it was started.
+    public static func arrivalKeys(_ rows: [SessionRow]) -> Set<String> {
+        var keys = Set<String>()
+        for row in rows {
+            if row.lamp == .ready { keys.insert(row.id) }
+            if row.lamp == .fault, row.read == .unread { keys.insert(row.id + "#ask") }
+        }
+        return keys
+    }
 }
