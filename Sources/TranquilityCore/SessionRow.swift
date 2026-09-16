@@ -371,8 +371,16 @@ public struct SessionRow: Equatable, Sendable {
         // AGENT, so the card is a superset of the door. The one case the
         // door still wins is the one green already has: a row with nothing
         // recorded to read, or a remote row with no local transcript.
+        // Blue and quiet mirror green (15 Sep): the card when there is a turn
+        // to read, the door only when there is not. The earlier `door.isRemote`
+        // clause sent every blue/quiet CROBOT row straight to its web page even
+        // when it had a recorded turn to recap — so a working crobot task with
+        // a prior summary skipped its own card. Robert: "blue and green
+        // obviously should open the card." A row with nothing recorded still
+        // takes its door, which is the only honest thing for a mid-turn agent
+        // that has not spoken yet.
         case .working, .running:
-            if row.door.isRemote || row.read == .none { return goTo(row) }
+            if row.read == .none { return goTo(row) }
             return .announce
         // **Green consults the door too, since 14 Sep.** Announce reads a
         // finished turn out of the LOCAL store, so it is the right verb only

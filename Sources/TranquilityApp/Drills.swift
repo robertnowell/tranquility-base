@@ -1262,7 +1262,79 @@ extension StatusHUD {
         ])
     }
 
-    func closedRowsDrill() {
+/// **A crobot task, driven through the real grid.** Robert, after too many
+    /// "it works" claims backed by tests that described themselves: *"have you
+    /// really driven this end-to-end through the grid?"* No test can answer
+    /// that; only this can. It poses crobot rows on the live panel, taps each
+    /// through the actual `sessionRowTapped`, and reports where the tap went.
+    ///
+    /// The verbs are captured by swapping the panel's own callbacks, so the
+    /// drill sees exactly what a click sees — `.announce` raises the card,
+    /// `.goToAgent` opens the door — without a browser window or a spoken card
+    /// escaping the drill.
+    func crobotFinishDrill() {
+        let page = SessionRow.Door.page(URL(string: "https://crobot.coframe.com/tasks/api-x")!)
+        func row(_ id: String, _ lamp: Lamp, read: ReadState) -> SessionRow {
+            SessionRow(id: id, name: "crobot: \(id)", aux: "recap", lamp: lamp,
+                       read: read, detail: "It opened the PR and left the tests green.",
+                       harness: "crobot", door: page)
+        }
+        // green: a finished task whose recap is recorded (read = .unread).
+        // blue: still working, but with a prior recap to show.
+        // amber: a problem — straight to the agent.
+        let rows = [row("crobot-green", .ready, read: .unread),
+                    row("crobot-blue", .working, read: .unread),
+                    row("crobot-amber", .fault, read: .none)]
+        showIdle(rows: rows)
+
+        // Green and blue take the card path (announce) — driven for real, the
+        // callback captured so no card actually escapes the drill. Amber's
+        // path for a crobot row is `.openPage` (its web UI), which a tap would
+        // send to `NSWorkspace` and open a browser; so amber is asserted from
+        // the panel's own row, not tapped. Either way the fact under test is
+        // where `sessionRowTapped` WOULD send it, read off the live grid.
+        var went: [String: String] = [:]
+        let savedAnnounce = onPickWaiting
+        onPickWaiting = { went[$0] = "card" }
+        for id in ["crobot-green", "crobot-blue"] {
+            let control = NSButton()
+            control.identifier = NSUserInterfaceItemIdentifier(id)
+            sessionRowTapped(control)
+        }
+        onPickWaiting = savedAnnounce
+        // Amber, straight to the agent, which for crobot is the web page.
+        let amberAction = face.sessionRows.first { $0.id == "crobot-amber" }
+            .map { SessionRow.action(for: $0) }
+        let amberOpensTheWeb: Bool = {
+            if case .openPage(let url)? = amberAction { return url.host == "crobot.coframe.com" }
+            return false
+        }()
+
+        // The card's Go to Agent, for the crobot row now on the stage, resolves
+        // to the web page — not a terminal this Mac does not own.
+        currentTarget = ("crobot-green", nil, "crobot")
+        let goDoor = remoteDoorForCurrentTarget
+        let goesToTheWeb: Bool = {
+            if case .page(let url)? = goDoor { return url.host == "crobot.coframe.com" }
+            return false
+        }()
+        currentTarget = nil
+        showIdle(rows: [])
+
+        SelfTest.report("crobotFinish", [
+            // A finished crobot task with a recap opens the card, not the web.
+            ("greenRecapOpensTheCard", went["crobot-green"] == "card"),
+            // The blue fix: a working crobot row with a recap opens the card too.
+            ("blueWorkingOpensTheCard", went["crobot-blue"] == "card"),
+            // Amber goes straight to the agent, which for a crobot row is
+            // opening its web UI directly (not a card, not a local terminal).
+            ("amberOpensTheAgentDirectly", amberOpensTheWeb),
+            // And Go to Agent, from the card, is the web page.
+            ("goToAgentOpensTheWebUI", goesToTheWeb),
+        ])
+    }
+
+        func closedRowsDrill() {
         func row(_ id: String, _ lamp: Lamp,
                  revivable: Bool = false) -> SessionRow {
             // A green row carries an unread turn, because that is what a green
