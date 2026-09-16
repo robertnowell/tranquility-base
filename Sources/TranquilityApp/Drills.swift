@@ -1809,6 +1809,32 @@ extension StatusHUD {
             spoken: SpokenTextSanitizer().sanitize("Nobody knows this one."),
             sessionId: "remote-2", pid: nil, project: "elsewhere", cwd: "/tmp")
         checks.append(("anUnknownRemoteAgentStillHasNoDoor", goButton.isHidden))
+
+        // A remote agent waiting on a permission: the card carries the
+        // answers and Go to Agent steps aside, because OpenCode's own screen
+        // cannot take an answer to a request made to this app (Robert,
+        // 15 Sep 8:51 PM: "it still didn't give me the ability on the agent
+        // to answer the question").
+        let realAsk = askOptionsForSession
+        let realAnswer = onAnswerRequest
+        askOptionsForSession = { id in
+            id == "remote-1" ? [(id: "allow_once", label: "Allow once"),
+                                (id: "allow_always", label: "Always allow"),
+                                (id: "reject_once", label: "Reject")] : []
+        }
+        var answered: (String, String)?
+        onAnswerRequest = { answered = ($0, $1) }
+        currentTarget = nil
+        _ = showAnnouncement(
+            spoken: SpokenTextSanitizer().sanitize("The agent is asking permission: read Downloads. Allow once, Always allow, Reject. Which?"),
+            sessionId: "remote-1", pid: nil, project: "tranquility-base", cwd: "/tmp")
+        checks.append(("anAskCardCarriesItsAnswers", answerButtons.count == 3))
+        checks.append(("andGoToAgentStepsAside", goButton.isHidden))
+        checks.append(("theRowIsShown", !actionRow.isHidden))
+        if let first = answerButtons.first { first.performClick(nil) }
+        checks.append(("anAnswerReachesTheApp", answered?.0 == "remote-1" && answered?.1 == "allow_once"))
+        askOptionsForSession = realAsk
+        onAnswerRequest = realAnswer
         agentDoorForSession = realDoor
 
         SelfTest.report("revivedDoor", checks)
