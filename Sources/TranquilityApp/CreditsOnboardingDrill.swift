@@ -2,18 +2,9 @@ import AppKit
 import TranquilityCore
 
 /// The actual Setup renderer and readiness callback, without AppDelegate,
-/// pairing, real keys, provider calls, microphone, or a live-app relaunch.
+/// browser pairing, real keys, provider calls, microphone, or a live-app relaunch.
 @MainActor
 enum CreditsOnboardingDrill {
-    private final class Identity: @unchecked Sendable {
-        private let lock = NSLock()
-        private var token: String?
-        func set(_ token: String?) { lock.lock(); self.token = token; lock.unlock() }
-        func read() -> ManagedCreditSession.Identity? {
-            lock.lock(); defer { lock.unlock() }
-            return token.map { .init(hub: URL(string: "https://fixture.invalid")!, token: $0) }
-        }
-    }
     private struct Gateway: GatewayTransport {
         func request(method: String, path: String, body: Data?) async throws -> (status: Int, body: Data) {
             let balance = #"{"availableMicros":"10000000","reservedMicros":"0","ledgerSequence":"1"}"#
@@ -33,14 +24,27 @@ enum CreditsOnboardingDrill {
         return false
     }
     static func run() async -> Bool {
+        // This drill writes synthetic credentials through the REAL adoption
+        // path. Refuse unless the wrapper provided an isolated temporary store.
+        let support = QueueStore.supportDirectory.resolvingSymlinksInPath().path
+        let temporary = FileManager.default.temporaryDirectory.resolvingSymlinksInPath().path
+        guard ProcessInfo.processInfo.environment["VOICE_DISPATCH_SUPPORT_DIR"] != nil,
+              support.hasPrefix(temporary.hasSuffix("/") ? temporary : temporary + "/") else {
+            print("FAIL credits UI requires an isolated temporary support directory")
+            return false
+        }
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("credits-ui-\(UUID())")
         defer { try? FileManager.default.removeItem(at: directory) }
-        let identity = Identity()
-        let session = ManagedCreditSession(identity: { identity.read() }, outboxURL: directory.appendingPathComponent("outbox.sqlite"),
+        let identity: ManagedCreditSession.IdentitySource = {
+            Secrets.read(.hubToken).map { .init(hub: URL(string: "https://fixture.invalid")!, token: $0) }
+        }
+        let session = ManagedCreditSession(identity: identity, outboxURL: directory.appendingPathComponent("outbox.sqlite"),
                                           connect: { _, _ in .init(transport: Gateway()) })
+        let observer = ManagedCredits.observeIdentityChanges(session)
+        defer { NotificationCenter.default.removeObserver(observer) }
         let probes = Prerequisites.Probes(tmuxPath: { "/fixture/tmux" }, hooksProblem: { _ in nil },
             hasSecret: { _ in false }, harnesses: { [] },
-            hubStatus: { .init(connected: identity.read() != nil, detail: "fixture sign-in") },
+            hubStatus: { .init(connected: identity() != nil, detail: "fixture sign-in") },
             creditStanding: { CreditStanding.current })
         let view = SetupChecklistView(frame: NSRect(x: 0, y: 0, width: 700, height: 600), probes: probes)
         let window = NSWindow(contentRect: view.frame, styleMask: [.titled], backing: .buffered, defer: false)
@@ -52,17 +56,21 @@ enum CreditsOnboardingDrill {
         var checks: [(String, Bool)] = []
         let scanned = await until { view.hasScannedForSelfTest }
         checks.append(("unconnected setup is not ready", scanned && !ready))
-        identity.set("fixture-A")
-        await session.refresh()
+        do {
+            try HubPairing.adopt(token: "fixture-A", base: URL(string: "https://fixture.invalid")!,
+                                 config: directory.appendingPathComponent("hq.json"))
+        } catch { print("FAIL fixture pairing adoption: \(error)"); return false }
         let connected = await until { ready && view.rowTextForSelfTest.contains("$10.00 at last balance check") }
         checks.append(("existing checklist reacts to completed sign-in", connected))
         checks.append(("personal key is explicitly optional", view.rowTextForSelfTest.contains("not required for credits")))
-        identity.set(nil)
-        await session.refresh()
+        do { try Secrets.write(.hubToken, value: "") }
+        catch { print("FAIL fixture sign-out: \(error)"); return false }
         let disconnected = await until { !ready && !view.rowTextForSelfTest.contains("$10.00") }
         checks.append(("sign-out removes readiness and previous balance", disconnected))
-        identity.set("fixture-B")
-        await session.refresh()
+        do {
+            try HubPairing.adopt(token: "fixture-B", base: URL(string: "https://fixture.invalid")!,
+                                 config: directory.appendingPathComponent("hq.json"))
+        } catch { print("FAIL fixture second pairing: \(error)"); return false }
         checks.append(("same checklist becomes ready for next sign-in", await until { ready }))
         window.layoutIfNeeded()
         for (name, passed) in checks { print("\(passed ? "PASS" : "FAIL") \(name)") }
