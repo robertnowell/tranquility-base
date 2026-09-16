@@ -47,7 +47,17 @@ out of the CI source verdict. Workstream progress is tracked in issue #489.
 
 ## Testing the Intel slice
 
-The app ships universal (arm64 + x86_64). To run the suite against the Intel
+Production ships universal (arm64 + x86_64). Dev builds default to this Mac's
+hardware architecture, including when invoked from a translated shell. Use
+`TB_ARCHS="arm64 x86_64" scripts/bundle-dev.sh` for a universal Dev build.
+
+The test wrapper discovers both frameworks' compiled tests and checks that
+they ran. Adding a test needs no count edit in `scripts/test.sh`; its fixed
+baseline also rejects a collapsed inventory or missing target. The baseline
+is not an exact source-level inventory: deliberately removing test sources
+still needs review, even if enough tests remain to exceed that baseline.
+
+To run the suite against the Intel
 slice on an Apple Silicon Mac:
 
 ```sh

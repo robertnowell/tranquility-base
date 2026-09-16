@@ -73,15 +73,27 @@ for scheme in $URL_SCHEMES; do
 "
 done
 
-# Architectures. Universal by default so Intel Macs are covered; a single arch
-# stays available for fast local iteration (TB_ARCHS=arm64 scripts/bundle.sh).
+# Production is universal. Dev defaults to this Mac's hardware architecture;
+# an explicit TB_ARCHS still supports cross-architecture validation. Detect the
+# hardware, since a translated shell reports x86_64 on Apple Silicon.
 #
 # The output path is ASKED FOR, never assumed. A multi-arch `swift build` does
 # not write to .build/<config>: it redirects to .build/apple/Products/<Config>,
 # with the configuration capitalised. Hardcoding either layout is how a bundle
 # silently ships the previous single-arch binary, and `--show-bin-path` reports
 # both correctly for the cost of one extra invocation.
-read -r -a TB_ARCH_LIST <<< "${TB_ARCHS:-arm64 x86_64}"
+if [ -z "${TB_ARCHS:-}" ]; then
+  if [ "$APP_CHANNEL" = "development" ]; then
+    if /usr/bin/arch -arm64e /usr/bin/true 2>/dev/null; then
+      TB_ARCHS=arm64
+    else
+      TB_ARCHS=x86_64
+    fi
+  else
+    TB_ARCHS="arm64 x86_64"
+  fi
+fi
+read -r -a TB_ARCH_LIST <<< "$TB_ARCHS"
 ARCH_ARGS=()
 for _tb_arch in "${TB_ARCH_LIST[@]}"; do ARCH_ARGS+=(--arch "$_tb_arch"); done
 PRODUCTS_DIR=$(swift build --configuration "$CONFIG" "${ARCH_ARGS[@]}" --show-bin-path)

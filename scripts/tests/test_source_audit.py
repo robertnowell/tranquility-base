@@ -37,6 +37,7 @@ class SourceAuditTests(unittest.TestCase):
             "check-compat-comments.sh", "check-row-dates.sh", "tests/test_source_audit.py",
             "tests/test_deployment_state.py",
             "tests/test_delivery.py",
+            "tests/test_test_gate.py",
         ):
             (self.repo / "scripts" / name).write_text(
                 "import os\nfrom pathlib import Path\n"
