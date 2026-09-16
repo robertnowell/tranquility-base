@@ -795,7 +795,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // Identity, not count: a turn replacing an older turn on the same
                 // session leaves both the count and the membership unchanged, and
                 // that is exactly the case that should not make a noise.
-                let waitingIds = Set(rows.filter { $0.lamp == .ready }.map(\.id))
+                let waitingIds = EarconGate.arrivalKeys(rows)
                 let primed = self.lastWaitingIds
                 self.lastWaitingIds = waitingIds
                 let newlyWaiting = EarconGate.hasNewArrival(waiting: waitingIds, previous: primed)
