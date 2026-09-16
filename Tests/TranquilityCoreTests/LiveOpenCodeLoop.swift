@@ -230,6 +230,16 @@ final class LiveOpenCodeLoop: XCTestCase {
         mk.httpMethod = "POST"; mk.setValue("application/json", forHTTPHeaderField: "content-type")
         mk.httpBody = Data("{\"parentID\":\"\(poller.snapshot.agent(id)!.providerID)\",\"title\":\"Verify a claim (@general subagent)\"}".utf8)
         _ = try await URLSession.shared.data(for: mk)
+        // The model titles a session a few seconds after its first turn, and
+        // an untitled session is not adopted (it reads as never spoken to).
+        for _ in 0..<100 {
+            let (data, _) = try await URLSession.shared.data(from: provider.baseURL.appendingPathComponent("session"))
+            let titled = (try? JSONSerialization.jsonObject(with: data) as? [[String: Any]])?
+                .contains { ($0["id"] as? String) == poller.snapshot.agent(id)?.providerID
+                    && !(($0["title"] as? String) ?? "").hasPrefix("New session") } ?? false
+            if titled { break }
+            try await Task.sleep(for: .milliseconds(100))
+        }
         let adopted = try await second.mine()
         XCTAssertTrue(adopted.contains { $0.id == id }, "the session comes back")
         XCTAssertFalse(adopted.contains { $0.title.contains("subagent") }, "a subagent is not a row")
