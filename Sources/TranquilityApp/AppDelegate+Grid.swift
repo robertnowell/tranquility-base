@@ -196,6 +196,14 @@ extension AppDelegate {
     /// `lastSeenLive` follows for the local bands.
     func remoteAgents(waiting: [WaitingSession]) -> GridAssembler.RowInputs.RemoteAgents {
         guard let snapshot = agents?.snapshot else { return .init() }
+        return Self.remoteAgents(snapshot: snapshot, waiting: waiting)
+    }
+
+    /// The pure half, so the panel's own drill can drive it with a posed
+    /// snapshot and a temporary store's waiting list, exactly as the grid
+    /// does with the real ones.
+    static func remoteAgents(snapshot: AgentPoller.Snapshot,
+                             waiting: [WaitingSession]) -> GridAssembler.RowInputs.RemoteAgents {
         // UNREAD COMES FROM THE STORED EVENT LOG, exactly like every local
         // row's green lamp, rather than from the provider's own opinion. The
         // spool line a remote turn wrote is what puts it here, so a remote

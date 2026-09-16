@@ -1334,7 +1334,85 @@ extension StatusHUD {
         ])
     }
 
-        func closedRowsDrill() {
+        /// **An OpenCode agent, driven through the real grid from real facts.**
+    /// Robert, 16 Sep, on a green row he had just heard opening the terminal:
+    /// "does it work now? have you driven it end to end through the UI?"
+    /// The crobot drill poses rows with their read state already decided;
+    /// the defect was in DERIVING that state, so this one starts one step
+    /// earlier: a temporary store with a turn and a heard cursor, the app's
+    /// own `remoteAgents(snapshot:waiting:)`, the app's own `GridAssembler`,
+    /// the live panel, and the actual `sessionRowTapped`. Three rows, three
+    /// facts: unread, heard-and-undismissed, nothing at all.
+    func openCodeRowDrill() {
+        var checks: [(String, Bool)] = []
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("tb-opencode-row-drill-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        guard (try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)) != nil,
+              let store = try? QueueStore(url: dir.appendingPathComponent("q.sqlite")) else {
+            SelfTest.report("openCodeRow", [("storeBuilt", false)]); return
+        }
+        // Three served OpenCode sessions, the way the poller would hold them.
+        func agent(_ raw: String, _ title: String) -> AgentSession {
+            var a = AgentSession.of(raw, provider: "opencode", title: title, state: .completed)
+            a.repository = "tranquility-base"
+            a.shell = AgentSession.ShellDoor(command: "opencode attach http://127.0.0.1:1 --session \(raw)",
+                                             directory: "/tmp")
+            return a
+        }
+        let unread = agent("ses_drill_unread", "Unread turn")
+        let heard = agent("ses_drill_heard", "Heard turn")
+        let silent = agent("ses_drill_silent", "Never spoke")
+        var snapshot = AgentPoller.Snapshot()
+        snapshot.agents = [unread, heard, silent]
+        // Turns in the store for two of them, as the spool would have written.
+        func turn(_ id: String, at ms: Int64) -> Int64? {
+            guard (try? store.insert(event: QueuedEvent(
+                createdAtMs: ms, hookEvent: .stop, sessionId: id, promptId: "drill-\(id)",
+                cwd: "/tmp", transcriptPath: nil, lastAssistantMessage: "Done.", tty: nil))) != nil
+            else { return nil }
+            return (try? store.latestStop(for: id))??.latestId
+        }
+        _ = turn(unread.id, at: 1_000)
+        if let heardLatest = turn(heard.id, at: 2_000) {
+            try? store.advanceCursor(sessionId: heard.id, heardThrough: heardLatest)
+        }
+        let waiting = (try? store.waitingSessions()) ?? []
+        let remote = AppDelegate.remoteAgents(snapshot: snapshot, waiting: waiting)
+        let rows = GridAssembler.rows(GridAssembler.RowInputs(
+            waiting: waiting, known: (try? store.allKnownSessions()) ?? [],
+            discovered: [], liveById: [:], boundaries: [:], switchedOff: [], switchedOn: [],
+            evidence: { _, _ in nil }, isHeadless: { _ in false }, family: { [$0] },
+            supersedesWaiting: { _, _ in false }, isInFlight: { _ in false },
+            remote: remote)).rows
+        func read(_ a: AgentSession) -> ReadState? { rows.first { $0.id == a.id }?.read }
+        checks.append(("unreadIsDerivedUnread", read(unread) == .unread))
+        checks.append(("heardIsDerivedOpened", read(heard) == .opened))
+        checks.append(("silentIsDerivedNone", read(silent) == ReadState.none))
+
+        // On the live panel, tapped through the real handler; the verbs
+        // captured so nothing escapes the drill.
+        showIdle(rows: rows)
+        var went: [String: String] = [:]
+        let savedAnnounce = onPickWaiting, savedShell = onOpenShell
+        onPickWaiting = { went[$0] = "card" }
+        onOpenShell = { command, _ in
+            if let a = [unread, heard, silent].first(where: { command.contains($0.providerID) }) { went[a.id] = "door" }
+        }
+        for a in [unread, heard, silent] {
+            let control = NSButton()
+            control.identifier = NSUserInterfaceItemIdentifier(a.id)
+            sessionRowTapped(control)
+        }
+        onPickWaiting = savedAnnounce; onOpenShell = savedShell
+        showIdle(rows: [])
+        checks.append(("unreadTapOpensTheCard", went[unread.id] == "card"))
+        checks.append(("heardTapOpensTheCard", went[heard.id] == "card"))
+        checks.append(("nothingToSayTapOpensTheAgent", went[silent.id] == "door"))
+        SelfTest.report("openCodeRow", checks)
+    }
+
+    func closedRowsDrill() {
         func row(_ id: String, _ lamp: Lamp,
                  revivable: Bool = false) -> SessionRow {
             // A green row carries an unread turn, because that is what a green
