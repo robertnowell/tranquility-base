@@ -1287,18 +1287,28 @@ extension StatusHUD {
                     row("crobot-amber", .fault, read: .none)]
         showIdle(rows: rows)
 
+        // Green and blue take the card path (announce) — driven for real, the
+        // callback captured so no card actually escapes the drill. Amber's
+        // path for a crobot row is `.openPage` (its web UI), which a tap would
+        // send to `NSWorkspace` and open a browser; so amber is asserted from
+        // the panel's own row, not tapped. Either way the fact under test is
+        // where `sessionRowTapped` WOULD send it, read off the live grid.
         var went: [String: String] = [:]
         let savedAnnounce = onPickWaiting
-        let savedGo = onGoToSession
         onPickWaiting = { went[$0] = "card" }
-        onGoToSession = { went[$0] = "agent" }
-        for id in ["crobot-green", "crobot-blue", "crobot-amber"] {
+        for id in ["crobot-green", "crobot-blue"] {
             let control = NSButton()
             control.identifier = NSUserInterfaceItemIdentifier(id)
             sessionRowTapped(control)
         }
         onPickWaiting = savedAnnounce
-        onGoToSession = savedGo
+        // Amber, straight to the agent, which for crobot is the web page.
+        let amberAction = face.sessionRows.first { $0.id == "crobot-amber" }
+            .map { SessionRow.action(for: $0) }
+        let amberOpensTheWeb: Bool = {
+            if case .openPage(let url)? = amberAction { return url.host == "crobot.coframe.com" }
+            return false
+        }()
 
         // The card's Go to Agent, for the crobot row now on the stage, resolves
         // to the web page — not a terminal this Mac does not own.
@@ -1316,8 +1326,9 @@ extension StatusHUD {
             ("greenRecapOpensTheCard", went["crobot-green"] == "card"),
             // The blue fix: a working crobot row with a recap opens the card too.
             ("blueWorkingOpensTheCard", went["crobot-blue"] == "card"),
-            // Amber is the one that goes straight to the agent.
-            ("amberGoesToTheAgent", went["crobot-amber"] == "agent"),
+            // Amber goes straight to the agent, which for a crobot row is
+            // opening its web UI directly (not a card, not a local terminal).
+            ("amberOpensTheAgentDirectly", amberOpensTheWeb),
             // And Go to Agent, from the card, is the web page.
             ("goToAgentOpensTheWebUI", goesToTheWeb),
         ])
