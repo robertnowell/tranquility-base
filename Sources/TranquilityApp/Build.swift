@@ -410,7 +410,11 @@ extension StatusHUD {
             self?.onAttach?()
         }
         panel.typedLineIsEditing = { [weak self] in self?.trayRow.compose.currentEditor() != nil }
-        trayRow.onComposeChanged = { [weak self] _ in self?.render() }
+        // A keystroke changes exactly one thing on the panel, whether Send
+        // stands in for Controls, so a keystroke repaints exactly that. The
+        // first cut ran the whole render() per key, and render() rebuilds
+        // the card: "the typing is super slow, it kills perf" (15 Sep).
+        trayRow.onComposeChanged = { [weak self] _ in self?.refreshSendDoor() }
         // Return sends (re-ruled 15 Sep: "return enters it, that's not
         // needed, just do type a message"): the line is a message box, and
         // a message box sends on Return. Same door as the Send button.
