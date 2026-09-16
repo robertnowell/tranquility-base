@@ -33,7 +33,11 @@ public enum RemoteSpool {
             // back is already in the log by the route that sent it, and
             // storing it again would announce the user's own sentence to them.
             guard turn.role == .agent, !turn.text.isEmpty else { return [] }
-            return [SpoolLine(kind: .stop, event: event, text: turn.text, agent: agent)]
+            // Keyed by the TURN, not the moment: the same message seen twice
+            // (streamed as it ended, then adopted at the next launch from the
+            // server's store) is one turn, and the drainer's dedupe needs the
+            // same id both times.
+            return [SpoolLine(kind: .stop, event: event, text: turn.text, agent: agent, key: turn.id)]
 
         case .asks(let request):
             // A question is a TURN, not a Notification. Locally a permission
@@ -148,13 +152,13 @@ public enum RemoteSpool {
         public var notificationMatcher: String?
 
         init(kind: HookEventKind, event: AgentEvent, text: String,
-             agent: AgentSession?, matcher: String? = nil) {
+             agent: AgentSession?, matcher: String? = nil, key: String? = nil) {
             // DETERMINISTIC, not a fresh UUID. The drainer dedupes on the
             // record id, so a poller that sees the same change twice (a retry,
             // a restart, an overlapping tick) must produce the same id or the
             // agent says everything twice. `AgentPoll`'s digest already makes
             // re-emission rare; this makes a duplicate harmless.
-            self.id = Self.stableID(event: event, kind: kind, text: text)
+            self.id = Self.stableID(event: event, kind: kind, text: text, key: key)
             self.createdAtMs = Int64(event.at.timeIntervalSince1970 * 1000)
             self.hookEvent = kind
             self.sessionId = event.session
@@ -172,9 +176,10 @@ public enum RemoteSpool {
             self.notificationMatcher = matcher
         }
 
-        static func stableID(event: AgentEvent, kind: HookEventKind, text: String) -> String {
+        static func stableID(event: AgentEvent, kind: HookEventKind, text: String,
+                             key: String? = nil) -> String {
             let seed = "\(event.provider)\u{0}\(event.session)\u{0}\(kind.rawValue)"
-                + "\u{0}\(Int64(event.at.timeIntervalSince1970 * 1000))\u{0}\(text)"
+                + "\u{0}\(key ?? String(Int64(event.at.timeIntervalSince1970 * 1000)))\u{0}\(text)"
             return SHA256.hash(data: Data(seed.utf8))
                 .map { String(format: "%02x", $0) }.joined()
         }
