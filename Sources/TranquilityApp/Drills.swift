@@ -1388,7 +1388,7 @@ extension StatusHUD {
         func read(_ a: AgentSession) -> ReadState? { rows.first { $0.id == a.id }?.read }
         checks.append(("unreadIsDerivedUnread", read(unread) == .unread))
         checks.append(("heardIsDerivedOpened", read(heard) == .opened))
-        checks.append(("silentIsDerivedNone", read(silent) == .none))
+        checks.append(("silentIsDerivedNone", read(silent) == ReadState.none))
 
         // On the live panel, tapped through the real handler; the verbs
         // captured so nothing escapes the drill.
