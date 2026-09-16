@@ -392,6 +392,43 @@ public struct PendingRequest: Sendable, Equatable, Identifiable {
     /// The first question's words, for a lamp caption or a spoken line that has
     /// room for one clause. Never the whole request: answering needs all of it.
     public var asked: String { questions.first?.asked ?? "" }
+
+    /// The option the person meant, from what they said. An id or a label
+    /// verbatim wins; otherwise the words are read for consent: "always"
+    /// before "yes", because "yes, always" is an always. Nil when the words
+    /// do not choose, so the caller can refuse rather than guess. The
+    /// vocabulary is the ACP permission kinds this type was built from (#367).
+    public func option(chosenBy words: String) -> Option? {
+        let options = questions.first?.options ?? []
+        let said = words.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let exact = options.first(where: {
+            $0.id.caseInsensitiveCompare(said) == .orderedSame
+                || $0.label.caseInsensitiveCompare(said) == .orderedSame }) {
+            return exact
+        }
+        let lower = said.lowercased()
+        func has(_ terms: [String]) -> Bool {
+            terms.contains { term in
+                lower.range(of: "\\b\(term)\\b", options: .regularExpression) != nil
+            }
+        }
+        let kind: Option.Kind?
+        if has(["always", "every time", "from now on", "don't ask again", "do not ask again"]) {
+            kind = has(["no", "never", "reject", "deny", "don't", "do not"]) && !has(["yes", "allow", "ok", "okay", "go", "sure"]) ? .rejectAlways : .allowAlways
+        } else if has(["never"]) {
+            kind = .rejectAlways
+        } else if has(["no", "reject", "deny", "don't", "do not", "stop", "cancel"]) {
+            kind = .rejectOnce
+        } else if has(["yes", "yeah", "yep", "allow", "ok", "okay", "go", "go ahead", "sure", "approve", "proceed", "do it", "fine"]) {
+            kind = .allowOnce
+        } else {
+            kind = nil
+        }
+        guard let kind else { return nil }
+        return options.first { $0.kind == kind }
+            ?? (kind == .allowAlways ? options.first { $0.kind == .allowOnce } : nil)
+            ?? (kind == .rejectAlways ? options.first { $0.kind == .rejectOnce } : nil)
+    }
 }
 
 /// An answer to a `PendingRequest`.

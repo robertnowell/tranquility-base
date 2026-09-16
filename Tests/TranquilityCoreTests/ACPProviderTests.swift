@@ -234,6 +234,23 @@ final class ACPProviderTests: XCTestCase {
         XCTAssertEqual(session.state, .inputRequired, "configuration is not activity")
     }
 
+    /// What was said picks the option; the id goes back on the wire.
+    func testSpeechPicksThePermissionOption() {
+        let request = PendingRequest(id: "p", session: "s", asked: "Run it?", options: [
+            .init(id: "allow", label: "Allow", kind: .allowOnce),
+            .init(id: "allow_always", label: "Always allow", kind: .allowAlways),
+            .init(id: "reject", label: "Reject", kind: .rejectOnce),
+        ])
+        XCTAssertEqual(request.option(chosenBy: "yes")?.id, "allow")
+        XCTAssertEqual(request.option(chosenBy: "Yeah, go ahead.")?.id, "allow")
+        XCTAssertEqual(request.option(chosenBy: "yes, and always")?.id, "allow_always")
+        XCTAssertEqual(request.option(chosenBy: "no")?.id, "reject")
+        XCTAssertEqual(request.option(chosenBy: "don't do that")?.id, "reject")
+        XCTAssertEqual(request.option(chosenBy: "Always allow")?.id, "allow_always", "a label verbatim")
+        XCTAssertEqual(request.option(chosenBy: "reject")?.id, "reject", "an id verbatim")
+        XCTAssertNil(request.option(chosenBy: "what is this for?"), "a question is not a choice")
+    }
+
     func testAHeadlineIsOneLineOfARowsWidth() {
         XCTAssertEqual(ACPProvider.headline("  short  "), "short")
         XCTAssertEqual(ACPProvider.headline(String(repeating: "x", count: 80)).count, 60)

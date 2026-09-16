@@ -281,6 +281,9 @@ public final class AgentPoller: @unchecked Sendable {
                 merge([session], from: event.provider)
                 state.confirmedAt[session.id] = event.at
             case .changed(let session):
+                if stamped.previously != session.state {
+                    trace?("\(event.provider) \(session.id.prefix(8)) \(stamped.previously?.rawValue ?? "new") -> \(session.state.rawValue)")
+                }
                 merge([session], from: event.provider)
                 state.confirmedAt[session.id] = event.at
             case .asks(let request):

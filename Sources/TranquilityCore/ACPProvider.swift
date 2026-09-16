@@ -394,13 +394,21 @@ public actor ACPProvider: AgentProvider {
         guard let waiting = asking[request.session], waiting.request.id == request.id else {
             return .failed(reason: "that request is no longer open")
         }
-        guard let chosen = response.answers.first?.first else {
+        guard let words = response.answers.first?.first else {
             return .failed(reason: "nothing chosen")
+        }
+        // What was SAID picks the option; the option id goes back. Sending
+        // the words as the id was refused by the agent and the row held its
+        // lamp for ever. A reply that chooses nothing is refused here, out
+        // loud, rather than guessed at.
+        guard let chosen = waiting.request.option(chosenBy: words) else {
+            return .failed(reason: "\"\(words.prefix(40))\" does not choose one of: "
+                + (waiting.request.questions.first?.options.map(\.label).joined(separator: ", ") ?? "no options"))
         }
         try await connectIfNeeded()
         try await client.respond(to: waiting.rpcID,
                                  result: ["outcome": ["outcome": "selected",
-                                                      "optionId": chosen]])
+                                                      "optionId": chosen.id]])
         asking[request.session] = nil
         emit(request.session, .answered(requestId: request.id))
         return .accepted
