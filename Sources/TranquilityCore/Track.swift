@@ -322,8 +322,13 @@ public enum Track {
         record("reply_outcome", props)
     }
 
-    /// Tests only.
+    /// Tests only. Stop producers and call from outside the event queue.
     public static func resetForTesting() {
+        // A queued event can repopulate pending after the reset, then replay
+        // into the next test's sink. Drain before taking the lock: event
+        // delivery also takes it. Seen as a wrong failure mirror and an
+        // over-fulfilled XCTest expectation during preflight on 15 Sep.
+        flush()
         lock.lock(); defer { lock.unlock() }
         storeURL = nil; salt = ""; _suppressed = false; _recorded = 0; _refused = 0; _suppressedDrops = 0; common = [:]
         pending = []
