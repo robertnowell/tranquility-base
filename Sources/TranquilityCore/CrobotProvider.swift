@@ -170,6 +170,14 @@ public struct CrobotProvider: AgentProvider {
 
     public func url(for id: AgentSession.ID) -> URL? { transport.taskURL(id) }
 
+    /// crobot begins in its own web UI, not in the app. New Agent opens this
+    /// and never calls `start` for crobot: the repo question, and the prompt,
+    /// are answered on crobot's page — the same door a running crobot task
+    /// opens to. One verb, one place.
+    public nonisolated func composeURL(for brief: Brief) -> URL? {
+        transport.composeURL(repo: brief.repository)
+    }
+
     // MARK: -
 
     /// The gateway's own task id for an app-side id.
@@ -244,6 +252,7 @@ public protocol CrobotTransport: Sendable {
     func prompt(_ id: String, text: String) async throws -> SendOutcome
     func create(repo: String, prompt: String, baseBranch: String?) async throws -> String
     func taskURL(_ id: String) -> URL?
+    func composeURL(repo: String?) -> URL?
     /// An `OpenCodeClient` transport pointed at this task's proxy.
     func opencode(_ id: String) -> any OpenCodeClient.Transport
 }

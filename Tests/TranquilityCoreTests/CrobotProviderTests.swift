@@ -35,7 +35,10 @@ final class CrobotProviderTests: XCTestCase {
             prompts.append((id, text))
             return promptResult
         }
-        func create(repo: String, prompt: String, baseBranch: String?) async throws -> String {
+        func composeURL(repo: String?) -> URL? {
+            URL(string: "https://crobot.example/new" + (repo.map { "?repo=\($0)" } ?? ""))
+        }
+                func create(repo: String, prompt: String, baseBranch: String?) async throws -> String {
             created.append((repo, prompt, baseBranch))
             return "0de592c1-382e-4760-8e39-b95206cec31c"
         }
@@ -284,5 +287,45 @@ final class CrobotProviderTests: XCTestCase {
         g.detail[a] = task(a, status: "running")
         g.openCodeRoutes["GET /session"] = (200, "[]")
         try await AgentProviderConformance.run(provider(g), egress: true)
+    }
+}
+
+// MARK: - crobot begins at its own door (15 Sep 2026, "one verb, one place")
+
+extension CrobotProviderTests {
+
+    /// New Agent opens crobot's own web page; it does not start crobot in the
+    /// app. The first question (which repo?) is answered there.
+    func testCrobotBeginsAtItsWebComposePage() {
+        let url = provider(Gateway()).composeURL(for: Brief(prompt: ""))
+        XCTAssertEqual(url?.absoluteString, "https://crobot.example/new")
+    }
+
+    /// When a repo is already known, it is pre-selected on that page — the same
+    /// door, aimed.
+    func testAKnownRepoIsPreselectedOnTheComposePage() {
+        var brief = Brief(prompt: "go"); brief.repository = "Coframe/crobot"
+        let url = provider(Gateway()).composeURL(for: brief)
+        XCTAssertEqual(url?.absoluteString, "https://crobot.example/new?repo=Coframe/crobot")
+    }
+
+    /// The rule is general: an agent begun in the app has no compose URL, so it
+    /// is not sent to a browser. This is what keeps "crobot opens a web page"
+    /// from being a special case — it is one branch on one declared fact.
+    func testAnAgentWithoutAWebUIHasNoComposeURL() {
+        struct Local: AgentProvider {
+            let id = "local"; let can = Capabilities()
+            func changes() -> AsyncStream<AgentEvent>? { nil }
+            func mine() async throws -> [AgentSession] { [] }
+            func refine(_ id: AgentSession.ID) async throws -> AgentSession { .of(id, provider: "local") }
+            func request(_ id: AgentSession.ID) async throws -> PendingRequest? { nil }
+            func transcript(_ id: AgentSession.ID) async throws -> [Turn] { [] }
+            func send(_ t: String, to id: AgentSession.ID) async throws -> SendOutcome { .accepted }
+            func respond(to r: PendingRequest, with response: Response) async throws -> SendOutcome { .accepted }
+            func start(_ brief: Brief) async throws -> AgentSession.ID { "x" }
+            func cancel(_ id: AgentSession.ID) async throws -> SendOutcome { .accepted }
+            func url(for id: AgentSession.ID) -> URL? { nil }
+        }
+        XCTAssertNil(Local().composeURL(for: Brief(prompt: "hi")))
     }
 }
