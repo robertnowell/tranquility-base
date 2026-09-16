@@ -78,7 +78,10 @@ public struct Summary: Sendable {
 public struct SummaryDelivery: Sendable {
     public let brief: SessionBrief
     public let receipt: GatewayReceipt?
-    public init(brief: SessionBrief, receipt: GatewayReceipt? = nil) { self.brief = brief; self.receipt = receipt }
+    public let receiptWasReplayed: Bool
+    public init(brief: SessionBrief, receipt: GatewayReceipt? = nil, receiptWasReplayed: Bool = false) {
+        self.brief = brief; self.receipt = receipt; self.receiptWasReplayed = receiptWasReplayed
+    }
 }
 
 public protocol SummaryProvider: Sendable {
@@ -600,6 +603,7 @@ public struct SummarizerChain: Sendable {
         var produced: (SessionBrief, String)?
         var managedReceipt: GatewayReceipt?
         var managedFailure: ManagedSummaryFailure?
+        var cancelled = false
 
         // An empty final message never reaches a model. The model correctly refuses
         // to summarize nothing, which burns a call to learn what we already know —
@@ -625,6 +629,10 @@ public struct SummarizerChain: Sendable {
                     managedReceipt = delivery.receipt
                     break
                 } catch {
+                    if error is CancellationError {
+                        cancelled = true
+                        break
+                    }
                     if provider.usesManagedCredits {
                         managedFailure = (error as? ManagedSummaryFailure) ?? .refused(code: "service_unavailable", operationId: nil)
                         // A Mac that is NOT ON CREDITS is not a credits failure.
@@ -655,7 +663,7 @@ public struct SummarizerChain: Sendable {
         // real (app.log 20 Aug 14:13:49). Leave `produced` nil instead; the
         // "none" summary is never persisted, and the speak path gates on the
         // same cancellation.
-        if produced == nil, !Task.isCancelled,
+        if produced == nil, !cancelled, !Task.isCancelled,
            let fallback = try? await DeterministicSummarizer().brief(for: request) {
             produced = (fallback, "deterministic-fallback")
         }
@@ -686,14 +694,8 @@ public struct SummarizerChain: Sendable {
                 proposal, maxWords: SpokenTextSanitizer.proposalWords)
         }
 
-        // The one app-level state about credits, derived from this summary.
-        // Only a chain that has a managed provider says anything; a BYOK chain
-        // is not on credits and must not paint the row.
-        if providers.contains(where: \.usesManagedCredits),
-           let standing = CreditStanding.from(receipt: managedReceipt, failure: managedFailure,
-                                              provider: providerName) {
-            CreditStanding.set(standing)
-        }
+        // Standing belongs to ManagedCreditSession. This chain preserves an
+        // operation's receipt for history but cannot promote it to balance.
         return Summary(
             spoken: sanitizer.sanitize(brief.spokenText(), allowing: speakable),
             brief: brief,
