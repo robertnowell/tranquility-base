@@ -644,8 +644,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 poller.onEvents = { [weak self] events in
                     guard let self else { return }
                     let snapshot = self.agents?.snapshot
-                    let lines = events.flatMap {
-                        RemoteSpool.lines(for: $0, agent: snapshot?.agent($0.session))
+                    let lines = events.flatMap { event -> [RemoteSpool.SpoolLine] in
+                        let agent = snapshot?.agent(event.session)
+                        var out = RemoteSpool.lines(for: event, agent: agent)
+                        // An adopted agent whose last word here was a question
+                        // nobody can answer any more: say so, as a turn.
+                        if case .appeared = event.kind, snapshot?.requests[event.session] == nil,
+                           let latest = try? self.store?.latestStop(for: event.session) {
+                            out += RemoteSpool.expiredQuestion(for: event, agent: agent, latest: latest)
+                        }
+                        return out
                     }
                     guard !lines.isEmpty else { return }
                     RemoteSpool.append(lines, to: QueueStore.supportDirectory
