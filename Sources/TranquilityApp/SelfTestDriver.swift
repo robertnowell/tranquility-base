@@ -2055,6 +2055,7 @@ extension StatusHUD {
         restartedAgentDrill()
         closedRowsDrill()
         agentGridDrill()
+        crobotFinishDrill()
         lampSwitchDrill()
         pickUpDrill()
         resumePromptDrill()
