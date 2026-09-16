@@ -40,6 +40,8 @@ class DeliveryTests(unittest.TestCase):
         self.network_failure = False
         self.interrupt_install = False
         self.make_receipt = False
+        self.main_sha = B
+        self.not_ancestor = None
 
     def run_command(self, args, **kwargs):
         output = ""
@@ -50,19 +52,19 @@ class DeliveryTests(unittest.TestCase):
         elif args[:4] == ["git", "remote", "get-url", "origin"]:
             output = f"https://github.com/{module.REPOSITORY}.git"
         elif args[:2] == ["git", "merge-base"]:
-            if self.ancestry_failure:
+            if self.ancestry_failure or tuple(args[-2:]) == self.not_ancestor:
                 raise subprocess.CalledProcessError(1, args)
         elif args[:2] == ["git", "hash-object"]:
             output = "old" if self.stale_driver else "blob"
         elif args[:2] == ["git", "rev-parse"]:
-            output = B if args[-1] == "origin/main" else "blob"
+            output = self.main_sha if args[-1] == "origin/main" else "blob"
         elif args[:2] == ["ps", "-axo"]:
             output = self.processes
         elif args[0] == "ps":
             output = self.started
         elif args[0].endswith("relaunch.sh"):
             self.install_count += 1
-            self.assertEqual(args[-1], B)
+            self.assertEqual(args[-1], self.main_sha)
             self.assertEqual(kwargs["env"]["TB_DEPLOY_AUTOMATIC"], "1")
             if self.interrupt_install:
                 raise KeyboardInterrupt
@@ -144,6 +146,28 @@ class DeliveryTests(unittest.TestCase):
         token = self.state.acquire(os.getpid())
         with self.assertRaisesRegex(module.Blocked, "predates"):
             self.delivery.record_running(os.getpid(), token, B, self.app, self.epoch + 20)
+
+    def test_later_main_does_not_redeploy_an_already_delivered_merge(self):
+        self.merge()
+        self.returncode = 0
+        self.make_receipt = True
+        self.assertEqual(self.delivery.step(1, "owner")["status"], "running")
+        self.main_sha = "c" * 40
+        result = self.delivery.step(1, "owner")
+        self.assertEqual(result["status"], "running")
+        self.assertEqual(result["target_sha"], B)
+        self.assertEqual(self.install_count, 1)
+
+    def test_receipt_must_contain_the_requested_merge_and_be_on_main(self):
+        self.merge()
+        self.record()
+        self.main_sha = "c" * 40
+        for pair in ((A, B), (B, "origin/main")):
+            with self.subTest(pair=pair):
+                self.not_ancestor = pair
+                result = self.delivery.step(1, "owner")
+                self.assertEqual(result["status"], "deployment_pending")
+        self.assertEqual(self.install_count, 2)
 
     def test_wrong_full_stamp_or_second_process_blocks_receipt(self):
         token = self.state.acquire(os.getpid())
