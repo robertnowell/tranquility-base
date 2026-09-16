@@ -195,7 +195,7 @@ class EntrypointTests(unittest.TestCase):
     """Run the actual shell guards with isolated state, bundles and git remote.
 
     App/process helpers and mutation commands are tripwires. A guard moved past
-    a stop, copy, build, launch, or signing command makes these tests fail.
+    a stop, copy, build, launch, or signature mutation makes these tests fail.
     """
 
     def setUp(self):
@@ -240,10 +240,28 @@ wait_for_microphone() { echo capture_check >> "$TB_TEST_MUTATIONS"; exit 99; }
         binary = self.root / "bin"
         binary.mkdir()
         tripwire = '#!/bin/bash\necho "${0##*/}" >> "$TB_TEST_MUTATIONS"\nexit 99\n'
-        for name in ("cp", "rm", "open", "launchctl", "codesign", "xattr"):
+        for name in ("cp", "rm", "open", "launchctl", "xattr"):
             path = binary / name
             path.write_text(tripwire)
             path.chmod(0o755)
+        # Signature inspection is read-only; re-signing is still a tripwire.
+        signing = binary / "codesign"
+        signing.write_text('''#!/bin/bash
+case "$1" in
+  --verify) exit 0 ;;
+  -dv)
+    if [ "${TB_TEST_LOCAL_SIGNATURE:-0}" = 1 ]; then
+      echo "Authority=Apple Development: fixture"
+    else
+      echo "Authority=Developer ID Application: Robert Nowell (FKE587SZ6H)"
+      echo "TeamIdentifier=FKE587SZ6H"
+    fi
+    exit 0 ;;
+esac
+echo codesign >> "$TB_TEST_MUTATIONS"
+exit 99
+''')
+        signing.chmod(0o755)
         for name in ("build-clean.sh", "bundle-dev.sh"):
             path = scripts / name
             path.write_text(tripwire)
@@ -297,6 +315,18 @@ wait_for_microphone() { echo capture_check >> "$TB_TEST_MUTATIONS"; exit 99; }
         pending = self.state.read()["pending"]
         self.assertEqual(len(pending), 5)
         self.assertTrue(all(p["sha"] == self.sha and p["retry_owner"] == "fixture-retry-owner" for p in pending))
+
+    def test_local_prod_signature_is_rejected_without_requesting_deployment(self):
+        source = self.root / "Applications/Tranquility Base.app"
+        result = subprocess.run(["bash", "scripts/install.sh", str(source), "--no-login-item"],
+                                cwd=self.repo, env=dict(self.env, TB_TEST_LOCAL_SIGNATURE="1"),
+                                text=True, capture_output=True, timeout=15)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("Prod accepts only the expected Developer ID release identity", result.stderr)
+        self.assertFalse((self.root / "mutations").exists())
+        self.assertFalse(self.state.lock_dir.exists())
+        self.assertEqual(self.state.read()["pending"], [])
+        self.assertEqual(self.state.read()["preview"]["token"], self.token)
 
     def test_shell_exec_reuses_lock_and_exit_releases_it(self):
         script = self.repo / "scripts/exec-fixture.sh"

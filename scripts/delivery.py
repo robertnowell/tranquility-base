@@ -126,16 +126,26 @@ class Delivery:
         if item["status"] != "deployment_pending":
             return item
         target = item["target_sha"]
+        with self.state.transaction():
+            previous = self.state.read().get("running")
+        if previous and self.receipt_still_running(previous):
+            # This request is delivered once its merge is in a verified main
+            # build. Later main movement must not invalidate that completion.
+            try:
+                self.command("git", "merge-base", "--is-ancestor", item["merged_sha"], previous["sha"])
+                self.command("git", "merge-base", "--is-ancestor", previous["sha"], "origin/main")
+            except subprocess.CalledProcessError as error:
+                if error.returncode != 1:
+                    raise
+            else:
+                return self.update(pr, status="running", target_sha=previous["sha"],
+                                   receipt=previous, last_error=None)
         # A current checkout is necessary: relaunch and its shared helpers are
         # the policy. Never build a new app with an old deployment driver.
         for path in ("scripts/relaunch.sh", "scripts/build-clean.sh", "scripts/lib/deployment.sh",
                      "scripts/deployment-state.py", "scripts/delivery.py", "scripts/lib/app-process.sh"):
             if self.command("git", "hash-object", path) != self.command("git", "rev-parse", f"{target}:{path}"):
                 return self.update(pr, last_error=f"deployment tooling differs from main: {path}")
-        with self.state.transaction():
-            previous = self.state.read().get("running")
-        if previous and previous["sha"] == target and self.receipt_still_running(previous):
-            return self.update(pr, status="running", receipt=previous, last_error=None)
         # Intent is already durable. A dead watcher or busy install lock leaves
         # deployment_pending for the next supervised resume; no background job.
         log = self.state.state_dir / f"delivery-pr-{pr}.log"

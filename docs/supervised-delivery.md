@@ -46,6 +46,12 @@ be coalesced into a newer main containing its actual merge SHA. Both identities
 are retained. The target is pinned through building and bundle verification;
 moving main during the build cannot change that attempt's source.
 
+Once a verified running main build contains a requested merge, that request is
+complete even if main advances again. Resuming it reuses the still-running
+receipt and records that build as its delivered target. A receipt from an
+unmerged preview, or from a build that does not contain the requested merge,
+cannot satisfy main delivery. Newer PRs retain their own delivery requests.
+
 ## What can defer a deployment
 
 An active preview, a busy deployment lock, a capture/transcription still in
