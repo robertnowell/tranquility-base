@@ -35,6 +35,12 @@ public actor ServedOpenCodeProvider: AgentProvider {
     /// (an abort settles as idle), and a first sighting would bring the row
     /// straight back.
     private var forgotten: Set<String> = []
+    /// Subagents, which are their parent's business and never rows. Robert,
+    /// 16 Sep: "subagents are appearing in the grid that were kicked off by
+    /// the opencode I asked for research, which shouldn't happen, and
+    /// naturally doesn't for claude and codex." Read from the list at seed
+    /// and on first sight of an unknown session.
+    private var children: Set<String> = []
     private var connected = false
     private var connecting: Task<Void, Error>?
     private var pump: Task<Void, Never>?
@@ -101,6 +107,13 @@ public actor ServedOpenCodeProvider: AgentProvider {
         guard let e = try? JSONDecoder().decode(Envelope.self, from: data), let type = e.type else { return }
         let raw = e.properties?.sessionID ?? e.properties?.info?.sessionID ?? e.properties?.info?.id
         guard let raw, !raw.isEmpty, !forgotten.contains(raw) else { return }
+        if sessions[raw] == nil, !children.contains(raw) {
+            // First sight of a session this instance did not start: a
+            // subagent's events must not conjure a row for it.
+            if let known = try? await client.childSessionIDs() { children = known }
+            if children.contains(raw) { return }
+        }
+        if children.contains(raw) { return }
         switch type {
         case "session.status":
             switch e.properties?.status?.type {
@@ -210,15 +223,28 @@ public actor ServedOpenCodeProvider: AgentProvider {
             guard ledger?.used(id) == true else { return [] }
             try await connectIfNeeded()
         }
+        children = (try? await client.childSessionIDs()) ?? children
         for listed in try await client.sessions() {
             let raw = listed.providerID
             if sessions[raw] == nil {
                 guard OpenCodeTitles.name(listed.title) != nil,
+                      !children.contains(raw),
                       ledger?.forgotten(raw, provider: id) != true else { continue }
                 var session = listed
                 decorate(&session, raw: raw)
                 sessions[raw] = session
                 emit(session.id, .appeared(session))
+                // Adopted WITH its last turn, so the row is the same kind of
+                // row a local one is: a turn in the store to read on a tap,
+                // rather than a door because there is nothing to say. Stamped
+                // with the turn's own time, so the spool's stable id is the
+                // same at every launch and the store keeps one copy; the
+                // heard cursor persists, so a turn heard once stays heard.
+                if let last = (try? await client.transcript(raw))?.last(where: { $0.role == .agent }) {
+                    lastSaid[raw] = last.id
+                    eventContinuation?.yield(AgentEvent(provider: id, session: session.id,
+                                                        at: last.at, kind: .said(last)))
+                }
             } else if let title = OpenCodeTitles.name(listed.title), sessions[raw]?.title != title {
                 sessions[raw]?.title = title
                 if let s = sessions[raw] { emit(s.id, .changed(s)) }

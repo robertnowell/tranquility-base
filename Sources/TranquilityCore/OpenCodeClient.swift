@@ -81,6 +81,14 @@ public struct OpenCodeClient: Sendable {
     /// Caller-scoped by construction for a local server: it is your own
     /// process. For crobot the gateway has already scoped the proxy to one
     /// task, so this returns that task's sessions and nobody else's.
+    /// The sessions that are somebody's subagent: OpenCode lists them beside
+    /// their parents, with `parentID` set. A subagent is the parent's
+    /// business, not a row (Claude Code's and Codex's never were).
+    public func childSessionIDs() async throws -> Set<String> {
+        let data = try await call("GET", "/session")
+        return Set(decodeList(data, as: Wire.Session.self).filter { $0.parentID != nil }.map(\.id))
+    }
+
     public func sessions() async throws -> [AgentSession] {
         let data = try await call("GET", "/session")
         let busy = await busySessions()
