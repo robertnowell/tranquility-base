@@ -190,9 +190,17 @@ public actor ACPProvider: AgentProvider {
         // History replayed by `session/load` is not news.
         guard !replaying.contains(raw) else { return }
         let kind = update.update?.sessionUpdate
-        // Anything at all from the agent means it is working. An update this
-        // app cannot name is still evidence, which is why the default is
-        // `.working` rather than a silent drop.
+        // Configuration is not activity. OpenCode answers `session/new` with
+        // `available_commands_update` (and a mode update), and reading those
+        // as work put a blue lamp on an agent that had never been spoken to
+        // (the live loop caught it, 15 Sep). Everything else from the agent,
+        // named or not, is evidence of a turn: an update this app cannot name
+        // is still work, which is why the default is `.working` rather than a
+        // silent drop.
+        if kind == ACPWire.UpdateKind.availableCommandsUpdate.rawValue
+            || kind == ACPWire.UpdateKind.currentModeUpdate.rawValue {
+            return
+        }
         let session = seen(raw: raw, state: .working)
         guard kind == ACPWire.UpdateKind.agentMessageChunk.rawValue,
               let text = update.update?.content?.text, !text.isEmpty
@@ -218,6 +226,7 @@ public actor ACPProvider: AgentProvider {
         // The place, so an untitled row reads as the agent in its workspace
         // rather than as eight hex characters (#470).
         fresh.repository = URL(fileURLWithPath: cwd).lastPathComponent
+        fresh.directory = cwd
         fresh.shell = door(raw)
         sessions[raw] = fresh
         emit(fresh.id, .appeared(fresh))
@@ -263,7 +272,18 @@ public actor ACPProvider: AgentProvider {
         guard supportsList else { return }
         for item in (try? await client.listSessions(cwd: cwd)) ?? [] {
             if sessions[item.sessionId] == nil {
+                // A session nobody ever spoke to is not an agent anyone
+                // started work with. OpenCode keeps every `session/new`,
+                // including the ones New Agent made and nobody answered, and
+                // adopting them drew four identical green "tranquility-base"
+                // rows on Robert's panel (15 Sep). The placeholder title is
+                // how the list says "never prompted"; the model names a
+                // session at its first turn. One started in THIS process is
+                // already known here and is not touched by this rule.
+                guard ACPWire.SessionList.Item.name(item.title) != nil,
+                      ledger?.forgotten(item.sessionId, provider: id) != true else { continue }
                 var session = item.agentSession(provider: id)
+                session.directory = item.cwd ?? cwd
                 session.shell = door(item.sessionId)
                 sessions[item.sessionId] = session
                 emit(session.id, .appeared(session))
@@ -347,7 +367,7 @@ public actor ACPProvider: AgentProvider {
     /// (Robert, 15 Sep: a row titled "[assistant]: How should we get
     /// started?"). The user's own words are the title; the framing is not.
     static func headline(_ text: String) -> String {
-        let spoken = text.range(of: HeardContext.userLabel).map { String(text[$0.upperBound...]) } ?? text
+        let spoken = HeardContext.spokenPart(text)
         let line = spoken.split(whereSeparator: \.isNewline)
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .first { !$0.isEmpty } ?? spoken
@@ -406,6 +426,19 @@ public actor ACPProvider: AgentProvider {
         try await client.cancel(session: raw)
         _ = seen(raw: raw, state: .canceled)
         return .accepted
+    }
+
+    /// End Agent: the turn is cancelled if one is running, the session is
+    /// dropped here and remembered as ended so the next launch's list does
+    /// not bring it back. OpenCode keeps the session in its own store.
+    public func forget(_ id: AgentSession.ID) async {
+        guard let raw = providerID(of: id) else { return }
+        turns[raw]?.cancel()
+        if connected { _ = try? await client.cancel(session: raw) }
+        sessions[raw] = nil
+        loaded.remove(raw)
+        asking[id] = nil
+        ledger?.forget(raw, provider: self.id)
     }
 
     /// A local agent has no page to open. `SessionRow.Door` already knows how

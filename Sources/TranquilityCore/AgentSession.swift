@@ -65,6 +65,11 @@ public struct AgentSession: Sendable, Equatable, Identifiable {
     public var pullRequest: URL?
     /// Where a person looks at this agent in the provider's own interface.
     public var url: URL?
+    /// The directory the agent works in on THIS Mac, when it has one. An ACP
+    /// agent always does (it is the child's cwd); a cloud agent never does.
+    /// The spool line carries it as the event's cwd, which is what a summary
+    /// request and a git-branch lookup read.
+    public var directory: String?
     /// The provider's own interface on THIS Mac, when it is a program rather
     /// than a page: OpenCode's TUI opens a session with `opencode --session`.
     /// Go to Agent for a row with no pane and no page (#470).

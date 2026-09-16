@@ -160,7 +160,7 @@ extension AppDelegate {
             supersedesWaiting: { delivering.supersedesWaiting($0, latestId: $1) },
             isInFlight: { delivering.isInFlight($0) },
             closedCallsigns: closedCallsigns,
-            remote: remoteAgents(known: known)))
+            remote: remoteAgents(waiting: (try? coordinator.waiting()) ?? [])))
 
         // Recorded before anything is drawn so the card can ask the same
         // question the rows answered, and get the same answer.
@@ -194,13 +194,20 @@ extension AppDelegate {
     /// rows and costs nothing. Read from the snapshot rather than fetched:
     /// a repaint must never wait on a network call, which is the same rule
     /// `lastSeenLive` follows for the local bands.
-    func remoteAgents(known: [WaitingSession]) -> GridAssembler.RowInputs.RemoteAgents {
+    func remoteAgents(waiting: [WaitingSession]) -> GridAssembler.RowInputs.RemoteAgents {
         guard let snapshot = agents?.snapshot else { return .init() }
         // UNREAD COMES FROM THE STORED EVENT LOG, exactly like every local
         // row's green lamp, rather than from the provider's own opinion. The
         // spool line a remote turn wrote is what puts it here, so a remote
         // agent goes green by the same route a local one does.
-        let unread = Set(known.filter { !$0.heard }.map(\.sessionId))
+        //
+        // From the WAITING list, which joins the heard cursor. This read
+        // `allKnownSessions()`, which does not, so `heard` was nil for every
+        // row and every remote row stayed unread for ever, however many times
+        // it was heard (Robert, 15 Sep: "read state isn't updating"). A
+        // dismissed session is not in the waiting list at all, which is also
+        // right: dismissed is read.
+        let unread = Set(waiting.filter { !$0.heard }.map(\.sessionId))
         return .init(agents: snapshot.agents,
                      requests: snapshot.requests,
                      unread: unread.intersection(snapshot.agents.map(\.id)),

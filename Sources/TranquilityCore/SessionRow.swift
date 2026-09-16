@@ -395,8 +395,15 @@ public struct SessionRow: Equatable, Sendable {
         // gets its door; this one does too. A remote row with no pane and no
         // page still lands on `.none`, through `goTo`, for the reason stated
         // there.
+        //
+        // And the announce comes FIRST for a remote row too (15 Sep, second
+        // witness): the turn is in the local store now, by the spool, so a
+        // green remote row with an unread turn has something to say, and
+        // Robert clicking the row after OpenCode answered got a Terminal
+        // instead of the answer. The door is for a row with nothing to say,
+        // and for Go to Agent on the card, whatever the row's colour.
         case .ready:
-            if row.door.isRemote || row.read == .none { return goTo(row) }
+            if row.read == .none { return goTo(row) }
             return .announce
         case .unlit: return row.revivable ? .revive : .none
         }
