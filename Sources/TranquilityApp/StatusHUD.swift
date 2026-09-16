@@ -1095,6 +1095,19 @@ final class StatusHUD: NSObject {
         }
     }
 
+    /// The one thing a keystroke on the typed line changes: Send stands in
+    /// for Controls while there is something to send. Cheap on purpose;
+    /// render() decides the same thing on a full repaint.
+    func refreshSendDoor() {
+        guard state.isCardOnStage || isCapturingAudio else { return }
+        let hasWords = !trayRow.composedText.trimmingCharacters(in: .whitespaces).isEmpty
+        let hasChips = !trayRow.fragments.isEmpty
+        let sending = isCapturingAudio || hasWords || hasChips
+        if sendButton.isHidden == sending { sendButton.isHidden = !sending }
+        let controls = state.isCardOnStage && !sending
+        if cardControls.isHidden == controls { cardControls.isHidden = !controls }
+    }
+
     @objc nonisolated func sendTapped() {
         MainActor.assumeIsolated {
             Track.record("door_opened", ["door": "send"])
