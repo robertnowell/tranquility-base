@@ -53,6 +53,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         "com.robertnowell.tranquilitybase.forwarded-deep-link")
     var permissionTimer: Timer?
     var intakeTimer: Timer?
+    /// The intake beat, callable out of turn (a remote turn landing).
+    var intakeBeat: (@Sendable () -> Void)?
     var inFlightTimer: Timer?
     var utteranceWasInFlight = false
     let onboarding = OnboardingWindow()
@@ -658,6 +660,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     guard !lines.isEmpty else { return }
                     RemoteSpool.append(lines, to: QueueStore.supportDirectory
                         .appendingPathComponent("spool.jsonl"))
+                    // Now, not on the next tick: the turn is a row to read
+                    // the moment it lands.
+                    self.intakeBeat?()
                     // The drainer runs on the same beat the hooks' lines are
                     // picked up on, so nothing new schedules it.
                 }
@@ -711,7 +716,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 CaptureMarker.settle(inFlight: inFlight)
             }
         }
-        intakeTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+        // One intake beat: drain the spool, prepare the next brief, repaint
+        // the grid, sound the arrival. On the five-second timer, and ALSO the
+        // moment a remote turn lands in the spool (`intakeBeat`): a remote
+        // agent's answer is appended by the poller and used to wait for the
+        // next tick, so for up to five seconds the row was green with nothing
+        // to read and a tap went to the door instead of the card (Robert,
+        // 15 Sep 8:37 PM, six seconds after OpenCode answered: "green lamp
+        // went to agent with no summary, no card").
+        let beat: @Sendable () -> Void = { [weak self] in
             Task { @MainActor in
                 guard let self, let coordinator = self.coordinator else { return }
                 // A dead tap is a mic that cannot be closed and gestures that
@@ -849,6 +862,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
         }
+        intakeBeat = beat
+        intakeTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { _ in beat() }
 
         // Lifted ABOVE the hotkey on purpose (ruled 18 Aug). A screenshot
         // tool has no business installing a global event tap: `--pose-shot`
