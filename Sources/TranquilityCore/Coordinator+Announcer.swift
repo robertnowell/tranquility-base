@@ -375,9 +375,13 @@ extension Coordinator {
         // asking permission to read a file" is worse than the file's name,
         // and the options are what the person answers with. Robert, 15 Sep
         // 7:47 PM: "there is no decision or anything."
-        if event.notificationMatcher == "agent_question",
+        if let matcher = event.notificationMatcher,
+           matcher == "agent_question" || matcher == "agent_question_expired",
            let words = event.lastAssistantMessage, !words.isEmpty {
-            let brief = RemoteSpool.decision(from: words, projectLabel: event.projectLabel)
+            let brief = matcher == "agent_question"
+                ? RemoteSpool.decision(from: words, projectLabel: event.projectLabel)
+                : SessionBrief(topic: "Interrupted", happened: words, recap: words,
+                               proposal: "What should it do next?")
             let composed = Summary(spoken: SpokenTextSanitizer().sanitize(brief.spokenText()),
                                    brief: brief, provider: "agent-question", latencyMs: 0)
             persistBrief(composed, for: event)
