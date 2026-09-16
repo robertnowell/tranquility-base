@@ -97,18 +97,16 @@ struct AudioSystemWatchTests {
     /// many times the menu asks.
     @Test func cacheLoadsOnceUntilInvalidated() async throws {
         let counter = LoadCounter()
-        let cache = AudioInputDevice.DeviceCache(maxAge: 300) {
+        let cache = AudioInputDevice.DeviceCache(maxAge: 300, loader: {
             counter.bump()
             return ([], 0)
-        }
-        _ = cache.current()
-        try await Task.sleep(nanoseconds: 100_000_000)
+        })
+        cache.refreshNow()
         for _ in 0..<50 { _ = cache.current() }
-        try await Task.sleep(nanoseconds: 100_000_000)
         #expect(counter.count == 1)
         cache.invalidate()
         _ = cache.current()
-        try await Task.sleep(nanoseconds: 100_000_000)
+        try await counter.waitForLoad(2)
         #expect(counter.count == 2)
     }
 
@@ -116,15 +114,30 @@ struct AudioSystemWatchTests {
     /// sent, and it is minutes, not seconds.
     @Test func cacheSafetyAgeIsMinutes() async throws {
         let counter = LoadCounter()
-        let cache = AudioInputDevice.DeviceCache(maxAge: 0.05) {
+        let clock = CacheClock()
+        let cache = AudioInputDevice.DeviceCache(now: { clock.now }) {
             counter.bump()
             return ([], 0)
         }
+        // Prime synchronously. A 120 ms sleep did not prove the background
+        // loader had completed 50 ms earlier, so busy runners saw only one load.
+        cache.refreshNow()
+        clock.advance(299)
         _ = cache.current()
-        try await Task.sleep(nanoseconds: 120_000_000)
+        #expect(counter.count == 1)
+        clock.advance(2)
         _ = cache.current()
-        try await Task.sleep(nanoseconds: 100_000_000)
+        try await counter.waitForLoad(2)
         #expect(counter.count == 2)
+    }
+
+    private final class CacheClock: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value = Date(timeIntervalSince1970: 1_000)
+        var now: Date { lock.lock(); defer { lock.unlock() }; return value }
+        func advance(_ seconds: TimeInterval) {
+            lock.lock(); value.addTimeInterval(seconds); lock.unlock()
+        }
     }
 
     private final class Lines: @unchecked Sendable {
@@ -146,5 +159,11 @@ struct AudioSystemWatchTests {
         private var n = 0
         var count: Int { lock.lock(); defer { lock.unlock() }; return n }
         func bump() { lock.lock(); n += 1; lock.unlock() }
+        func waitForLoad(_ expected: Int) async throws {
+            let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+            while count < expected && ContinuousClock.now < deadline {
+                try await Task.sleep(nanoseconds: 5_000_000)
+            }
+        }
     }
 }

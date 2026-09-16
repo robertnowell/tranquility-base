@@ -27,10 +27,11 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-# Raise these when the suite grows. They exist so that "the tests stopped being
-# compiled in" cannot look like "the tests passed".
-FLOOR_XCTEST=2103
-FLOOR_SWIFT_TESTING=66
+# Fixed coverage baseline from main on 16 Sep 2026. Do not edit when adding
+# tests: discovery below automatically raises the required count for this build.
+# Keep this independent minimum as protection against an omitted test target.
+BASELINE_XCTEST=2103
+BASELINE_SWIFT_TESTING=66
 
 # Apple Silicon hardware under a translated shell: re-exec the test run native.
 # `uname -m` reports the process PERSONALITY and is exactly what fooled us, so
@@ -127,13 +128,24 @@ esac
 XC=$(printf '%s\n' "$OUT" | grep -oE "Executed [0-9]+ tests" | tail -1 | grep -oE "[0-9]+" || echo 0)
 ST=$(printf '%s\n' "$OUT" | grep -oE "Test run with [0-9]+ tests" | tail -1 | grep -oE "[0-9]+" || echo 0)
 
-# --- gate 4: nothing quietly stopped running ----------------------------------
-[ "$XC" -ge "$FLOOR_XCTEST" ] \
-  || fail "only $XC XCTest tests ran, floor is $FLOOR_XCTEST — tests went missing, which is a failure"
-[ "$ST" -ge "$FLOOR_SWIFT_TESTING" ] \
-  || fail "only $ST swift-testing tests ran, floor is $FLOOR_SWIFT_TESTING — tests went missing, which is a failure"
+# --- gate 4: the built test inventory actually ran -----------------------------
+# Enumerate each framework separately, just as we execute them separately.
+# --skip-build observes the same compiled tests, without another compilation.
+# A new test raises the required count without every branch editing one number.
+XC_LIST=$("${RUNNER[@]}" swift test list --skip-build --enable-xctest --disable-swift-testing) \
+  || fail "XCTest discovery failed"
+ST_LIST=$("${RUNNER[@]}" swift test list --skip-build --disable-xctest --enable-swift-testing) \
+  || fail "Swift Testing discovery failed"
+EXPECTED_XC=$(printf '%s\n' "$XC_LIST" | grep -cE '^TranquilityCoreTests\.[^/]+/.+' || true)
+EXPECTED_ST=$(printf '%s\n' "$ST_LIST" | grep -cE '^TranquilityCoreTests\.[^/]+/.+' || true)
+[ "$EXPECTED_XC" -ge "$BASELINE_XCTEST" ] \
+  || fail "only $EXPECTED_XC XCTest tests discovered, baseline is $BASELINE_XCTEST — test coverage went missing"
+[ "$EXPECTED_ST" -ge "$BASELINE_SWIFT_TESTING" ] \
+  || fail "only $EXPECTED_ST Swift Testing tests discovered, baseline is $BASELINE_SWIFT_TESTING — test coverage went missing"
+[ "$XC" -ge "$EXPECTED_XC" ] \
+  || fail "only $XC of $EXPECTED_XC discovered XCTest tests ran"
+[ "$ST" -ge "$EXPECTED_ST" ] \
+  || fail "only $ST of $EXPECTED_ST discovered Swift Testing tests ran"
 
 echo "✓ $XC XCTest + $ST swift-testing = $((XC + ST)) tests, 0 failures"
-if [ "$XC" -gt "$FLOOR_XCTEST" ] || [ "$ST" -gt "$FLOOR_SWIFT_TESTING" ]; then
-  echo "  note: suite grew — raise FLOOR_XCTEST=$XC FLOOR_SWIFT_TESTING=$ST in scripts/test.sh"
-fi
+echo "  compiled inventory: $EXPECTED_XC XCTest + $EXPECTED_ST Swift Testing (no count update needed)"
