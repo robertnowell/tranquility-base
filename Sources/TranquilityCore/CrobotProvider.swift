@@ -72,7 +72,22 @@ public struct CrobotProvider: AgentProvider {
             // 115 were archived, and listing them would bury three live agents
             // under a hundred tombstones.
             .filter { $0.status != "archived" }
-            .map { $0.agentSession(provider: id) }
+            .map { withURL($0.agentSession(provider: id)) }
+    }
+
+    /// **The task's own web page, set here because only the provider has the
+    /// base URL.** `CrobotTask.agentSession` builds the session from wire
+    /// fields alone and cannot know where crobot lives; the transport does.
+    ///
+    /// Without this every real crobot row had `url == nil`, so its door was
+    /// `.none` and a tap reported "nowhere to land" — which is exactly what
+    /// Robert saw. The bug survived #459's test because that test set `url`
+    /// on the fixture by hand: a fixture describing itself, not the provider.
+    /// The test now goes through `mine()` so it cannot lie again.
+    private func withURL(_ session: AgentSession) -> AgentSession {
+        var s = session
+        s.url = transport.taskURL(session.providerID)
+        return s
     }
 
     /// The caller's identity, asked once and remembered.
@@ -92,7 +107,7 @@ public struct CrobotProvider: AgentProvider {
     /// the poller exists at all.
     public func refine(_ id: AgentSession.ID) async throws -> AgentSession {
         guard let raw = try await rawID(for: id) else { throw CrobotError.noSuchTask }
-        return try await transport.task(raw).agentSession(provider: self.id)
+        return withURL(try await transport.task(raw).agentSession(provider: self.id))
     }
 
     public func request(_ id: AgentSession.ID) async throws -> PendingRequest? {
