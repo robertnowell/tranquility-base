@@ -489,6 +489,26 @@ public struct AnthropicSummaryProvider: SummaryProvider {
         return Completion(text: text, raw: raw, elapsedMs: elapsedMs)
     }
 
+    /// The first sentence of what the agent said, for a turn the model could
+    /// not recap. Up to the first sentence end followed by whitespace or the
+    /// end, else the first line, capped at 200 characters. The Gateway's
+    /// `firstSentence` in brief.ts is this function; keep them identical.
+    static func firstSentence(_ text: String) -> String? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        var sentence: Substring = trimmed[...]
+        if let end = trimmed.indices.first(where: { i in
+            ".!?".contains(trimmed[i]) && (trimmed.index(after: i) == trimmed.endIndex
+                || trimmed[trimmed.index(after: i)].isWhitespace)
+        }) {
+            sentence = trimmed[...end]
+        } else if let newline = trimmed.firstIndex(where: \.isNewline) {
+            sentence = trimmed[..<newline]
+        }
+        let capped = String(sentence.prefix(200)).trimmingCharacters(in: .whitespacesAndNewlines)
+        return capped.isEmpty ? nil : capped
+    }
+
     public static func parse(_ text: String, request: SummaryRequest) throws -> SessionBrief {
         // Tolerate a stray code fence or leading prose.
         guard let start = text.firstIndex(of: "{"), let end = text.lastIndex(of: "}") else {
@@ -512,13 +532,24 @@ public struct AnthropicSummaryProvider: SummaryProvider {
         }
 
         let recap = field("recap", in: spoken)
+        let headline = field("headline", in: written)
         // `happened` is the store's non-optional column and the hub's turn
         // body. It is the recap now: what the agent did this turn. A flat,
         // older response may carry its own.
-        guard let happened = recap ?? field("happened", in: obj) else {
+        //
+        // A turn that concludes nothing ("what is OpenCode?" answered with an
+        // explanation) comes back with a null recap and something else filled
+        // in, exactly as the prompt permits: "if a field has nothing new to
+        // add, it is null". The store still needs one line, so it is the next
+        // best thing the model said, and failing that the agent's own first
+        // sentence. Refusing here sent real turns to the floor, read out
+        // verbatim with no ladder (issue #509, 15 Sep). The Gateway's
+        // brief.ts applies the same order; change both or neither.
+        guard let happened = recap ?? field("happened", in: obj) ?? field("proposal", in: spoken)
+                ?? headline ?? field("deck", in: written)
+                ?? Self.firstSentence(request.lastAssistantMessage) else {
             throw SummaryError.unparseable("no recap")
         }
-        let headline = field("headline", in: written)
         return SessionBrief(
             // The hub lists a turn by its headline and falls back to `topic`;
             // there is no topic field any more, so the fallback is the recap.
