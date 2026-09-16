@@ -6,6 +6,14 @@
     <description>Updates for Tranquility Base.</description>
     <language>en</language>
     <item>
+      <title>Version 0.3.1244</title>
+      <sparkle:version>1244</sparkle:version>
+      <sparkle:shortVersionString>0.3.1244</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <pubDate>Wed, 16 Sep 2026 03:28:28 +0000</pubDate>
+      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1244-e0872e80a/TranquilityBase-0.3.1244.dmg" type="application/octet-stream" length="15969045" sparkle:edSignature="FytnZ6PEXiJX12/S0HgjmCCENObcZ4Q1B0Nfw2kdEuvciC99TN88r162be1BrLk1c2rRzc+K3/UyR37sYvcpCg==" />
+    </item>
+    <item>
       <title>Version 0.3.1243</title>
       <sparkle:version>1243</sparkle:version>
       <sparkle:shortVersionString>0.3.1243</sparkle:shortVersionString>
@@ -77,16 +85,8 @@
       <pubDate>Wed, 16 Sep 2026 01:40:26 +0000</pubDate>
       <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1235-bca665ef4/TranquilityBase-0.3.1235.dmg" type="application/octet-stream" length="15939482" sparkle:edSignature="tQGPE+ZiS1KQp6O8Rc4itg0BhrMlEOpNAienTb7GQ3lRSLtmJnuWC3F7l4UPYoSdeP1FlDrtouKAWK324Q9uBg==" />
     </item>
-    <item>
-      <title>Version 0.3.1234</title>
-      <sparkle:version>1234</sparkle:version>
-      <sparkle:shortVersionString>0.3.1234</sparkle:shortVersionString>
-      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <pubDate>Wed, 16 Sep 2026 01:26:49 +0000</pubDate>
-      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1234-50c13ddb1/TranquilityBase-0.3.1234.dmg" type="application/octet-stream" length="15856745" sparkle:edSignature="Zrta+R3paunKWBs+MKqg/tGSOJYhf+ivHj9kyZb8q51q6O8I242qGNDPnlf/jAUCZv6MAUlK0yV2sRFw1lRfCw==" />
-    </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: KTsMcavLn5FIO3ehWhwzt/kzyIOr3GuNU0J3QIgcqY53da44Kj/XberLLHCB5OZtgwJ0b21/akfN6vDp/JRKDg==
+edSignature: mkMK5RioBiTCZdO8jrafqJliSPeOr2Bp+hvVIH1FaRuPsr8RkUOQtL+WjkoeGjP9NjRmLty4RLCWVsHn9aBDDQ==
 length: 6457
 -->
