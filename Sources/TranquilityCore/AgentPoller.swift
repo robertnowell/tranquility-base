@@ -58,6 +58,7 @@ public final class AgentPoller: @unchecked Sendable {
     /// What the grid reads. A value, copied out under the lock, so a repaint
     /// never waits on a network call and never sees a half-updated map.
     public struct Snapshot: Sendable {
+        public init() {}
         public var agents: [AgentSession] = []
         /// The pending request per agent, for the few that have one.
         public var requests: [AgentSession.ID: PendingRequest] = [:]
