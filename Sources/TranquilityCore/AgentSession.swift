@@ -229,9 +229,20 @@ public enum AgentPresentation: Sendable, Equatable {
     public static func bucket(state: AgentSessionState,
                               hasPendingRequest: Bool) -> AgentPresentation {
         // Amber first: a broken agent that also has something unread is broken.
+        //
+        // **A pending permission is AMBER** (revised 15 Sep, 7:47 PM). The
+        // 14 Sep ruling made a question green, and it still is for a turn
+        // that ends with one. A structured permission request is different:
+        // the agent is BLOCKED on it, exactly as a local agent is blocked on
+        // a dialog, and local dialogs have always been amber with the reason
+        // in the column. Robert, on a remote agent that had waited 27 minutes
+        // on a permission nobody had heard: "it seems hung, and the lamp is
+        // not amber, and there is no decision or anything." Same colour for
+        // the same situation, whichever side of the pipe the agent is on.
+        if hasPendingRequest { return .problem }
         switch state {
         case .authRequired, .failed, .rejected, .unknown: return .problem
-        case .submitted, .working: return hasPendingRequest ? .yours : .working
+        case .submitted, .working: return .working
         case .inputRequired, .completed, .canceled: return .yours
         }
     }

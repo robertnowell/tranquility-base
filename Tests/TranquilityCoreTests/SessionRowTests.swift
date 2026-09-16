@@ -222,6 +222,21 @@ final class SessionRowTests: XCTestCase {
     /// announces; its door is for when it has nothing to say, and for Go to
     /// Agent on the card. Robert clicked the row after OpenCode answered and
     /// got a Terminal instead of the answer.
+    /// An amber remote row blocked on a permission announces the decision;
+    /// an amber remote row with nothing to answer, or a local amber row,
+    /// goes to its door.
+    func testAnAmberRemoteRowWithAQuestionAnnouncesTheDecision() {
+        let door = SessionRow.Door.shell("opencode --session ses_1", directory: "/tmp")
+        let asking = SessionRow(id: "r", name: "r", aux: "Read x.png?", lamp: .fault, read: .unread,
+                                harness: "opencode", door: door)
+        XCTAssertEqual(SessionRow.action(for: asking), .announce)
+        let broken = SessionRow(id: "r", name: "r", aux: "cannot reach it", lamp: .fault, read: .none,
+                                harness: "opencode", door: door)
+        XCTAssertEqual(SessionRow.action(for: broken), .openShell("opencode --session ses_1", directory: "/tmp"))
+        let local = SessionRow(id: "l", name: "l", aux: "needs input", lamp: .fault, read: .unread)
+        XCTAssertEqual(SessionRow.action(for: local), .goToAgent, "a local dialog is answered in its pane")
+    }
+
     func testAGreenRemoteRowWithAnUnreadTurnAnnouncesBeforeItsDoor() {
         let door = SessionRow.Door.shell("opencode --session ses_1", directory: "/tmp")
         let unread = SessionRow(id: "r", name: "r", aux: "", lamp: .ready, read: .unread,

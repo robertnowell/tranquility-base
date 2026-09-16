@@ -370,6 +370,19 @@ extension Coordinator {
     }
 
     private func summarize(_ event: WaitingSession) async -> Summary {
+        // A PERMISSION IS A DECISION, NOT A SUMMARY. The question and its
+        // options are the brief, verbatim: a model's recap of "the agent is
+        // asking permission to read a file" is worse than the file's name,
+        // and the options are what the person answers with. Robert, 15 Sep
+        // 7:47 PM: "there is no decision or anything."
+        if event.notificationMatcher == "agent_question",
+           let words = event.lastAssistantMessage, !words.isEmpty {
+            let brief = RemoteSpool.decision(from: words, projectLabel: event.projectLabel)
+            let composed = Summary(spoken: SpokenTextSanitizer().sanitize(brief.spokenText()),
+                                   brief: brief, provider: "agent-question", latencyMs: 0)
+            persistBrief(composed, for: event)
+            return composed
+        }
         let context = event.transcriptPath.map {
             TranscriptArchive.sessionContext(in: URL(fileURLWithPath: $0))
         }

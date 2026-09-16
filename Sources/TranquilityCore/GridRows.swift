@@ -495,8 +495,11 @@ public extension GridAssembler {
             let request = input.remote.requests[agent.id]
             let bucket = AgentPresentation.bucket(
                 state: agent.state, hasPendingRequest: request != nil)
-            // Read-state is carried alongside the lamp, never inside it.
-            let unread = input.remote.unread.contains(agent.id)
+            // Read-state is carried alongside the lamp, never inside it. A
+            // pending request stays unread until it is answered: the tap has
+            // to bring the decision back however many times you heard it,
+            // and the door is for a row with nothing left to decide.
+            let unread = input.remote.unread.contains(agent.id) || request != nil
             let silent = input.remote.unreachable[agent.provider]
             rows.append(SessionRow(
                 id: agent.id,

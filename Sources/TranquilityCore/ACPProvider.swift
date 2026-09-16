@@ -190,6 +190,11 @@ public actor ACPProvider: AgentProvider {
         // History replayed by `session/load` is not news.
         guard !replaying.contains(raw) else { return }
         let kind = update.update?.sessionUpdate
+        // A session waiting on a permission stays waiting: the agent keeps
+        // sending tool-call status updates while it waits, and each one read
+        // as work flipped the state back to working under the pending request
+        // (log, 15 Sep 7:20 PM: input-required -> working 45 ms after the ask).
+        if let known = sessions[raw], asking[known.id] != nil { return }
         // Configuration is not activity. OpenCode answers `session/new` with
         // `available_commands_update` (and a mode update), and reading those
         // as work put a blue lamp on an agent that had never been spoken to

@@ -51,6 +51,15 @@ final class RemoteSpoolTests: XCTestCase {
                        "The agent is asking permission: Run cat hq.json?. Options: Allow once, Reject.")
     }
 
+    /// The decision the card shows: the ask verbatim, the choices as the proposal.
+    func testAQuestionsBriefIsTheDecisionNotASummary() {
+        let words = "The agent is asking permission: Read ~/Downloads/x.png. Options: Allow once, Always allow, Reject."
+        let brief = RemoteSpool.decision(from: words, projectLabel: "toy")
+        XCTAssertEqual(brief.topic, "Permission")
+        XCTAssertEqual(brief.recap, "The agent is asking permission: Read ~/Downloads/x.png.")
+        XCTAssertEqual(brief.proposal, "Allow once, Always allow, Reject. Which?")
+    }
+
     /// **The one that is easy to miss.** The green lamp comes from an
     /// undismissed stop event in the local database, not from the provider's
     /// verdict. Without this line a finished remote agent has nothing for the

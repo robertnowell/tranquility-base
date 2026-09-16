@@ -349,6 +349,15 @@ public struct SessionRow: Equatable, Sendable {
         // ONLY AMBER GOES STRAIGHT TO THE AGENT (ruled 15 Sep 2026). Amber
         // means needs you, and the terminal is where; nothing on a card can
         // repair a usage limit or a permission prompt.
+        //
+        // Except a REMOTE permission, which the card is the only place to
+        // answer: there is no pane, and the door (OpenCode's own screen)
+        // cannot take the answer this app holds. An amber remote row with
+        // something unread is an agent blocked on a question this app can
+        // answer, and the tap brings the decision, however often it was
+        // heard. Unreachable and failed remote rows have nothing to answer
+        // and keep the door.
+        case .fault where row.read == .unread && row.door.isRemote: return .announce
         case .fault: return goTo(row)
         // Blue and quiet open the card when they have one (ruled 15 Sep,
         // reversing 24 Aug's "blue joined amber"). Robert, on the Past
