@@ -121,11 +121,11 @@ final class LiveOpenCodeLoop: XCTestCase {
         guard case .shell(let open, let directory) = row.door else { return XCTFail("door is \(row.door)") }
         XCTAssertTrue(open.contains("attach") && open.contains("--session") && open.contains("ses_"), open)
         XCTAssertEqual(directory, toy)
-        // Unread: a tap reads the answer. Heard: a tap opens OpenCode's own screen.
+        // Unread: a tap reads the answer. HEARD: a tap reads it again (green
+        // opens the card, everywhere; ruled 15 Sep and broken for remote rows
+        // until 16 Sep, when a heard row was built as `.none`). Only a row
+        // with no turn at all goes to the door.
         XCTAssertEqual(SessionRow.action(for: row), .announce, "the answer comes before the door")
-        let heard = SessionRow(id: row.id, name: row.name, aux: row.aux, lamp: row.lamp,
-                               read: .none, harness: row.harness, door: row.door)
-        XCTAssertEqual(SessionRow.action(for: heard), .openShell(open, directory: toy))
         print("LOOP: row name=\(row.name) lamp=\(row.lamp) words=\(words.prefix(60))")
 
         // 5. Read state: the grid's unread set comes from the waiting list, which
@@ -136,6 +136,21 @@ final class LiveOpenCodeLoop: XCTestCase {
         XCTAssertTrue(try unread().contains(id), "unread before it is heard")
         try store.advanceCursor(sessionId: id, heardThrough: latest!.latestId)
         XCTAssertFalse(try unread().contains(id), "heard clears the read state")
+        let heardRows = GridAssembler.rows(GridAssembler.RowInputs(
+            waiting: try store.waitingSessions(), known: try store.allKnownSessions(),
+            discovered: [], liveById: [:], boundaries: [:], switchedOff: [], switchedOn: [],
+            evidence: { _, _ in nil }, isHeadless: { _ in false }, family: { [$0] },
+            supersedesWaiting: { _, _ in false }, isInFlight: { _ in false },
+            remote: .init(agents: poller.snapshot.agents, requests: poller.snapshot.requests,
+                          unread: Set(try coordinator.waiting().filter { !$0.heard }.map(\.sessionId)),
+                          unreachable: poller.snapshot.unreachable,
+                          heard: Set(try coordinator.waiting().filter { $0.heard }.map(\.sessionId))))).rows
+        let heardRow = try XCTUnwrap(heardRows.first { $0.id == id })
+        XCTAssertEqual(heardRow.read, .opened)
+        XCTAssertEqual(SessionRow.action(for: heardRow), .announce, "a heard green row still opens the card")
+        let silent = SessionRow(id: row.id, name: row.name, aux: row.aux, lamp: row.lamp,
+                                read: .none, harness: row.harness, door: row.door)
+        XCTAssertEqual(SessionRow.action(for: silent), .openShell(open, directory: toy), "only nothing-to-say goes to the door")
         XCTAssertEqual(try store.firstUtteranceText(to: id).map(HeardContext.spokenPart), said,
                        "the opening the summary asks with")
         let spooled = try XCTUnwrap(latest?.cwd)

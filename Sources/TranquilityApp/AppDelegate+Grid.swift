@@ -208,10 +208,13 @@ extension AppDelegate {
         // dismissed session is not in the waiting list at all, which is also
         // right: dismissed is read.
         let unread = Set(waiting.filter { !$0.heard }.map(\.sessionId))
+        let heard = Set(waiting.filter { $0.heard }.map(\.sessionId))
+        let ids = Set(snapshot.agents.map(\.id))
         return .init(agents: snapshot.agents,
                      requests: snapshot.requests,
-                     unread: unread.intersection(snapshot.agents.map(\.id)),
-                     unreachable: snapshot.unreachable)
+                     unread: unread.intersection(ids),
+                     unreachable: snapshot.unreachable,
+                     heard: heard.intersection(ids))
     }
 
     func showIdleGrid(note: String? = nil,

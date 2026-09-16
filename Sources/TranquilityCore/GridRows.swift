@@ -90,14 +90,23 @@ public extension GridAssembler {
             /// Providers that could not be reached, by id, with the reason.
             public var unreachable: [String: String]
 
+            /// Sessions with a turn in the store that HAS been heard and not
+            /// dismissed: `.opened`, the state a local row has between hearing
+            /// a turn and dismissing it, when a tap reads it again. Without
+            /// this a heard remote row read as `.none`, "nothing to say", and
+            /// its tap went to the door (Robert, 16 Sep 1:43 PM, on a green
+            /// row he had already heard: "not opening the card").
+            public var heard: Set<AgentSession.ID>
             public init(agents: [AgentSession] = [],
                         requests: [AgentSession.ID: PendingRequest] = [:],
                         unread: Set<AgentSession.ID> = [],
-                        unreachable: [String: String] = [:]) {
+                        unreachable: [String: String] = [:],
+                        heard: Set<AgentSession.ID> = []) {
                 self.agents = agents
                 self.requests = requests
                 self.unread = unread
                 self.unreachable = unreachable
+                self.heard = heard
             }
         }
 
@@ -500,6 +509,8 @@ public extension GridAssembler {
             // to bring the decision back however many times you heard it,
             // and the door is for a row with nothing left to decide.
             let unread = input.remote.unread.contains(agent.id) || request != nil
+            let read: ReadState = unread ? .unread
+                : (input.remote.heard.contains(agent.id) ? .opened : .none)
             let silent = input.remote.unreachable[agent.provider]
             rows.append(SessionRow(
                 id: agent.id,
@@ -523,7 +534,7 @@ public extension GridAssembler {
                 // constant — a declared capability nothing reads is worse than
                 // no capability (provider seam, rule 5).
                 revivable: false,
-                read: unread ? .unread : .none,
+                read: read,
                 detail: Self.remoteDetail(request: request, silent: silent, agent: agent),
                 harness: agent.provider,
                 // The provider said where this agent lives, or said it lives
