@@ -29,15 +29,13 @@ final class LiveOpenCodeLoop: XCTestCase {
         let spool = dir.appendingPathComponent("spool.jsonl")
         let noConfig = dir.appendingPathComponent("hq.json")
 
-        // The provider, built the way AgentProviders.registry builds it.
+        // The provider, built the way AgentProviders.registry builds it: a
+        // served OpenCode this test owns, on a port of its own.
         let entry = ACPCatalog.published.first { $0.id == "opencode" }!
         guard let command = ACPCatalog.resolve(entry) else { return XCTFail("opencode not installed") }
-        let transport = ACPProcessTransport(command: command, cwd: toy)
-        let provider = ACPProvider(
-            id: "opencode", client: ACPClient(transport: transport), cwd: toy,
-            start: { try transport.start() },
-            ledger: ProviderLedger(url: dir.appendingPathComponent("agents-used.json")),
-            open: { entry.openLine(session: $0, binary: command[0]) })
+        let provider = ServedOpenCodeProvider(
+            binary: command[0], directory: toy,
+            ledger: ProviderLedger(url: dir.appendingPathComponent("agents-used.json")))
         let registry = AgentProviderRegistry([provider], spawnable: ["opencode"])
         let poller = AgentPoller(registry: registry)
         poller.registryConfig = noConfig
@@ -121,7 +119,7 @@ final class LiveOpenCodeLoop: XCTestCase {
         XCTAssertFalse(row.name.hasPrefix("[assistant]"), "the framing is not a name")
         XCTAssertTrue(row.name == workspace || row.name.hasPrefix("Reply with exactly") || !row.name.isEmpty)
         guard case .shell(let open, let directory) = row.door else { return XCTFail("door is \(row.door)") }
-        XCTAssertTrue(open.contains("--session") && open.contains("ses_"), open)
+        XCTAssertTrue(open.contains("attach") && open.contains("--session") && open.contains("ses_"), open)
         XCTAssertEqual(directory, toy)
         // Unread: a tap reads the answer. Heard: a tap opens OpenCode's own screen.
         XCTAssertEqual(SessionRow.action(for: row), .announce, "the answer comes before the door")
@@ -179,13 +177,18 @@ final class LiveOpenCodeLoop: XCTestCase {
                               unread: [], unreachable: poller.snapshot.unreachable))).rows
             let askingRow = try XCTUnwrap(asking.first { $0.id == id })
             XCTAssertEqual(askingRow.lamp, .fault, "blocked on a permission is amber")
-            XCTAssertEqual(SessionRow.action(for: askingRow), .announce, "the tap brings the decision, however often it was heard")
-            let yes = Utterance(status: .ready, transcriptText: "[assistant]: \(asked) [user]: Yes, go ahead.", targetSessionId: id)
-            try store.update(utterance: yes)
-            guard case .dispatched = try await coordinator.confirmAndSend(utteranceId: yes.id) else {
-                return XCTFail("the answer was refused")
-            }
-            XCTAssertNil(poller.snapshot.requests[id], "answered")
+            if case .openShell(let attach, _) = SessionRow.action(for: askingRow) {
+                XCTAssertTrue(attach.contains("attach"), "amber goes to the attached terminal, where the question is")
+            } else { XCTFail("amber goes to the agent; got \(SessionRow.action(for: askingRow))") }
+            // Answered where Robert answers it: on the server, as the
+            // attached terminal does with Enter. The app only WATCHES.
+            var reply = URLRequest(url: provider.baseURL.appendingPathComponent("permission/\(pending.id)/reply"))
+            reply.httpMethod = "POST"; reply.httpBody = Data(#"{"reply":"once"}"#.utf8)
+            reply.setValue("application/json", forHTTPHeaderField: "content-type")
+            let (_, replied) = try await URLSession.shared.data(for: reply)
+            XCTAssertEqual((replied as? HTTPURLResponse)?.statusCode, 200)
+            for _ in 0..<100 where poller.snapshot.requests[id] != nil { try await Task.sleep(for: .milliseconds(50)) }
+            XCTAssertNil(poller.snapshot.requests[id], "the app saw the terminal's answer")
             var done: WaitingSession?
             for _ in 0..<600 {
                 _ = try drainer.drain()

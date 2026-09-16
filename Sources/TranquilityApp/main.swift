@@ -657,6 +657,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         }
                         return out
                     }
+                    // A question answered elsewhere (the attached terminal,
+                    // with Enter) is done here too: the "asking permission"
+                    // turn is dismissed, or the row would stay unread for a
+                    // decision already made.
+                    for event in events {
+                        if case .answered = event.kind, let store = self.store,
+                           let latest = try? store.latestStop(for: event.session),
+                           latest.notificationMatcher == "agent_question" {
+                            try? store.advanceCursor(sessionId: event.session,
+                                                     heardThrough: latest.latestId,
+                                                     dismissedThrough: latest.latestId)
+                        }
+                    }
                     guard !lines.isEmpty else { return }
                     RemoteSpool.append(lines, to: QueueStore.supportDirectory
                         .appendingPathComponent("spool.jsonl"))
@@ -1106,34 +1119,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // report's own "Open hub" footer button.
         // The card asks, the app answers from what the grid already knows.
         hud.harnessForSession = { [weak self] id in self?.harnessById[id] }
-        // The answers a remote agent is waiting on, for the card that asks.
-        hud.askOptionsForSession = { [weak self] id in
-            (self?.agents?.snapshot.requests[id]?.questions.first?.options ?? [])
-                .map { (id: $0.id, label: $0.label) }
-        }
-        hud.onAnswerRequest = { [weak self] id, optionId in
-            guard let self, let poller = self.agents,
-                  let request = poller.snapshot.requests[id],
-                  let session = poller.snapshot.agent(id),
-                  let provider = self.providerRegistry?.provider(session.provider) else { return }
-            let label = request.questions.first?.options.first { $0.id == optionId }?.label ?? optionId
-            Permissions.log("ask: answering \(id.prefix(8)) with \(optionId) from the card")
-            Task { @MainActor in
-                do {
-                    let outcome = try await provider.respond(to: request, with: Response(label))
-                    Permissions.log("ask: \(id.prefix(8)) -> \(outcome)")
-                    if let store = self.store, let latest = try? store.latestStop(for: id)?.latestId {
-                        try? store.advanceCursor(sessionId: id, heardThrough: latest)
-                    }
-                    poller.kick()
-                    self.showIdleGrid()
-                } catch {
-                    Failures.report(.launchFailed, reason: "ask: \(error)",
-                                    card: "Couldn't send that answer: \(error)")
-                    self.hud.showResult("Couldn't send that answer: \(error)")
-                }
-            }
-        }
         hud.agentDoorForSession = { [weak self] id in
             guard let agent = self?.agents?.snapshot.agent(id) else { return nil }
             return agent.url.map { .page($0) }

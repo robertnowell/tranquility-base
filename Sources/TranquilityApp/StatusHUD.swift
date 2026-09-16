@@ -37,17 +37,6 @@ final class StatusHUD: NSObject {
     /// text action, not a lozenge. The Reply/Dismiss buttons are dead — chords
     /// are the interface.
     var dontSendButton: ConsoleButton!
-    /// The answers to a remote agent's permission, on the card that asks it:
-    /// one quiet word per option. They take the place of Go to Agent, which
-    /// on an ask card led to OpenCode's own screen, where the question cannot
-    /// be answered: the request was made to this app, and the answer has to
-    /// go back through it. Robert, 15 Sep 8:51 PM: "it still didn't give me
-    /// the ability on the agent to answer the question."
-    var answerButtons: [ConsoleButton] = []
-    /// Wired by the app: the options the current target is waiting on, or none.
-    var askOptionsForSession: ((String) -> [(id: String, label: String)])?
-    /// Wired by the app: an answer chosen on the card.
-    var onAnswerRequest: ((String, String) -> Void)?
     var micSettingsButton: ConsoleButton!
     /// The microphone's buttons (ruled 15 Sep, twice). A small mic, centred
     /// in the slot the waveform takes while the microphone is open, above
@@ -2357,7 +2346,6 @@ final class StatusHUD: NSObject {
         // all, while its own row in the grid was carrying the URL the whole
         // time. The row already knows; the card just never asked.
         goButton.isHidden = currentTarget?.pid == nil && remoteDoorForCurrentTarget == nil
-        renderAnswers()
         // The card's second door. It rides the same rule as "Go to agent" —
         // shown wherever an agent is named. The label follows the destination:
         // a report this turn just wrote, or the hub. Retitled per render
@@ -2911,50 +2899,15 @@ final class StatusHUD: NSObject {
     /// The action row exists exactly when one of its quiet actions is visible —
     /// the row of lozenge buttons is dead (ruled); this is what replaced its
     /// per-state visibility flag.
-    /// The card's answers, when its agent is waiting on one. Built per card
-    /// because the options are the agent's own (OpenCode: allow once, always
-    /// allow, reject; another vendor may differ), and Go to Agent steps aside
-    /// while they are shown.
-    func renderAnswers() {
-        for button in answerButtons { button.removeFromSuperview() }
-        answerButtons = []
-        guard let target = currentTarget,
-              let options = askOptionsForSession?(target.sessionId), !options.isEmpty,
-              let row = actionRow else { return }
-        goButton.isHidden = true
-        for option in options {
-            let button = ConsoleButton(title: option.label, target: self,
-                                       action: #selector(answerTapped(_:)))
-            button.isBordered = false
-            button.controlSize = .small
-            button.font = StateLegend.Face.chrome(11, .medium)
-            button.restingInk = StateLegend.Palette.accent
-            button.identifier = NSUserInterfaceItemIdentifier(option.id)
-            button.toolTip = option.label
-            row.addView(button, in: .trailing)
-            answerButtons.append(button)
-        }
-    }
-
-    @objc nonisolated private func answerTapped(_ sender: NSButton) {
-        MainActor.assumeIsolated {
-            guard let target = currentTarget, let option = sender.identifier?.rawValue else { return }
-            Track.record("ask_answered", ["agent_id": Track.hash(target.sessionId), "via": "card"])
-            bodyLabel.stringValue = "Answered: \(sender.title)."
-            for button in answerButtons { button.isEnabled = false }
-            onAnswerRequest?(target.sessionId, option)
-        }
-    }
-
     func updateActionRowVisibility() {
         // `cardControls` counts: it is a row member like any other, and a card
         // with no buttons but a Controls word still has a bottom line.
-        actionRow.isHidden = ([goButton, openPageButton, dontSendButton,
+        actionRow.isHidden = [goButton, openPageButton, dontSendButton,
                               micSettingsButton, newSessionButton,
                               restartAudioButton,
                               cancelTranscriptionButton, retryTranscriptionButton,
-                              cardControls] as [NSView?])
-            .allSatisfy { $0?.isHidden ?? true } && answerButtons.isEmpty
+                              cardControls]
+            .allSatisfy { $0?.isHidden ?? true }
         if let panel { resizeToFit(panel); position(panel) }
     }
 
