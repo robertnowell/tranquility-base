@@ -13,7 +13,14 @@ final class NullRecapTests: XCTestCase {
 
     func testTheNextBestLineStandsInForANullRecap() throws {
         let nulls = #"{"spoken":{"recap":null,"proposal":"Pick one. Go?","goal":null},"written":{"headline":null,"deck":null}}"#
-        XCTAssertEqual(try AnthropicSummaryProvider.parse(nulls, request: request("ignored")).happened, "Pick one. Go?")
+        let stood = try AnthropicSummaryProvider.parse(nulls, request: request("ignored"))
+        XCTAssertEqual(stood.happened, "Pick one. Go?")
+        // The stand-in is the recap too, so the spoken line is the authored
+        // path and never "topic. happened." with both the same sentence.
+        XCTAssertEqual(stood.recap, "Pick one. Go?")
+        XCTAssertEqual(stood.spokenText(), "Pick one. Go?")
+        let deckOnly = try AnthropicSummaryProvider.parse(#"{"spoken":{"recap":null},"written":{"deck":"Only a deck."}}"#, request: request("x"))
+        XCTAssertEqual(deckOnly.spokenText(), "Only a deck.")
 
         let onlyHeadline = #"{"spoken":{"recap":null},"written":{"headline":"What OpenCode is","deck":"An open agent."}}"#
         let b = try AnthropicSummaryProvider.parse(onlyHeadline, request: request("ignored"))

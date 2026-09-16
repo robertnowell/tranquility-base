@@ -545,9 +545,18 @@ public struct AnthropicSummaryProvider: SummaryProvider {
         // sentence. Refusing here sent real turns to the floor, read out
         // verbatim with no ladder (issue #509, 15 Sep). The Gateway's
         // brief.ts applies the same order; change both or neither.
-        guard let happened = recap ?? field("happened", in: obj) ?? field("proposal", in: spoken)
-                ?? headline ?? field("deck", in: written)
-                ?? Self.firstSentence(request.lastAssistantMessage) else {
+        // Moved, not copied: the field that stands in stops being itself, or
+        // the spoken line says it twice ("Pick one. Go? Pick one. Go?").
+        var proposal = field("proposal", in: spoken)
+        var deck = field("deck", in: written)
+        var standIn: String?
+        if recap == nil && field("happened", in: obj) == nil {
+            if let p = proposal { standIn = p; proposal = nil }
+            else if let h = headline { standIn = h }
+            else if let d = deck { standIn = d; deck = nil }
+            else { standIn = Self.firstSentence(request.lastAssistantMessage) }
+        }
+        guard let happened = recap ?? field("happened", in: obj) ?? standIn else {
             throw SummaryError.unparseable("no recap")
         }
         return SessionBrief(
@@ -563,10 +572,13 @@ public struct AnthropicSummaryProvider: SummaryProvider {
             findings: field("findings", in: spoken),
             solution: field("solution", in: spoken),
             branch: request.gitBranch,
-            recap: recap,
-            proposal: field("proposal", in: spoken),
+            // The stand-in IS the recap. Without one, spokenText() falls to
+            // "topic. happened." and, with topic falling back to the same
+            // line, said it twice (16 Sep). The Gateway's brief.ts agrees.
+            recap: recap ?? standIn,
+            proposal: proposal,
             headline: headline,
-            deck: field("deck", in: written))
+            deck: deck)
     }
 }
 
