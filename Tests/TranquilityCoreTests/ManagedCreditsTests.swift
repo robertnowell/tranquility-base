@@ -36,12 +36,12 @@ final class ManagedCreditsTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), first.uuidString.lowercased())
     }
 
-    func testAMacThatIsNotConnectedHasNoManagedSummariser() {
-        XCTAssertNil(ManagedCredits.summarizer(hubBase: URL(string: "https://hub.example"),
-                                               deviceToken: { nil },
-                                               outboxURL: directory.appendingPathComponent("outbox.sqlite")))
-        XCTAssertNil(ManagedCredits.summarizer(hubBase: nil, deviceToken: { "hq_token" },
-                                               outboxURL: directory.appendingPathComponent("outbox.sqlite")))
+    func testAnUnconnectedMacHasALiveSessionWithoutMakingAKeyOrCallingAService() async {
+        let session = ManagedCredits.session(identity: { nil }, outboxURL: directory.appendingPathComponent("outbox.sqlite"))
+        await session.refresh()
+        XCTAssertEqual(CreditStanding.current, .notOnCredits(connectAgain: false))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: directory.appendingPathComponent("outbox.sqlite").path))
+        CreditStanding.reset()
     }
 
     func testTheAccountIsAskedForOnceAcrossConcurrentFirstSummaries() async throws {

@@ -110,6 +110,8 @@ public actor GatewayAuthority {
     private var grant: Grant?
     /// The refresh currently in flight, so ten callers produce one request.
     private var inFlight: Task<String, Error>?
+    private var device: String?
+    private var generation = UUID()
 
     /// Refreshed this far before expiry, so a request never starts with a
     /// token that dies mid-flight.
@@ -128,13 +130,17 @@ public actor GatewayAuthority {
 
     /// A usable bearer, from cache when possible.
     public func bearer() async throws -> String {
+        let current = deviceToken()
+        if current != device { clear(); device = current }
+        guard let current, !current.isEmpty else { throw Failure.notConnected }
         if let grant, grant.expiresAt.timeIntervalSince(now()) > margin {
             return grant.token
         }
         if let inFlight { return try await inFlight.value }
-        let task = Task { try await fetch() }
+        let generation = generation
+        let task = Task { try await fetch(token: current, generation: generation) }
         inFlight = task
-        defer { inFlight = nil }
+        defer { if self.generation == generation { inFlight = nil } }
         return try await task.value
     }
 
@@ -190,14 +196,15 @@ public actor GatewayAuthority {
     /// its result after the switch, which is how A's credential ends up
     /// serving B.
     public func clear() {
+        generation = UUID()
+        device = nil
         grant = nil
         inFlight?.cancel()
         inFlight = nil
     }
 
     /// The proof the mint requires, and the request that carries it.
-    private func fetch() async throws -> String {
-        guard let token = deviceToken(), !token.isEmpty else { throw Failure.notConnected }
+    private func fetch(token: String, generation: UUID) async throws -> String {
         // No access token yet, so the proof carries no `ath`: this IS the
         // request that asks for one.
         let proof = try DeviceKey.proof(
@@ -206,6 +213,7 @@ public actor GatewayAuthority {
 
         let (status, body) = try await exchange(proof, token)
         try Task.checkCancellation()
+        guard self.generation == generation, deviceToken() == token else { throw CancellationError() }
 
         switch status {
         case 200:

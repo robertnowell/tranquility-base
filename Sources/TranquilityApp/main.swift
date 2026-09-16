@@ -30,6 +30,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         QueueStore.supportDirectory.appendingPathComponent("session-search.sqlite"))
     var pastAgentPreparation: Task<Void, Never>?
     var coordinator: Coordinator?
+    var managedCredits: ManagedCreditSession?
+    private var creditIdentityObserver: NSObjectProtocol?
     /// The providers this build can drive, kept so New Agent can start one.
     /// The same instance the coordinator and the poller share, by the rule at
     /// its construction: a reply must never reach a provider the grid is not
@@ -594,14 +596,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let registry = AgentProviders.registry()
             self.providerRegistry = registry
             let poller = registry.configured().isEmpty ? nil : AgentPoller(registry: registry)
-            // Managed credits, when this Mac can spend: connected to a hub
-            // and holding a device key. Otherwise the chain it always used.
-            // Nothing here asks the person for anything; see ManagedCredits.
-            let managed = ManagedCredits.summarizer(hubBase: HubApp.baseURL,
-                                                    log: { Permissions.log($0) })
+            // Present before pairing. The session changes accounts; the
+            // coordinator and its immutable provider chain do not need replacing.
+            let managed = ManagedCredits.session(log: { Permissions.log($0) })
+            self.managedCredits = managed
+            creditIdentityObserver = NotificationCenter.default.addObserver(
+                forName: Secrets.hubIdentityDidChange, object: nil, queue: nil) { _ in
+                    Task { await managed.refresh() }
+                }
+            Task { await managed.refresh() }
             self.coordinator = Coordinator(
                 store: store,
-                summarizer: managed ?? SummarizerChain(),
+                summarizer: SummarizerChain(providers: [managed, AnthropicSummaryProvider(), DeterministicSummarizer()]),
                 localSummaryOriginId: ManagedCredits.originId(),
                 remoteTransport: poller.map { p in
                     RemoteDispatchTransport(
@@ -1455,8 +1461,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Where this Mac stands with credits, as one amber line on the grid
         // that opens Setup. The summariser keeps the standing; the panel only
         // shows it. Ruled 15 Sep after a floor summary read as a broken prompt.
-        CreditStanding.observe { [weak self] standing in
-            DispatchQueue.main.async { self?.hud.setCreditStanding(standing.line) }
+        CreditStanding.observe { [weak self] _ in
+            DispatchQueue.main.async { self?.hud.setCreditStanding(CreditStanding.current.line) }
         }
         // One door per pane. The panel asks for a tab; the host assembles that
         // tab's data and shows it. Nothing re-renders a pane it has not fed.
@@ -2200,6 +2206,17 @@ if CommandLine.arguments.contains("--selftest-past-search") {
     let probeApplication = NSApplication.shared
     Task { @MainActor in
         let passed = await PastAgentsSearchDrill.run()
+        exit(passed ? 0 : 1)
+    }
+    probeApplication.run()
+    exit(1)
+}
+
+// Isolated credits regression: the real checklist, with only fixture services.
+if CommandLine.arguments.contains("--selftest-credits-onboarding") {
+    let probeApplication = NSApplication.shared
+    Task { @MainActor in
+        let passed = await CreditsOnboardingDrill.run()
         exit(passed ? 0 : 1)
     }
     probeApplication.run()

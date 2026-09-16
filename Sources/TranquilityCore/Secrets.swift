@@ -9,6 +9,10 @@ import Security
 /// genuinely hard to diagnose — it cost an hour during development. Anything that
 /// shells out (the `claude -p` fallback provider) must likewise scrub it.
 public enum Secrets {
+    /// Local credential changes notify the one managed session, without carrying
+    /// credentials in notification payloads. Other-process changes are caught
+    /// by the uncached Hub-token read before every managed operation.
+    public static let hubIdentityDidChange = Notification.Name("TranquilityHubIdentityDidChange")
     /// The Keychain service name, deliberately NOT renamed with the product.
     ///
     /// This string is the lookup key for every stored credential. Changing it does
@@ -238,7 +242,8 @@ public enum Secrets {
     /// happens once, from `tbase` — the binary that owns the keychain items — so the
     /// app has no keychain code path at all.
     public static func read(_ key: Key) -> String? {
-        cache.value(for: key) { readFile()[key.rawValue].flatMap { $0.isEmpty ? nil : $0 } }
+        if key == .hubToken { return readFile()[key.rawValue].flatMap { $0.isEmpty ? nil : $0 } }
+        return cache.value(for: key) { readFile()[key.rawValue].flatMap { $0.isEmpty ? nil : $0 } }
     }
 
     /// Explicit, one-time move of every key out of the keychain into the file.
@@ -282,6 +287,7 @@ public enum Secrets {
         values[key.rawValue] = value
         try writeFile(values)
         cache.invalidate(key)
+        if key == .hubToken { NotificationCenter.default.post(name: hubIdentityDidChange, object: nil) }
     }
 
     /// Legacy keychain writer, kept only so existing items remain readable for the
