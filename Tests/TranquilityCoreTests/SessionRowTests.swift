@@ -217,6 +217,23 @@ final class SessionRowTests: XCTestCase {
                        "a row with a turn in the store still announces it")
     }
 
+    /// And a REMOTE green row is no different (15 Sep, second witness): its
+    /// turn is in the local store by the spool, so with something unread it
+    /// announces; its door is for when it has nothing to say, and for Go to
+    /// Agent on the card. Robert clicked the row after OpenCode answered and
+    /// got a Terminal instead of the answer.
+    func testAGreenRemoteRowWithAnUnreadTurnAnnouncesBeforeItsDoor() {
+        let door = SessionRow.Door.shell("opencode --session ses_1", directory: "/tmp")
+        let unread = SessionRow(id: "r", name: "r", aux: "", lamp: .ready, read: .unread,
+                                harness: "opencode", door: door)
+        XCTAssertEqual(SessionRow.action(for: unread), .announce)
+        let silent = SessionRow(id: "r", name: "r", aux: "", lamp: .ready, read: .none,
+                                harness: "opencode", door: door)
+        XCTAssertEqual(SessionRow.action(for: silent),
+                       .openShell("opencode --session ses_1", directory: "/tmp"))
+        XCTAssertTrue(SessionRow.isLive(silent))
+    }
+
     // MARK: - Green above blue (ruled 15 Sep 2026)
 
     /// Robert, on the screenshot #458 produced: "the green lamps should

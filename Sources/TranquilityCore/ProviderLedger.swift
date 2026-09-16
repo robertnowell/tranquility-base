@@ -32,23 +32,48 @@ public struct ProviderLedger: Sendable {
 
     /// Record that an agent was started on `provider`, with when.
     public func mark(_ provider: String, at date: Date = Date()) {
-        var marks = read()
-        marks[provider] = ISO8601DateFormatter().string(from: date)
-        guard let data = try? JSONSerialization.data(withJSONObject: marks, options: [.sortedKeys]) else { return }
-        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
-                                                 withIntermediateDirectories: true)
-        try? data.write(to: url, options: .atomic)
+        var file = read()
+        file.used[provider] = ISO8601DateFormatter().string(from: date)
+        write(file)
     }
 
     /// Whether an agent has ever been started on `provider` from this Mac.
     public func used(_ provider: String) -> Bool {
-        read()[provider] != nil
+        read().used[provider] != nil
     }
 
-    private func read() -> [String: String] {
+    /// The user ended this agent (the provider's own id). It is not adopted
+    /// again at the next launch: the vendor still lists it, and a row that
+    /// came back after End Agent would be the row refusing to end.
+    public func forget(_ raw: String, provider: String) {
+        var file = read()
+        var ended = Set(file.ended[provider] ?? [])
+        ended.insert(raw)
+        file.ended[provider] = ended.sorted()
+        write(file)
+    }
+
+    public func forgotten(_ raw: String, provider: String) -> Bool {
+        read().ended[provider]?.contains(raw) == true
+    }
+
+    private struct File { var used: [String: String] = [:]; var ended: [String: [String]] = [:] }
+
+    private func read() -> File {
         guard let data = try? Data(contentsOf: url),
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: String]
-        else { return [:] }
-        return object
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return File() }
+        // The first shape was a flat provider → date map (15 Sep, morning).
+        if let flat = object as? [String: String] { return File(used: flat) }
+        return File(used: object["used"] as? [String: String] ?? [:],
+                    ended: object["ended"] as? [String: [String]] ?? [:])
+    }
+
+    private func write(_ file: File) {
+        let object: [String: Any] = ["used": file.used, "ended": file.ended]
+        guard let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]) else { return }
+        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
+                                                 withIntermediateDirectories: true)
+        try? data.write(to: url, options: .atomic)
     }
 }

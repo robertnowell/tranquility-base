@@ -1718,6 +1718,29 @@ extension StatusHUD {
         attachLivePid(77633, sessionId: "01a05338")
         checks.append(("aStrangersPidIsIgnored", goButton.isHidden))
 
+        // A REMOTE agent has no pid and never will; its door is a program or
+        // a page the poller knows about. The card asks the app for it, and
+        // the answer opens the door on a card the grid is not drawing (a
+        // greeting, a reply). Robert, 15 Sep, three times: "it never shows Go
+        // to Agent when I've opened a new agent."
+        let realDoor = agentDoorForSession
+        agentDoorForSession = { id in
+            id == "remote-1" ? .shell("opencode --session ses_1", directory: "/tmp") : nil
+        }
+        currentTarget = nil
+        _ = showAnnouncement(
+            spoken: SpokenTextSanitizer().sanitize("How should we get started?"),
+            sessionId: "remote-1", pid: nil, project: "tranquility-base", cwd: "/tmp")
+        checks.append(("aRemoteAgentsDoorOpensWithNoPid", !goButton.isHidden))
+        checks.append(("andItIsTheProvidersDoor",
+                       remoteDoorForCurrentTarget == .shell("opencode --session ses_1", directory: "/tmp")))
+        currentTarget = nil
+        _ = showAnnouncement(
+            spoken: SpokenTextSanitizer().sanitize("Nobody knows this one."),
+            sessionId: "remote-2", pid: nil, project: "elsewhere", cwd: "/tmp")
+        checks.append(("anUnknownRemoteAgentStillHasNoDoor", goButton.isHidden))
+        agentDoorForSession = realDoor
+
         SelfTest.report("revivedDoor", checks)
     }
 

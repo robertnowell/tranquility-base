@@ -246,6 +246,44 @@ final class CoordinatorTests: XCTestCase {
         XCTAssertEqual(waiting, [remote])
     }
 
+    /// And its brief is asked for with the opening the app itself dispatched,
+    /// since there is no transcript on this Mac to read one from. Without it
+    /// the model recapped an answer to a question it could not see as
+    /// `null`, and every remote turn fell to the floor: read out verbatim,
+    /// no ladder (15 Sep, reproduced against the model).
+    func testARemoteTurnIsSummarizedWithTheOpeningTheAppDispatched() async throws {
+        final class Capturing: SummaryProvider, @unchecked Sendable {
+            let name = "capturing"; let isConfigured = true
+            var opening: String??
+            func brief(for request: SummaryRequest) async throws -> SessionBrief {
+                opening = .some(request.firstUserMessage)
+                return SessionBrief(topic: "t", happened: "h", recap: "r", proposal: "p")
+            }
+        }
+        let remote = AgentSession.id("ses_live", provider: "opencode")
+        let capturing = Capturing()
+        let coordinator = Coordinator(
+            store: store,
+            summarizer: SummarizerChain(providers: [capturing]),
+            speech: SpeechChain(preferred: SilentSpeech(), fallback: SilentSpeech()),
+            gate: InterruptGate(minimumIdleSeconds: 0, signals: .quiescent),
+            tmuxTransport: RecordingTransport(),
+            isRemote: { $0 == remote },
+            enrolment: EnrolmentRegistry(url: tmpDir.appendingPathComponent("e4.json")),
+            agents: FakeAgents(live: []),
+            sweep: SessionSweep(),
+            recovery: RecoveryChain(providers: [FixedTranscript(text: "x")],
+                                    maxAttemptsPerProvider: 1, backoff: [0]),
+            readinessGrace: 0)
+        try store.update(utterance: Utterance(
+            status: .confirmed,
+            transcriptText: "[assistant]: How should we get started?\n\n[user]: What is OpenCode?",
+            targetSessionId: remote))
+        try appendWithTranscript(session: remote, entrypoint: "cli", at: 4_000)
+        _ = try await coordinator.announceNext(only: remote)
+        XCTAssertEqual(capturing.opening, .some("What is OpenCode?"))
+    }
+
     // MARK: - Only sessions a person started are announced
 
     /// Liveness used to do this job by accident, and the accident held only

@@ -92,6 +92,13 @@ public protocol AgentProvider: Sendable {
     /// poor start.
     func cancel(_ id: AgentSession.ID) async throws -> SendOutcome
 
+    /// End the agent as far as this app is concerned: after this it is not
+    /// listed, not adopted at the next launch, and its row is gone. What the
+    /// vendor does with the session is the vendor's business (OpenCode keeps
+    /// it in its own store; `opencode --session` still opens it). Default is
+    /// nothing, for a provider whose list this app cannot edit.
+    func forget(_ id: AgentSession.ID) async
+
     /// Where a person looks at this agent in the provider's own interface, or
     /// nil for a provider with no such place (a local server has none).
     func url(for id: AgentSession.ID) -> URL?
@@ -128,4 +135,9 @@ public struct AgentProviderRegistry: Sendable {
         let addressed = Set(ProviderConfig.configured(config: config)).union(spawnable)
         return providers.filter { addressed.contains($0.id) }
     }
+}
+
+
+extension AgentProvider {
+    public func forget(_ id: AgentSession.ID) async {}
 }

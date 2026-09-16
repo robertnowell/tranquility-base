@@ -48,6 +48,15 @@ public enum HeardContext {
     /// The label on what they said. Present only when there is a note.
     public static let userLabel = "[user]:"
 
+    /// What the user said, out of a framed dispatch: the text after the user
+    /// label, or the whole text when it was never framed. The inverse of
+    /// `note`, for the readers that want the words and not the quote (a row's
+    /// title, a summary's opening).
+    public static func spokenPart(_ text: String) -> String {
+        guard let range = text.range(of: userLabel) else { return text }
+        return String(text[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     /// The note, or nil when there is nothing spoken to quote. An event with
     /// no brief (a launch greeting, a summariser floor, a turn the user was
     /// deep-linked to before it was announced) dispatches the transcript

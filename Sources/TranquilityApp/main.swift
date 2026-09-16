@@ -986,6 +986,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         //
         // Probe, signal and poll off-main (rule 9); only the repaint hops back.
         hud.onTerminateSession = { [weak self] id, name in
+            // A REMOTE ROW ENDS THROUGH ITS PROVIDER. There is no pid to
+            // signal; the poller drops it, the store's turns are dismissed so
+            // no local band draws a husk, and the grid repaints without it.
+            if let poller = self?.agents, poller.snapshot.agent(id) != nil {
+                Task { @MainActor in
+                    await poller.end(id)
+                    if let store = self?.store,
+                       let latest = try? store.latestStop(for: id)?.latestId {
+                        try? store.advanceCursor(sessionId: id, heardThrough: latest,
+                                                 dismissedThrough: latest)
+                    }
+                    Permissions.log("terminate: \(name) (\(id.prefix(8))) ended through its provider")
+                    Track.record("agent_ended", ["agent_id": Track.hash(id), "outcome": "remote"])
+                    self?.refreshGridAfterTerminate()
+                }
+                return
+            }
             Task.detached {
                 // `agents` alone made this a permanent no-op for a live Codex
                 // session (26 Aug) — logged "already gone" and refused to
@@ -1066,6 +1083,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // report's own "Open hub" footer button.
         // The card asks, the app answers from what the grid already knows.
         hud.harnessForSession = { [weak self] id in self?.harnessById[id] }
+        hud.agentDoorForSession = { [weak self] id in
+            guard let agent = self?.agents?.snapshot.agent(id) else { return nil }
+            return agent.url.map { .page($0) }
+                ?? agent.shell.map { .shell($0.command, directory: $0.directory) }
+        }
         hud.doorForSession = { [weak self] session in
             if let report = self?.freshReport(session: session) {
                 return .report(report)

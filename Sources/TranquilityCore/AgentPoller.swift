@@ -112,6 +112,22 @@ public final class AgentPoller: @unchecked Sendable {
         for (_, task) in running { task.cancel() }
     }
 
+    /// End Agent on a remote row: the provider forgets it, the snapshot drops
+    /// it, and the next repaint has no row. Right-click → End Agent on a
+    /// remote row did nothing before this (Robert, 15 Sep): the handler
+    /// looked for a local pid, found none, and logged "already gone".
+    public func end(_ id: AgentSession.ID) async {
+        guard let session = snapshot.agent(id),
+              let provider = registry.provider(session.provider) else { return }
+        await provider.forget(id)
+        sync {
+            state.agents.removeAll { $0.id == id }
+            state.requests.removeValue(forKey: id)
+            state.confirmedAt.removeValue(forKey: id)
+        }
+        trace?("\(session.provider) ended \(id.prefix(8))")
+    }
+
     /// Coalesced, like `HubMirror.kick`: several reasons to refresh inside a
     /// moment are one refresh.
     public func kick() {

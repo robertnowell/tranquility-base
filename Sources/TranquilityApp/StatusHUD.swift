@@ -285,6 +285,15 @@ final class StatusHUD: NSObject {
     /// Wired by the app. Nil is a complete answer — a session never
     /// summarized has no hub and no report to open.
     var doorForSession: ((String) -> SecondDoor?)?
+    /// Where a REMOTE agent's Go to Agent goes, when the card holds a
+    /// session the grid is not currently drawing: the greeting card and the
+    /// reply card exist before and between grid repaints, and
+    /// `remoteDoorForCurrentTarget` used to read the door off
+    /// `face.sessionRows` alone, so a card bound to a fresh OpenCode agent
+    /// never offered Go to Agent (Robert, 15 Sep, three times). Wired by the
+    /// app from the poller's own snapshot, which is what the row would be
+    /// drawn from anyway.
+    var agentDoorForSession: ((String) -> SessionRow.Door?)?
     /// Which harness a session runs, so the card can wear its mark.
     ///
     /// A closure rather than a lookup, for the same reason `doorForSession` is
@@ -3617,9 +3626,10 @@ final class StatusHUD: NSObject {
     /// The current target's door when it is not a pane of ours: a page or a
     /// program. Nil for a terminal (the pid is the door) and for none.
     var remoteDoorForCurrentTarget: SessionRow.Door? {
-        guard let target = currentTarget,
-              let door = face.sessionRows.first(where: { $0.id == target.sessionId })?.door,
-              door.isRemote else { return nil }
+        guard let target = currentTarget else { return nil }
+        let door = face.sessionRows.first(where: { $0.id == target.sessionId })?.door
+            ?? agentDoorForSession?(target.sessionId)
+        guard let door, door.isRemote else { return nil }
         return door
     }
 
