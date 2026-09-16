@@ -114,14 +114,19 @@ final class AgentSessionTests: XCTestCase {
                        "the three buckets must draw the three lamps")
     }
 
-    /// **A question is GREEN, not amber.** Robert, 14 Sep: *"for something
-    /// needs your judgment is great. That's like it needs you. It's your time
-    /// to shine."* Amber is reserved for the unanticipated.
+    /// **A finished turn that asks is GREEN; a pending permission is AMBER.**
+    /// Robert, 14 Sep: *"for something needs your judgment is great. That's
+    /// like it needs you. It's your time to shine."* And 15 Sep 7:47 PM, on
+    /// a remote agent blocked 27 minutes on a permission: *"it seems hung,
+    /// and the lamp is not amber, and there is no decision or anything."* A
+    /// structured request blocks the agent the way a local dialog does, and
+    /// local dialogs are amber with the reason in the column.
     func testAQuestionIsGreenAndAFailureIsAmber() {
         XCTAssertEqual(AgentPresentation.bucket(state: .inputRequired,
                                                 hasPendingRequest: false), .yours)
         XCTAssertEqual(AgentPresentation.bucket(state: .working,
-                                                hasPendingRequest: true), .yours)
+                                                hasPendingRequest: true), .problem,
+                       "a pending permission is amber, like a local dialog")
         for broken: AgentSessionState in [.authRequired, .failed, .rejected] {
             XCTAssertEqual(AgentPresentation.bucket(state: broken, hasPendingRequest: false),
                            .problem, "\(broken) is a problem, not a question")
