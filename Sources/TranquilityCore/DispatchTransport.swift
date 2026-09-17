@@ -213,6 +213,12 @@ public enum Readiness: Sendable, Equatable {
         guard let live else { return .notRegistered }
         switch live.status {
         case "idle": return .ready
+        // The registry's own third word (measured 9 Sep): the turn ended and
+        // background shells the session started are still running. The CLI
+        // rendered it `busy`, which held a blue lamp for five hours on a
+        // session that had finished; the file says what it is, and a session
+        // between turns takes a reply.
+        case "shell": return .ready
         case "busy": return .busy
         case "waiting": return .waiting(live.waitingFor)
         default: return .notRegistered
@@ -509,6 +515,21 @@ public enum ProcessProbe {
         kill(pid_t(pid), 0) == 0 || errno == EPERM
     }
 
+    /// When the kernel created this process, or nil when there is no such
+    /// process. Asked of the kernel directly (`sysctl KERN_PROC_PID`), not
+    /// of `ps`: this runs for every registry file on every liveness tick,
+    /// and a subprocess per row is the cost profile the old CLI probe had.
+    public static func startTime(of pid: Int) -> Date? {
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, Int32(pid)]
+        var info = kinfo_proc()
+        var size = MemoryLayout<kinfo_proc>.stride
+        guard sysctl(&mib, UInt32(mib.count), &info, &size, nil, 0) == 0, size > 0,
+              info.kp_proc.p_pid == Int32(pid)
+        else { return nil }
+        let tv = info.kp_proc.p_starttime
+        return Date(timeIntervalSince1970: Double(tv.tv_sec) + Double(tv.tv_usec) / 1_000_000)
+    }
+
     /// Controlling terminal of a process, as `/dev/ttysNNN`.
     public static func tty(of pid: Int) -> String? {
         guard case .success(let raw) = Subprocess.run(
@@ -737,68 +758,77 @@ public struct ClaudeAgentsCLI: ClaudeAgentsReading {
     /// for six seconds reads as a broken control rather than a cached one.
     public static func invalidate() { cache.clear() }
 
-    /// One row per live session, decoded LENIENTLY: a row this build cannot
-    /// decode is dropped and traced, never allowed to nil the whole probe.
-    /// The old all-or-nothing decode meant one future session kind could
-    /// refuse every reply on the machine at once (audit R4) — the same
-    /// per-row asymmetry `LiveSession.kind` itself documents, applied at the
-    /// array level.
-    private struct LenientRow: Decodable {
-        let session: LiveSession?
-        init(from decoder: Decoder) {
-            session = try? LiveSession(from: decoder)
-        }
-    }
-
+    /// One row per live session, from the registry the sessions themselves
+    /// write (`~/.claude/sessions/<pid>.json`), each kept only on the
+    /// kernel's word that its process exists and started when the file says.
+    ///
+    /// Until 16 Sep this spawned `claude agents --json` and decoded its
+    /// output. That listing is a RENDERING of the same files: it hides a
+    /// parked session and lists its job instead (undone below), spells the
+    /// registry's `shell` as `busy` (the 9 Sep blue lamp), and appends
+    /// pid-less rows for daemon jobs whose process is gone. On 10 Sep and
+    /// again on 16 Sep, after a reboot, that last kind was the only row left,
+    /// it could not decode, and the rule "every row undecodable is unknown"
+    /// held twenty dead sessions green for hours because nothing could
+    /// tell "the schema moved" from "only a corpse is listed". Reading the
+    /// files removes the schema, the subprocess, its 8 s deadline and the
+    /// login-shell lookup in one move; the CLI added nothing the files do
+    /// not carry (measured 16 Sep against a session parked at a permission
+    /// prompt: `status` and `waitingFor` identical in both).
+    ///
+    /// nil ONLY when the registry directory exists and cannot be listed —
+    /// the witness could not be asked. An empty directory is [] — nobody is
+    /// home — which after a reboot is the truth, and the answer that lets
+    /// the sweep retire and the grid offer revive on the first tick.
     public func sessions() -> [LiveSession]? {
         if let cached = Self.cache.get(maxAge: 6) { return cached }
-        guard let binary = Self.resolveBinary() else {
-            Self.trace?("liveness: claude binary not found")
+        guard let entries = SessionRegistry.read() else {
+            Self.trace?("liveness: registry unreadable at \(SessionRegistry.directory.path)")
             return nil
         }
-        // Bounded: a wedged CLI here used to block whichever thread asked,
-        // every tick, for as long as the wedge lasted (audit R5).
-        switch Subprocess.run(binary, ["agents", "--json"], timeout: 8) {
-        case .failure(let error):
-            Self.trace?("liveness: \(error.timedOut ? "deadline" : "probe failed"): \(error.message.prefix(160))")
-            return nil
-        case .success(let out):
-            guard let decoded = Self.decodeSessions(out, trace: Self.trace) else { return nil }
-            // The CLI hides a session that was sent to the background with
-            // the left arrow and lists its job instead. The session's own
-            // registry file says otherwise, and it is read here, once, so
-            // every caller sees the session and none sees the job.
-            let sessions = SessionRegistry.standingInForParkedJobs(
-                decoded, entries: SessionRegistry.all(),
-                isAlive: ProcessProbe.isAlive, trace: Self.trace)
-            Self.cache.put(sessions)
-            return sessions
-        }
+        let witnessed = Self.witnessed(entries, isAlive: ProcessProbe.isAlive,
+                                       startTime: ProcessProbe.startTime, trace: Self.trace)
+        // The CLI used to hide a session that was sent to the background
+        // with the left arrow and list its job instead; the files name both,
+        // and this keeps the session and drops the job so every caller sees
+        // the conversation people know.
+        let sessions = SessionRegistry.standingInForParkedJobs(
+            witnessed, entries: entries, isAlive: ProcessProbe.isAlive, trace: Self.trace)
+        Self.cache.put(sessions)
+        return sessions
     }
 
-    /// Lenient at the row, honest at the array: dropped rows are traced, and
-    /// a probe where EVERY row failed returns nil ("could not determine"),
-    /// never [] ("nobody is home") — the exact nil-vs-empty distinction this
-    /// protocol documents as load-bearing, applied at the boundary a future
-    /// CLI schema change would hit first (M1 gate finding V1). Internal so
-    /// the tests exercise THIS code, not a copy (finding V12).
-    static func decodeSessions(_ body: String, trace: (@Sendable (String) -> Void)?) -> [LiveSession]? {
-        guard let data = body.data(using: .utf8),
-              let rows = try? JSONDecoder().decode([LenientRow].self, from: data)
-        else {
-            trace?("liveness: decode failed: body=\(body.prefix(120))")
-            return nil
+    /// The pure half: which registry entries have a live process behind
+    /// them. Internal so the tests exercise THIS code, not a copy.
+    ///
+    /// A file is kept when its pid is alive AND, where the file records the
+    /// process start, the kernel agrees within two seconds. A pid that is
+    /// alive under a different start time is a recycled number: after a
+    /// reboot the kernel hands out low pids again, and this app itself came
+    /// up as pid 766 on 16 Sep. A file with no `procStart` (older CLI) is
+    /// kept on the pid alone, which is what every probe before this did.
+    static func witnessed(
+        _ entries: [SessionRegistry.Entry],
+        isAlive: (Int) -> Bool, startTime: (Int) -> Date?,
+        trace: (@Sendable (String) -> Void)?
+    ) -> [LiveSession] {
+        entries.compactMap { entry in
+            guard isAlive(entry.pid) else { return nil }
+            if let recorded = entry.procStart, let actual = startTime(entry.pid),
+               abs(actual.timeIntervalSince(recorded)) > 2 {
+                trace?("liveness: pid \(entry.pid) is alive but is not "
+                    + "\(entry.sessionId.prefix(8)) — started \(actual), file says \(recorded)")
+                return nil
+            }
+            var live = LiveSession(pid: entry.pid, sessionId: entry.sessionId, cwd: entry.cwd,
+                                   status: entry.status, name: entry.name,
+                                   waitingFor: entry.waitingFor)
+            // The file spells a daemon-hosted job "bg"; the CLI spelled it
+            // "background" and `isBackground` still reads that word.
+            live.kind = entry.kind == "bg" ? "background" : entry.kind
+            live.startedAt = entry.startedAt
+            return live
         }
-        let sessions = rows.compactMap(\.session)
-        let dropped = rows.count - sessions.count
-        if dropped > 0 {
-            trace?("liveness: dropped \(dropped) undecodable row(s) of \(rows.count)")
-        }
-        if sessions.isEmpty, !rows.isEmpty {
-            trace?("liveness: ALL \(rows.count) rows undecodable — treating as unknown, not empty")
-            return nil
-        }
-        return sessions
     }
 }
 

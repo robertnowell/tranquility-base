@@ -56,14 +56,41 @@ final class GridRowsTests: XCTestCase {
         supersedes: @escaping (String, Int64) -> Bool = { _, _ in false },
         isInFlight: @escaping (String) -> Bool = { _ in false },
         callsigns: [String: String] = [:],
-        remote: GridAssembler.RowInputs.RemoteAgents = .init()
+        remote: GridAssembler.RowInputs.RemoteAgents = .init(),
+        livenessKnown: Bool = true
     ) -> GridAssembler.RowInputs {
         GridAssembler.RowInputs(
             waiting: waiting, known: known, discovered: discovered, liveById: live,
             boundaries: [:], switchedOff: switchedOff, switchedOn: switchedOn,
             evidence: evidence, isHeadless: isHeadless, family: family,
             supersedesWaiting: supersedes, isInFlight: isInFlight,
-            closedCallsigns: callsigns, remote: remote)
+            closedCallsigns: callsigns, remote: remote, livenessKnown: livenessKnown)
+    }
+
+    // MARK: - An empty machine is empty, not unknown
+
+    /// The reboot case, 10 Sep and 16 Sep: every process is gone, the witness
+    /// answered [] honestly, and the band used to read "known" off a
+    /// non-empty map — so twenty dead sessions with owed turns drew green and
+    /// no row anywhere offered to bring one back.
+    func testAnAnsweredEmptyProbeGreysAWaitingRowAndOffersRevive() {
+        let w = WaitingSession(sessionId: "dead-1", latestId: 1, createdAtMs: 0, hookEvent: .stop)
+        let rows = GridAssembler.rows(inputs(waiting: [w], live: [:], livenessKnown: true)).rows
+        let row = rows.first { $0.id == "dead-1" }
+        XCTAssertEqual(row?.lamp, .unlit)
+        XCTAssertEqual(row?.revivable, true)
+        XCTAssertEqual(row.map { SessionRow.lampAction(for: $0, on: .grid) }, .revive)
+    }
+
+    /// The other answer: the registry could not be read at all. Nobody is
+    /// retired and nobody is greyed on the strength of a witness that did not
+    /// speak; the row keeps the lamp its turn earns.
+    func testAnUnansweredProbeHoldsTheRow() {
+        let w = WaitingSession(sessionId: "held-1", latestId: 1, createdAtMs: 0, hookEvent: .stop)
+        let rows = GridAssembler.rows(inputs(waiting: [w], live: [:], livenessKnown: false)).rows
+        let row = rows.first { $0.id == "held-1" }
+        XCTAssertEqual(row?.lamp, .ready)
+        XCTAssertEqual(row?.revivable, false)
     }
 
     // MARK: - The liveness probe, and the crash it caused twice
@@ -109,12 +136,12 @@ final class GridRowsTests: XCTestCase {
     // MARK: - Band 1: sessions with an unanswered turn
 
     func testAWaitingSessionIsGreenAndUnreadUntilItIsHeard() {
-        let rows = GridAssembler.rows(inputs(waiting: [waiting(A)])).rows
+        let rows = GridAssembler.rows(inputs(waiting: [waiting(A)], live: [A: live(A)])).rows
         XCTAssertEqual(rows.first?.lamp, .ready)
         XCTAssertEqual(rows.first?.read, .unread)
 
         let heard = GridAssembler.rows(
-            inputs(waiting: [waiting(A, latestId: 5, heardThrough: 5)])).rows
+            inputs(waiting: [waiting(A, latestId: 5, heardThrough: 5)], live: [A: live(A)])).rows
         XCTAssertEqual(heard.first?.read, .opened, "heard, but still owed an answer")
         XCTAssertEqual(heard.first?.lamp, .ready)
     }
@@ -125,7 +152,8 @@ final class GridRowsTests: XCTestCase {
     /// asking for the user seconds after they spoke to it.
     func testAReplyInFlightTurnsAWaitingRowBlueRatherThanGreen() {
         let rows = GridAssembler.rows(
-            inputs(waiting: [waiting(A)], supersedes: { id, _ in id == self.A })).rows
+            inputs(waiting: [waiting(A)], live: [A: live(A)],
+                   supersedes: { id, _ in id == self.A })).rows
         XCTAssertEqual(rows.first?.lamp, .working)
     }
 
@@ -276,7 +304,8 @@ final class GridRowsTests: XCTestCase {
     /// the row would quietly drop off the grid again as soon as the user read
     /// it. Returned rather than written, so this function has no side effects.
     func testATurnArrivingClearsTheFiledLampRatherThanOverridingIt() {
-        let verdict = GridAssembler.rows(inputs(waiting: [waiting(A)], switchedOff: [A]))
+        let verdict = GridAssembler.rows(inputs(waiting: [waiting(A)], live: [A: live(A)],
+                                                switchedOff: [A]))
         XCTAssertEqual(verdict.clearSwitches, [A])
         XCTAssertFalse(verdict.rows.first?.switchedOff == true,
                        "a waiting session is not filed")
@@ -331,12 +360,21 @@ final class GridRowsTests: XCTestCase {
         XCTAssertFalse(verdict.rows.first?.revivable == true)
     }
 
-    /// **The fail-safe.** "The probe returned nothing" and "nothing is running"
-    /// are the same value, and only one of them should grey the whole panel.
-    func testAnEmptyLivenessProbeGreysNothing() {
-        let verdict = GridAssembler.rows(inputs(waiting: [waiting(A), waiting(B)], live: [:]))
-        XCTAssertEqual(verdict.rows.map(\.lamp), [.ready, .ready],
+    /// **The fail-safe, corrected 16 Sep.** "The probe could not answer" and
+    /// "nothing is running" used to be the same value, so the band could only
+    /// grey the panel on a non-empty map, and a machine with no sessions at
+    /// all (every reboot) drew everything green. They are different inputs
+    /// now: a witness that did not speak greys nothing; one that said "nobody"
+    /// greys everybody.
+    func testAFailedProbeGreysNothingAndAnEmptyOneGreysEverything() {
+        let failed = GridAssembler.rows(inputs(waiting: [waiting(A), waiting(B)], live: [:],
+                                               livenessKnown: false))
+        XCTAssertEqual(failed.rows.map(\.lamp), [.ready, .ready],
                        "a failed probe must not read as a dead machine")
+        let empty = GridAssembler.rows(inputs(waiting: [waiting(A), waiting(B)], live: [:],
+                                              livenessKnown: true))
+        XCTAssertEqual(empty.rows.map(\.lamp), [.unlit, .unlit],
+                       "an empty machine must not read as a live one")
     }
 
     // MARK: - Hearing a row does not move it (14 Sep, reversing #428)

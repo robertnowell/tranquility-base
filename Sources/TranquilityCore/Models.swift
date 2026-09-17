@@ -428,3 +428,19 @@ public struct WaitingSession: Codable, FetchableRecord, Sendable {
         return String(last)
     }
 }
+
+extension WaitingSession {
+    /// The shape a drill builds by hand: a session that owes an answer, with
+    /// the fields the grid reads. The store is the only production source of
+    /// these rows; this exists so a drill about the grid does not have to
+    /// write drill rows into the real queue to get one. In an extension so
+    /// the memberwise initialiser the tests use survives.
+    public init(sessionId: String, latestId: Int64, createdAtMs: Int64,
+                cwd: String? = nil, transcriptPath: String? = nil,
+                hookEvent: HookEventKind) {
+        self.init(sessionId: sessionId, latestId: latestId, createdAtMs: createdAtMs,
+                  cwd: cwd, tty: nil, promptId: nil, transcriptPath: transcriptPath,
+                  lastAssistantMessage: nil, notificationMatcher: nil, summaryText: nil,
+                  hookEvent: hookEvent, callsign: nil)
+    }
+}

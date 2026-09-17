@@ -38,31 +38,88 @@ final class SubprocessTests: XCTestCase {
         XCTAssertGreaterThan(text.count, 150_000)
     }
 
-    // MARK: per-element liveness decode (audit R4)
+    // MARK: the liveness witness is the registry plus the kernel
 
-    func testLenientSessionsDecodeDropsBadRowsOnly() {
-        // The REAL decode path (gate finding V12 killed the test-local copy):
-        // one row missing the non-optional pid is dropped and traced, never
-        // allowed to nil the machine's whole view.
-        let json = """
-        [{"pid": 1, "sessionId": "a", "kind": "interactive", "status": "idle"},
-         {"sessionId": "missing-pid"},
-         {"pid": 3, "sessionId": "c", "status": "busy"}]
-        """
-        let sessions = ClaudeAgentsCLI.decodeSessions(json, trace: nil)
-        XCTAssertEqual(sessions?.map(\.sessionId), ["a", "c"])
+    private func entry(_ pid: Int, _ id: String, kind: String? = "interactive",
+                       procStart: Date? = nil, status: String? = "idle") -> SessionRegistry.Entry {
+        SessionRegistry.Entry(pid: pid, sessionId: id, cwd: "/tmp", status: status, tmux: nil,
+                              messagingSocketPath: nil, name: nil, updatedAt: nil, kind: kind,
+                              procStart: procStart)
     }
 
-    func testAllRowsUndecodableReadsAsUnknownNotEmpty() {
-        // nil means "could not determine"; [] means "nobody is home". A CLI
-        // whose schema moved under us must produce the former (gate V1) —
-        // collapsing it into [] is how one hiccup once hid every waiting
-        // session.
-        let sessions = ClaudeAgentsCLI.decodeSessions(
-            #"[{"sessionId": "no-pid-1"}, {"sessionId": "no-pid-2"}]"#, trace: nil)
-        XCTAssertNil(sessions)
-        // A genuinely empty array is still honestly empty.
-        XCTAssertEqual(ClaudeAgentsCLI.decodeSessions("[]", trace: nil)?.count, 0)
+    func testADeadPidIsNotARow() {
+        // The reboot case: files outlive their processes, and the kernel is
+        // the witness. [] here, never nil — nobody home is a positive finding.
+        let rows = ClaudeAgentsCLI.witnessed(
+            [entry(1, "a"), entry(2, "b")], isAlive: { $0 == 2 }, startTime: { _ in nil },
+            trace: nil)
+        XCTAssertEqual(rows.map(\.sessionId), ["b"])
+    }
+
+    func testAReusedPidIsNotARow() {
+        // Alive, but not the process the file was written by: the kernel's
+        // start time disagrees with the file's by more than two seconds.
+        let recorded = Date(timeIntervalSince1970: 1_000_000)
+        final class Traced: @unchecked Sendable { var lines: [String] = [] }
+        let traced = Traced()
+        let rows = ClaudeAgentsCLI.witnessed(
+            [entry(1, "recycled", procStart: recorded),
+             entry(2, "same", procStart: recorded)],
+            isAlive: { _ in true },
+            startTime: { $0 == 1 ? recorded.addingTimeInterval(3_600) : recorded.addingTimeInterval(1) },
+            trace: { traced.lines.append($0) })
+        XCTAssertEqual(rows.map(\.sessionId), ["same"])
+        XCTAssertEqual(traced.lines.count, 1)
+        XCTAssertTrue(traced.lines[0].contains("pid 1 is alive but is not recycled"), traced.lines[0])
+    }
+
+    func testAFileWithNoProcStartIsKeptOnThePidAlone() {
+        // Older CLIs wrote no start time; missing means absent (seam rule 1),
+        // and the pid alone is what every probe before this trusted.
+        let rows = ClaudeAgentsCLI.witnessed(
+            [entry(1, "old")], isAlive: { _ in true },
+            startTime: { _ in Date() }, trace: nil)
+        XCTAssertEqual(rows.map(\.sessionId), ["old"])
+    }
+
+    func testTheFilesWordsReachTheRowUnchanged() {
+        // "bg" is the file's spelling of the CLI's "background"; `isBackground`
+        // still reads the CLI's word. Status and waitingFor pass through as
+        // written, which is the whole reason the CLI is no longer in the way.
+        var e = entry(1, "job", kind: "bg", status: "waiting")
+        e.waitingFor = "permission prompt"
+        e.startedAt = 1_789_603_195_942
+        let rows = ClaudeAgentsCLI.witnessed([e], isAlive: { _ in true },
+                                             startTime: { _ in nil }, trace: nil)
+        XCTAssertEqual(rows.count, 1)
+        XCTAssertTrue(rows[0].isBackground)
+        XCTAssertEqual(rows[0].status, "waiting")
+        XCTAssertEqual(rows[0].waitingFor, "permission prompt")
+        XCTAssertEqual(rows[0].startedAt, 1_789_603_195_942)
+    }
+
+    func testAnUnreadableRegistryIsNilAndAnAbsentOneIsEmpty() throws {
+        // nil means "could not determine"; [] means "nobody is home". The
+        // difference is load-bearing: the sweep holds on nil and retires on [].
+        let base = FileManager.default.temporaryDirectory
+            .appendingPathComponent("tb-registry-\(UUID().uuidString)", isDirectory: true)
+        XCTAssertEqual(SessionRegistry.read(in: base)?.count, 0, "a directory that was never made")
+        try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        XCTAssertEqual(SessionRegistry.read(in: base)?.count, 0, "an empty one")
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: base.path)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: base.path)
+            try? FileManager.default.removeItem(at: base)
+        }
+        XCTAssertNil(SessionRegistry.read(in: base), "one that exists and cannot be listed")
+    }
+
+    func testShellIsAReadyStatus() throws {
+        // The registry's third word, rendered `busy` by the CLI (9 Sep). Between
+        // turns with shells still running, the session takes a reply.
+        let live = try JSONDecoder().decode(LiveSession.self, from: Data(
+            #"{"pid": 1, "sessionId": "s", "status": "shell"}"#.utf8))
+        XCTAssertEqual(Readiness.classify(live), .ready)
     }
 
     // MARK: shared readiness mapping
