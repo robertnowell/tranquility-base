@@ -233,6 +233,15 @@ public actor ServedOpenCodeProvider: AgentProvider {
         session.directory = server.directory
         session.shell = AgentSession.ShellDoor(command: server.attachCommand(session: raw),
                                                directory: server.directory)
+        // A pane THIS server's TUI is already in (a reconnect on the same
+        // port) is the door; one from another launch is blind and is not.
+        // Here, on every first sighting, not only the listed kind: a session
+        // first seen through an SSE ask got the plain door and Go to Agent
+        // opened a blind window beside a pane that had the question (driven
+        // 17 Sep 9:33 AM on Dev).
+        if hostsPanes, let port = server.baseURL.port, OpenCodePane.isLive(raw: raw, port: port) {
+            session.pane = OpenCodePane.name(for: raw, port: port)
+        }
     }
 
     /// The session's TUI, attached in a pane of ours BEFORE the turn that
@@ -274,12 +283,6 @@ public actor ServedOpenCodeProvider: AgentProvider {
                       ledger?.forgotten(raw, provider: id) != true else { continue }
                 var session = listed
                 decorate(&session, raw: raw)
-                // A pane THIS server's TUI is already in (a reconnect on
-                // the same port) is the door; one from another launch is
-                // blind and is not.
-                if hostsPanes, let port = server.baseURL.port, OpenCodePane.isLive(raw: raw, port: port) {
-                    session.pane = OpenCodePane.name(for: raw, port: port)
-                }
                 sessions[raw] = session
                 emit(session.id, .appeared(session))
                 // Adopted WITH its turns, so the row is the same kind of row
