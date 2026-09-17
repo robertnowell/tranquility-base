@@ -1107,6 +1107,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // the same door the card's GO TO AGENT opens.
         hud.onGoToSession = { [weak self] id in self?.goToSession(id) }
         hud.onOpenShell = { [weak self] command, directory in self?.openShell(command, in: directory) }
+        hud.onAttachPane = { [weak self] name in self?.attachPane(name) }
         hud.onNewSessionForArtifact = { [weak self] ref in
             self?.newSession(forArtifact: ref)
         }
@@ -1120,9 +1121,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // The card asks, the app answers from what the grid already knows.
         hud.harnessForSession = { [weak self] id in self?.harnessById[id] }
         hud.agentDoorForSession = { [weak self] id in
-            guard let agent = self?.agents?.snapshot.agent(id) else { return nil }
-            return agent.url.map { .page($0) }
-                ?? agent.shell.map { .shell($0.command, directory: $0.directory) }
+            self?.agents?.snapshot.agent(id)?.door
         }
         hud.doorForSession = { [weak self] session in
             if let report = self?.freshReport(session: session) {

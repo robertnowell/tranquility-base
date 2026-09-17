@@ -41,6 +41,9 @@ public actor ServedOpenCodeProvider: AgentProvider {
     /// naturally doesn't for claude and codex." Read from the list at seed
     /// and on first sight of an unknown session.
     private var children: Set<String> = []
+    /// Host each session's TUI in a pane of ours (`OpenCodePane`). Off for
+    /// tests and drills, which would otherwise leave attach processes behind.
+    private let hostsPanes: Bool
     private var connected = false
     private var connecting: Task<Void, Error>?
     private var pump: Task<Void, Never>?
@@ -48,8 +51,10 @@ public actor ServedOpenCodeProvider: AgentProvider {
     private nonisolated let streamBox = Box<AsyncStream<AgentEvent>?>(nil)
 
     public init(binary: String, directory: String, ledger: ProviderLedger? = nil,
-                port: Int? = nil, pidFile: URL? = nil, trace: (@Sendable (String) -> Void)? = nil) {
+                port: Int? = nil, pidFile: URL? = nil, hostsPanes: Bool = false,
+                trace: (@Sendable (String) -> Void)? = nil) {
         self.server = OpenCodeServer(binary: binary, directory: directory, port: port, pidFile: pidFile)
+        self.hostsPanes = hostsPanes
         self.transport = HTTPTransport(base: server.baseURL, password: nil, trace: trace)
         self.client = OpenCodeClient(transport: transport, provider: "opencode")
         self.ledger = ledger
@@ -80,6 +85,7 @@ public actor ServedOpenCodeProvider: AgentProvider {
     private func connect() async throws {
         try await server.start()
         connected = true
+        if hostsPanes { OpenCodePane.sweepStale(keeping: server.baseURL.port ?? 0) }
         guard let raw = transport.events() else { return }
         pump = Task { [weak self] in
             for await chunk in raw {
@@ -227,6 +233,34 @@ public actor ServedOpenCodeProvider: AgentProvider {
         session.directory = server.directory
         session.shell = AgentSession.ShellDoor(command: server.attachCommand(session: raw),
                                                directory: server.directory)
+        // A pane THIS server's TUI is already in (a reconnect on the same
+        // port) is the door; one from another launch is blind and is not.
+        // Here, on every first sighting, not only the listed kind: a session
+        // first seen through an SSE ask got the plain door and Go to Agent
+        // opened a blind window beside a pane that had the question (driven
+        // 17 Sep 9:33 AM on Dev).
+        if hostsPanes, let port = server.baseURL.port, OpenCodePane.isLive(raw: raw, port: port) {
+            session.pane = OpenCodePane.name(for: raw, port: port)
+        }
+    }
+
+    /// The session's TUI, attached in a pane of ours BEFORE the turn that
+    /// may ask; see `OpenCodePane`. Called on the way into `start` and
+    /// `send`, and a no-op once the pane is live. Waits, bounded, for the
+    /// TUI to draw, since a TUI attached after the ask never shows it.
+    private func hostPane(_ raw: String) async {
+        guard hostsPanes, var known = sessions[raw] else { return }
+        let port = server.baseURL.port ?? 0
+        if known.pane == nil || !OpenCodePane.isLive(raw: raw, port: port) {
+            known.pane = OpenCodePane.host(raw: raw, port: port, command: server.attachCommand(session: raw),
+                                           directory: server.directory)
+            sessions[raw] = known
+            emit(known.id, .changed(known))
+        }
+        guard known.pane != nil else { return }
+        for _ in 0..<30 where !OpenCodePane.hasDrawn(raw: raw, port: port) {
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
     }
 
     private func emit(_ session: AgentSession.ID, _ kind: AgentEvent.Kind) {
@@ -288,6 +322,7 @@ public actor ServedOpenCodeProvider: AgentProvider {
             emit(titled.id, .changed(titled))
         }
         _ = seen(raw: raw, state: .submitted)
+        await hostPane(raw)
         return try await client.sendAsync(text, to: raw)
     }
 
@@ -321,6 +356,7 @@ public actor ServedOpenCodeProvider: AgentProvider {
             throw LocalOpenCodeProvider.ProviderError.noSuchSession(appID)
         }
         let session = seen(raw: listed.providerID, state: .inputRequired)
+        await hostPane(listed.providerID)
         if !brief.prompt.isEmpty { _ = try await send(brief.prompt, to: session.id) }
         return session.id
     }
@@ -335,6 +371,7 @@ public actor ServedOpenCodeProvider: AgentProvider {
     public func forget(_ id: AgentSession.ID) async {
         guard let raw = providerID(of: id) else { return }
         forgotten.insert(raw)
+        if hostsPanes { OpenCodePane.kill(raw: raw, port: server.baseURL.port ?? 0) }
         if connected { _ = try? await client.abort(raw) }
         sessions[raw] = nil
         asking[id] = nil

@@ -123,6 +123,25 @@ final class RemoteRowsTests: XCTestCase {
         XCTAssertEqual(SessionRow.action(for: out[0]), SessionRow.RowAction.none)
     }
 
+    /// A served OpenCode agent's screen is a pane of ours with its TUI
+    /// attached since it started; that pane is the door, and outranks the
+    /// attach command it also carries (the command is the fallback for a
+    /// pane that could not be made, and a fresh attach never shows an ask
+    /// raised before it; 17 Sep).
+    func testAnAgentWithAPaneGoesToItRatherThanAttachingAfresh() {
+        var agent = remote("a", state: .working)
+        agent.shell = AgentSession.ShellDoor(command: "opencode attach http://127.0.0.1:1 --session a",
+                                             directory: "/tmp")
+        XCTAssertEqual(SessionRow.action(for: rows(.init(agents: [agent]))[0]),
+                       .openShell("opencode attach http://127.0.0.1:1 --session a", directory: "/tmp"))
+        agent.pane = "tb-oc-a"
+        let out = rows(.init(agents: [agent]))
+        XCTAssertEqual(out[0].door, .pane("tb-oc-a"))
+        XCTAssertEqual(SessionRow.action(for: out[0]), .attachPane("tb-oc-a"))
+        XCTAssertTrue(out[0].door.isRemote)
+        XCTAssertEqual(DeepLink.discussDestination(rowAction: .attachPane("tb-oc-a"), lamp: .fault, hasCompletedTurn: true), .agentPane("tb-oc-a"))
+    }
+
     /// Every local row keeps the door it always had, which is what makes this
     /// a default rather than a migration.
     func testALocalRowStillGoesToItsTerminal() {
@@ -266,5 +285,18 @@ extension RemoteRowsTests {
         XCTAssertEqual(row?.read, ReadState.none)
         XCTAssertEqual(SessionRow.action(for: row!), SessionRow.RowAction.none,
                        "announce would read a turn that does not exist")
+    }
+}
+
+/// The pane's name carries the served port, so last launch's pane can never
+/// read as this launch's; and the sweep at connect removes exactly the panes
+/// on ports nobody serves.
+final class OpenCodePaneTests: XCTestCase {
+    func testTheNameCarriesThePortAndRefusesAnUnsafeId() {
+        XCTAssertEqual(OpenCodePane.name(for: "ses_abc123", port: 59814), "tb-oc-59814-ses_abc123")
+        XCTAssertEqual(OpenCodePane.portInName("tb-oc-59814-ses_abc123"), 59814)
+        XCTAssertNil(OpenCodePane.portInName("tb-2276a76f"), "a local pane is not ours to sweep")
+        XCTAssertNil(OpenCodePane.name(for: "ses_a b; rm", port: 1), "refused, not mangled")
+        XCTAssertNil(OpenCodePane.name(for: String(repeating: "x", count: 70), port: 1))
     }
 }

@@ -202,6 +202,16 @@ public struct SessionRow: Equatable, Sendable {
         /// A program on this Mac that opens the agent: OpenCode's own TUI on
         /// the session. Run in a Terminal window in `directory`.
         case shell(String, directory: String)
+        /// A tmux session on this app's own socket that the agent's screen
+        /// lives in, by name. Go to Agent raises the Terminal window already
+        /// attached to it, or attaches one, never a second copy. This is the
+        /// local rows' door with the pane named rather than looked up: an
+        /// OpenCode agent's TUI is attached to its served session from the
+        /// start, in a pane, because a TUI attached AFTER a permission was
+        /// asked never shows it (measured 17 Sep against 1.18.31), and a
+        /// second attach per tap left the first window behind (Robert, 17 Sep
+        /// 8:50 AM: "it attaches a new window and you don't see the prompt").
+        case pane(String)
         /// Neither, and that is honest rather than a gap: a local
         /// `opencode serve` has no web page and no terminal of ours. Go to
         /// Agent has nowhere to go, so it is not offered.
@@ -217,7 +227,7 @@ public struct SessionRow: Equatable, Sendable {
         /// program. The card offers Go to Agent for either.
         public var isRemote: Bool {
             switch self {
-            case .page, .shell: return true
+            case .page, .shell, .pane: return true
             case .terminal, .none: return false
             }
         }
@@ -334,6 +344,8 @@ public struct SessionRow: Equatable, Sendable {
         case openPage(URL)
         /// A remote agent whose interface is a program on this Mac.
         case openShell(String, directory: String)
+        /// A remote agent whose screen lives in a named tmux pane of ours.
+        case attachPane(String)
         /// Proven gone, and its directory is still there: bring it back.
         case revive
         /// Unlit but unproven — the probe could not answer, or the
@@ -436,6 +448,7 @@ public struct SessionRow: Equatable, Sendable {
         case .terminal: return .goToAgent
         case .page(let url): return .openPage(url)
         case .shell(let command, let directory): return .openShell(command, directory: directory)
+        case .pane(let name): return .attachPane(name)
         // Offering a door that opens on nothing is worse than offering none:
         // it reads as broken rather than as absent.
         case .none: return .none
@@ -505,7 +518,7 @@ public struct SessionRow: Equatable, Sendable {
         // same verb through a different door, and an agent you can open is an
         // agent that exists. Listing it here rather than defaulting, because a
         // default is what let the menu and the left-click drift apart before.
-        case .announce, .goToAgent, .openPage, .openShell: return true
+        case .announce, .goToAgent, .openPage, .openShell, .attachPane: return true
         case .revive, .none: return false
         }
     }

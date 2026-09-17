@@ -45,11 +45,14 @@ public enum AgentProviders {
             // pipe could drive it but not share it: a permission asked over
             // the pipe was invisible to the terminal opened on the session.
             // `opencode serve` is one session seen from two places, and Go to
-            // Agent attaches a terminal to it. See ServedOpenCodeProvider.
+            // Agent raises the TUI already attached to it in a pane of ours
+            // (attached from the start, since a late attach never shows a
+            // pending ask). See ServedOpenCodeProvider and OpenCodePane.
             if entry.id == "opencode" {
                 built.append(ServedOpenCodeProvider(
                     binary: command[0], directory: workspace, ledger: ledger,
                     pidFile: QueueStore.supportDirectory.appendingPathComponent("opencode-serve.pid"),
+                    hostsPanes: true,
                     trace: { Failures.trace?($0) }))
                 continue
             }
