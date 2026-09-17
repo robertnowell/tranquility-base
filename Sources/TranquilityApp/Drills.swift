@@ -757,7 +757,24 @@ extension StatusHUD {
         if let letterA { panel.sendEvent(letterA) }
         let strayKeyReleases = pasteArmed && panel.acceptsKey
             && trayRow.compose.stringValue == "a"
-        trayRow.clearComposed()
+        // The draft (17 Sep): what was typed is kept per session as you
+        // type, comes back when the card is selected again, and goes when
+        // sent. An in-memory store stands in for the queue store so the
+        // drill leaves nothing behind.
+        var kept: [String: String] = [:]
+        let savedOnDraft = onDraftChanged, savedDraftFor = draftFor
+        onDraftChanged = { session, text in kept[session] = text.isEmpty ? nil : text }
+        draftFor = { kept[$0] }
+        flushDraftSaveForTesting()
+        scheduleDraftSave(); flushDraftSaveForTesting()
+        let draftIsKept = kept["A"] == "a"
+        trayRow.compose.stringValue = ""
+        releasePaste(because: "drill", repaint: true)
+        armPaste(via: "drill")
+        let draftComesBack = trayRow.compose.stringValue == "a" && trayRow.isComposeRowShown
+        trayRow.clearComposed(); noteDraftCleared()
+        let sentClearsTheDraft = kept["A"] == nil
+        onDraftChanged = savedOnDraft; draftFor = savedDraftFor
         if let escape { panel.sendEvent(escape) }
         let escapeReleases = !pasteArmed
         pasteIntoTray()
@@ -799,6 +816,9 @@ extension StatusHUD {
             ("fileIsAChip", chipIsCutAndCounted),
             ("refusalOnTheCard", refusalOnTheCard),
             ("typedKeyLandsOnTheLine", strayKeyReleases),
+            ("draftIsKept", draftIsKept),
+            ("draftComesBack", draftComesBack),
+            ("sentClearsTheDraft", sentClearsTheDraft),
             ("releasedPastesNothing", releasedPastesNothing),
             ("escapeReleases", escapeReleases && escapeReleasesAgain),
             ("clickAwayReleases", clickAwayReleases),

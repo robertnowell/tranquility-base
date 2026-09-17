@@ -1203,6 +1203,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Send with the microphone closed (ruled 15 Sep): the typed line and
         // the chips go now. The click is the consent, so there is no undo
         // window; the same `send` the countdown hands off to does the rest.
+        // The typed line is kept in the queue store as you type and read
+        // back when the card is selected (17 Sep). Off the main actor: the
+        // store has its own queue, and a keystroke must not wait on a disk.
+        hud.onDraftChanged = { [weak self] session, text in
+            guard let store = self?.store else { return }
+            DispatchQueue.global(qos: .utility).async {
+                do { try store.saveDraft(text, session: session) }
+                catch { Permissions.log("draft: save failed: \(error)") }
+            }
+        }
+        hud.draftFor = { [weak self] session in
+            (try? self?.store?.draft(session: session)) ?? nil
+        }
         hud.onSendTyped = { [weak self] text in
             guard let self, let coordinator, let target = dropTarget else {
                 self?.lastStatusLine = "nothing to send to yet"
