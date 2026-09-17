@@ -111,8 +111,11 @@ public actor ManagedCreditSession: SummaryProvider {
                     try await updateBalance(check.client, context: check.context,
                                             ticket: check.ticket, mayRecover: check.mayRecover)
                 } catch {
-                    // Paid work already succeeded. Only readiness changes.
-                    record(error, context: check.context, ticket: check.ticket)
+                    // Paid work already succeeded; only the number is stale.
+                    // Saying "credits unavailable" here was audit finding A10:
+                    // the summary was on credits and charged, and the row
+                    // said summaries were on the floor.
+                    recordBalanceUnknown(error, context: check.context, ticket: check.ticket)
                 }
             }
             balanceTask = nil
@@ -176,6 +179,13 @@ public actor ManagedCreditSession: SummaryProvider {
             ?? .refused(code: "service_unavailable", operationId: nil)
         guard let next = CreditStanding.from(receipt: nil, failure: failure, provider: name) else { return }
         statusTicket = ticket; standing = next; emit(ctx)
+    }
+    private func recordBalanceUnknown(_ error: Error, context ctx: Context, ticket: UInt64) {
+        guard isCurrent(ctx), !(error is CancellationError), ticket >= statusTicket else { return }
+        // A floor already showing keeps its reason; a stale number does not
+        // outrank a real warning.
+        if case .floored = standing { return }
+        statusTicket = ticket; standing = .balanceUnknown(at: Date()); emit(ctx)
     }
     private func recordPreparation(_ error: Error) {
         let current = identity()

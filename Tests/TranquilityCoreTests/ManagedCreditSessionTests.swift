@@ -268,7 +268,13 @@ final class ManagedCreditSessionTests: XCTestCase {
         let delivery = try await session.delivery(for: request())
         await session.waitForBalanceUpdates()
         XCTAssertEqual(delivery.receipt?.chargedMicros, "20000")
-        XCTAssertEqual(display.current.line, "Credits unavailable right now")
+        // A10: the summary was on credits and paid for; only the number is
+        // stale. Nothing amber, the row stays on credits, and the detail says
+        // exactly which of the two facts is missing.
+        XCTAssertNil(display.current.line, "a paid success is never amber")
+        XCTAssertTrue(display.current.isOnCredits)
+        XCTAssertTrue(display.current.detail.contains("balance could not be refreshed"), display.current.detail)
+        XCTAssertFalse(display.current.detail.contains("floor"), display.current.detail)
     }
 
     func testStoredTokenAloneDoesNotWaiveTheDirectKeyRequirement() {

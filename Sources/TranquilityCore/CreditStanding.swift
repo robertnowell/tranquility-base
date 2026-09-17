@@ -20,6 +20,11 @@ public enum CreditStanding: Sendable, Equatable {
     case onCredits
     /// Balance from the account endpoint, not an operation's historical receipt.
     case good(availableMicros: String, at: Date)
+    /// Summaries are running on credits and the last one was paid for, but
+    /// the balance could not be refreshed afterwards. Not a floor: nothing
+    /// fell back and nothing is owed; only the number is stale. Audit A10
+    /// found this shown as "credits unavailable", which was untrue.
+    case balanceUnknown(at: Date)
     /// The last managed summary did not happen on credits. The reason names
     /// the resolution, which is the only thing worth showing.
     case floored(Reason, at: Date)
@@ -40,7 +45,7 @@ public enum CreditStanding: Sendable, Equatable {
     public var line: String? {
         switch self {
         case .notOnCredits(connectAgain: true): return "Connect this Mac again for credits"
-        case .notOnCredits, .onCredits, .good: return nil
+        case .notOnCredits, .onCredits, .good, .balanceUnknown: return nil
         case .floored(.outOfCredits, _): return "Out of credits"
         case .floored(.connectAgain, _): return "Connect this Mac again for credits"
         case .floored(.serviceUnavailable, _): return "Credits unavailable right now"
@@ -59,6 +64,8 @@ public enum CreditStanding: Sendable, Equatable {
             return "signed in · checking credits"
         case let .good(micros, _):
             return "\(Self.dollars(micros)) at last balance check · summaries use credits"
+        case .balanceUnknown:
+            return "summaries use credits · the last one was paid for; the balance could not be refreshed and will be at the next"
         case .floored(.outOfCredits, _):
             return "out of credits. Top-ups are coming; until then your own Anthropic key keeps summaries going"
         case .floored(.serviceUnavailable, _):
@@ -68,12 +75,22 @@ public enum CreditStanding: Sendable, Equatable {
         }
     }
 
+    /// Verified on credits with the last summary paid for: a known balance,
+    /// or a balance that merely could not be refreshed. What waives the
+    /// personal key and what paints the row green.
+    public var isOnCredits: Bool {
+        switch self {
+        case .good, .balanceUnknown: return true
+        case .notOnCredits, .onCredits, .floored: return false
+        }
+    }
+
     /// Whether the row is the person's to act on now.
     public var needsAttention: Bool {
         switch self {
         case .notOnCredits(connectAgain: true), .floored(.outOfCredits, _), .floored(.connectAgain, _): return true
         case .floored(.serviceUnavailable, _), .floored(.summaryFailed, _): return true
-        case .notOnCredits, .onCredits, .good: return false
+        case .notOnCredits, .onCredits, .good, .balanceUnknown: return false
         }
     }
 

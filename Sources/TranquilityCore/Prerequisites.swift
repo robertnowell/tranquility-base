@@ -459,7 +459,7 @@ public enum Prerequisites {
     public static func snapshot(_ probes: Probes = .live) -> [State] {
         let credits = probes.creditStanding()
         return items(harnesses: probes.harnesses(), providers: probes.providers()).map { item in
-            if item == .anthropicKey, case .good = credits, !probes.hasSecret(.anthropicAPIKey) {
+            if item == .anthropicKey, credits.isOnCredits, !probes.hasSecret(.anthropicAPIKey) {
                 return State(item: item, satisfied: true,
                              detail: "not required for credits · optional for direct use")
             }
@@ -512,10 +512,8 @@ public enum Prerequisites {
                              detail: "not connected. Sign in and your agents' pages and turns appear in the hub")
             case .credits:
                 let standing = credits
-                switch standing {
-                case .good:
+                if standing.isOnCredits {
                     return State(item: item, satisfied: true, detail: standing.detail)
-                default: break
                 }
                 return State(item: item, satisfied: false, detail: standing.detail,
                              attention: standing.needsAttention)
