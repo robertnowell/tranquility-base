@@ -344,7 +344,13 @@ public enum TranscriptForks {
         // child is whichever child's subtree reaches furthest down the file, and
         // its siblings are what was left behind.
         var orderOf: [String: Int] = [:]
-        for (i, r) in records.enumerated() { orderOf[r.uuid] = i }
+        var firstTypeOf: [String: String] = [:]
+        for (i, r) in records.enumerated() {
+            orderOf[r.uuid] = i
+            // Preserve first(where:) semantics even for duplicate UUIDs.
+            // Repeated linear lookups dominated large attachment-fork scans.
+            if firstTypeOf[r.uuid] == nil { firstTypeOf[r.uuid] = r.type }
+        }
         func subtree(_ root: String) -> Set<String> {
             var out: Set<String> = []
             var stack = [root]
@@ -381,7 +387,7 @@ public enum TranscriptForks {
             var abandonedHere = false
             for (child, nodes) in subtrees where child != survivor {
                 if nodes.contains(where: { node in
-                    records.first(where: { $0.uuid == node })?.type != "attachment"
+                    firstTypeOf[node] != "attachment"
                 }) { abandonedHere = true }
                 abandonedUuids.formUnion(nodes)
             }
