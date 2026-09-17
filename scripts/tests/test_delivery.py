@@ -36,6 +36,7 @@ class DeliveryTests(unittest.TestCase):
         self.returncode = 75
         self.install_count = 0
         self.stale_driver = False
+        self.install_output = ""
         self.ancestry_failure = False
         self.network_failure = False
         self.interrupt_install = False
@@ -64,6 +65,7 @@ class DeliveryTests(unittest.TestCase):
             output = self.started
         elif args[0].endswith("relaunch.sh"):
             self.install_count += 1
+            kwargs["stdout"].write(self.install_output)
             self.assertEqual(args[-1], self.main_sha)
             self.assertEqual(kwargs["env"]["TB_DEPLOY_AUTOMATIC"], "1")
             if self.interrupt_install:
@@ -128,6 +130,17 @@ class DeliveryTests(unittest.TestCase):
         self.stale_driver = True
         self.assertEqual(self.delivery.step(1, "owner")["status"], "deployment_pending")
         self.assertEqual(self.install_count, 0)
+
+    def test_deferral_status_shows_the_current_blocker_without_build_noise(self):
+        self.merge()
+        self.install_output = "signing output\n" * 500 + "deployment deferred: preview reserved by owner; deployment pending for retry: " + B + "\n"
+        result = self.delivery.step(1, "owner")
+        self.assertEqual(result["status"], "deployment_pending")
+        self.assertEqual(result["last_error"], "preview reserved by owner")
+        self.assertIn("signing output", Path(result["log"]).read_text())
+        self.install_output = ""
+        result = self.delivery.step(1, "owner")
+        self.assertEqual(result["last_error"], "Activation deferred; see the delivery log")
 
     def test_zero_exit_without_runtime_receipt_is_not_running(self):
         self.merge()
