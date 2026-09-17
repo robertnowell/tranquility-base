@@ -48,7 +48,9 @@ final class LiveOpenCodeLoop: XCTestCase {
             if !lines.isEmpty { RemoteSpool.append(lines, to: spool) }
         }
         poller.start()
-        defer { poller.stop() }
+        // The served process outlives xctest otherwise (two were found
+        // running an hour after their tests, 17 Sep).
+        defer { poller.stop(); OpenCodeServer.stopAll() }
 
         let coordinator = Coordinator(
             store: store,
@@ -128,8 +130,9 @@ final class LiveOpenCodeLoop: XCTestCase {
         // not a command to attach one now: a TUI attached after an ask never
         // shows it (17 Sep), so the screen has to exist before the question.
         guard case .pane(let paneName) = row.door else { return XCTFail("door is \(row.door)") }
-        XCTAssertEqual(paneName, OpenCodePane.name(for: poller.snapshot.agent(id)!.providerID))
-        XCTAssertTrue(OpenCodePane.isLive(raw: poller.snapshot.agent(id)!.providerID), "the TUI is attached in its pane")
+        let port = provider.baseURL.port!
+        XCTAssertEqual(paneName, OpenCodePane.name(for: poller.snapshot.agent(id)!.providerID, port: port))
+        XCTAssertTrue(OpenCodePane.isLive(raw: poller.snapshot.agent(id)!.providerID, port: port), "the TUI is attached in its pane")
         let screen = { (try? Tmux.run(["capture-pane", "-p", "-t", paneName], socket: Tmux.socketName).get()) ?? "" }
         XCTAssertTrue(screen().contains("PONG") || screen().contains("PING"),
                       "the pane shows the session's own conversation: \(screen().suffix(300))")
@@ -262,10 +265,13 @@ final class LiveOpenCodeLoop: XCTestCase {
             try await Task.sleep(for: .milliseconds(100))
         }
         let adopted = try await second.mine()
-        // Every adopted session got a pane (the toy project keeps sessions
-        // from earlier runs too); none of them outlives the test.
-        defer { for a in adopted { OpenCodePane.kill(raw: a.providerID) } }
+        defer { for a in adopted { OpenCodePane.kill(raw: a.providerID, port: port) } }
         XCTAssertTrue(adopted.contains { $0.id == id }, "the session comes back")
+        // Adoption does not host panes (a TUI is ~400 MB, and a finished
+        // session has nothing to ask); it takes over the one this server's
+        // TUI is already in, and gives the others the plain attach door.
+        XCTAssertEqual(adopted.first { $0.id == id }?.pane, paneName, "the live pane on this port is the door")
+        XCTAssertTrue(adopted.filter { $0.id != id }.allSatisfy { $0.pane == nil }, "no pane per adopted stranger")
         XCTAssertFalse(adopted.contains { $0.title.contains("subagent") }, "a subagent is not a row")
         actor Bag { var items: [AgentEvent] = []; func add(_ e: AgentEvent) { items.append(e) } }
         let bag = Bag()
@@ -287,10 +293,10 @@ final class LiveOpenCodeLoop: XCTestCase {
 
         // 6. End Agent: gone from the snapshot, and not adopted by a fresh provider.
         let raw = poller.snapshot.agent(id)!.providerID
-        XCTAssertTrue(OpenCodePane.isLive(raw: raw), "adoption re-hosted the pane")
+        XCTAssertTrue(OpenCodePane.isLive(raw: raw, port: port), "the pane is kept after the turn")
         await poller.end(id)
         XCTAssertNil(poller.snapshot.agent(id))
-        XCTAssertFalse(OpenCodePane.isLive(raw: raw), "End Agent takes its pane with it")
+        XCTAssertFalse(OpenCodePane.isLive(raw: raw, port: port), "End Agent takes its pane with it")
         XCTAssertFalse(try coordinator.waiting().map(\.sessionId).contains(id),
                        "no longer live once ended")
     }

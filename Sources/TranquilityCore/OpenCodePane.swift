@@ -16,16 +16,22 @@ import Foundation
 /// 17 Sep 8:50 AM: "it attaches a new window and you don't see the prompt
 /// ... it doesn't end the old window ... this cannot work."
 ///
-/// One pane per session, named after it. Created at `start` and at
-/// adoption, recreated at every seed (the served port changes per launch, so
-/// a pane from the last launch is attached to a server that is gone), killed
-/// on forget. `remain-on-exit` stays on so an attach that dies leaves its
-/// last screen, and the reason, where the next Go to Agent will show it.
+/// One pane per session, named after it, hosted the first time THIS app
+/// sends the session a turn (start, or send) and kept until End Agent. Not
+/// at adoption: a TUI is a ~400 MB Bun process, and a session that finished
+/// last week has nothing to ask; its row keeps the plain attach door until
+/// it is spoken to. Panes whose attach has exited (their server was last
+/// launch's) are swept at connect. `remain-on-exit` stays on so an attach
+/// that dies leaves its last screen, and the reason, where the next Go to
+/// Agent will show it.
 public enum OpenCodePane {
-    /// "tb-oc-" + the session's own id, which is already in tmux's safe
-    /// charset (`ses_` and base62). Anything else is refused, not mangled.
-    public static func name(for raw: String) -> String? {
-        let name = "tb-oc-\(raw)"
+    /// "tb-oc-<port>-" + the session's own id (already in tmux's safe
+    /// charset: `ses_` and base62; anything else is refused, not mangled).
+    /// The port is in the name because a TUI outlives its server (a blind
+    /// one on a dead port ran for 16 h at 20% CPU, 17 Sep): last launch's
+    /// pane must never read as this launch's, whatever tmux says.
+    public static func name(for raw: String, port: Int) -> String? {
+        let name = "tb-oc-\(port)-\(raw)"
         guard name.count <= 64,
               name.unicodeScalars.allSatisfy({ TerminalTabFocus.sessionNameCharset.contains($0) })
         else { return nil }
@@ -36,8 +42,8 @@ public enum OpenCodePane {
     /// `directory`. Best effort: a pane that cannot be made leaves the row
     /// with its `shell` door, which is the old (blind) attach.
     @discardableResult
-    public static func host(raw: String, command: String, directory: String) -> String? {
-        guard let name = name(for: raw) else { return nil }
+    public static func host(raw: String, port: Int, command: String, directory: String) -> String? {
+        guard let name = name(for: raw, port: port) else { return nil }
         _ = Tmux.run(["kill-session", "-t", name], socket: Tmux.socketName, timeout: 5)
         let path = ([ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin"]
                     + ["/usr/local/bin", "/opt/homebrew/bin"]).joined(separator: ":")
@@ -53,15 +59,67 @@ public enum OpenCodePane {
         }
     }
 
-    public static func kill(raw: String) {
-        guard let name = name(for: raw) else { return }
+    /// The TUI has drawn something: it is connected and will see the next
+    /// ask. Polled before the first prompt goes, bounded, so a send never
+    /// waits on a pane that will not come.
+    public static func hasDrawn(raw: String, port: Int) -> Bool {
+        guard let name = name(for: raw, port: port),
+              case .success(let out) = Tmux.run(["capture-pane", "-p", "-t", name],
+                                                socket: Tmux.socketName, timeout: 5)
+        else { return false }
+        return !out.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// Kill every pane of ours on a port nobody serves any more (last
+    /// launch's, dead or blind) or whose attach has exited. Another
+    /// instance's live panes, on a port that answers, are left alone.
+    public static func sweepStale(keeping port: Int, listening: (Int) -> Bool = isListening) {
+        guard case .success(let out) = Tmux.run(
+            ["list-sessions", "-F", "#{session_name} #{pane_dead}"], socket: Tmux.socketName, timeout: 5)
+        else { return }
+        for line in out.split(separator: "\n") {
+            let fields = line.split(separator: " ")
+            guard fields.count == 2, let theirs = portInName(String(fields[0])) else { continue }
+            let dead = fields[1] == "1"
+            guard dead || (theirs != port && !listening(theirs)) else { continue }
+            _ = Tmux.run(["kill-session", "-t", String(fields[0])], socket: Tmux.socketName, timeout: 5)
+        }
+    }
+
+    static func portInName(_ name: String) -> Int? {
+        guard name.hasPrefix("tb-oc-") else { return nil }
+        let rest = name.dropFirst("tb-oc-".count)
+        guard let dash = rest.firstIndex(of: "-") else { return nil }
+        return Int(rest[..<dash])
+    }
+
+    /// Does anything answer on 127.0.0.1:port? A connect, not a request:
+    /// the question is whether a server is there at all.
+    public static func isListening(_ port: Int) -> Bool {
+        let fd = socket(AF_INET, SOCK_STREAM, 0)
+        guard fd >= 0 else { return false }
+        defer { close(fd) }
+        var addr = sockaddr_in()
+        addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        addr.sin_family = sa_family_t(AF_INET)
+        addr.sin_port = in_port_t(port).bigEndian
+        addr.sin_addr.s_addr = inet_addr("127.0.0.1")
+        return withUnsafePointer(to: &addr) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) == 0
+            }
+        }
+    }
+
+    public static func kill(raw: String, port: Int) {
+        guard let name = name(for: raw, port: port) else { return }
         _ = Tmux.run(["kill-session", "-t", name], socket: Tmux.socketName, timeout: 5)
     }
 
     /// Is the pane there, and its process alive? A dead pane (attach
     /// exited) reads as false, so a seed recreates it.
-    public static func isLive(raw: String) -> Bool {
-        guard let name = name(for: raw) else { return false }
+    public static func isLive(raw: String, port: Int) -> Bool {
+        guard let name = name(for: raw, port: port) else { return false }
         guard case .success(let out) = Tmux.run(
             ["display-message", "-p", "-t", name, "#{pane_dead}"], socket: Tmux.socketName, timeout: 5)
         else { return false }

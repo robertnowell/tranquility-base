@@ -287,3 +287,16 @@ extension RemoteRowsTests {
                        "announce would read a turn that does not exist")
     }
 }
+
+/// The pane's name carries the served port, so last launch's pane can never
+/// read as this launch's; and the sweep at connect removes exactly the panes
+/// on ports nobody serves.
+final class OpenCodePaneTests: XCTestCase {
+    func testTheNameCarriesThePortAndRefusesAnUnsafeId() {
+        XCTAssertEqual(OpenCodePane.name(for: "ses_abc123", port: 59814), "tb-oc-59814-ses_abc123")
+        XCTAssertEqual(OpenCodePane.portInName("tb-oc-59814-ses_abc123"), 59814)
+        XCTAssertNil(OpenCodePane.portInName("tb-2276a76f"), "a local pane is not ours to sweep")
+        XCTAssertNil(OpenCodePane.name(for: "ses_a b; rm", port: 1), "refused, not mangled")
+        XCTAssertNil(OpenCodePane.name(for: String(repeating: "x", count: 70), port: 1))
+    }
+}
