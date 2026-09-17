@@ -133,7 +133,8 @@ extension AppDelegate {
         // from the grid, or read blockedOnYou wrong, because Codex has no
         // registry of its own to appear in. `liveNonRegistrySessions` adds
         // ownership's own answer for a harness with no registry.
-        let found = (ClaudeAgentsCLI().sessions() ?? [])
+        let probe = ClaudeAgentsCLI().sessions()
+        let found = (probe ?? [])
             + FileSessionOwnershipStore.shared.liveNonRegistrySessions(
                 // NO STATUS FOR CODEX, since 01 Sep. This used to say "busy"
                 // whenever a prompt had gone in with no Stop after it, which
@@ -185,7 +186,9 @@ extension AppDelegate {
             supersedesWaiting: { delivering.supersedesWaiting($0, latestId: $1) },
             isInFlight: { delivering.isInFlight($0) },
             closedCallsigns: closedCallsigns,
-            remote: remoteAgents(waiting: (try? coordinator.waiting()) ?? [])))
+            remote: remoteAgents(waiting: (try? coordinator.waiting()) ?? []),
+            // nil is "could not read the registry"; [] is "nobody is home".
+            livenessKnown: probe != nil))
 
         // Recorded before anything is drawn so the card can ask the same
         // question the rows answered, and get the same answer.

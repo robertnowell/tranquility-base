@@ -55,11 +55,23 @@ public enum SessionRegistry {
         public var jobId: String? = nil
         /// When the process came up (epoch ms), as the file records it.
         public var startedAt: Double? = nil
+        /// When the PROCESS was created, as the kernel reports it, written by
+        /// the session as ctime text in UTC ("Wed Sep 16 23:59:55 2026").
+        /// Present since CLI 2.1.27x; nil on older files. This is the half of
+        /// the witness a pid cannot supply on its own: pids are recycled, from
+        /// low numbers, at every reboot — the very moment the files most often
+        /// outlive their processes — and a live pid under a different start
+        /// time is somebody else's process wearing a dead session's number.
+        public var procStart: Date? = nil
+        /// What the session is waiting AT when `status` is "waiting", in the
+        /// CLI's own words ("permission prompt", "dialog open"). Measured 16
+        /// Sep: the file carries exactly what `agents --json` prints.
+        public var waitingFor: String? = nil
 
         public init(pid: Int, sessionId: String, cwd: String?, status: String?, tmux: String?,
                     messagingSocketPath: String?, name: String?, updatedAt: Double?,
                     kind: String? = nil, parkedJobId: String? = nil, jobId: String? = nil,
-                    startedAt: Double? = nil) {
+                    startedAt: Double? = nil, procStart: Date? = nil, waitingFor: String? = nil) {
             self.pid = pid
             self.sessionId = sessionId
             self.cwd = cwd
@@ -72,6 +84,8 @@ public enum SessionRegistry {
             self.parkedJobId = parkedJobId
             self.jobId = jobId
             self.startedAt = startedAt
+            self.procStart = procStart
+            self.waitingFor = waitingFor
         }
 
         /// Just the `%17` — the only part any tmux command needs, and the
@@ -103,8 +117,20 @@ public enum SessionRegistry {
     /// read is ordinary, and one bad file must not blind us to fifteen good
     /// ones.
     public static func all(in directory: URL = SessionRegistry.directory) -> [Entry] {
-        guard let names = try? FileManager.default.contentsOfDirectory(atPath: directory.path)
+        read(in: directory) ?? []
+    }
+
+    /// The same entries, keeping the one distinction `all()` collapses: nil
+    /// when the directory EXISTS and cannot be listed (the witness could not be
+    /// asked), [] when it is absent or empty (nobody is home). Liveness is
+    /// built on this rather than on `all()` because the two answers send the
+    /// panel in opposite directions — hold everything, or retire everything.
+    public static func read(in directory: URL = SessionRegistry.directory) -> [Entry]? {
+        let fm = FileManager.default
+        var isDirectory: ObjCBool = false
+        guard fm.fileExists(atPath: directory.path, isDirectory: &isDirectory), isDirectory.boolValue
         else { return [] }
+        guard let names = try? fm.contentsOfDirectory(atPath: directory.path) else { return nil }
         return names.filter { $0.hasSuffix(".json") }.compactMap { name in
             guard let data = try? Data(contentsOf: directory.appendingPathComponent(name))
             else { return nil }
@@ -129,7 +155,21 @@ public enum SessionRegistry {
                      kind: obj["kind"] as? String,
                      parkedJobId: obj["parkedJobId"] as? String,
                      jobId: obj["jobId"] as? String,
-                     startedAt: (obj["startedAt"] as? NSNumber)?.doubleValue)
+                     startedAt: (obj["startedAt"] as? NSNumber)?.doubleValue,
+                     procStart: (obj["procStart"] as? String).flatMap(parseProcStart),
+                     waitingFor: obj["waitingFor"] as? String)
+    }
+
+    /// ctime text as the CLI writes it, in UTC. A single-digit day is padded
+    /// with a second space ("Sat Sep  6 ..."), which a fixed format rejects,
+    /// so runs of whitespace are collapsed first.
+    static func parseProcStart(_ text: String) -> Date? {
+        let collapsed = text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(identifier: "UTC")
+        formatter.dateFormat = "EEE MMM d HH:mm:ss yyyy"
+        return formatter.date(from: collapsed)
     }
 
     /// A session sent to the background is still that session.
