@@ -1358,6 +1358,7 @@ extension StatusHUD {
             a.repository = "tranquility-base"
             a.shell = AgentSession.ShellDoor(command: "opencode attach http://127.0.0.1:1 --session \(raw)",
                                              directory: "/tmp")
+            a.pane = "tb-oc-\(raw)"
             return a
         }
         let unread = agent("ses_drill_unread", "Unread turn")
@@ -1394,17 +1395,20 @@ extension StatusHUD {
         // captured so nothing escapes the drill.
         showIdle(rows: rows)
         var went: [String: String] = [:]
-        let savedAnnounce = onPickWaiting, savedShell = onOpenShell
+        let savedAnnounce = onPickWaiting, savedShell = onOpenShell, savedPane = onAttachPane
         onPickWaiting = { went[$0] = "card" }
         onOpenShell = { command, _ in
-            if let a = [unread, heard, silent].first(where: { command.contains($0.providerID) }) { went[a.id] = "door" }
+            if let a = [unread, heard, silent].first(where: { command.contains($0.providerID) }) { went[a.id] = "shell" }
+        }
+        onAttachPane = { name in
+            if let a = [unread, heard, silent].first(where: { name == "tb-oc-\($0.providerID)" }) { went[a.id] = "door" }
         }
         for a in [unread, heard, silent] {
             let control = NSButton()
             control.identifier = NSUserInterfaceItemIdentifier(a.id)
             sessionRowTapped(control)
         }
-        onPickWaiting = savedAnnounce; onOpenShell = savedShell
+        onPickWaiting = savedAnnounce; onOpenShell = savedShell; onAttachPane = savedPane
         showIdle(rows: [])
         checks.append(("unreadTapOpensTheCard", went[unread.id] == "card"))
         checks.append(("heardTapOpensTheCard", went[heard.id] == "card"))

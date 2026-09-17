@@ -3193,6 +3193,8 @@ final class StatusHUD: NSObject {
     var onGoToSession: ((String) -> Void)?
     /// Go to Agent through a program on this Mac (`SessionRow.Door.shell`).
     var onOpenShell: ((String, String) -> Void)?
+    /// Go to Agent for a row whose screen lives in a named pane of ours.
+    var onAttachPane: ((String) -> Void)?
     /// Wired by the app: create an ordinary agent under the other harness,
     /// carrying this live row's context into its first explicit user message.
     var onContinueWork: ((_ id: String, _ name: String) -> Void)?
@@ -3678,6 +3680,7 @@ final class StatusHUD: NSObject {
                 switch door {
                 case .page(let url): NSWorkspace.shared.open(url)
                 case .shell(let command, let directory): onOpenShell?(command, directory)
+                case .pane(let name): onAttachPane?(name)
                 case .terminal, .none: break
                 }
                 return
@@ -3974,6 +3977,7 @@ final class StatusHUD: NSObject {
             // lives; opening that is what Go to Agent MEANS for it.
             case .openPage(let url): NSWorkspace.shared.open(url)
             case .openShell(let command, let directory): onOpenShell?(command, directory)
+            case .attachPane(let name): onAttachPane?(name)
             case .revive: onRevive?(id, row.name)
             case .none: refuseRowTap(id)
             }

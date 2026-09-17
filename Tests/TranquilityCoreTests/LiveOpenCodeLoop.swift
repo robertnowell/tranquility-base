@@ -35,7 +35,8 @@ final class LiveOpenCodeLoop: XCTestCase {
         guard let command = ACPCatalog.resolve(entry) else { return XCTFail("opencode not installed") }
         let provider = ServedOpenCodeProvider(
             binary: command[0], directory: toy,
-            ledger: ProviderLedger(url: dir.appendingPathComponent("agents-used.json")))
+            ledger: ProviderLedger(url: dir.appendingPathComponent("agents-used.json")),
+            hostsPanes: true)
         let registry = AgentProviderRegistry([provider], spawnable: ["opencode"])
         let poller = AgentPoller(registry: registry)
         poller.registryConfig = noConfig
@@ -62,7 +63,12 @@ final class LiveOpenCodeLoop: XCTestCase {
             readinessGrace: 0)
 
         // 1. New Agent: start, greeting recorded under the agent's id.
-        let id = try await provider.start(Brief(prompt: ""))
+        // Printed before rethrowing: XCTest on this toolchain reports a
+        // thrown error at the site of the LAST throw it saw, including one
+        // swallowed by `try?` (17 Sep: a missing TB_TOY read as a missing
+        // ledger file at ProviderLedger.swift:63).
+        let id: AgentSession.ID
+        do { id = try await provider.start(Brief(prompt: "")) } catch { print("LOOP: start threw \(error)"); throw error }
         let workspace = (toy as NSString).lastPathComponent
         XCTAssertNotNil(try LaunchGreeting.record(sessionId: id, directory: toy,
                                                   line: "How should we get started?", store: store))
@@ -118,9 +124,15 @@ final class LiveOpenCodeLoop: XCTestCase {
         XCTAssertNotEqual(row.name, SessionRow.shortId(id), "a hash is not a name")
         XCTAssertFalse(row.name.hasPrefix("[assistant]"), "the framing is not a name")
         XCTAssertTrue(row.name == workspace || row.name.hasPrefix("Reply with exactly") || !row.name.isEmpty)
-        guard case .shell(let open, let directory) = row.door else { return XCTFail("door is \(row.door)") }
-        XCTAssertTrue(open.contains("attach") && open.contains("--session") && open.contains("ses_"), open)
-        XCTAssertEqual(directory, toy)
+        // The door is the pane the TUI has been attached in since `start`,
+        // not a command to attach one now: a TUI attached after an ask never
+        // shows it (17 Sep), so the screen has to exist before the question.
+        guard case .pane(let paneName) = row.door else { return XCTFail("door is \(row.door)") }
+        XCTAssertEqual(paneName, OpenCodePane.name(for: poller.snapshot.agent(id)!.providerID))
+        XCTAssertTrue(OpenCodePane.isLive(raw: poller.snapshot.agent(id)!.providerID), "the TUI is attached in its pane")
+        let screen = { (try? Tmux.run(["capture-pane", "-p", "-t", paneName], socket: Tmux.socketName).get()) ?? "" }
+        XCTAssertTrue(screen().contains("PONG") || screen().contains("PING"),
+                      "the pane shows the session's own conversation: \(screen().suffix(300))")
         // Unread: a tap reads the answer. HEARD: a tap reads it again (green
         // opens the card, everywhere; ruled 15 Sep and broken for remote rows
         // until 16 Sep, when a heard row was built as `.none`). Only a row
@@ -150,7 +162,7 @@ final class LiveOpenCodeLoop: XCTestCase {
         XCTAssertEqual(SessionRow.action(for: heardRow), .announce, "a heard green row still opens the card")
         let silent = SessionRow(id: row.id, name: row.name, aux: row.aux, lamp: row.lamp,
                                 read: .none, harness: row.harness, door: row.door)
-        XCTAssertEqual(SessionRow.action(for: silent), .openShell(open, directory: toy), "only nothing-to-say goes to the door")
+        XCTAssertEqual(SessionRow.action(for: silent), .attachPane(paneName), "only nothing-to-say goes to the door")
         XCTAssertEqual(try store.firstUtteranceText(to: id).map(HeardContext.spokenPart), said,
                        "the opening the summary asks with")
         let spooled = try XCTUnwrap(latest?.cwd)
@@ -192,9 +204,18 @@ final class LiveOpenCodeLoop: XCTestCase {
                               unread: [], unreachable: poller.snapshot.unreachable))).rows
             let askingRow = try XCTUnwrap(asking.first { $0.id == id })
             XCTAssertEqual(askingRow.lamp, .fault, "blocked on a permission is amber")
-            if case .openShell(let attach, _) = SessionRow.action(for: askingRow) {
-                XCTAssertTrue(attach.contains("attach"), "amber goes to the attached terminal, where the question is")
-            } else { XCTFail("amber goes to the agent; got \(SessionRow.action(for: askingRow))") }
+            XCTAssertEqual(SessionRow.action(for: askingRow), .attachPane(paneName),
+                           "amber goes to the agent's own screen, where the question is")
+            // And the question IS on that screen: the whole reason for the
+            // pane. The TUI draws the tool's permission prompt with its
+            // choices; a late attach draws nothing (measured 17 Sep).
+            var shown = screen()
+            for _ in 0..<20 where !shown.lowercased().contains("permission") && !shown.contains("mkdir") {
+                try await Task.sleep(nanoseconds: 250_000_000); shown = screen()
+            }
+            XCTAssertTrue(shown.lowercased().contains("permission") || shown.contains("mkdir"),
+                          "the pane does not show the ask: \(shown.suffix(400))")
+            print("LOOP: pane screen at the ask:\n\(shown.suffix(600))")
             // Answered where Robert answers it: on the server, as the
             // attached terminal does with Enter. The app only WATCHES.
             var reply = URLRequest(url: provider.baseURL.appendingPathComponent("permission/\(pending.id)/reply"))
@@ -224,7 +245,7 @@ final class LiveOpenCodeLoop: XCTestCase {
         let second = ServedOpenCodeProvider(
             binary: command[0], directory: toy,
             ledger: ProviderLedger(url: dir.appendingPathComponent("agents-used.json")),
-            port: provider.baseURL.port)
+            port: provider.baseURL.port, hostsPanes: true)
         // A child session on the server, as a research subagent would leave.
         var mk = URLRequest(url: provider.baseURL.appendingPathComponent("session"))
         mk.httpMethod = "POST"; mk.setValue("application/json", forHTTPHeaderField: "content-type")
@@ -241,6 +262,9 @@ final class LiveOpenCodeLoop: XCTestCase {
             try await Task.sleep(for: .milliseconds(100))
         }
         let adopted = try await second.mine()
+        // Every adopted session got a pane (the toy project keeps sessions
+        // from earlier runs too); none of them outlives the test.
+        defer { for a in adopted { OpenCodePane.kill(raw: a.providerID) } }
         XCTAssertTrue(adopted.contains { $0.id == id }, "the session comes back")
         XCTAssertFalse(adopted.contains { $0.title.contains("subagent") }, "a subagent is not a row")
         actor Bag { var items: [AgentEvent] = []; func add(_ e: AgentEvent) { items.append(e) } }
@@ -262,8 +286,11 @@ final class LiveOpenCodeLoop: XCTestCase {
         }
 
         // 6. End Agent: gone from the snapshot, and not adopted by a fresh provider.
+        let raw = poller.snapshot.agent(id)!.providerID
+        XCTAssertTrue(OpenCodePane.isLive(raw: raw), "adoption re-hosted the pane")
         await poller.end(id)
         XCTAssertNil(poller.snapshot.agent(id))
+        XCTAssertFalse(OpenCodePane.isLive(raw: raw), "End Agent takes its pane with it")
         XCTAssertFalse(try coordinator.waiting().map(\.sessionId).contains(id),
                        "no longer live once ended")
     }

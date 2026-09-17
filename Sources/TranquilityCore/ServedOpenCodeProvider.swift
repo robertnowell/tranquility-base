@@ -41,6 +41,9 @@ public actor ServedOpenCodeProvider: AgentProvider {
     /// naturally doesn't for claude and codex." Read from the list at seed
     /// and on first sight of an unknown session.
     private var children: Set<String> = []
+    /// Host each session's TUI in a pane of ours (`OpenCodePane`). Off for
+    /// tests and drills, which would otherwise leave attach processes behind.
+    private let hostsPanes: Bool
     private var connected = false
     private var connecting: Task<Void, Error>?
     private var pump: Task<Void, Never>?
@@ -48,8 +51,10 @@ public actor ServedOpenCodeProvider: AgentProvider {
     private nonisolated let streamBox = Box<AsyncStream<AgentEvent>?>(nil)
 
     public init(binary: String, directory: String, ledger: ProviderLedger? = nil,
-                port: Int? = nil, pidFile: URL? = nil, trace: (@Sendable (String) -> Void)? = nil) {
+                port: Int? = nil, pidFile: URL? = nil, hostsPanes: Bool = false,
+                trace: (@Sendable (String) -> Void)? = nil) {
         self.server = OpenCodeServer(binary: binary, directory: directory, port: port, pidFile: pidFile)
+        self.hostsPanes = hostsPanes
         self.transport = HTTPTransport(base: server.baseURL, password: nil, trace: trace)
         self.client = OpenCodeClient(transport: transport, provider: "opencode")
         self.ledger = ledger
@@ -227,6 +232,13 @@ public actor ServedOpenCodeProvider: AgentProvider {
         session.directory = server.directory
         session.shell = AgentSession.ShellDoor(command: server.attachCommand(session: raw),
                                                directory: server.directory)
+        // The TUI is attached NOW, before any ask, in a pane Go to Agent
+        // raises; see `OpenCodePane`. Recreated at every seed: the port is
+        // per launch, so last launch's pane is attached to nothing.
+        if hostsPanes {
+            session.pane = OpenCodePane.host(raw: raw, command: server.attachCommand(session: raw),
+                                             directory: server.directory)
+        }
     }
 
     private func emit(_ session: AgentSession.ID, _ kind: AgentEvent.Kind) {
@@ -335,6 +347,7 @@ public actor ServedOpenCodeProvider: AgentProvider {
     public func forget(_ id: AgentSession.ID) async {
         guard let raw = providerID(of: id) else { return }
         forgotten.insert(raw)
+        if hostsPanes { OpenCodePane.kill(raw: raw) }
         if connected { _ = try? await client.abort(raw) }
         sessions[raw] = nil
         asking[id] = nil
