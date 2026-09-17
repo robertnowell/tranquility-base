@@ -384,26 +384,14 @@ public struct AnthropicSummaryProvider: SummaryProvider {
 
         ── GROUNDING: overrides everything above ──
 
-        Every fact comes from what the agent said this turn, and the proposal comes from \
-        its final message alone. If the final message does not say what comes next, say what happened and stop; never invent a \
+        Every fact, and especially the proposal, comes from the agent's final message. \
+        If it does not say what comes next, say what happened and stop; never invent a \
         next task, and never take one from how the session opened. The work was done by \
         the agent, not the user: "the session validated", never "you validated". A \
         session with a next step always needs a reply; never say no input is needed.
 
         If the message says the session is BLOCKED and waiting, say what it wants to do \
         and what the decision is.
-
-        Earlier messages from the same turn are part of the turn. The recap and the \
-        findings describe the whole turn: what was done, what was measured, what changed. \
-        When the final message is only a sign-off ("going quiet", "watching for the \
-        finish", "done for now"), the recap comes from the earlier messages, never from \
-        the sign-off. The proposal still comes only from the final message; an interim \
-        "I'll check" or "still running" is never a proposal.
-
-        The final message may be nothing but a link. You cannot open it and do not need \
-        to: it means the agent finished and put its result on a page at that address. \
-        Recap what the turn did, from the earlier messages if there are any; the proposal \
-        is to open it. Never say you cannot access a URL.
 
         ── EXAMPLES: real turns, at the length wanted ──
 
