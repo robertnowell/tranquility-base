@@ -160,3 +160,11 @@ identity and ancestry, durable interrupted intent, idempotent runtime receipts,
 stale helpers, process reuse, wrong bundles, capture rechecks and hook parsing.
 The preview entrypoint tests additionally exercise automatic Quit/Prod deferral.
 These tests use temporary state and fixture processes; no live app is installed.
+
+## Prepared builds
+
+See [prepared-dev-builds.md](prepared-dev-builds.md) for separate build ownership,
+leased artifacts, activation rechecks and bounded archive diagnostics. Use
+`python3 scripts/update-deployment-tooling.py` to update the stable checkout
+under both locks. A preview can defer activation while a merged build is
+prepared and retained for its later handoff.

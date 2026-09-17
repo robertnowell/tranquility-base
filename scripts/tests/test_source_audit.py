@@ -38,6 +38,8 @@ class SourceAuditTests(unittest.TestCase):
             "tests/test_deployment_state.py",
             "tests/test_delivery.py",
             "tests/test_test_gate.py",
+            "tests/test_run_stage.py",
+            "tests/test_prepared_dev.py",
         ):
             (self.repo / "scripts" / name).write_text(
                 "import os\nfrom pathlib import Path\n"

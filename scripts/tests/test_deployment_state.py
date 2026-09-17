@@ -221,6 +221,7 @@ class EntrypointTests(unittest.TestCase):
             path = scripts / name
             path.write_text(text)
             path.chmod(0o755)
+        (scripts / "prepare-dev.py").write_text("import sys\nsys.exit(0 if sys.argv[1] == 'verify' else 99)\n")
         shutil.copy2(TOOL.parent / "lib/deployment.sh", scripts / "lib/deployment.sh")
         # Redirect only state paths, retaining the real CLI and shell adapter.
         (scripts / "deployment-state.py").write_text(f'''import importlib.util, sys
@@ -235,7 +236,7 @@ sys.exit(m.main())
 app_running() { return 1; }
 app_stop() { echo stop >> "$TB_TEST_MUTATIONS"; exit 99; }
 app_stop_path() { echo stop_path >> "$TB_TEST_MUTATIONS"; exit 99; }
-wait_for_microphone() { echo capture_check >> "$TB_TEST_MUTATIONS"; exit 99; }
+wait_for_microphone() { return 0; }
 ''')
         binary = self.root / "bin"
         binary.mkdir()
@@ -296,7 +297,7 @@ exit 99
     def test_all_four_mutation_paths_defer_before_touching_an_app(self):
         apps = self.root / "Applications"
         commands = (
-            ("relaunch.sh", "origin/main"),
+            ("relaunch.sh", "--activate-prepared", self.sha, str(self.root / "prepared")),
             ("install-dev.sh", str(apps / "Tranquility Base Dev.app"), "--activate"),
             ("install-dev.sh",),  # Also protect the implicit source build.
             ("install.sh", str(apps / "Tranquility Base.app"), "--no-login-item"),
@@ -342,6 +343,19 @@ tb_deployment_authorize fixture "''' + A + '''" dev 1
                                 env=dict(self.env, TB_PREVIEW_TOKEN=self.token),
                                 text=True, capture_output=True, timeout=15)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(self.state.lock_dir.exists())
+
+    def test_main_advancing_after_preparation_defers_automatic_activation(self):
+        (self.repo / "scripts/lib/app-process.sh").write_text("app_at_path_running() { return 1; }\napp_running() { return 0; }\n")
+        self.git("commit", "--allow-empty", "-qm", "newer main")
+        self.git("push", "-q", "origin", "main")
+        result = subprocess.run(["bash", "scripts/relaunch.sh", "--activate-prepared", self.sha,
+                                 str(self.root / "prepared")], cwd=self.repo,
+                                env=dict(self.env, TB_DEPLOY_AUTOMATIC="1"),
+                                text=True, capture_output=True, timeout=15)
+        self.assertEqual(result.returncode, 75, result.stdout + result.stderr)
+        self.assertIn("main advanced", result.stderr)
+        self.assertFalse((self.root / "mutations").exists())
         self.assertFalse(self.state.lock_dir.exists())
 
     def test_automatic_delivery_preserves_quit_and_selected_prod(self):

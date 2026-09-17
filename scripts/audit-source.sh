@@ -30,6 +30,8 @@ python3 scripts/tests/test_source_audit.py
 python3 scripts/tests/test_deployment_state.py
 python3 scripts/tests/test_delivery.py
 python3 scripts/tests/test_test_gate.py
+python3 scripts/tests/test_run_stage.py
+python3 scripts/tests/test_prepared_dev.py
 
 # Cheap, and it catches a class the panel's own drills cannot: a bare modifier
 # glyph in text a human reads. The existing drill guards ONE string; this
@@ -123,35 +125,10 @@ echo "→ testing"
 # success unless each half cleared a floor. The two-invocation mechanism
 # was this file's, found at App-lane P9; the floor is what stops an
 # "Executed 0 tests, with 0 failures" from reading as green.
-TEST_OUT=$(scripts/test.sh 2>&1) && TEST_STATUS=0 || TEST_STATUS=$?
-if [ "$TEST_STATUS" -ne 0 ]; then
-  echo "✗ tests failed (exit $TEST_STATUS)" >&2
-  # The failing ASSERTIONS, not the compiler's source-context lines. `XCTAssert`
-  # also matched the " 65 |   XCTAssertTrue(" context the compiler prints under
-  # a warning, and twenty of those from the build phase pushed every real
-  # failure off the bottom of a CI log (PR #299: three lines, seven times,
-  # and not one of them the failure).
-  # A CRASH IS NOT AN ASSERTION, and the patterns above could only see the
-  # second. A `fatalError` or a force-unwrapped nil kills the xctest process,
-  # so swift test reports "exited with unexpected signal code 5" and never
-  # prints "Test Case ... failed" at all. The grep matched nothing, the log
-  # said "✗ tests failed (exit 1)" and stopped, and finding out why cost a
-  # full CI round trip (14 Sep, PR #423).
-  #
-  # `unexpected signal` and `Fatal error` are what a crash actually prints.
-  FAILURE_LINES=$(printf '%s\n' "$TEST_OUT" | grep -E "✗|: error: |error: -\[|Test Case .* failed|Test Suite .* failed|unexpected signal|Fatal error|Crash:|couldn.t be loaded|incompatible architecture|recorded an issue" \
-    | grep -v " warning: " | head -40 || true)
-  if [ -n "$FAILURE_LINES" ]; then
-    printf '%s\n' "$FAILURE_LINES" >&2
-  else
-    # Decide from what the filter actually emitted. A second, broader pattern
-    # can match a reason that the first discarded, leaving an empty failure log.
-    echo "  (no recognised failure line; the end of the run follows)" >&2
-    printf '%s\n' "$TEST_OUT" | tail -40 >&2
-  fi
-  exit 1
-fi
-printf '%s\n' "$TEST_OUT" | grep -E "^✓ [0-9]+ XCTest" | tail -1 | sed 's/^✓/ /'
+# test.sh streams per-test progress and preserves complete logs and timeout
+# diagnostics. Command substitution here used to hide everything until exit,
+# so the hour-long stall had no last-test breadcrumb in the hosted log.
+scripts/test.sh
 echo "✓ build clean, tests green"
 
 # The app target is intentionally identical between Dev and Prod, while the

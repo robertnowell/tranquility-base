@@ -160,7 +160,8 @@ class Delivery:
         # A current checkout is necessary: relaunch and its shared helpers are
         # the policy. Never build a new app with an old deployment driver.
         for path in ("scripts/relaunch.sh", "scripts/build-clean.sh", "scripts/lib/deployment.sh",
-                     "scripts/deployment-state.py", "scripts/delivery.py", "scripts/lib/app-process.sh"):
+                     "scripts/deployment-state.py", "scripts/delivery.py", "scripts/lib/app-process.sh",
+                     "scripts/prepare-dev.py", "scripts/run-stage.py"):
             if self.command("git", "hash-object", path) != self.command("git", "rev-parse", f"{target}:{path}"):
                 return self.update(pr, last_error=f"deployment tooling differs from main: {path}")
         # Intent is already durable. A dead watcher or busy install lock leaves
@@ -236,11 +237,6 @@ class Delivery:
         # starts at most one install, however many PRs are waiting.
         item = candidates[-1]
         target = item["target_sha"]
-        with self.state.transaction():
-            preview = self.state.active_preview(self.state.read())
-        if preview:
-            return save(phase="deferred", target_sha=target, attempts=0,
-                        reason=f"Preview held by {preview['owner']}")
         attempts = previous.get("attempts", 0) if previous.get("attempt_target") == target else 0
         save(phase="activating", target_sha=target, attempt_target=target, attempts=attempts + 1)
         try:
