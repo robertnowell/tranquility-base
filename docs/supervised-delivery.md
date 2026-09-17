@@ -14,8 +14,10 @@ python3 scripts/delivery.py watch --pr 498 --owner session-01a0a703 --wait
 The command does not merge or rebase PRs. It observes GitHub, retains intent,
 and deploys only after GitHub returns a real merge commit reachable from main.
 Without `--wait` it checks once. With it, it checks every 30 seconds until
-delivery is verified or the PR is closed. Stop it with Ctrl-C; pending work
-survives. There is no installed daemon or unattended retry guarantee.
+delivery is verified, the PR is closed, or activation fails. A failed activation
+returns nonzero instead of repeatedly reinstalling that source. Stop with Ctrl-C;
+pending work survives. An optional installed worker can take responsibility after
+the foreground session ends; see below.
 
 ```sh
 python3 scripts/delivery.py status
@@ -25,6 +27,41 @@ python3 scripts/delivery.py resume --owner session-01a0a703 --wait
 `resume` explicitly takes retry responsibility for unfinished requests. After
 sleep, session loss, or a hook timeout, the next supervisor uses it. Record the
 named owner in the workstream issue while the pilot is supervised.
+
+## Durable delivery worker
+
+After merging the tooling, update the clean persistent `deployment-main`
+checkout and run its `scripts/install-delivery-supervisor.py`. It installs
+`dev.tranquilitybase.delivery-supervisor`, a per-user launch agent that invokes
+`delivery.py supervise` every 30 seconds and at login. Stop it with the same
+installer's `--stop` option. Installation refuses an unmerged/stale driver or a
+temporary feature checkout. Credentials stay in the existing GitHub CLI store.
+
+The worker processes only recorded requests in `delivery.json`. It does not
+replay `deployment.json`'s old refused preview/switch operations and does not
+automatically admit arbitrary open PRs. Each tick observes eligible PRs, chooses
+current main containing their merges and starts at most one install. A successful
+receipt also completes the other observed requests whose merges it contains.
+Newer main movement during that install is handled by a later request/tick.
+
+The same installer retains capture, preview, signing, channel, intentional Quit
+and launch-drill checks. Preview expiry only permits the next attempt; it is not
+a deadline by which a build must be running. Sleep delays the worker until wake.
+The build still holds the app-mutation lock; splitting preparation from activation
+is the remaining #519 slice, not part of this worker.
+
+A failed source is held across ticks/restarts, including other requests for that
+same source. A newer main can be attempted; an operator can explicitly retry via
+`watch`/`resume` after inspecting the failure. Two interrupted activation attempts
+also hold that source. Safe deferrals do not consume that recovery budget. A
+singleton lock prevents overlapping workers, and the existing per-PR/app locks
+still arbitrate foreground operators and other installers.
+
+`delivery-supervisor.json` stores the last tick's phase, timestamp, target and
+reason beside private logs. A timestamp is a heartbeat, not proof of a running
+app; only the process/source receipt proves delivery. Missing/stale heartbeat or
+`unavailable` means the worker needs attention. Disable the launch agent for
+rollback; keep durable requests and the guarded foreground commands.
 
 | State | Evidence |
 | --- | --- |
@@ -86,9 +123,9 @@ python3 /absolute/path/to/deployment-checkout/scripts/hooks/merge-delivery.py
 ```
 
 Keep its `Bash` matcher and allow 180 seconds. This new hook observes once and
-records pending work; it never installs. The requesting session's `watch` or
-`resume` command is the supervised installer. A delayed auto-merge therefore
-requires that named supervisor or a later explicit resume.
+records pending work; it never installs. The requesting session's `watch`,
+`resume`, or the installed worker uses the supervised installer. A delayed
+auto-merge requires one of these active supervisors.
 
 Perform the cutover under the shared app mutation lock, after this tooling is
 merged and required CI has passed:

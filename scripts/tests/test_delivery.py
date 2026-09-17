@@ -221,6 +221,84 @@ time.sleep(30)
         self.assertTrue(not status or status.startswith("Z"), f"install child still running: {status}")
 
 
+    def test_supervisor_restarts_and_coalesces_recorded_requests(self):
+        self.merge()
+        for pr in (1, 2, 3): self.delivery.update(pr, status="requested")
+        self.returncode, self.make_receipt = 0, True
+        reopened = module.Delivery(self.state, self.root, self.run_command)
+        self.assertEqual(reopened.supervise()["phase"], "running")
+        self.assertEqual(self.install_count, 1)
+        self.assertTrue(all(r["status"] == "running" for r in reopened.read()["requests"].values()))
+        self.assertEqual(reopened.supervise()["phase"], "idle")
+        self.assertEqual(self.install_count, 1)
+
+    def test_supervisor_preserves_preview_then_resumes_after_release(self):
+        self.merge(); self.delivery.update(1, status="requested")
+        token = self.state.acquire(os.getpid())
+        reservation = self.state.reserve(os.getpid(), token, "preview-owner", A, "dev", 20)
+        self.state.unlock(os.getpid(), token)
+        self.assertEqual(self.delivery.supervise()["phase"], "deferred")
+        self.assertEqual(self.install_count, 0)
+        token = self.state.acquire(os.getpid())
+        self.state.release(os.getpid(), token, reservation)
+        self.state.unlock(os.getpid(), token)
+        self.returncode, self.make_receipt = 0, True
+        self.assertEqual(self.delivery.supervise()["phase"], "running")
+        self.assertEqual(self.install_count, 1)
+
+    def test_supervisor_holds_failed_source_across_restart_and_other_requests(self):
+        self.merge(); self.delivery.update(1, status="requested"); self.returncode = 1
+        self.assertEqual(self.delivery.supervise()["phase"], "failed")
+        self.delivery.update(2, status="requested")
+        reopened = module.Delivery(self.state, self.root, self.run_command)
+        self.assertEqual(reopened.supervise()["phase"], "failed")
+        self.assertEqual(self.install_count, 1)
+        self.main_sha = "c" * 40
+        reopened.supervise()
+        self.assertEqual(self.install_count, 2)
+
+    def test_supervisor_retains_network_failure_and_recovers(self):
+        self.delivery.update(1, status="requested"); self.network_failure = True
+        self.assertEqual(self.delivery.supervise()["phase"], "unavailable")
+        self.assertEqual(self.install_count, 0)
+        self.network_failure = False; self.merge()
+        self.returncode, self.make_receipt = 0, True
+        self.assertEqual(self.delivery.supervise()["phase"], "running")
+
+    def test_supervisor_limits_interrupted_activation_recovery(self):
+        self.merge(); self.delivery.update(1, status="requested"); self.interrupt_install = True
+        for _ in range(2):
+            with self.assertRaises(KeyboardInterrupt): self.delivery.supervise()
+        self.assertEqual(self.delivery.supervise()["phase"], "failed")
+        self.assertEqual(self.install_count, 2)
+
+    def test_safe_activation_deferral_does_not_exhaust_retry_budget(self):
+        self.merge(); self.delivery.update(1, status="requested"); self.returncode = 75
+        for _ in range(3): self.assertEqual(self.delivery.supervise()["phase"], "deferred")
+        self.returncode, self.make_receipt = 0, True
+        self.assertEqual(self.delivery.supervise()["phase"], "running")
+
+    def test_supervisor_never_replays_historical_preview_refusals(self):
+        token = self.state.acquire(os.getpid())
+        self.state.reserve(os.getpid(), token, "preview", A, "dev", 20)
+        with self.assertRaises(module.Blocked):
+            self.state.authorize(os.getpid(), token, "relaunch", B, "dev", "old-owner")
+        self.state.unlock(os.getpid(), token)
+        self.assertEqual(self.delivery.supervise()["phase"], "idle")
+        self.assertEqual(self.install_count, 0)
+
+    def test_foreground_wait_stops_after_failed_activation(self):
+        from unittest.mock import patch
+        self.merge(); self.returncode = 1
+        with patch.object(module, "Delivery", return_value=self.delivery), \
+             patch.object(module.state_module, "DeploymentState", return_value=self.state), \
+             patch.object(sys, "argv", ["delivery.py", "watch", "--pr", "1", "--owner", "operator", "--wait"]), \
+             patch.object(module.time, "sleep") as sleep:
+            self.assertEqual(module.main(), 1)
+        self.assertEqual(self.install_count, 1)
+        sleep.assert_not_called()
+
+
 class HookTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
