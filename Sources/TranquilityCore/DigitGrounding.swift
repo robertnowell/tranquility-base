@@ -21,6 +21,10 @@ public enum DigitGrounding {
     /// label, whose digits — "m3-tracker" — are legitimately speakable).
     public static func sourcePool(for request: SummaryRequest) -> Set<String> {
         var text = request.lastAssistantMessage
+        // What the agent said earlier in the turn is in the model's context,
+        // so a number from there is a number the agent stated, not one the
+        // model invented. Leaving it out of the pool scrubbed real figures.
+        if let earlier = request.earlierThisTurn { text += " " + earlier }
         if let opening = request.firstUserMessage { text += " " + opening }
         if let matcher = request.notificationMatcher { text += " " + matcher }
         text += " " + request.projectLabel

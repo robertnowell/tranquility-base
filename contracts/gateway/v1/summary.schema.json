@@ -26,7 +26,8 @@
         "gitBranch":{"type":"string","maxLength":1024},
         "cwd":{"type":"string","maxLength":4096},
         "hookEvent":{"enum":["Stop","Notification","SubagentStop"]},
-        "notificationMatcher":{"type":"string","maxLength":512}
+        "notificationMatcher":{"type":"string","maxLength":512},
+        "earlierThisTurn":{"type":"string","maxLength":6000}
       }
     },
     "request": {

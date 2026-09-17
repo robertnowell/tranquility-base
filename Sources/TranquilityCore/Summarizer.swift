@@ -34,6 +34,11 @@ public struct SummaryRequest: Sendable {
     public var correctiveNote: String?
     /// Required only by managed composition. Never inferred from a rowid/fork.
     public var managedSource: GatewaySource?
+    /// What the agent said this turn BEFORE its final message, oldest first,
+    /// capped. Context for the recap and the findings; never the source of a
+    /// proposal, which still comes only from the final message. Absent when
+    /// the turn was one message, or the adapter cannot say. See `EarlierThisTurn`.
+    public var earlierThisTurn: String?
 
     public init(
         lastAssistantMessage: String,
@@ -45,7 +50,8 @@ public struct SummaryRequest: Sendable {
         hookEvent: HookEventKind = .stop,
         notificationMatcher: String? = nil,
         correctiveNote: String? = nil,
-        managedSource: GatewaySource? = nil
+        managedSource: GatewaySource? = nil,
+        earlierThisTurn: String? = nil
     ) {
         self.lastAssistantMessage = lastAssistantMessage
         self.projectLabel = projectLabel
@@ -57,6 +63,7 @@ public struct SummaryRequest: Sendable {
         self.notificationMatcher = notificationMatcher
         self.correctiveNote = correctiveNote
         self.managedSource = managedSource
+        self.earlierThisTurn = earlierThisTurn
     }
 }
 
@@ -239,6 +246,15 @@ public struct AnthropicSummaryProvider: SummaryProvider {
                 """
         }
 
+        if let earlier = request.earlierThisTurn {
+            context += """
+
+
+                Earlier this turn, before the final message, the agent said (oldest first):
+                \(earlier)
+                """
+        }
+
         var user = """
             \(context)
 
@@ -368,14 +384,26 @@ public struct AnthropicSummaryProvider: SummaryProvider {
 
         ── GROUNDING: overrides everything above ──
 
-        Every fact, and especially the proposal, comes from the agent's final message. \
-        If it does not say what comes next, say what happened and stop; never invent a \
+        Every fact comes from what the agent said this turn, and the proposal comes from \
+        its final message alone. If the final message does not say what comes next, say what happened and stop; never invent a \
         next task, and never take one from how the session opened. The work was done by \
         the agent, not the user: "the session validated", never "you validated". A \
         session with a next step always needs a reply; never say no input is needed.
 
         If the message says the session is BLOCKED and waiting, say what it wants to do \
         and what the decision is.
+
+        Earlier messages from the same turn are part of the turn. The recap and the \
+        findings describe the whole turn: what was done, what was measured, what changed. \
+        When the final message is only a sign-off ("going quiet", "watching for the \
+        finish", "done for now"), the recap comes from the earlier messages, never from \
+        the sign-off. The proposal still comes only from the final message; an interim \
+        "I'll check" or "still running" is never a proposal.
+
+        The final message may be nothing but a link. You cannot open it and do not need \
+        to: it means the agent finished and put its result on a page at that address. \
+        Recap what the turn did, from the earlier messages if there are any; the proposal \
+        is to open it. Never say you cannot access a URL.
 
         ── EXAMPLES: real turns, at the length wanted ──
 
@@ -678,7 +706,11 @@ public struct SummarizerChain: Sendable {
 
         // Names the source itself used are speakable ("say Klaviyo, not 'an email
         // platform'"); everything identifier-shaped is still stripped.
-        let speakable = SpokenTextSanitizer.speakableTerms(in: request.lastAssistantMessage)
+        // Names the agent used anywhere in the turn are speakable: the earlier
+        // messages are in the model's context, so a name from there can land
+        // in the brief and must not be genericised on the way to speech.
+        let speakable = SpokenTextSanitizer.speakableTerms(
+                in: request.lastAssistantMessage + " " + (request.earlierThisTurn ?? ""))
             .union(lexicon)
 
         // Each section is clamped against its own budget before composing, so a long

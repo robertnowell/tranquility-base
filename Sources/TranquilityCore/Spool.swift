@@ -98,6 +98,7 @@ public struct SpoolDrainer: Sendable {
         var cwd: String?
         var transcriptPath: String?
         var lastAssistantMessage: String?
+        var earlierThisTurn: String?
         var notificationMatcher: String?
         var tty: String?
 
@@ -111,6 +112,7 @@ public struct SpoolDrainer: Sendable {
                 cwd: cwd,
                 transcriptPath: transcriptPath,
                 lastAssistantMessage: lastAssistantMessage,
+                earlierThisTurn: earlierThisTurn,
                 notificationMatcher: notificationMatcher,
                 tty: tty
             )

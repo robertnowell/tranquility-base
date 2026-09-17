@@ -488,11 +488,15 @@ public struct Turn: Sendable, Equatable, Identifiable {
     public var at: Date
     public var role: Role
     public var text: String
+    /// What the agent said before this, in the same turn, when the poller
+    /// had the whole transcript in hand. Only ever set on the agent turn that
+    /// ends a turn; see `EarlierThisTurn`. Not part of identity.
+    public var earlier: String?
 
     public enum Role: String, Sendable, Equatable, Codable { case agent, user, system }
 
-    public init(id: String, at: Date, role: Role, text: String) {
-        self.id = id; self.at = at; self.role = role; self.text = text
+    public init(id: String, at: Date, role: Role, text: String, earlier: String? = nil) {
+        self.id = id; self.at = at; self.role = role; self.text = text; self.earlier = earlier
     }
 }
 

@@ -203,8 +203,14 @@ public final class AgentPoller: @unchecked Sendable {
                   session.state.isFinished, event.previously?.isFinished != true,
                   session.state != .failed, session.state != .rejected,
                   let turns = try? await provider.transcript(event.session),
-                  let last = turns.last(where: { $0.role == .agent && !$0.text.isEmpty })
+                  var last = turns.last(where: { $0.role == .agent && !$0.text.isEmpty })
             else { out.append(event); continue }
+            // The whole turn is in hand here and nowhere later, so this is
+            // where the agent's earlier words ride along with its last ones.
+            let sinceUser = turns.lastIndex { $0.role == .user }
+                .map { turns[turns.index(after: $0)...] } ?? turns[...]
+            last.earlier = EarlierThisTurn.earlier(
+                blocks: sinceUser.filter { $0.role == .agent }.map(\.text))
             // REPLACE the wordless finish with the words. One stop line, not
             // two: the `.said` lights the same green lamp the `.changed` would
             // have, and now it carries a summary and a hub page. A finish with

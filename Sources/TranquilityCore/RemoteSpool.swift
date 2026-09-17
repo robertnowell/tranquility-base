@@ -37,7 +37,9 @@ public enum RemoteSpool {
             // (streamed as it ended, then adopted at the next launch from the
             // server's store) is one turn, and the drainer's dedupe needs the
             // same id both times.
-            return [SpoolLine(kind: .stop, event: event, text: turn.text, agent: agent, key: turn.id)]
+            var line = SpoolLine(kind: .stop, event: event, text: turn.text, agent: agent, key: turn.id)
+            line.earlierThisTurn = turn.earlier
+            return [line]
 
         case .asks(let request):
             // A question is a TURN, not a Notification. Locally a permission
@@ -153,6 +155,7 @@ public enum RemoteSpool {
         public var sessionId: String
         public var cwd: String?
         public var lastAssistantMessage: String?
+        public var earlierThisTurn: String?
         public var notificationMatcher: String?
 
         init(kind: HookEventKind, event: AgentEvent, text: String,
@@ -198,6 +201,7 @@ public enum RemoteSpool {
             ]
             if let cwd { line["cwd"] = cwd }
             if let lastAssistantMessage { line["lastAssistantMessage"] = lastAssistantMessage }
+            if let earlierThisTurn { line["earlierThisTurn"] = earlierThisTurn }
             if let notificationMatcher { line["notificationMatcher"] = notificationMatcher }
             // transcriptPath and tty are deliberately ABSENT rather than empty.
             // Both are local facts a remote agent does not have, both are

@@ -17,14 +17,16 @@ final class UserPromptTemplateTests: XCTestCase {
 
     private func request(
         notification: Bool = false, branch: String? = nil, goal: String? = nil,
-        opening: String? = nil, note: String? = nil, matcher: String? = nil
+        opening: String? = nil, note: String? = nil, matcher: String? = nil,
+        earlier: String? = nil
     ) -> SummaryRequest {
         SummaryRequest(
             lastAssistantMessage: "The export is ready. All tests passed.",
             projectLabel: "Kopi",
             firstUserMessage: opening, previousGoal: goal, gitBranch: branch,
             hookEvent: notification ? .notification : .stop,
-            notificationMatcher: matcher, correctiveNote: note)
+            notificationMatcher: matcher, correctiveNote: note,
+            earlierThisTurn: earlier)
     }
 
     /// Every combination of the optional blocks, because the bug this guards
@@ -37,20 +39,23 @@ final class UserPromptTemplateTests: XCTestCase {
             for goal in [nil, "", "Ship the export"] as [String?] {
               for opening in [nil, "Can you add an export button"] as [String?] {
                 for note in [nil, "Say less about the branch."] as [String?] {
+                 for earlier in [nil, "Running the export.\n\nTwelve of twelve passed."] as [String?] {
                   let r = request(notification: notification, branch: branch,
-                                  goal: goal, opening: opening, note: note)
+                                  goal: goal, opening: opening, note: note, earlier: earlier)
                   XCTAssertEqual(
                     AnthropicSummaryProvider.userPromptFromTemplate(for: r),
                     AnthropicSummaryProvider.userPrompt(for: r),
                     "diverged for notification=\(notification) branch=\(branch ?? "nil") "
-                    + "goal=\(goal ?? "nil") opening=\(opening ?? "nil") note=\(note ?? "nil")")
+                    + "goal=\(goal ?? "nil") opening=\(opening ?? "nil") note=\(note ?? "nil") "
+                    + "earlier=\(earlier == nil ? "nil" : "set")")
                   checked += 1
+                 }
                 }
               }
             }
           }
         }
-        XCTAssertEqual(checked, 48, "every combination of the optional blocks")
+        XCTAssertEqual(checked, 96, "every combination of the optional blocks")
     }
 
     /// A slot name inside a VALUE is text. The renderer used to substitute
