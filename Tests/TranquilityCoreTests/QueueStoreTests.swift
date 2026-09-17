@@ -7,6 +7,40 @@ final class QueueStoreTests: XCTestCase {
     /// against two real rows when it counted every non-terminal status, and later
     /// "2 waiting" when it added stuck replies. Both were possible because the badge
     /// had its own predicate; it now shares one with the announcer.
+    // MARK: - Typed drafts (17 Sep 2026)
+
+    /// A half-written message is in the file within one write and is still
+    /// there after the store is reopened, which is what a crash looks like.
+    func testATypedDraftSurvivesAReopen() throws {
+        try store.saveDraft("also check the Loom before", session: "A")
+        XCTAssertEqual(try store.draft(session: "A"), "also check the Loom before")
+        let reopened = try QueueStore(url: tmpDir.appendingPathComponent("queue.sqlite"))
+        XCTAssertEqual(try reopened.draft(session: "A"), "also check the Loom before")
+    }
+
+    /// One row per session, overwritten as you type; another session's
+    /// draft is its own.
+    func testADraftIsPerSessionAndOverwritten() throws {
+        try store.saveDraft("first", session: "A")
+        try store.saveDraft("first, then more", session: "A")
+        try store.saveDraft("other", session: "B")
+        XCTAssertEqual(try store.draft(session: "A"), "first, then more")
+        XCTAssertEqual(try store.draft(session: "B"), "other")
+        XCTAssertEqual(try store.drafts().count, 2)
+    }
+
+    /// Sent, or emptied by hand, and the draft is gone: an empty line is
+    /// the absence of a draft, not a draft of nothing.
+    func testAnEmptyOrClearedDraftIsAbsent() throws {
+        try store.saveDraft("words", session: "A")
+        try store.saveDraft("   ", session: "A")
+        XCTAssertNil(try store.draft(session: "A"))
+        try store.saveDraft("words again", session: "A")
+        try store.clearDraft(session: "A")
+        XCTAssertNil(try store.draft(session: "A"))
+        XCTAssertTrue(try store.drafts().isEmpty)
+    }
+
     func testPendingCountIsExactlyWhatCanBeAnnounced() throws {
         _ = try store.insert(event: QueuedEvent(
             createdAtMs: 1_000, hookEvent: .stop, sessionId: "waiting-one",

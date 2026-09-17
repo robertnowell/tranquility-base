@@ -322,6 +322,43 @@ final class StatusHUD: NSObject {
     /// Send with the microphone closed: the typed line (may be empty) and
     /// whatever the tray holds, to the card's session, now.
     var onSendTyped: ((String) -> Void)?
+    /// The typed line, kept (ruled 17 Sep: "I don't like losing half-written
+    /// messages"). `onDraftChanged` is called with the session and the whole
+    /// line, debounced, and with an empty line when it is sent or emptied;
+    /// `draftFor` is asked when a card is selected, to put the words back.
+    var onDraftChanged: ((String, String) -> Void)?
+    var draftFor: ((String) -> String?)?
+    private var draftSave: DispatchWorkItem?
+
+    /// What the keystroke path calls: a save 300 ms after the last change.
+    /// The session is the card's reply target, read now rather than at the
+    /// deadline so a face change in between cannot move the draft.
+    func scheduleDraftSave() {
+        guard let target = replyTargetForDrop?() else { return }
+        let session = target.sessionId
+        draftSave?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            onDraftChanged?(session, trayRow.composedText)
+        }
+        draftSave = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
+    }
+
+    /// For the drill: the debounced save, now.
+    func flushDraftSaveForTesting() {
+        guard let work = draftSave else { return }
+        draftSave = nil
+        work.perform()
+    }
+
+    /// The line was emptied by a send or a flush: the draft goes with it,
+    /// now, not after a debounce a crash could beat.
+    func noteDraftCleared() {
+        draftSave?.cancel(); draftSave = nil
+        guard let target = replyTargetForDrop?() else { return }
+        onDraftChanged?(target.sessionId, "")
+    }
 
     // MARK: - Public surface
 
@@ -598,6 +635,7 @@ final class StatusHUD: NSObject {
         guard !text.isEmpty else { return false }
         guard onItemsStaged?([.text(text)], .typed) == true else { return false }
         trayRow.compose.stringValue = ""
+        noteDraftCleared()
         Permissions.log("typed line: \(text.count) chars staged to ride the dictation")
         return true
     }
@@ -1120,6 +1158,7 @@ final class StatusHUD: NSObject {
                 let text = trayRow.composedText
                 releasePaste(because: "sent", repaint: false)
                 trayRow.clearComposed()
+                noteDraftCleared()
                 onSendTyped?(text)
             }
         }
@@ -3561,7 +3600,13 @@ final class StatusHUD: NSObject {
         Permissions.log("paste: armed for \(target.sessionId.prefix(8)) via \(door)")
         Track.record("paste_armed", ["via": .token(door)])
         // The type-or-attach row appears and takes the keys (ruled 15 Sep):
-        // selecting the card is what shows it.
+        // selecting the card is what shows it. The words you left on it
+        // come back first (17 Sep): a draft outlives the face, the process
+        // and the machine.
+        if trayRow.composedText.isEmpty, let kept = draftFor?(target.sessionId), !kept.isEmpty {
+            trayRow.compose.stringValue = kept
+            Permissions.log("draft: restored \(kept.count) chars for \(target.sessionId.prefix(8))")
+        }
         trayRow.setComposing(true)
         render()
         let took = panel.makeFirstResponder(trayRow.compose)

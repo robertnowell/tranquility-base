@@ -556,6 +556,20 @@ public final class QueueStore: Sendable {
                 FROM events GROUP BY sessionId
                 """)
         }
+        m.registerMigration("v22_typed_drafts") { db in
+            // Half-written typed messages (ruled 17 Sep 2026: "I don't like
+            // losing half-written messages"). One row per session, written
+            // as you type, gone when sent. Same file, same durability as the
+            // utterances: a crash keeps everything but the last few hundred
+            // milliseconds.
+            try db.execute(sql: """
+                CREATE TABLE typed_drafts (
+                    sessionId TEXT PRIMARY KEY NOT NULL,
+                    text TEXT NOT NULL,
+                    updatedAtMs INTEGER NOT NULL
+                )
+                """)
+        }
         return m
     }
 
@@ -742,6 +756,49 @@ public final class QueueStore: Sendable {
 
     public func utterance(id: String) throws -> Utterance? {
         try dbQueue.read { db in try Utterance.fetchOne(db, key: id) }
+    }
+
+    // MARK: - Typed drafts (17 Sep 2026)
+
+    /// Keep what is on the typed line for a session. Empty text is the
+    /// absence of a draft and deletes the row, so "cleared" and "never
+    /// typed" are one state.
+    public func saveDraft(_ text: String, session: String) throws {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        try dbQueue.write { db in
+            if trimmed.isEmpty {
+                try db.execute(sql: "DELETE FROM typed_drafts WHERE sessionId = ?", arguments: [session])
+            } else {
+                try db.execute(
+                    sql: """
+                        INSERT INTO typed_drafts (sessionId, text, updatedAtMs) VALUES (?, ?, ?)
+                        ON CONFLICT(sessionId) DO UPDATE SET text = excluded.text, updatedAtMs = excluded.updatedAtMs
+                        """,
+                    arguments: [session, text, Int64(Date().timeIntervalSince1970 * 1000)])
+            }
+        }
+    }
+
+    /// The draft for a session, or nil.
+    public func draft(session: String) throws -> String? {
+        try dbQueue.read { db in
+            try String.fetchOne(db, sql: "SELECT text FROM typed_drafts WHERE sessionId = ?", arguments: [session])
+        }
+    }
+
+    public func clearDraft(session: String) throws {
+        try dbQueue.write { db in
+            try db.execute(sql: "DELETE FROM typed_drafts WHERE sessionId = ?", arguments: [session])
+        }
+    }
+
+    /// Every draft, newest first: what Recents will list one day, and what
+    /// a test reads back after a reopen.
+    public func drafts() throws -> [(session: String, text: String, updatedAtMs: Int64)] {
+        try dbQueue.read { db in
+            try Row.fetchAll(db, sql: "SELECT sessionId, text, updatedAtMs FROM typed_drafts ORDER BY updatedAtMs DESC")
+                .map { ($0["sessionId"], $0["text"], $0["updatedAtMs"]) }
+        }
     }
 
     /// The first thing the user said to a session through this app, or nil.
