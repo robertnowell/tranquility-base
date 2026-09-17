@@ -18,6 +18,7 @@ class TestGateTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         (self.root / "scripts").mkdir()
         shutil.copy2(SOURCE / "scripts/test.sh", self.root / "scripts/test.sh")
+        shutil.copy2(SOURCE / "scripts/run-stage.py", self.root / "scripts/run-stage.py")
         binary = self.root / "bin"
         binary.mkdir()
         swift = binary / "swift"
