@@ -9,12 +9,19 @@ import Foundation
 /// AUTHORIZATION.md is the requirement: one sign-in, no second login, and an
 /// outage is never shown as being signed out.
 ///
-/// The provider order is not a fallback chain. A failure of the credits path
-/// lands on the deterministic floor, never on a pasted key: the floor is free
-/// and honest, and a person who is on credits must not be silently moved onto
-/// their own bill. The one exception is a Mac the hub says is not on credits
-/// at all, paired before key binding; that Mac keeps whatever it had.
+/// Service/auth failures use the free floor. A Mac not on credits, or one
+/// whose credits are exhausted, may use its pasted key (15 September ruling).
+/// The standing explains exhaustion; it is not a second sign-in requirement.
 public enum ManagedCredits {
+
+    /// Shared by the app and the isolated onboarding drill. Notification
+    /// payloads contain no credentials; the session reads its identity itself.
+    public static func observeIdentityChanges(_ session: ManagedCreditSession,
+                                              center: NotificationCenter = .default) -> NSObjectProtocol {
+        center.addObserver(forName: Secrets.hubIdentityDidChange, object: nil, queue: nil) { _ in
+            Task { await session.refresh() }
+        }
+    }
 
     /// The Gateway this build spends at. `gateway.base_url` in hq.json when
     /// it says, else the one built in. Same file and same rule as the hub's
@@ -77,43 +84,33 @@ public enum ManagedCredits {
         }
     }
 
-    /// The summariser that spends, or nil when this Mac cannot.
-    ///
-    /// Nil is the ordinary state for a Mac that is not connected to a hub, and
-    /// the caller falls back to the chain it always used. A connected Mac that
-    /// was paired before key binding gets a summariser that will be told
-    /// `rebindingRequired` on first use and land on the floor; that is
-    /// reported where the failure is, not guessed here.
-    public static func summarizer(
-        hubBase: URL?,
-        deviceToken: @escaping @Sendable () -> String? = { Secrets.read(.hubToken) },
+    /// Created even before sign-in. Each operation resolves the current app
+    /// session; pairing never requires replacing the Coordinator or restarting.
+    public static func session(
+        identity: @escaping ManagedCreditSession.IdentitySource = {
+            guard let hub = HubApp.baseURL, let token = Secrets.read(.hubToken), !token.isEmpty else { return nil }
+            return .init(hub: hub, token: token)
+        },
         outboxURL: URL = QueueStore.supportDirectory.appendingPathComponent("managed-outbox.sqlite"),
-        log: (String) -> Void = { _ in }
-    ) -> SummarizerChain? {
-        guard let hubBase, let token = deviceToken(), !token.isEmpty else { return nil }
-        guard let signer = deviceSigner(log: log) else { return nil }
-        let tokenURL = hubBase.appendingPathComponent("api/gateway/token")
-        let authority = GatewayAuthority(
-            signer: signer, hubBase: hubBase, deviceToken: deviceToken,
-            exchange: GatewayAuthority.httpExchange(tokenURL: tokenURL))
-        do {
-            let transport = try GatewayHTTPTransport(base: gatewayURL) { method, url in
-                try await authority.credential(method: method, url: url)
+        log: @escaping @Sendable (String) -> Void = { _ in }
+    ) -> ManagedCreditSession {
+        ManagedCreditSession(identity: identity, outboxURL: outboxURL) { current, valid in
+            guard let signer = deviceSigner(log: log) else {
+                throw ManagedSummaryFailure.refused(code: "service_unavailable", operationId: nil)
             }
-            let outbox = try ManagedSummaryOutbox(url: outboxURL)
-            log("credits: managed summaries at \(gatewayURL.host ?? "?") as \(signer.storage)")
-            CreditStanding.set(.onCredits)
-            // Managed first. A pasted key follows ONLY for a Mac the hub says
-            // is not on credits yet (see SummarizerChain); a failure of the
-            // credits path itself lands on the floor.
-            return SummarizerChain(providers: [
-                ManagedSummaryProvider(transport: transport, outbox: outbox),
-                AnthropicSummaryProvider(),
-                DeterministicSummarizer(),
-            ])
-        } catch {
-            log("credits: managed path unavailable: \(error)")
-            return nil
+            let tokenURL = current.hub.appendingPathComponent("api/gateway/token")
+            let authority = GatewayAuthority(
+                signer: signer, hubBase: current.hub,
+                deviceToken: { valid() ? current.token : nil },
+                exchange: GatewayAuthority.httpExchange(tokenURL: tokenURL))
+            let transport = try GatewayHTTPTransport(base: gatewayURL) { method, url in
+                guard valid() else { throw CancellationError() }
+                let credential = try await authority.credential(method: method, url: url)
+                guard valid() else { throw CancellationError() }
+                return credential
+            }
+            log("credits: managed session at \(gatewayURL.host ?? "?") as \(signer.storage)")
+            return .init(transport: transport, invalidate: { await authority.clear() })
         }
     }
 }

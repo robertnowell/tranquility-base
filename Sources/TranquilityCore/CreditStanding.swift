@@ -10,18 +10,21 @@ import Foundation
 /// shown as an amber line the person can press, with a Settings row that
 /// says what to do about it.
 ///
-/// The standing is derived from summaries as they finish, never from a poll:
-/// there is nothing to know about credits between two summaries that the
-/// last one did not already say.
+/// ManagedCreditSession publishes this view. Historical receipts are never a
+/// balance source; balance checks are explicit at sign-in and after summaries.
 public enum CreditStanding: Sendable, Equatable {
     /// This Mac is not on credits and nothing is wrong: not connected to a
     /// hub, or paired before key binding. Summaries use whatever it has.
     case notOnCredits(connectAgain: Bool)
-    /// This Mac can spend and nothing has happened yet this launch: the
-    /// balance is not known until the first receipt.
+    /// Signed in, but authority and account readiness are still being checked.
     case onCredits
-    /// Summaries are running on credits. The balance is the last receipt's.
+    /// Balance from the account endpoint, not an operation's historical receipt.
     case good(availableMicros: String, at: Date)
+    /// Summaries are running on credits and the last one was paid for, but
+    /// the balance could not be refreshed afterwards. Not a floor: nothing
+    /// fell back and nothing is owed; only the number is stale. Audit A10
+    /// found this shown as "credits unavailable", which was untrue.
+    case balanceUnknown(at: Date)
     /// The last managed summary did not happen on credits. The reason names
     /// the resolution, which is the only thing worth showing.
     case floored(Reason, at: Date)
@@ -42,7 +45,7 @@ public enum CreditStanding: Sendable, Equatable {
     public var line: String? {
         switch self {
         case .notOnCredits(connectAgain: true): return "Connect this Mac again for credits"
-        case .notOnCredits, .onCredits, .good: return nil
+        case .notOnCredits, .onCredits, .good, .balanceUnknown: return nil
         case .floored(.outOfCredits, _): return "Out of credits"
         case .floored(.connectAgain, _): return "Connect this Mac again for credits"
         case .floored(.serviceUnavailable, _): return "Credits unavailable right now"
@@ -56,11 +59,13 @@ public enum CreditStanding: Sendable, Equatable {
         case .notOnCredits(connectAgain: false):
             return "sign in to your hub and summaries run on us, ten dollars to start"
         case .notOnCredits(connectAgain: true), .floored(.connectAgain, _):
-            return "this Mac was connected before credits existed. Sign in again and it is on credits"
+            return "this Mac needs to sign in again for credits; use the same hub sign-in"
         case .onCredits:
-            return "summaries run on credits · balance after the next one"
+            return "signed in · checking credits"
         case let .good(micros, _):
-            return "\(Self.dollars(micros)) available · summaries run on credits"
+            return "\(Self.dollars(micros)) at last balance check · summaries use credits"
+        case .balanceUnknown:
+            return "summaries use credits · the last one was paid for; the balance could not be refreshed and will be at the next"
         case .floored(.outOfCredits, _):
             return "out of credits. Top-ups are coming; until then your own Anthropic key keeps summaries going"
         case .floored(.serviceUnavailable, _):
@@ -70,19 +75,29 @@ public enum CreditStanding: Sendable, Equatable {
         }
     }
 
+    /// Verified on credits with the last summary paid for: a known balance,
+    /// or a balance that merely could not be refreshed. What waives the
+    /// personal key and what paints the row green.
+    public var isOnCredits: Bool {
+        switch self {
+        case .good, .balanceUnknown: return true
+        case .notOnCredits, .onCredits, .floored: return false
+        }
+    }
+
     /// Whether the row is the person's to act on now.
     public var needsAttention: Bool {
         switch self {
         case .notOnCredits(connectAgain: true), .floored(.outOfCredits, _), .floored(.connectAgain, _): return true
         case .floored(.serviceUnavailable, _), .floored(.summaryFailed, _): return true
-        case .notOnCredits, .onCredits, .good: return false
+        case .notOnCredits, .onCredits, .good, .balanceUnknown: return false
         }
     }
 
     static func dollars(_ micros: String) -> String {
         guard let value = Int64(micros) else { return "$?" }
         let cents = (value + 5_000) / 10_000
-        return String(format: "$%d.%02d", cents / 100, cents % 100)
+        return String(format: "$%lld.%02lld", cents / 100, cents % 100)
     }
 
     // MARK: - From a summary
@@ -91,7 +106,8 @@ public enum CreditStanding: Sendable, Equatable {
     /// nothing (a summary that never went near credits).
     public static func from(receipt: GatewayReceipt?, failure: ManagedSummaryFailure?,
                             provider: String, now: Date = Date()) -> CreditStanding? {
-        if let receipt { return .good(availableMicros: receipt.balanceAfter.availableMicros, at: now) }
+        // A successful replay says nothing about today's balance or access.
+        // Failures still take precedence even if a caller also has a receipt.
         guard let failure else { return nil }
         switch failure {
         case let .refused(code, _):
@@ -115,31 +131,41 @@ public enum CreditStanding: Sendable, Equatable {
 
     private static let lock = NSLock()
     nonisolated(unsafe) private static var current_: CreditStanding = .notOnCredits(connectAgain: false)
-    nonisolated(unsafe) private static var observers: [@Sendable (CreditStanding) -> Void] = []
+    nonisolated(unsafe) private static var observers: [UUID: @Sendable (CreditStanding) -> Void] = [:]
+    nonisolated(unsafe) private static var isCurrent: @Sendable () -> Bool = { true }
 
     public static var current: CreditStanding {
-        lock.lock(); defer { lock.unlock() }
-        return current_
+        lock.lock(); let value = current_; let valid = isCurrent; lock.unlock()
+        return valid() ? value : .notOnCredits(connectAgain: false)
     }
 
     /// Replace the standing and tell whoever is listening, if it changed.
-    public static func set(_ standing: CreditStanding) {
+    static func set(_ standing: CreditStanding, isCurrent valid: @escaping @Sendable () -> Bool = { true }) {
         lock.lock()
         let changed = standing != current_
         current_ = standing
-        let listeners = observers
+        isCurrent = valid
+        let listeners = Array(observers.values)
         lock.unlock()
         guard changed else { return }
         for listener in listeners { listener(standing) }
     }
 
-    public static func observe(_ listener: @escaping @Sendable (CreditStanding) -> Void) {
-        lock.lock(); observers.append(listener); let now = current_; lock.unlock()
-        listener(now)
+    @discardableResult
+    public static func observe(_ listener: @escaping @Sendable (CreditStanding) -> Void) -> UUID {
+        let id = UUID()
+        lock.lock(); observers[id] = listener; lock.unlock()
+        listener(current)
+        return id
     }
 
-    /// Reset, for tests and for sign-out.
+    public static func removeObserver(_ id: UUID) {
+        lock.lock(); observers.removeValue(forKey: id); lock.unlock()
+    }
+
+    /// Test isolation only. Session changes publish a new standing without
+    /// disconnecting the UI's observers.
     public static func reset() {
-        lock.lock(); current_ = .notOnCredits(connectAgain: false); observers = []; lock.unlock()
+        lock.lock(); current_ = .notOnCredits(connectAgain: false); isCurrent = { true }; observers = [:]; lock.unlock()
     }
 }

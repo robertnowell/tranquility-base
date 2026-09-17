@@ -18,12 +18,14 @@ final class CreditStandingTests: XCTestCase {
                        balanceAfter: GatewayBalance(availableMicros: available, reservedMicros: "0", ledgerSequence: "9"))
     }
 
-    func testAReceiptIsGoodStandingWithTheBalanceInDollars() {
+    func testAReceiptIsHistoryNotCurrentStanding() {
         let s = CreditStanding.from(receipt: receipt(available: "9480000"), failure: nil, provider: "tranquility-gateway", now: now)
-        XCTAssertEqual(s, .good(availableMicros: "9480000", at: now))
-        XCTAssertNil(s?.line, "nothing is amber while summaries run on credits")
-        XCTAssertEqual(s?.detail, "$9.48 available · summaries run on credits")
-        XCTAssertEqual(s?.needsAttention, false)
+        XCTAssertNil(s)
+        XCTAssertEqual(CreditStanding.good(availableMicros: "9480000", at: now).detail,
+                       "$9.48 at last balance check · summaries use credits")
+        XCTAssertEqual(CreditStanding.from(receipt: receipt(available: "9480000"),
+                                          failure: .refused(code: "insufficient_credit", operationId: nil),
+                                          provider: "tranquility-gateway", now: now), .floored(.outOfCredits, at: now))
     }
 
     func testEachRefusalNamesItsResolution() {
@@ -71,7 +73,7 @@ final class CreditStandingTests: XCTestCase {
         let good = row(.good(availableMicros: "9480000", at: now))
         XCTAssertTrue(good.satisfied); XCTAssertFalse(good.attention)
         let fresh = row(.onCredits)
-        XCTAssertTrue(fresh.satisfied); XCTAssertFalse(fresh.attention)
+        XCTAssertFalse(fresh.satisfied); XCTAssertFalse(fresh.attention, "a stored token is not verified readiness")
         let out = row(.floored(.outOfCredits, at: now))
         XCTAssertFalse(out.satisfied); XCTAssertTrue(out.attention)
         XCTAssertTrue(out.detail.hasPrefix("out of credits"))

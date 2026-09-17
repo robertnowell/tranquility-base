@@ -16,6 +16,84 @@ private func minted(_ token: String, expiresIn: Int = 900) -> (Int, Data) {
 /// to a browser because a service was down, and treating a Mac that predates
 /// key binding as broken rather than as needing to connect again.
 final class GatewayAuthorityTests: XCTestCase {
+    private final class DeviceToken: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value: String? = "A"
+        func read() -> String? { lock.lock(); defer { lock.unlock() }; return value }
+        func set(_ value: String?) { lock.lock(); self.value = value; lock.unlock() }
+    }
+    private actor DelayedMint {
+        private var pending: [String: [CheckedContinuation<(Int, Data), Never>]] = [:]
+        private var arrivals: [String: CheckedContinuation<Void, Never>] = [:]
+        private var calls: [String: Int] = [:]
+        private var released: Set<String> = []
+        func exchange(_ token: String) async -> (Int, Data) {
+            calls[token, default: 0] += 1
+            arrivals.removeValue(forKey: token)?.resume()
+            if released.contains(token) { return minted("access-" + token) }
+            return await withCheckedContinuation { pending[token, default: []].append($0) }
+        }
+        func wait(_ token: String) async {
+            if calls[token] != nil { return }
+            await withCheckedContinuation { arrivals[token] = $0 }
+        }
+        func release(_ token: String) {
+            released.insert(token)
+            for continuation in pending.removeValue(forKey: token) ?? [] {
+                continuation.resume(returning: minted("access-" + token))
+            }
+        }
+        func count(_ token: String) -> Int { calls[token] ?? 0 }
+    }
+
+    func testCachedAuthorityChecksDeviceTokenBeforeReturning() async throws {
+        let device = DeviceToken()
+        let authority = GatewayAuthority(signer: DeviceKey.SoftwareSigner(), hubBase: URL(string: "https://fixture.invalid")!,
+            deviceToken: { device.read() }, exchange: { _, token in minted("access-" + token) })
+        let first = try await authority.bearer()
+        XCTAssertEqual(first, "access-A")
+        device.set("B")
+        let second = try await authority.bearer()
+        XCTAssertEqual(second, "access-B")
+        device.set(nil)
+        do { _ = try await authority.bearer(); XCTFail("removed device still authorized") }
+        catch { XCTAssertEqual(error as? GatewayAuthority.Failure, .notConnected) }
+    }
+
+    func testLateRefreshFromPreviousDeviceCannotInstallOrClearTheNextRefresh() async throws {
+        let device = DeviceToken(), mint = DelayedMint()
+        let authority = GatewayAuthority(signer: DeviceKey.SoftwareSigner(), hubBase: URL(string: "https://fixture.invalid")!,
+            deviceToken: { device.read() }, exchange: { _, token in await mint.exchange(token) })
+        let first = Task { try await authority.bearer() }
+        await mint.wait("A")
+        device.set("B")
+        let second = Task { try await authority.bearer() }
+        await mint.wait("B")
+        await mint.release("A")
+        do { _ = try await first.value; XCTFail("old refresh survived") }
+        catch { XCTAssertTrue(error is CancellationError) }
+        let joined = Task { try await authority.bearer() }
+        // A released mint stays open: even a wrongly started third exchange
+        // completes, and the count below catches it without a hanging test.
+        for _ in 0..<20 { await Task.yield() }
+        await mint.release("B")
+        let secondValue = try await second.value, joinedValue = try await joined.value
+        XCTAssertEqual(secondValue, "access-B"); XCTAssertEqual(joinedValue, "access-B")
+        let count = await mint.count("B")
+        XCTAssertEqual(count, 1)
+    }
+
+    func testRemovalDuringUncooperativeRefreshCannotReturnItsToken() async throws {
+        let device = DeviceToken(), mint = DelayedMint()
+        let authority = GatewayAuthority(signer: DeviceKey.SoftwareSigner(), hubBase: URL(string: "https://fixture.invalid")!,
+            deviceToken: { device.read() }, exchange: { _, token in await mint.exchange(token) })
+        let pending = Task { try await authority.bearer() }
+        await mint.wait("A")
+        device.set(nil)
+        await mint.release("A")
+        do { _ = try await pending.value; XCTFail("signed-out mint returned authority") }
+        catch { XCTAssertTrue(error is CancellationError) }
+    }
 
     private func authority(
         deviceToken: String? = "hq_device_token",
