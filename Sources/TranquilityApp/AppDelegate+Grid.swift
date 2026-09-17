@@ -180,7 +180,15 @@ extension AppDelegate {
     /// name for the same call, kept so the many call sites elsewhere in the
     /// app don't all need to say `GridAssembler.` themselves.
     func tabDisplayName(for event: WaitingSession, live: LiveSession?) -> String {
-        GridAssembler.tabDisplayName(for: event, live: live)
+        // A remote agent's name is the provider's title for it, the same
+        // name its row wears. The local rule reads a transcript title and
+        // falls back to the directory, and a remote agent has no transcript
+        // here, so its card said "tranquility-base" over an answer about
+        // software markets (Robert, 16 Sep 2:15 PM: "name on card incorrect").
+        if let agent = agents?.snapshot.agent(event.sessionId), !agent.title.isEmpty {
+            return agent.title
+        }
+        return GridAssembler.tabDisplayName(for: event, live: live)
     }
 
     /// The one route to the idle face: assemble the grid and show it.

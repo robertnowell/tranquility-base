@@ -249,6 +249,16 @@ final class ACPProviderTests: XCTestCase {
         XCTAssertEqual(request.option(chosenBy: "Always allow")?.id, "allow_always", "a label verbatim")
         XCTAssertEqual(request.option(chosenBy: "reject")?.id, "reject", "an id verbatim")
         XCTAssertNil(request.option(chosenBy: "what is this for?"), "a question is not a choice")
+        // The agent's own question, with its own labels.
+        let scope = PendingRequest(id: "q", session: "s", asked: "How deep should this research run?", options: [
+            .init(id: "Thorough (Recommended)", label: "Thorough (Recommended)"),
+            .init(id: "Standard", label: "Standard"),
+            .init(id: "Quick", label: "Quick"),
+        ])
+        XCTAssertEqual(scope.option(chosenBy: "thorough")?.id, "Thorough (Recommended)")
+        XCTAssertEqual(scope.option(chosenBy: "let's go standard")?.id, "Standard")
+        XCTAssertEqual(scope.option(chosenBy: "quick please")?.id, "Quick")
+        XCTAssertNil(scope.option(chosenBy: "yes"), "yes chooses nothing among named options")
     }
 
     func testAHeadlineIsOneLineOfARowsWidth() {

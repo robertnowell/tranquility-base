@@ -124,7 +124,11 @@ public enum RemoteSpool {
         let asked = request.asked.trimmingCharacters(in: .whitespacesAndNewlines)
         let options = request.questions.first?.options.map(\.label).filter { !$0.isEmpty } ?? []
         let choices = options.isEmpty ? "" : " Options: " + options.joined(separator: ", ") + "."
-        return "The agent is asking permission: \(asked).\(choices)"
+        // A permission is one kind of question; the other kind is the
+        // agent's own ("How deep should this research run?"), which is not
+        // a permission and must not be read as one (16 Sep, 2:23 PM).
+        let verb = request.isPermission ? "asking permission" : "asking"
+        return "The agent is \(verb): \(asked).\(choices)"
     }
 
     /// The brief for a question, built from the words `question(_:)` wrote,

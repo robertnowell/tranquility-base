@@ -49,6 +49,10 @@ final class RemoteSpoolTests: XCTestCase {
         XCTAssertEqual(lines[0].notificationMatcher, "agent_question")
         XCTAssertEqual(lines[0].lastAssistantMessage,
                        "The agent is asking permission: Run cat hq.json?. Options: Allow once, Reject.")
+        let own = PendingRequest(id: "q2", session: agent().id, asked: "How deep?",
+                                 options: [.init(id: "Thorough", label: "Thorough"), .init(id: "Quick", label: "Quick")])
+        XCTAssertEqual(RemoteSpool.lines(for: event(.asks(own)), agent: agent())[0].lastAssistantMessage,
+                       "The agent is asking: How deep?. Options: Thorough, Quick.", "the agent's own question is not a permission")
     }
 
     /// A question that died with the process is written as a turn at adoption.

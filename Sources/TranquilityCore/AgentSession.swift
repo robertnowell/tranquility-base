@@ -404,6 +404,13 @@ public struct PendingRequest: Sendable, Equatable, Identifiable {
     /// room for one clause. Never the whole request: answering needs all of it.
     public var asked: String { questions.first?.asked ?? "" }
 
+    /// A permission, as opposed to the agent's own question: every option
+    /// is one of the allow/reject kinds.
+    public var isPermission: Bool {
+        guard let options = questions.first?.options, !options.isEmpty else { return false }
+        return options.allSatisfy { $0.kind != .other }
+    }
+
     /// The option the person meant, from what they said. An id or a label
     /// verbatim wins; otherwise the words are read for consent: "always"
     /// before "yes", because "yes, always" is an always. Nil when the words
@@ -418,6 +425,19 @@ public struct PendingRequest: Sendable, Equatable, Identifiable {
             return exact
         }
         let lower = said.lowercased()
+        // A label said in part: "thorough" for "Thorough (Recommended)",
+        // "standard" for "Standard". The agent's own questions carry labels
+        // like these, and nobody says the parenthesis. One label whose first
+        // word is in what was said wins; two is no choice.
+        let byLabel = options.filter { option in
+            let head = option.label.lowercased()
+                .split(whereSeparator: { !$0.isLetter && !$0.isNumber }).first.map(String.init) ?? ""
+            return head.count >= 3
+                && lower.range(of: "\\b\(NSRegularExpression.escapedPattern(for: head))\\b",
+                               options: .regularExpression) != nil
+        }
+        if byLabel.count == 1 { return byLabel[0] }
+        if byLabel.count > 1 { return nil }
         func has(_ terms: [String]) -> Bool {
             terms.contains { term in
                 lower.range(of: "\\b\(term)\\b", options: .regularExpression) != nil
