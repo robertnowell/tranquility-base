@@ -54,9 +54,18 @@ public enum OpenCodePane {
             "/bin/zsh", "-c", SessionLauncher.paneCommand(path: path, directory: directory, command: command),
             ";", "set", "-t", name, "remain-on-exit", "on",
         ], socket: Tmux.socketName, timeout: 10) {
-        case .success: return name
+        case .success: break
         case .failure: return nil
         }
+        // The same options every local pane gets (SessionLauncher): the
+        // server outlives its last session, the pane never resizes itself,
+        // and the mouse reaches the TUI. Plus no status bar: this window is
+        // the agent's screen, and tmux's own furniture is not its chrome.
+        _ = Tmux.run(["set", "-s", "exit-empty", "off"], socket: Tmux.socketName)
+        _ = Tmux.run(["set", "-t", name, "window-size", "manual"], socket: Tmux.socketName)
+        _ = Tmux.run(["set", "-t", name, "mouse", "on"], socket: Tmux.socketName)
+        _ = Tmux.run(["set", "-t", name, "status", "off"], socket: Tmux.socketName)
+        return name
     }
 
     /// The TUI has drawn something: it is connected and will see the next
