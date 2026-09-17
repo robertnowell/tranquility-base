@@ -298,6 +298,22 @@ time.sleep(30)
         self.assertEqual(self.install_count, 1)
         sleep.assert_not_called()
 
+    def test_cleanup_permission_error_requires_proof_no_group_members_are_live(self):
+        from unittest.mock import patch
+        for rows in ("", "123 Z\n999 S\n"):
+            with patch.object(module.os, "killpg", side_effect=PermissionError(1, "not permitted")), \
+                 patch.object(module.subprocess, "check_output", return_value=rows):
+                module.signal_install_group(123, module.signal.SIGKILL)
+        with patch.object(module.os, "killpg", side_effect=PermissionError(1, "not permitted")), \
+             patch.object(module.subprocess, "check_output", return_value="123 S\n"):
+            with self.assertRaises(PermissionError): module.signal_install_group(123, module.signal.SIGKILL)
+
+    def test_cleanup_permission_error_cannot_pass_when_process_inspection_fails(self):
+        from unittest.mock import patch
+        with patch.object(module.os, "killpg", side_effect=PermissionError(1, "not permitted")), \
+             patch.object(module.subprocess, "check_output", side_effect=subprocess.TimeoutExpired("ps", 5)):
+            with self.assertRaises(subprocess.TimeoutExpired): module.signal_install_group(123, module.signal.SIGKILL)
+
 
 class HookTests(unittest.TestCase):
     @classmethod

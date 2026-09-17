@@ -23,6 +23,21 @@ spec.loader.exec_module(state_module)
 Blocked = state_module.Blocked
 
 
+def signal_install_group(pgid, sig):
+    try:
+        os.killpg(pgid, sig)
+    except ProcessLookupError:
+        pass
+    except PermissionError:
+        # Darwin can reject a cleanup signal after TERM has removed all live
+        # members. Do not mask EPERM on a surviving process: verify the group.
+        rows = subprocess.check_output(["ps", "-axo", "pgid=,stat="], text=True, timeout=5)
+        for row in rows.splitlines():
+            fields = row.split()
+            if len(fields) >= 2 and fields[0] == str(pgid) and not fields[1].startswith("Z"):
+                raise
+
+
 def run_install(command, **kwargs):
     """Stop the whole build/install process group on timeout or interruption."""
     timeout = kwargs.pop("timeout")
@@ -31,13 +46,13 @@ def run_install(command, **kwargs):
             return subprocess.CompletedProcess(command, child.wait(timeout=timeout))
         except BaseException:
             try:
-                os.killpg(child.pid, signal.SIGTERM)
+                signal_install_group(child.pid, signal.SIGTERM)
                 child.wait(timeout=10)
             except (ProcessLookupError, subprocess.TimeoutExpired):
                 pass
             finally:
                 try:
-                    os.killpg(child.pid, signal.SIGKILL)
+                    signal_install_group(child.pid, signal.SIGKILL)
                 except ProcessLookupError:
                     pass
                 child.wait()
