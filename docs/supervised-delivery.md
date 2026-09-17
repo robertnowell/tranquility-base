@@ -47,8 +47,9 @@ Newer main movement during that install is handled by a later request/tick.
 The same installer retains capture, preview, signing, channel, intentional Quit
 and launch-drill checks. Preview expiry only permits the next attempt; it is not
 a deadline by which a build must be running. Sleep delays the worker until wake.
-The build still holds the app-mutation lock; splitting preparation from activation
-is the remaining #519 slice, not part of this worker.
+Build preparation now owns a separate workspace lock and produces a leased
+artifact before app ownership. See `prepared-dev-builds.md` for activation
+checks and the bounded informational diagnostic after the runtime receipt.
 
 A failed source is held across ticks/restarts, including other requests for that
 same source. A newer main can be attempted; an operator can explicitly retry via
