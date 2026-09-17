@@ -222,18 +222,24 @@ final class SessionRowTests: XCTestCase {
     /// announces; its door is for when it has nothing to say, and for Go to
     /// Agent on the card. Robert clicked the row after OpenCode answered and
     /// got a Terminal instead of the answer.
-    /// Amber goes to the agent, remote or local: a remote row's door is a
-    /// terminal attached to the served session, where the permission is on
-    /// screen (15 Sep 9:11 PM).
+    /// Amber goes to the agent, remote or local: a remote row's door is the
+    /// pane its TUI has been attached in since it started, where the
+    /// permission is on screen (15 Sep 9:11 PM; pane, not a fresh attach,
+    /// 17 Sep: a TUI attached after the ask never shows it).
     func testAnAmberRemoteRowGoesToItsDoorWhereTheQuestionIs() {
-        let door = SessionRow.Door.shell("opencode attach http://127.0.0.1:1 --session ses_1", directory: "/tmp")
+        let door = SessionRow.Door.pane("tb-oc-ses_1")
         let asking = SessionRow(id: "r", name: "r", aux: "Read x.png?", lamp: .fault, read: .unread,
                                 harness: "opencode", door: door)
-        XCTAssertEqual(SessionRow.action(for: asking),
-                       .openShell("opencode attach http://127.0.0.1:1 --session ses_1", directory: "/tmp"))
+        XCTAssertEqual(SessionRow.action(for: asking), .attachPane("tb-oc-ses_1"))
         let broken = SessionRow(id: "r", name: "r", aux: "cannot reach it", lamp: .fault, read: .none,
                                 harness: "opencode", door: door)
-        XCTAssertEqual(SessionRow.action(for: broken), .openShell("opencode attach http://127.0.0.1:1 --session ses_1", directory: "/tmp"))
+        XCTAssertEqual(SessionRow.action(for: broken), .attachPane("tb-oc-ses_1"))
+        // A row whose pane could not be made keeps the old door.
+        let shell = SessionRow(id: "r", name: "r", aux: "Read x.png?", lamp: .fault, read: .unread,
+                               harness: "opencode",
+                               door: .shell("opencode attach http://127.0.0.1:1 --session ses_1", directory: "/tmp"))
+        XCTAssertEqual(SessionRow.action(for: shell),
+                       .openShell("opencode attach http://127.0.0.1:1 --session ses_1", directory: "/tmp"))
         let local = SessionRow(id: "l", name: "l", aux: "needs input", lamp: .fault, read: .unread)
         XCTAssertEqual(SessionRow.action(for: local), .goToAgent, "a local dialog is answered in its pane")
     }

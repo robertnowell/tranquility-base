@@ -74,6 +74,18 @@ public struct AgentSession: Sendable, Equatable, Identifiable {
     /// than a page: OpenCode's TUI opens a session with `opencode --session`.
     /// Go to Agent for a row with no pane and no page (#470).
     public var shell: ShellDoor?
+    /// The tmux session (on this app's socket) holding the agent's screen,
+    /// when the provider keeps one. Outranks `shell` as the door.
+    public var pane: String?
+
+    /// Where Go to Agent goes, decided once for the grid and the card: a web
+    /// page, else our pane with its screen, else a command that opens one.
+    public var door: SessionRow.Door {
+        url.map { .page($0) }
+            ?? pane.map { .pane($0) }
+            ?? shell.map { .shell($0.command, directory: $0.directory) }
+            ?? SessionRow.Door.none
+    }
 
     public struct ShellDoor: Sendable, Equatable {
         public var command: String

@@ -244,6 +244,8 @@ extension AppDelegate {
             goToSession(resolved)
         case .agentShell(let command, let directory):
             openShell(command, in: directory)
+        case .agentPane(let name):
+            attachPane(name)
         case .agentPage(let url):
             // The remote half of `agentTerminal`. `goToSession` focuses a pane
             // this Mac owns, and a remote agent has none; its provider already
@@ -1560,6 +1562,21 @@ extension AppDelegate {
             if case .failure(let error) = AppleScript.run(script: script) {
                 Failures.report(.launchFailed, reason: "shell door: \(error)",
                                 card: "Couldn't open a Terminal for that agent: \(error)")
+            }
+        }
+    }
+
+    /// Go to Agent for a screen that lives in a named pane on our tmux socket
+    /// (an OpenCode agent's TUI). Raise the window already showing it, or
+    /// attach one; never a second copy of the same screen.
+    func attachPane(_ name: String) {
+        Permissions.log("door: pane \(name)")
+        Task.detached(priority: .userInitiated) {
+            let outcome = await TerminalTabFocus.focus(tmuxSession: name)
+            Permissions.log("door: pane \(name) -> \(outcome)")
+            if case .failed(let reason) = outcome {
+                Failures.report(.launchFailed, reason: "pane door: \(reason)",
+                                card: "Couldn't open that agent's window: \(reason)")
             }
         }
     }

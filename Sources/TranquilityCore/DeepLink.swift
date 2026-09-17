@@ -64,6 +64,8 @@ public enum DeepLink {
         case agentPage(URL)
         /// The agent's own program on this Mac, for one that has no pane of ours.
         case agentShell(String, directory: String)
+        /// The agent's own pane on this app's tmux socket.
+        case agentPane(String)
         case revive
         case refused
         case invitation
@@ -93,6 +95,7 @@ public enum DeepLink {
         // says which so no caller has to ask what kind of agent it was.
         case .openPage(let url): return .agentPage(url)
         case .openShell(let command, let directory): return .agentShell(command, directory: directory)
+        case .attachPane(let name): return .agentPane(name)
         case .revive:    return .revive
         case .none?:     return .refused
         case nil:        return hasCompletedTurn ? .conversationCard : .invitation

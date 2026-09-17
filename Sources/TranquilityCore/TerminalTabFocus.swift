@@ -251,6 +251,23 @@ public enum TerminalTabFocus {
         return outcome(of: result, timeout: 5)
     }
 
+    /// The same door for a pane addressed by NAME, on this app's socket: an
+    /// OpenCode agent's screen. Raise the window already attached to it if
+    /// it is still open, otherwise attach one (which detaches any other, so
+    /// there is never a second copy).
+    public static func focus(tmuxSession name: String, timeout: TimeInterval = 5) async -> Outcome {
+        let pane = TmuxPaneAddress(socketName: Tmux.socketName, paneId: "", sessionName: name, paneTty: "")
+        if let known = TerminalWindows.windowId(for: name) {
+            let raised = outcome(
+                of: await AppleScript.run(script: raiseScript(windowId: known), timeout: timeout),
+                timeout: timeout)
+            if raised != .tabGone { return raised }
+            TerminalWindows.forget(sessionName: name)
+        }
+        return await attachFresh(pane: pane, timeout: timeout)
+    }
+
+
     /// Never call from the main actor: the one Apple event still blocks for
     /// up to `timeout` when Terminal is busy, and a main-thread block past
     /// ~1 s trips the event-tap watchdog and silently kills the hotkeys.
