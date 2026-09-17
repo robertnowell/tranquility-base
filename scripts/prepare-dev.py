@@ -111,7 +111,7 @@ def prepare(target):
             raw_app = Path(raw)
             clean = CLEAN
             subprocess.run(["swift", "build", "--configuration", "debug", "--product", "tbase"],
-                           cwd=clean, check=True, stdout=sys.stderr)
+                           cwd=clean, check=True, stdout=sys.stderr, pass_fds=(lock.fileno(),))
             partial = Path(tempfile.mkdtemp(prefix=".partial-", dir=CACHE))
             try:
                 shutil.copytree(raw_app, partial / "Tranquility Base Dev.app", symlinks=True)
