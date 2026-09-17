@@ -76,6 +76,8 @@ Multiple Claude sessions work this repo in parallel. The rules that keep it safe
    **All four mutation paths use the current deployment checkout.** Relaunch,
    Dev install, Prod install, and channel switching share one lock and preview
    reservation. Do not use an older worktree's installer to bypass a deferral.
+   Update that checkout with `python3 scripts/update-deployment-tooling.py`,
+   which excludes both builds and activation before changing its files.
    Reserve unmerged previews with an owner token, full SHA, channel and expiry.
    Main and other branches wait until release or expiry. Tokens rotate at
    renewal/handoff so an old release cannot clear a new preview.
