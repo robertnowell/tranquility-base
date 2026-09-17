@@ -184,9 +184,12 @@ public enum TranscriptForks {
         // `omittingEmptySubsequences` keeps a trailing newline from producing a
         // phantom record; a final line with no newline is still parsed, and is
         // simply skipped below if it does not decode.
-        for line in text.split(separator: "\n", omittingEmptySubsequences: true) {
-            guard let data = line.data(using: .utf8),
-                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+        // JSONL uses byte 0x0A as its delimiter. Walking grapheme clusters
+        // dominated the real archive profile; CRLF is also one Character and
+        // was never split by the old Character-based separator. A trailing CR
+        // is valid JSON whitespace, and UTF-8 payload bytes remain unchanged.
+        for line in text.utf8.split(separator: 0x0A, omittingEmptySubsequences: true) {
+            guard let obj = try? JSONSerialization.jsonObject(with: Data(line)) as? [String: Any],
                   let uuid = obj["uuid"] as? String
             else { continue }
             records.append((uuid, obj["parentUuid"] as? String,

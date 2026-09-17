@@ -112,6 +112,19 @@ final class TranscriptForksTests: XCTestCase {
         XCTAssertNotNil(TranscriptForks.survey(text: text, sessionId: "s"))
     }
 
+    func testUTF8RecordsAndCRLFPreserveForkClassification() {
+        let records = [rec("根🌳", nil), rec("分岐", "根🌳"),
+                       rec("ancien-é", "分岐"), rec("新🛰️", "分岐")]
+        for separator in ["\n", "\r\n"] {
+            let text = records.joined(separator: separator) + separator + separator
+                + "{\"uuid\":\"partial"
+            let survey = TranscriptForks.survey(text: text, sessionId: "unicode")
+            XCTAssertEqual(survey?.linked, 4)
+            XCTAssertEqual(survey?.reachable, 3)
+            XCTAssertEqual(survey?.unreachable, 1)
+        }
+    }
+
     /// The threshold exists so routine parallel-agent branching does not turn
     /// the gate permanently red. Measured gap: 60 stranded records at the top
     /// of the benign population, 1,256 at the bottom of the real one.
