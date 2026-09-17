@@ -16,15 +16,28 @@ extension StatusHUD {
     /// in-line, 465 of 477 spindump samples deep in waitUntilExit while the
     /// event-tap watchdog took the hotkeys down with it. pid 1 never has a
     /// controlling terminal, so the background half must come home empty and
-    /// drop the guard; that round trip reports three seconds later, on the
-    /// mic drill's pattern. The label is NOT asserted at +3s — the ambient
+    /// drop the guard. The label is NOT asserted afterwards — the ambient
     /// refresh may repaint it at any time, and the guard is the one piece of
     /// state this drill owns outright.
+    ///
+    /// The round trip is reported when the answer ARRIVES, not on a timer.
+    /// The walk that decides "nothing on disk" is a function of the archive's
+    /// size: 5 s on 58 sessions (11 Sep), 13.7 to 18.8 s on 243 (17 Sep, ten
+    /// of ten launches). Two sweeps at 3 s and 9 s were written against the
+    /// first number and missed every launch at the second, leaving the
+    /// refusal card on the live grid until Robert pressed ⌃⌥ home. A guess at
+    /// a duration expires; waiting on the event does not.
     func goToSessionDrill() {
         _ = showAnnouncement(
             spoken: SpokenTextSanitizer().sanitize("Go to session drill."),
             sessionId: "goto-drill", pid: 1, project: "promotions copy", cwd: "/tmp")
         let t0 = Date()
+        // Armed BEFORE the press, so an answer that arrives fast (0.3 s on a
+        // small archive, measured on the TEST install) cannot slip past it.
+        // Bounded, because a wait with no ceiling is a drill that can never
+        // report FAIL. Sixty seconds is three times the worst walk measured;
+        // a walk that long is its own finding.
+        let answer = Task { @MainActor in await self.awaitGoToSessionAnswer(within: 60) }
         goToSession()
         let returned = Date().timeIntervalSince(t0)
         let painted = bodyLabel.stringValue
@@ -39,48 +52,49 @@ extension StatusHUD {
         ])
         Permissions.log("selftest goToSession: returned in \(Int(returned * 1000))ms")
         Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            let said = await answer.value
+            let answeredAt = Date()
+            let guardReleasedAt = self.goToSessionGuardReleasedAt
+            let walk = Int(answeredAt.timeIntervalSince(t0) * 1000)
+            // The fixture session does not exist anywhere, not even on disk,
+            // so the answer is always the refusal. (A dead session that IS on
+            // disk gets revived instead, since 11 Sep; the fixture is chosen
+            // so this drill never launches anything.)
+            let refused: Bool
+            if case .said(let message)? = said {
+                refused = message.contains("can't find its history")
+            } else {
+                refused = false
+            }
             SelfTest.report("goToSession.roundTrip", [
+                ("answered", said != nil),
                 ("guardDropped", !self.goToSessionInFlight),
+                // #359's contract: the button is pressable again while the
+                // walk runs, so the guard comes down first and the answer
+                // comes later. Both stamps are the HUD's own.
+                ("guardDroppedBeforeTheAnswer",
+                 guardReleasedAt.map { $0 <= answeredAt } ?? false),
+                ("refusedNotRevived", refused),
             ], skippedBecauseOfAGesture: self.slateInterruptedByAGesture)
-            // The background half paints its outcome over whatever the
-            // cleanup left up; a deploy's selftest must not strand that on
-            // the live panel. The fixture session does not exist anywhere, not
-            // even on disk, so the answer is always the refusal. (A dead
-            // session that IS on disk gets revived instead, since 11 Sep; the
-            // fixture is chosen so this drill never launches anything.)
-            // Twice, because the answer now arrives AFTER the guard drops:
-            // the guard comes down at once and the discovery walk that
-            // decides "nothing on disk" can take 5 s on a cold cache at
-            // launch (measured 11 Sep). One sweep at 3 s caught the guard;
-            // a second at 9 s catches the card.
+            Permissions.log("selftest goToSession.roundTrip: answered in \(walk)ms")
+            // The answer paints its refusal over whatever is up. When the walk
+            // outlives the slate, which on this archive it always does, that
+            // is the live grid, and nothing else will take the card down.
             //
-            // Asked of the STATE, not of the body text. The text check here
-            // could never fire once the drills began to overlap (11 Sep, #357
-            // and #359): the refusal now lands while `selfTestPendingSend`'s
-            // card owns the stage, and `showResult` routes a failure that
-            // arrives during a capture to the amber strip (`face.captureFault`)
-            // instead of the body. `bodyLabel` therefore never held the
-            // message, the sweep matched nothing on either pass, and the red
-            // card was left on the panel: measured 12 to 13 Sep, seven of ten
-            // launches, the worst of them for 61 minutes.
+            // `.result` cannot be anything but this drill's own fixture while
+            // the slate is running, because `Failures.suppressed` is true for
+            // the whole window; after it, the card names `goto-drill` (the
+            // refusal carries its subject since 17 Sep), so a stranger's
+            // failure is left alone.
             //
-            // `.result` cannot be anything but this drill's own fixture for as
-            // long as the slate is running, because `Failures.suppressed` is
-            // true for the whole window. The late pass can outlive the slate on
-            // a cold cache, which is exactly why it stays: `endDrills` has
-            // already handed the stage back by then and cannot see this one.
-            //
-            // `returnToTheGrid`, never `showIdle(rows: [])`. This sweep is the
-            // one piece of the slate that can run AFTER the slate is over, on a
+            // `returnToTheGrid`, never `showIdle(rows: [])`. This is the one
+            // piece of the slate that can run AFTER the slate is over, on a
             // panel that has gone back to work, and on 13 Sep at 20:59 it
             // painted an empty grid over twenty live agents. Ten seconds later
             // the panel was teaching Robert his first keypress.
-            for _ in 0..<2 {
-                if case .result = self.state {
-                    self.returnToTheGrid(because: "goToSession drill, late sweep")
-                }
-                try? await Task.sleep(nanoseconds: 6_000_000_000)
+            if case .result = self.state,
+               self.currentTarget == nil || self.currentTarget?.sessionId == "goto-drill" {
+                self.returnToTheGrid(because: "goToSession drill, its answer arrived")
             }
         }
     }
