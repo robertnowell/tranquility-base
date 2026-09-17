@@ -87,6 +87,7 @@ public struct UserPromptTemplate: Sendable {
         switch condition {
         case "always": return true
         case "notification": return r.hookEvent == .notification
+        case "earlier_this_turn": return r.earlierThisTurn != nil
         case "git_branch": return r.gitBranch != nil
         case "previous_goal": return !(r.previousGoal ?? "").isEmpty
         case "first_user_message": return r.firstUserMessage != nil
@@ -108,6 +109,7 @@ public struct UserPromptTemplate: Sendable {
             "first_user_message": r.firstUserMessage ?? "",
             "last_assistant_message": r.lastAssistantMessage,
             "corrective_note": r.correctiveNote ?? "",
+            "earlier_this_turn": r.earlierThisTurn ?? "",
         ]
         // One pass over the TEMPLATE text, and only the template text. This
         // was a loop of replacingOccurrences per slot, each over the output of

@@ -28,6 +28,23 @@ final class QueueStoreTests: XCTestCase {
         XCTAssertEqual(try store.waitingSessions().first?.sessionId, "waiting-one")
     }
 
+    /// What a polled provider knew at ingest survives to announce time: the
+    /// column, the view and every waiting-session query carry it, and a row
+    /// without it (every file-based harness) reads back nil, not empty.
+    func testEarlierThisTurnRoundTripsThroughTheWaitingQueries() throws {
+        _ = try store.insert(event: QueuedEvent(
+            createdAtMs: 1_000, hookEvent: .stop, sessionId: "remote-one",
+            promptId: "a", cwd: "/tmp", lastAssistantMessage: "Done; PR opened.",
+            earlierThisTurn: "Reading the repo.\n\nFound the bug.", tty: "??"))
+        _ = try store.insert(event: QueuedEvent(
+            createdAtMs: 1_000, hookEvent: .stop, sessionId: "local-one",
+            promptId: "b", cwd: "/tmp", lastAssistantMessage: "Watching quietly.", tty: "ttys1"))
+        let waiting = try store.waitingSessions()
+        XCTAssertEqual(waiting.first { $0.sessionId == "remote-one" }?.earlierThisTurn, "Reading the repo.\n\nFound the bug.")
+        XCTAssertNil(waiting.first { $0.sessionId == "local-one" }?.earlierThisTurn)
+        XCTAssertEqual(try store.latestStop(for: "remote-one")?.earlierThisTurn, "Reading the repo.\n\nFound the bug.")
+    }
+
     /// A cursor only ever moves forward. An out-of-order advance must not rewind it,
     /// or dismissing something would un-dismiss it.
     func testCursorsOnlyAdvance() throws {

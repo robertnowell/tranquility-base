@@ -1,7 +1,7 @@
 {
   "version":"1",
   "frozenOn":"2026-09-13",
-  "schemaCanonicalSha256":"52eaaaf041789538180e6b6dd27ca68edfc66503393fb273209ab8261bbdbd20",
+  "schemaCanonicalSha256":"6bf9db08a29fc0e45f2c10521b434cdd33cd483401f1a2e3e29d3a38925febba",
   "identityAlgorithm":"sha256-utf8-length-framed-uuid8",
   "baseline":"faf3362"
 }

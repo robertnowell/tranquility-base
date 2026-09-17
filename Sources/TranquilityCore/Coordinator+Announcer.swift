@@ -395,6 +395,19 @@ extension Coordinator {
             : (event.transcriptPath
                 .flatMap { TranscriptArchive.lastAssistantMessage(in: URL(fileURLWithPath: $0)) } ?? "")
 
+        // THE TURN, NOT THE LAST LINE. What the agent said before its final
+        // message, from whichever source has it: a polled provider put it on
+        // the event when it saw the turn end; a file-based harness (Claude
+        // Code, Codex) has it in the transcript `TurnText` already reads for
+        // the hub. Only for a finished turn: a permission question is its own
+        // text and must not be diluted with what came before it. Nil when the
+        // turn was one message or nobody can say, and then the summary is
+        // exactly what it was before 17 Sep.
+        let earlier: String? = event.hookEvent == .stop
+            ? (event.earlierThisTurn
+               ?? EarlierThisTurn.earlier(blocks: TurnText.forSession(event.sessionId, limit: 1).last?.blocks ?? []))
+            : nil
+
         // One agents probe serves both the lexicon's live names and the label
         // stripping (dropped 14 Sep with the label instruction); summarizing must not double the
         // subprocess cost it already pays. Codex names, from `ownership`, ride
@@ -440,7 +453,8 @@ extension Coordinator {
             cwd: event.cwd,
             hookEvent: event.hookEvent,
             notificationMatcher: event.notificationMatcher,
-            managedSource: try? store.summarySource(eventRowid: event.latestId)),
+            managedSource: try? store.summarySource(eventRowid: event.latestId),
+            earlierThisTurn: earlier),
             lexicon: lexicon.allowlistTerms)
 
         if summary.provider == "empty-source" {
