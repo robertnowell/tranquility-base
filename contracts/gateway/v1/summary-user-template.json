@@ -25,6 +25,10 @@
       "text": "\n\nHow this session opened, HOURS AGO and possibly abandoned since. Use it only to disambiguate names. Never describe it as current work, and never propose a next step from it:\n{first_user_message}"
     },
     {
+      "when": "earlier_this_turn",
+      "text": "\n\nEarlier this turn, before the final message, the agent said (oldest first):\n{earlier_this_turn}"
+    },
+    {
       "when": "always",
       "text": "\n\nThe agent's final message this turn:\n{last_assistant_message}"
     },

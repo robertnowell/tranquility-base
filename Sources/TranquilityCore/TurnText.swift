@@ -41,11 +41,17 @@ public enum TurnText {
         /// timestamps — where an ordinal is not, because the transcript is read
         /// as a tail and the tail does not know how many turns came before it.
         public let at: Date?
+        /// The prose as the agent wrote it: one entry per message, in order,
+        /// the final message last. `prose` is these joined; the summariser
+        /// needs them apart, because the final message is carried on its own
+        /// and the rest becomes `earlierThisTurn`.
+        public let blocks: [String]
 
-        public init(prompt: String, prose: String, at: Date? = nil) {
+        public init(prompt: String, prose: String, at: Date? = nil, blocks: [String] = []) {
             self.prompt = prompt
             self.prose = prose
             self.at = at
+            self.blocks = blocks
         }
 
         /// A turn nobody would read is not worth showing under a brief.
@@ -92,7 +98,7 @@ public enum TurnText {
 
         func close() {
             guard started else { return }
-            let t = Turn(prompt: prompt, prose: prose.joined(separator: "\n\n"), at: at)
+            let t = Turn(prompt: prompt, prose: prose.joined(separator: "\n\n"), at: at, blocks: prose)
             if !t.isEmpty { turns.append(t) }
             prompt = ""; prose = []; at = nil
         }
@@ -192,7 +198,7 @@ public enum TurnText {
 
         func close() {
             guard started else { return }
-            let t = Turn(prompt: prompt, prose: prose.joined(separator: "\n\n"), at: at)
+            let t = Turn(prompt: prompt, prose: prose.joined(separator: "\n\n"), at: at, blocks: prose)
             if !t.isEmpty { turns.append(t) }
             prompt = ""; prose = []; at = nil
         }

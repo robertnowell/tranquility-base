@@ -85,6 +85,10 @@ wait_for_microphone() {
       echo "✗ an utterance is still in flight after ${waited}s (${when}) — not stopping the app." >&2
       echo "  It stays on its current build. Run this again when you're done," >&2
       echo "  or TB_KILL_ANYWAY=1 if the marker is wedged." >&2
+      # An ongoing utterance is a safe deferral, not evidence that the source
+      # failed. Let the durable worker retry after it ends without holding the
+      # source indefinitely. Manual callers retain their existing failure code.
+      if [ "${TB_DEPLOY_AUTOMATIC:-0}" = "1" ]; then exit 75; fi
       exit 1
     fi
     [ "$waited" -eq 0 ] && echo "→ an utterance is in flight — mic open, transcribing, or delivering (${when}); waiting for it to land"

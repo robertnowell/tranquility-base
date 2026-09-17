@@ -34,6 +34,11 @@ public struct SummaryRequest: Sendable {
     public var correctiveNote: String?
     /// Required only by managed composition. Never inferred from a rowid/fork.
     public var managedSource: GatewaySource?
+    /// What the agent said this turn BEFORE its final message, oldest first,
+    /// capped. Context for the recap and the findings; never the source of a
+    /// proposal, which still comes only from the final message. Absent when
+    /// the turn was one message, or the adapter cannot say. See `EarlierThisTurn`.
+    public var earlierThisTurn: String?
 
     public init(
         lastAssistantMessage: String,
@@ -45,7 +50,8 @@ public struct SummaryRequest: Sendable {
         hookEvent: HookEventKind = .stop,
         notificationMatcher: String? = nil,
         correctiveNote: String? = nil,
-        managedSource: GatewaySource? = nil
+        managedSource: GatewaySource? = nil,
+        earlierThisTurn: String? = nil
     ) {
         self.lastAssistantMessage = lastAssistantMessage
         self.projectLabel = projectLabel
@@ -57,6 +63,7 @@ public struct SummaryRequest: Sendable {
         self.notificationMatcher = notificationMatcher
         self.correctiveNote = correctiveNote
         self.managedSource = managedSource
+        self.earlierThisTurn = earlierThisTurn
     }
 }
 
@@ -236,6 +243,15 @@ public struct AnthropicSummaryProvider: SummaryProvider {
                 Use it only to disambiguate names. Never describe it as current \
                 work, and never propose a next step from it:
                 \(ask)
+                """
+        }
+
+        if let earlier = request.earlierThisTurn {
+            context += """
+
+
+                Earlier this turn, before the final message, the agent said (oldest first):
+                \(earlier)
                 """
         }
 
@@ -678,7 +694,11 @@ public struct SummarizerChain: Sendable {
 
         // Names the source itself used are speakable ("say Klaviyo, not 'an email
         // platform'"); everything identifier-shaped is still stripped.
-        let speakable = SpokenTextSanitizer.speakableTerms(in: request.lastAssistantMessage)
+        // Names the agent used anywhere in the turn are speakable: the earlier
+        // messages are in the model's context, so a name from there can land
+        // in the brief and must not be genericised on the way to speech.
+        let speakable = SpokenTextSanitizer.speakableTerms(
+                in: request.lastAssistantMessage + " " + (request.earlierThisTurn ?? ""))
             .union(lexicon)
 
         // Each section is clamped against its own budget before composing, so a long

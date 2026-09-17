@@ -205,6 +205,25 @@ app_stop
         self.assertEqual(result.returncode, 75, result.stdout + result.stderr)
         self.assertEqual(result.stdout.splitlines(), ["capture finished", "activation deferred after capture"])
 
+    def test_long_capture_defers_automatic_delivery_without_stopping_the_app(self):
+        marker = self.root / "capturing"
+        marker.write_text(str(int(time.time())))
+        for automatic, expected in (("1", 75), ("0", 1)):
+            with self.subTest(automatic=automatic):
+                result = subprocess.run(["bash", "-c", '''set -euo pipefail
+. "$1"
+TB_CAPTURE_MARKER="$2"
+TB_MIC_GIVE_UP_AFTER=0
+TB_DEPLOY_AUTOMATIC="$3"
+app_running() { return 0; }
+pkill() { echo "unexpected stop"; exit 99; }
+app_stop
+''', "fixture", str(module.ROOT / "scripts/lib/app-process.sh"), str(marker), automatic],
+                    text=True, capture_output=True)
+                self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
+                self.assertNotIn("unexpected stop", result.stdout)
+                self.assertTrue(marker.exists())
+
     def test_timeout_stops_install_children(self):
         marker = self.root / "child-pid"
         program = '''import subprocess, sys, time

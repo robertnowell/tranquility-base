@@ -542,6 +542,20 @@ public final class QueueStore: Sendable {
                 );
                 """)
         }
+        m.registerMigration("v21_earlier_this_turn") { db in
+            // What the agent said before its final message, when the source
+            // knew it at ingest (a polled provider). File-based harnesses
+            // leave it null and the transcript is read at announce time.
+            try db.execute(sql: "ALTER TABLE events ADD COLUMN earlierThisTurn TEXT")
+            try db.execute(sql: "DROP VIEW latest_per_session")
+            try db.execute(sql: """
+                CREATE VIEW latest_per_session AS
+                SELECT sessionId, max(rowid) AS latestId, hookEvent, createdAtMs,
+                       cwd, tty, promptId, transcriptPath, lastAssistantMessage,
+                       notificationMatcher, summaryText, earlierThisTurn
+                FROM events GROUP BY sessionId
+                """)
+        }
         return m
     }
 
@@ -830,7 +844,7 @@ public final class QueueStore: Sendable {
             try WaitingSession.fetchAll(db, sql: """
                 SELECT l.sessionId, l.latestId, l.createdAtMs, l.cwd, l.tty,
                        l.promptId, l.transcriptPath, l.lastAssistantMessage,
-                       l.notificationMatcher, l.summaryText, l.hookEvent,
+                       l.notificationMatcher, l.summaryText, l.hookEvent, l.earlierThisTurn,
                        cs.callsign, b.topic AS briefTopic,
                        c.heardThrough AS heardThrough
                 FROM latest_per_session l
@@ -881,7 +895,7 @@ public final class QueueStore: Sendable {
             try WaitingSession.fetchOne(db, sql: """
                 SELECT l.sessionId, l.latestId, l.createdAtMs, l.cwd, l.tty,
                        l.promptId, l.transcriptPath, l.lastAssistantMessage,
-                       l.notificationMatcher, l.summaryText, l.hookEvent,
+                       l.notificationMatcher, l.summaryText, l.hookEvent, l.earlierThisTurn,
                        cs.callsign
                 FROM session_cursor c
                 JOIN latest_per_session l ON l.sessionId = c.sessionId
@@ -905,7 +919,7 @@ public final class QueueStore: Sendable {
             try WaitingSession.fetchAll(db, sql: """
                 SELECT l.sessionId, l.latestId, l.createdAtMs, l.cwd, l.tty,
                        l.promptId, l.transcriptPath, l.lastAssistantMessage,
-                       l.notificationMatcher, l.summaryText, l.hookEvent,
+                       l.notificationMatcher, l.summaryText, l.hookEvent, l.earlierThisTurn,
                        cs.callsign, b.topic AS briefTopic
                 FROM latest_per_session l
                 LEFT JOIN session_callsign cs ON cs.sessionId = l.sessionId
@@ -962,7 +976,7 @@ public final class QueueStore: Sendable {
             try WaitingSession.fetchOne(db, sql: """
                 SELECT e.sessionId, max(e.rowid) AS latestId, e.createdAtMs, e.cwd,
                        e.tty, e.promptId, e.transcriptPath, e.lastAssistantMessage,
-                       e.notificationMatcher, e.summaryText, e.hookEvent,
+                       e.notificationMatcher, e.summaryText, e.hookEvent, e.earlierThisTurn,
                        cs.callsign
                 FROM events e
                 LEFT JOIN session_callsign cs ON cs.sessionId = e.sessionId
