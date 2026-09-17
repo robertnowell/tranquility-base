@@ -3745,20 +3745,96 @@ final class StatusHUD: NSObject {
     /// can put it back rather than leaving a stale progress line on screen.
     private var goToSessionPriorBody: String?
 
+    /// What a GO TO AGENT said when it ended: nothing (it opened the tab) or
+    /// the sentence it put on a card.
+    enum GoToSessionAnswer: Equatable {
+        case silent
+        case said(String)
+    }
+
+    /// When the in-flight guard last came down, for the drill that asserts it
+    /// comes down BEFORE the discovery walk rather than after it (#359).
+    private(set) var goToSessionGuardReleasedAt: Date?
+
+    /// Whoever is waiting for the next GO TO AGENT to answer, by ticket, so a
+    /// wait that gives up can withdraw its own ticket and nobody else's.
+    private var goToSessionAnswerWaiters: [UUID: CheckedContinuation<GoToSessionAnswer?, Never>] = [:]
+
+    /// The guard comes down without the jump being over.
+    ///
+    /// Split from `finishGoToSession` on 17 Sep. The not-live branch drops the
+    /// guard before its discovery walk (#359, so the button is pressable again
+    /// while the walk runs) and answers afterwards; while both went through
+    /// `finishGoToSession`, "the guard dropped" and "the jump answered" were
+    /// the same call, and nothing could wait for the second without also
+    /// waking on the first. The drill guessed with timers instead, and the
+    /// guess expired when the walk grew from 5 s to 14 s.
+    func releaseGoToSessionGuard() {
+        guard goToSessionInFlight else { return }
+        goToSessionInFlight = false
+        goToSessionGuardReleasedAt = Date()
+        bodyLabel.stringValue = goToSessionPriorBody ?? bodyLabel.stringValue
+        goToSessionPriorBody = nil
+    }
+
     /// The end of a GO TO AGENT, from wherever it started.
     ///
     /// The HUD decides how to say it, because the HUD is what knows whether a
     /// card is mid-flight: from the card, restore or replace its body and drop
     /// the guard; from a grid row, there is no card to restore, so a message
     /// gets its own result card and silence stays silent.
-    func finishGoToSession(_ message: String?) {
+    ///
+    /// `about` is the session the jump was FOR, and it is not optional. The
+    /// answer can arrive 14 s after the press (the discovery walk, measured
+    /// 17 Sep on 243 archived sessions), by which time the panel has moved on
+    /// and `showResult`'s fallback names whatever it addressed last. That is
+    /// how a refusal about `goto-drill` painted under the title "adopted", a
+    /// fixture from a different drill, on ten of ten launches.
+    func finishGoToSession(_ message: String?, about sessionId: String) {
+        defer {
+            let waiters = goToSessionAnswerWaiters.values
+            goToSessionAnswerWaiters = [:]
+            let answer: GoToSessionAnswer = message.map { .said($0) } ?? .silent
+            waiters.forEach { $0.resume(returning: answer) }
+        }
         if goToSessionInFlight {
             goToSessionInFlight = false
+            goToSessionGuardReleasedAt = Date()
             bodyLabel.stringValue = message ?? goToSessionPriorBody ?? bodyLabel.stringValue
             goToSessionPriorBody = nil
             return
         }
-        if let message { showResult(message) }
+        guard let message else { return }
+        // The name the panel already has for it, wherever it has one; the
+        // short id only when it has none, which is a card that is at least
+        // honest about whose it is.
+        let onStage = currentTarget.flatMap { $0.sessionId == sessionId ? $0 : nil }
+        let label = onStage?.label
+            ?? face.sessionRows.first(where: { $0.id == sessionId })?.name
+            ?? lastAddressed.flatMap { $0.sessionId == sessionId ? $0.label : nil }
+            ?? String(sessionId.prefix(8)).uppercased()
+        showResult(message, about: (sessionId: sessionId, pid: onStage?.pid, label: label))
+    }
+
+    /// Wait for the next GO TO AGENT to answer, however long its walk takes,
+    /// or `nil` once `seconds` have passed without one.
+    ///
+    /// For the drill, which used to sweep at 3 s and again at 9 s and call
+    /// that a round trip; the walk is a function of the archive's size and
+    /// has already outgrown two guesses. The ceiling is here rather than in
+    /// a cancelled task because a continuation that is never resumed is a
+    /// leak, and a cancelled `Task` does nothing to a continuation.
+    func awaitGoToSessionAnswer(within seconds: TimeInterval) async -> GoToSessionAnswer? {
+        let ticket = UUID()
+        return await withCheckedContinuation { continuation in
+            goToSessionAnswerWaiters[ticket] = continuation
+            DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { [weak self] in
+                guard let self,
+                      let gaveUp = self.goToSessionAnswerWaiters.removeValue(forKey: ticket)
+                else { return }
+                gaveUp.resume(returning: nil)
+            }
+        }
     }
 
     /// Advance the highlight to the character range currently being spoken.
