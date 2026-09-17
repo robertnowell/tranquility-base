@@ -169,6 +169,7 @@ class Delivery:
         log = self.state.state_dir / f"delivery-pr-{pr}.log"
         with open(log, "a") as output:
             os.chmod(log, 0o600)
+            attempt_start = output.tell()
             installer = run_install if self.run is subprocess.run else self.run
             result = installer([str(self.root / "scripts/relaunch.sh"), target], cwd=self.root,
                               env=dict(os.environ, TB_DEPLOY_OWNER=owner, TB_DEPLOY_AUTOMATIC="1"),
@@ -177,7 +178,17 @@ class Delivery:
             receipt = self.state.read().get("running")
         if result.returncode == 0 and receipt and receipt["sha"] == target and self.receipt_still_running(receipt):
             return self.update(pr, status="running", receipt=receipt, last_error=None, log=str(log))
-        reason = log.read_text(errors="replace")[-2000:].strip()
+        with log.open("rb") as recorded:
+            recorded.seek(attempt_start)
+            reason = recorded.read().decode("utf-8", errors="replace")[-2000:].strip()
+        if result.returncode == 75:
+            # The product needs the actual blocker, not build/signing output
+            # that can truncate the blocker out of its bounded status payload.
+            lines = [line.strip() for line in reason.splitlines()]
+            explicit = next((line for line in reversed(lines) if line.startswith("deployment deferred: ")), None)
+            detail = explicit.removeprefix("deployment deferred: ").split("; deployment pending", 1)[0] if explicit else None
+            return self.update(pr, status="deployment_pending", log=str(log),
+                               last_error=detail or "Activation deferred; see the delivery log")
         return self.update(pr, status="deployment_pending" if result.returncode == 75 else "failed",
                            last_error=f"relaunch exit {result.returncode}; {reason or 'verified runtime receipt absent or incomplete'}",
                            log=str(log))
