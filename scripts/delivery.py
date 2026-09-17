@@ -23,6 +23,21 @@ spec.loader.exec_module(state_module)
 Blocked = state_module.Blocked
 
 
+def signal_install_group(pgid, sig):
+    try:
+        os.killpg(pgid, sig)
+    except ProcessLookupError:
+        pass
+    except PermissionError:
+        # Darwin can reject a cleanup signal after TERM has removed all live
+        # members. Do not mask EPERM on a surviving process: verify the group.
+        rows = subprocess.check_output(["ps", "-axo", "pgid=,stat="], text=True, timeout=5)
+        for row in rows.splitlines():
+            fields = row.split()
+            if len(fields) >= 2 and fields[0] == str(pgid) and not fields[1].startswith("Z"):
+                raise
+
+
 def run_install(command, **kwargs):
     """Stop the whole build/install process group on timeout or interruption."""
     timeout = kwargs.pop("timeout")
@@ -31,13 +46,13 @@ def run_install(command, **kwargs):
             return subprocess.CompletedProcess(command, child.wait(timeout=timeout))
         except BaseException:
             try:
-                os.killpg(child.pid, signal.SIGTERM)
+                signal_install_group(child.pid, signal.SIGTERM)
                 child.wait(timeout=10)
             except (ProcessLookupError, subprocess.TimeoutExpired):
                 pass
             finally:
                 try:
-                    os.killpg(child.pid, signal.SIGKILL)
+                    signal_install_group(child.pid, signal.SIGKILL)
                 except ProcessLookupError:
                     pass
                 child.wait()
@@ -111,7 +126,7 @@ class Delivery:
         return self.update(pr, status="deployment_pending", target_sha=target,
                            last_error=None)
 
-    def step(self, pr, owner):
+    def step(self, pr, owner, blocked_targets=()):
         self.state.state_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         with open(self.state.state_dir / f"delivery-pr-{pr}.lock", "a") as lock:
             os.chmod(lock.name, 0o600)
@@ -119,9 +134,9 @@ class Delivery:
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError as error:
                 raise Blocked(f"another watcher is checking PR {pr}; its intent remains recorded") from error
-            return self._step(pr, owner)
+            return self._step(pr, owner, blocked_targets)
 
-    def _step(self, pr, owner):
+    def _step(self, pr, owner, blocked_targets=()):
         item = self.observe(pr, owner)
         if item["status"] != "deployment_pending":
             return item
@@ -140,6 +155,8 @@ class Delivery:
             else:
                 return self.update(pr, status="running", target_sha=previous["sha"],
                                    receipt=previous, last_error=None)
+        if target in blocked_targets:
+            return self.update(pr, status="failed", last_error="automatic retry held for this source; inspect the failure and retry explicitly")
         # A current checkout is necessary: relaunch and its shared helpers are
         # the policy. Never build a new app with an old deployment driver.
         for path in ("scripts/relaunch.sh", "scripts/build-clean.sh", "scripts/lib/deployment.sh",
@@ -147,7 +164,7 @@ class Delivery:
             if self.command("git", "hash-object", path) != self.command("git", "rev-parse", f"{target}:{path}"):
                 return self.update(pr, last_error=f"deployment tooling differs from main: {path}")
         # Intent is already durable. A dead watcher or busy install lock leaves
-        # deployment_pending for the next supervised resume; no background job.
+        # deployment_pending for the next foreground or installed worker tick.
         log = self.state.state_dir / f"delivery-pr-{pr}.log"
         with open(log, "a") as output:
             os.chmod(log, 0o600)
@@ -163,6 +180,92 @@ class Delivery:
         return self.update(pr, status="deployment_pending" if result.returncode == 75 else "failed",
                            last_error=f"relaunch exit {result.returncode}; {reason or 'verified runtime receipt absent or incomplete'}",
                            log=str(log))
+
+    def supervise(self):
+        """One durable worker tick. Only recorded PR delivery intent is eligible."""
+        self.state.state_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        with open(self.state.state_dir / "delivery-supervisor.lock", "a") as lock:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return {"phase": "busy"}
+            return self._supervise()
+
+    def _supervise(self):
+        path = self.state.state_dir / "delivery-supervisor.json"
+        previous = json.loads(path.read_text()) if path.exists() else {}
+        if not isinstance(previous, dict):
+            raise Blocked("invalid supervisor state")
+        def save(**fields):
+            previous.update(fields, checked_at=self.now(), owner="desktop-delivery-supervisor")
+            fd, temporary = tempfile.mkstemp(prefix=".supervisor-", dir=self.state.state_dir)
+            try:
+                with os.fdopen(fd, "w") as out:
+                    json.dump(previous, out); out.flush(); os.fsync(out.fileno())
+                os.replace(temporary, path)
+            finally:
+                if os.path.exists(temporary): os.unlink(temporary)
+            return dict(previous)
+
+        # A crashed tick may have reached activation. Permit one recovery attempt,
+        # then hold that target. A completed failed activation is held immediately.
+        interrupted_target = previous.get("attempt_target") if previous.get("phase") == "activating" else None
+        blocked = {previous.get("failed_target")}
+        if interrupted_target and previous.get("attempts", 0) >= 2:
+            blocked.add(interrupted_target)
+        with self.state.transaction():
+            requests = list(self.read()["requests"].values())
+        blocked.update(r.get("target_sha") for r in requests if r.get("status") == "failed")
+        blocked.discard(None)
+        save(phase="checking", reason=None)
+        candidates, errors = [], []
+        for request in requests:
+            if request.get("status") in ("running", "closed"):
+                continue
+            pr = int(request["pr"])
+            try:
+                item = self.observe(pr, "desktop-delivery-supervisor")
+                if item["status"] == "deployment_pending": candidates.append(item)
+            except (Blocked, OSError, ValueError, subprocess.SubprocessError) as error:
+                self.update(pr, retry_owner="desktop-delivery-supervisor", last_error=str(error))
+                errors.append(pr)
+        if not candidates:
+            return save(phase="unavailable" if errors else "idle", target_sha=None,
+                        reason="GitHub observation failed; delivery intent retained" if errors else None)
+        # Observe chooses current main, containing the requested merge. One tick
+        # starts at most one install, however many PRs are waiting.
+        item = candidates[-1]
+        target = item["target_sha"]
+        with self.state.transaction():
+            preview = self.state.active_preview(self.state.read())
+        if preview:
+            return save(phase="deferred", target_sha=target, attempts=0,
+                        reason=f"Preview held by {preview['owner']}")
+        attempts = previous.get("attempts", 0) if previous.get("attempt_target") == target else 0
+        save(phase="activating", target_sha=target, attempt_target=target, attempts=attempts + 1)
+        try:
+            result = self.step(item["pr"], "desktop-delivery-supervisor", blocked_targets=blocked)
+        except (Blocked, OSError, ValueError, subprocess.SubprocessError) as error:
+            self.update(item["pr"], retry_owner="desktop-delivery-supervisor", last_error=str(error))
+            # Interrupted installers leave an uncertain outcome, so the same
+            # crash budget also applies to a timeout. Network failures retry.
+            return save(phase="activating" if isinstance(error, subprocess.TimeoutExpired) else "unavailable",
+                        reason="Delivery did not complete; intent retained")
+        if result["status"] == "running":
+            receipt = result["receipt"]
+            for other in candidates:
+                if other["pr"] == item["pr"]: continue
+                try:
+                    self.command("git", "merge-base", "--is-ancestor", other["merged_sha"], receipt["sha"])
+                except subprocess.SubprocessError:
+                    continue
+                self.update(other["pr"], status="running", target_sha=receipt["sha"], receipt=receipt, last_error=None)
+            return save(phase="running", target_sha=receipt["sha"], attempts=0, failed_target=None, reason=None)
+        failed = result["status"] == "failed"
+        target = result.get("target_sha", target)
+        return save(phase="failed" if failed else "deferred", target_sha=target, attempts=0,
+                    failed_target=target if failed else previous.get("failed_target"),
+                    reason="Activation failed; automatic retry held for this source" if failed else result.get("last_error"))
 
     def processes(self):
         text = self.command("ps", "-axo", "pid=,comm=")
@@ -218,6 +321,7 @@ def main():
             command.add_argument("--pr", required=True, type=int)
             command.add_argument("--observe-only", action="store_true", help="record merge progress without installing (hook mode)")
     sub.add_parser("status")
+    sub.add_parser("supervise", help="one coalescing tick for the installed background worker")
     record = sub.add_parser("record-running")
     record.add_argument("--pid", type=int, required=True)
     record.add_argument("--lock-token", required=True)
@@ -228,6 +332,9 @@ def main():
     state = state_module.DeploymentState(Path.home() / "Library/Application Support/VoiceDispatch", "/tmp/tb-relaunch.lock")
     delivery = Delivery(state)
     try:
+        if args.command == "supervise":
+            print(json.dumps(delivery.supervise()))
+            return 0
         if args.command == "record-running":
             print(json.dumps(delivery.record_running(args.pid, args.lock_token, args.sha, args.bundle, args.launched_at)))
             return 0
@@ -254,6 +361,8 @@ def main():
                 except (Blocked, OSError, ValueError, subprocess.SubprocessError) as error:
                     item = delivery.update(pr, retry_owner=args.owner, last_error=str(error))
                 print(json.dumps(item), flush=True)
+                if item.get("status") == "failed":
+                    return 1
                 pending |= item.get("status") not in ("running", "closed")
             if not args.wait or not pending:
                 return 75 if pending else 0

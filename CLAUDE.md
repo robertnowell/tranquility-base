@@ -88,7 +88,10 @@ Multiple Claude sessions work this repo in parallel. The rules that keep it safe
    merge; use the supervised command and its evidence.
 
    See `docs/preview-ownership.md` and `docs/supervised-delivery.md` for commands,
-   recovery, hook cutover, and the explicit limit: no unattended retry daemon.
+   recovery, hook cutover, and the optional durable delivery worker. A failed
+   activation stops a foreground wait and holds automatic retry of that source;
+   inspect the failure before explicitly retrying. The worker never replays old
+   refused preview/switch attempts as if they were delivery requests.
 7. **`swift test` is not evidence about the panel.** `Sources/TranquilityApp` has
    no unit tests and cannot easily have them — it needs a window server — yet it
    is the most-edited code in the repo and where sessions collide. Its evidence
