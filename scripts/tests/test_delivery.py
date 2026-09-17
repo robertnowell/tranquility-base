@@ -257,13 +257,13 @@ time.sleep(30)
         reservation = self.state.reserve(os.getpid(), token, "preview-owner", A, "dev", 20)
         self.state.unlock(os.getpid(), token)
         self.assertEqual(self.delivery.supervise()["phase"], "deferred")
-        self.assertEqual(self.install_count, 0)
+        self.assertEqual(self.install_count, 1)  # preparation/activation attempt defers safely
         token = self.state.acquire(os.getpid())
         self.state.release(os.getpid(), token, reservation)
         self.state.unlock(os.getpid(), token)
         self.returncode, self.make_receipt = 0, True
         self.assertEqual(self.delivery.supervise()["phase"], "running")
-        self.assertEqual(self.install_count, 1)
+        self.assertEqual(self.install_count, 2)
 
     def test_supervisor_holds_failed_source_across_restart_and_other_requests(self):
         self.merge(); self.delivery.update(1, status="requested"); self.returncode = 1
