@@ -6,6 +6,14 @@
     <description>Updates for Tranquility Base.</description>
     <language>en</language>
     <item>
+      <title>Version 0.3.1261</title>
+      <sparkle:version>1261</sparkle:version>
+      <sparkle:shortVersionString>0.3.1261</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <pubDate>Thu, 17 Sep 2026 16:18:13 +0000</pubDate>
+      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1261-9ee390ab1/TranquilityBase-0.3.1261.dmg" type="application/octet-stream" length="16161815" sparkle:edSignature="7NGNvUGhRLXVL0sQICjoEtXpwGtjz4t3pt3lHYAQuhhFcCXZGb3N/YBrewRutuqteACt5j8r/T6WaWXHSZfXCQ==" />
+    </item>
+    <item>
       <title>Version 0.3.1260</title>
       <sparkle:version>1260</sparkle:version>
       <sparkle:shortVersionString>0.3.1260</sparkle:shortVersionString>
@@ -77,16 +85,8 @@
       <pubDate>Wed, 16 Sep 2026 04:00:38 +0000</pubDate>
       <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1246-1ce1e0cad/TranquilityBase-0.3.1246.dmg" type="application/octet-stream" length="15970078" sparkle:edSignature="vuyzFlTxPiarUvtcFZxYRVix8mz+TOCpW/5ORH3aokM1tEdaRQWHFa3EyCxnM98E12nQpePTGI4QVIYx7mCABA==" />
     </item>
-    <item>
-      <title>Version 0.3.1245</title>
-      <sparkle:version>1245</sparkle:version>
-      <sparkle:shortVersionString>0.3.1245</sparkle:shortVersionString>
-      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <pubDate>Wed, 16 Sep 2026 03:41:46 +0000</pubDate>
-      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1245-fc077a3c4/TranquilityBase-0.3.1245.dmg" type="application/octet-stream" length="15967652" sparkle:edSignature="PHwLtJ40PSIcF+jSjRmtmZcHd5+e4JPSkNyLwdUrcC+T/S7j8ySMPsWpo+/hFO7ACUBRDadml3swLexx68qACQ==" />
-    </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: dT1xF8S/vKgGy8KyvKWdQkBwUoE1IU4SFnaQJmjCMmDyrIdNxde8Z1eYOX13YWcYrE9/KiYoSN5PUurk3xcBAg==
+edSignature: W3DtZVNdlG34lh5VGuWk2tk8GUeZ6aUylNr2Pcm1fU9ZqKImfwZlvOlYCSMKnxg+AOF6pDDm03SsKzWfEUYXBQ==
 length: 6457
 -->
