@@ -102,19 +102,31 @@ class Delivery:
     def observe(self, pr, owner):
         # Write BEFORE any network access, so even an interrupted query has an
         # explicit retry owner. Preserve prior merge/runtime evidence on errors.
-        self.update(pr, retry_owner=owner)
+        previous = self.update(pr, retry_owner=owner)
         observed = json.loads(self.command(
             "gh", "pr", "view", str(pr), "--repo", REPOSITORY, "--json",
-            "state,mergeCommit,headRefOid,autoMergeRequest,labels,url,mergedAt"))
+            "state,mergeCommit,headRefOid,autoMergeRequest,labels,url,mergedAt,mergeStateStatus"))
         if observed["state"] != "MERGED":
-            queued = observed.get("autoMergeRequest") or any(
-                label["name"] == "merge-queue" for label in observed.get("labels", []))
+            labels = {label["name"] for label in observed.get("labels", [])}
+            queued = observed.get("autoMergeRequest") or "merge-queue" in labels
+            had_admission = previous.get("queue_first_requested_at") or previous.get("queue_seen_admitted_at")
             status = "closed" if observed["state"] == "CLOSED" else "queued" if queued else "awaiting_merge"
+            conflict = observed.get("mergeStateStatus") == "DIRTY"
+            queue_state = ("closed" if status == "closed" else "held" if "queue-hold" in labels
+                           else "conflict" if conflict else "queued" if queued
+                           else "awaiting_readmission" if had_admission and previous.get("queue_conflict_seen_at")
+                           else "admission_removed" if had_admission
+                           else "not_admitted")
             return self.update(pr, status=status, head_sha=observed["headRefOid"],
-                               url=observed["url"], last_error=None)
+                               url=observed["url"], last_error=None, queue_state=queue_state,
+                               queue_observed_at=self.now(),
+                               queue_seen_admitted_at=self.now() if "merge-queue" in labels else previous.get("queue_seen_admitted_at"),
+                               queue_admission_error=None if "merge-queue" in labels else previous.get("queue_admission_error"),
+                               queue_conflict_seen_at=self.now() if conflict else previous.get("queue_conflict_seen_at"))
         merged = state_module.full_sha(observed["mergeCommit"]["oid"])
         self.update(pr, status="merged", merged_sha=merged, merged_at=observed["mergedAt"],
-                    url=observed["url"], last_error=None)
+                    url=observed["url"], last_error=None, queue_state="merged", queue_observed_at=self.now(),
+                    queue_admission_error=None)
         remote = self.command("git", "remote", "get-url", "origin")
         if remote.removesuffix(".git") not in (f"https://github.com/{REPOSITORY}", f"git@github.com:{REPOSITORY}"):
             raise Blocked("deployment checkout does not use the expected origin")
@@ -125,6 +137,51 @@ class Delivery:
         target = state_module.full_sha(self.command("git", "rev-parse", "origin/main"))
         return self.update(pr, status="deployment_pending", target_sha=target,
                            last_error=None)
+
+    def admit(self, pr, owner, expected_head):
+        """Persist delivery intent before requesting an opt-in queue admission."""
+        if pr < 1 or not owner.strip():
+            raise ValueError("a positive PR number and named owner are required")
+        expected_head = state_module.full_sha(expected_head)
+        self.state.state_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        with open(self.state.state_dir / "merge-queue-admission.lock", "a") as lock:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as error:
+                raise Blocked("another operator is admitting a PR; retry after it finishes") from error
+            remote = self.command("git", "remote", "get-url", "origin")
+            if remote.removesuffix(".git") not in (f"https://github.com/{REPOSITORY}", f"git@github.com:{REPOSITORY}"):
+                raise Blocked("queue admission requires the product repository")
+            self.command("git", "fetch", "-q", "origin")
+            for path in ("scripts/delivery.py", ".kodiak.toml"):
+                if self.command("git", "hash-object", path) != self.command("git", "rev-parse", f"origin/main:{path}"):
+                    raise Blocked(f"queue admission tooling differs from merged main: {path}")
+            candidate = json.loads(self.command(
+                "gh", "pr", "view", str(pr), "--repo", REPOSITORY, "--json",
+                "state,isDraft,baseRefName,headRefOid,autoMergeRequest,labels,mergeStateStatus"))
+            if candidate.get("state") != "OPEN" or candidate.get("isDraft") is not False or candidate.get("baseRefName") != "main":
+                raise Blocked("queue admission requires an open, non-draft PR targeting main")
+            if candidate.get("headRefOid") != expected_head:
+                raise Blocked("PR head changed; review its current source before admission")
+            if candidate.get("autoMergeRequest") is not None:
+                raise Blocked("GitHub auto-merge is already armed; use one merge coordinator")
+            if "queue-hold" in {label["name"] for label in candidate.get("labels", [])}:
+                raise Blocked("queue-hold is present; admission does not release a hold")
+            if candidate.get("mergeStateStatus") in (None, "UNKNOWN", "DIRTY"):
+                raise Blocked("resolve the conflict or wait for GitHub's mergeability result before admission")
+            with self.state.transaction():
+                previous = self.read()["requests"].get(str(pr), {})
+            # Label mutation can time out after GitHub applies it. Intent must
+            # already exist; never roll it back or assume the PR was not admitted.
+            self.update(pr, retry_owner=owner, queue_owner=owner, queue_requested_head=expected_head,
+                        queue_first_requested_at=previous.get("queue_first_requested_at", self.now()),
+                        queue_last_requested_at=self.now(), queue_admission_error=None)
+            try:
+                self.command("gh", "pr", "edit", str(pr), "--repo", REPOSITORY, "--add-label", "merge-queue")
+                return self.observe(pr, owner)
+            except (Blocked, OSError, ValueError, subprocess.SubprocessError) as error:
+                self.update(pr, queue_admission_error=str(error))
+                raise
 
     def step(self, pr, owner, blocked_targets=()):
         self.state.state_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -328,6 +385,10 @@ def main():
             command.add_argument("--pr", required=True, type=int)
             command.add_argument("--observe-only", action="store_true", help="record merge progress without installing (hook mode)")
     sub.add_parser("status")
+    admit = sub.add_parser("admit", help="record delivery intent, then request protected queue admission")
+    admit.add_argument("--pr", type=int, required=True)
+    admit.add_argument("--owner", required=True)
+    admit.add_argument("--head", type=state_module.full_sha, required=True, help="reviewed full PR head SHA")
     sub.add_parser("supervise", help="one coalescing tick for the installed background worker")
     record = sub.add_parser("record-running")
     record.add_argument("--pid", type=int, required=True)
@@ -339,6 +400,10 @@ def main():
     state = state_module.DeploymentState(Path.home() / "Library/Application Support/VoiceDispatch", "/tmp/tb-relaunch.lock")
     delivery = Delivery(state)
     try:
+        if args.command == "admit":
+            item = delivery.admit(args.pr, args.owner, args.head)
+            print(json.dumps(item))
+            return 0 if item.get("status") in ("queued", "deployment_pending", "running") else 75
         if args.command == "supervise":
             print(json.dumps(delivery.supervise()))
             return 0
