@@ -128,6 +128,7 @@ final class StatusHUD: NSObject {
     /// ones never reach it.
     var collapsedLampCount: Int { strip?.lamps.count ?? 0 }
     var collapsedGlowStrength: CGFloat { strip?.currentGlowStrength ?? 0 }
+    var collapsedGlowTimerIsActive: Bool { strip?.glowTimerIsActive ?? false }
     /// The ink the column actually painted in a lamp's middle — a state colour
     /// when the lamp is solid, transparent when it is a ring.
     func collapsedLampCentreInk(_ index: Int) -> NSColor? {
