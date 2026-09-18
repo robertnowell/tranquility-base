@@ -32,20 +32,45 @@ extension AppDelegate {
     /// the user asked for disarmed remain-on-exit first and left no corpse, so
     /// it is silently skipped here (see `onTerminateSession` and `postMortem`).
     func observeExits() {
-        let liveSessions = (ClaudeAgentsCLI().sessions() ?? [])
-            + FileSessionOwnershipStore.shared.liveNonRegistrySessions()
-        // Resolve and cache each agent's tmux session name the first time it
-        // is seen alive: once it is gone from the registry it can no longer be
-        // looked up, so the name has to be captured while it is still here.
-        for session in liveSessions where paneNameById[session.sessionId] == nil {
-            if let name = TmuxOwnership.pane(
-                forSessionId: session.sessionId, pid: session.pid)?.sessionName {
-                paneNameById[session.sessionId] = name
+        // The cold lookup runs a server inventory and process probes for each
+        // agent. Doing it in the UI tick stalled the collapse drill past its
+        // two-second frame deadline on 18 Sep (#541). One background snapshot
+        // at a time also prevents an older result arriving after a newer one.
+        guard !exitObservationInFlight else { return }
+        exitObservationInFlight = true
+        exitProbesStarted += 1
+        let cachedNames = paneNameById
+        Task.detached { [weak self] in
+            // The probe below is synchronous, with no suspension until its
+            // result returns to the main actor. Check this execution segment.
+            let ranOffMain = { !Thread.isMainThread }()
+            let liveSessions = (ClaudeAgentsCLI().sessions() ?? [])
+                + FileSessionOwnershipStore.shared.liveNonRegistrySessions()
+            var names = cachedNames
+            // Retain the verified name while the agent is alive, for the
+            // later post-mortem. Ownership verification is unchanged.
+            for session in liveSessions where names[session.sessionId] == nil {
+                if let name = TmuxOwnership.pane(
+                    forSessionId: session.sessionId, pid: session.pid)?.sessionName {
+                    names[session.sessionId] = name
+                }
+            }
+            let live = liveSessions.map {
+                (id: $0.sessionId, harness: $0.harness, sessionName: names[$0.sessionId])
+            }
+            let resolvedNames = names
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                self.paneNameById = resolvedNames
+                self.exitProbesCompleted += 1
+                self.exitProbeRanOffMain = ranOffMain
+                self.exitObservationInFlight = false
+                self.recordObservedExits(live)
             }
         }
-        let live = liveSessions.map {
-            (id: $0.sessionId, harness: $0.harness, sessionName: paneNameById[$0.sessionId])
-        }
+    }
+
+    private func recordObservedExits(_ live: [(id: String, harness: String, sessionName: String?)]) {
         for vanished in exitWatch.observe(live) {
             paneNameById[vanished.id] = nil
             guard let name = vanished.sessionName else { continue }

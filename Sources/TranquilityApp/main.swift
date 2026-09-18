@@ -343,6 +343,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// first seen and kept so the name is still in hand after the agent is
     /// gone from the registry and can no longer be looked up.
     var paneNameById: [String: String] = [:]
+    var exitObservationInFlight = false
+    var exitProbesStarted = 0
+    var exitProbesCompleted = 0
+    var exitProbeRanOffMain = false
     let launchedAt = Date()
     /// Which sessions were already waiting on the previous tick.
     ///
