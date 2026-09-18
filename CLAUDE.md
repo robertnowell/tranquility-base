@@ -73,6 +73,15 @@ Multiple Claude sessions work this repo in parallel. The rules that keep it safe
    named supervisor. Continue with `delivery.py resume --owner SESSION --wait`.
    Never report "running" from a checkout HEAD or a queued merge request.
 
+   **Queue admission records delivery first.** For the supervised queue pilot,
+   the named coordinator uses `delivery.py admit --pr NUMBER --owner SESSION
+   --head FULL_PR_HEAD_SHA` from the current deployment checkout. Do not merely
+   add a label; that bypasses the merge-command hook. Other sessions must not
+   independently update/rebase or arm auto-merge on an admitted PR. A conflict
+   can remove admission and requires explicit review/re-admission. The active
+   cohort is recorded in #493; see `docs/merge-queue.md`. Existing open PRs are
+   not automatically authorized for that cohort.
+
    **All four mutation paths use the current deployment checkout.** Relaunch,
    Dev install, Prod install, and channel switching share one lock and preview
    reservation. Do not use an older worktree's installer to bypass a deferral.

@@ -5,6 +5,11 @@ admission, merge completion, and running software have separate evidence.
 
 ## The operator's path
 
+For the supervised queue pilot, use `delivery.py admit --pr NUMBER --owner
+SESSION --head FULL_PR_HEAD_SHA` before any label-only admission. It persists
+delivery intent before requesting the queue. See [merge-queue.md](merge-queue.md)
+for cutover, coordinator ownership, explicit holds and conflict re-admission.
+
 After requesting a merge, keep one named supervisor on the request:
 
 ```sh

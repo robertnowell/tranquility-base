@@ -25,7 +25,11 @@ class DeliveryTests(unittest.TestCase):
         self.state = module.state_module.DeploymentState(self.root / "state", self.root / "lock")
         self.delivery = module.Delivery(self.state, self.root, self.run_command)
         self.observed = {"state": "OPEN", "headRefOid": A, "autoMergeRequest": None,
-                         "labels": [], "url": "https://example.invalid/pr/1", "mergedAt": None}
+                         "labels": [], "url": "https://example.invalid/pr/1", "mergedAt": None,
+                         "isDraft": False, "baseRefName": "main", "mergeStateStatus": "CLEAN"}
+        self.admission_calls = 0
+        self.admission_timeout = False
+        self.merge_during_admission = False
         self.app = self.root / "Tranquility Base Dev.app"
         (self.app / "Contents").mkdir(parents=True)
         (self.app / "Contents/Info.plist").write_bytes(plistlib.dumps({"TBSourceCommit": B}))
@@ -49,6 +53,17 @@ class DeliveryTests(unittest.TestCase):
         if args[0] == "gh":
             if self.network_failure:
                 raise subprocess.TimeoutExpired(args, 45)
+            if args[:3] == ["gh", "pr", "edit"]:
+                # Inspect disk from a fresh instance at the mutation boundary.
+                saved = module.Delivery(self.state).read()["requests"][args[3]]
+                self.assertEqual(saved["queue_requested_head"], A)
+                self.assertTrue(saved["queue_owner"])
+                self.admission_calls += 1
+                self.observed["labels"] = [{"name": "merge-queue"}]
+                if self.merge_during_admission:
+                    self.merge()
+                if self.admission_timeout:
+                    raise subprocess.TimeoutExpired(args, 45)
             output = json.dumps(self.observed)
         elif args[:4] == ["git", "remote", "get-url", "origin"]:
             output = f"https://github.com/{module.REPOSITORY}.git"
@@ -117,6 +132,101 @@ class DeliveryTests(unittest.TestCase):
         with self.assertRaises(subprocess.TimeoutExpired):
             self.delivery.step(1, "owner")
         self.assertEqual(self.delivery.read()["requests"]["1"]["retry_owner"], "owner")
+
+    def test_admission_records_intent_before_label_and_never_installs(self):
+        result = self.delivery.admit(1, "coordinator", A)
+        self.assertEqual(result["status"], "queued")
+        self.assertEqual(result["queue_owner"], "coordinator")
+        self.assertEqual(result["queue_requested_head"], A)
+        self.assertEqual(self.admission_calls, 1)
+        self.assertEqual(self.install_count, 0)
+
+    def test_admission_refuses_wrong_source_drafts_holds_and_competing_merges(self):
+        for change in ({"headRefOid": B}, {"isDraft": True}, {"baseRefName": "release"},
+                       {"state": "MERGED"}, {"state": "CLOSED"}, {"autoMergeRequest": {}},
+                       {"labels": [{"name": "queue-hold"}]}, {"mergeStateStatus": "DIRTY"},
+                       {"mergeStateStatus": "UNKNOWN"}):
+            with self.subTest(change=change):
+                original = dict(self.observed)
+                self.observed.update(change)
+                with self.assertRaises(module.Blocked):
+                    self.delivery.admit(1, "coordinator", A)
+                self.observed = original
+        self.assertEqual(self.admission_calls, 0)
+        self.assertFalse(self.delivery.read()["requests"])
+
+    def test_admission_refuses_unmerged_driver_and_invalid_arguments(self):
+        self.stale_driver = True
+        with self.assertRaisesRegex(module.Blocked, "tooling differs"):
+            self.delivery.admit(1, "coordinator", A)
+        for pr, owner, sha in ((0, "owner", A), (1, " ", A), (1, "owner", "short")):
+            with self.subTest(pr=pr, owner=owner, sha=sha), self.assertRaises((ValueError, module.argparse.ArgumentTypeError)):
+                self.delivery.admit(pr, owner, sha)
+        self.assertEqual(self.admission_calls, 0)
+
+    def test_failed_intent_write_never_applies_the_label(self):
+        from unittest.mock import patch
+        with patch.object(self.delivery, "update", side_effect=OSError("disk unavailable")):
+            with self.assertRaises(OSError):
+                self.delivery.admit(1, "coordinator", A)
+        self.assertEqual(self.admission_calls, 0)
+
+    def test_unadmitted_conflict_does_not_claim_readmission_is_needed(self):
+        self.observed["mergeStateStatus"] = "DIRTY"
+        self.delivery.observe(1, "owner")
+        self.observed["mergeStateStatus"] = "CLEAN"
+        self.assertEqual(self.delivery.observe(1, "owner")["queue_state"], "not_admitted")
+
+    def test_label_timeout_keeps_intent_and_worker_recovers_after_session_loss(self):
+        self.admission_timeout = True
+        with self.assertRaises(subprocess.TimeoutExpired):
+            self.delivery.admit(1, "coordinator", A)
+        saved = self.delivery.read()["requests"]["1"]
+        self.assertTrue(saved["queue_admission_error"])
+        self.assertEqual(saved["queue_owner"], "coordinator")
+        self.merge()
+        reopened = module.Delivery(self.state, self.root, self.run_command)
+        self.assertEqual(reopened.supervise()["phase"], "deferred")
+        self.returncode, self.make_receipt = 0, True
+        self.assertEqual(reopened.supervise()["phase"], "running")
+        result = reopened.read()["requests"]["1"]
+        self.assertEqual(result["receipt"]["sha"], B)
+        self.assertEqual(result["queue_owner"], "coordinator")
+
+    def test_merge_during_admission_stays_pending_without_foreground_install(self):
+        self.merge_during_admission = True
+        result = self.delivery.admit(1, "coordinator", A)
+        self.assertEqual(result["status"], "deployment_pending")
+        self.assertEqual((result["merged_sha"], result["target_sha"]), (A, B))
+        self.assertEqual(self.install_count, 0)
+
+    def test_queue_conflict_readmission_and_hold_are_distinct(self):
+        self.delivery.admit(1, "coordinator", A)
+        first = self.delivery.read()["requests"]["1"]["queue_first_requested_at"]
+        self.observed.update(mergeStateStatus="DIRTY", labels=[])
+        self.assertEqual(self.delivery.observe(1, "worker")["queue_state"], "conflict")
+        self.observed["mergeStateStatus"] = "CLEAN"
+        self.assertEqual(self.delivery.observe(1, "worker")["queue_state"], "awaiting_readmission")
+        result = self.delivery.admit(1, "coordinator", A)
+        self.assertEqual(result["queue_first_requested_at"], first)
+        self.assertEqual(result["queue_state"], "queued")
+        self.observed["labels"].append({"name": "queue-hold"})
+        self.assertEqual(self.delivery.observe(1, "worker")["queue_state"], "held")
+
+    def test_admitted_requests_coalesce_after_owner_disappears_and_safe_deferral(self):
+        for pr in (1, 2, 3):
+            self.delivery.admit(pr, "coordinator", A)
+        self.merge()
+        reopened = module.Delivery(self.state, self.root, self.run_command)
+        self.install_output = "deployment deferred: preview reserved by owner\n"
+        self.assertEqual(reopened.supervise()["phase"], "deferred")
+        self.assertEqual(self.install_count, 1)
+        self.returncode, self.make_receipt = 0, True
+        self.assertEqual(reopened.supervise()["phase"], "running")
+        for request in reopened.read()["requests"].values():
+            self.assertEqual(request["status"], "running")
+            self.assertEqual(request["receipt"]["sha"], B)
+        self.assertEqual(self.install_count, 2)
 
     def test_merge_outside_main_cannot_be_deployed(self):
         self.merge()
