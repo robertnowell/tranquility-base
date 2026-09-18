@@ -55,26 +55,29 @@ final class RemoteSpoolTests: XCTestCase {
                        "The agent is asking: How deep?. Options: Thorough, Quick.", "the agent's own question is not a permission")
     }
 
-    /// A question that died with the process is written as a turn at adoption.
-    func testAnAdoptedAgentWhoseLastWordWasAQuestionSaysItExpired() {
+
+    /// The decision the card shows: the ask verbatim, the choices as the proposal.
+    /// A question this app still holds is closed by an answer given elsewhere,
+    /// or by the agent coming back with no request (the ask died with the
+    /// process). Closed means dismissed, never replaced by a templated turn.
+    func testAQuestionIsClosedByAnAnswerOrByComingBackWithoutOne() {
         let adopted = agent(state: .completed)
         let asked = WaitingSession(sessionId: adopted.id, latestId: 9, createdAtMs: 1_000,
                                    lastAssistantMessage: "The agent is asking permission: x",
                                    notificationMatcher: "agent_question", hookEvent: .stop)
-        let lines = RemoteSpool.expiredQuestion(for: event(.appeared(adopted)), agent: adopted, latest: asked)
-        XCTAssertEqual(lines.count, 1)
-        XCTAssertEqual(lines[0].hookEvent, .stop)
-        XCTAssertEqual(lines[0].notificationMatcher, "agent_question_expired")
-        XCTAssertTrue(lines[0].lastAssistantMessage?.contains("interrupted") == true)
+        let open = PendingRequest(id: "q", session: adopted.id, asked: "x?")
+        XCTAssertTrue(RemoteSpool.closesQuestion(event(.appeared(adopted)), pending: nil, latest: asked))
+        XCTAssertFalse(RemoteSpool.closesQuestion(event(.appeared(adopted)), pending: open, latest: asked),
+                       "the ask survived; it stays open and amber")
+        XCTAssertTrue(RemoteSpool.closesQuestion(event(.answered(requestId: "q")), pending: nil, latest: asked))
+        XCTAssertFalse(RemoteSpool.closesQuestion(event(.changed(adopted)), pending: nil, latest: asked),
+                       "a live change is not a restart")
         let finished = WaitingSession(sessionId: adopted.id, latestId: 9, createdAtMs: 1_000,
                                       lastAssistantMessage: "Done.", hookEvent: .stop)
-        XCTAssertEqual(RemoteSpool.expiredQuestion(for: event(.appeared(adopted)), agent: adopted, latest: finished), [],
-                       "a finished turn is not an expired question")
-        XCTAssertEqual(RemoteSpool.expiredQuestion(for: event(.changed(adopted)), agent: adopted, latest: asked), [],
-                       "only adoption writes it; a live change is not a restart")
+        XCTAssertFalse(RemoteSpool.closesQuestion(event(.appeared(adopted)), pending: nil, latest: finished),
+                       "nothing to close when the last word was not a question")
     }
 
-    /// The decision the card shows: the ask verbatim, the choices as the proposal.
     func testAQuestionsBriefIsTheDecisionNotASummary() {
         let words = "The agent is asking permission: Read ~/Downloads/x.png. Options: Allow once, Always allow, Reject."
         let brief = RemoteSpool.decision(from: words, projectLabel: "toy")
