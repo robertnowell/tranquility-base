@@ -1786,7 +1786,12 @@ extension AppDelegate {
             // printed the PANE tty while the script raised a Terminal tab it
             // had found by a different tty entirely, so twelve wrong windows
             // in a row logged as twelve successes and the record could not be
-            // used to tell a hit from a corpse (13 Sep).
+            // used to tell a hit from a corpse (13 Sep). The window id here
+            // is only as honest as the raise that just used it: on 17 Sep the
+            // table held a stranger's id and four "focused … window 725"
+            // lines agreed with it. `TerminalTabFocus` now refuses to raise a
+            // window whose name does not carry this session, so an id that
+            // reaches this line has been checked against the window itself.
             let landedOn = TmuxOwnership.pane(forSessionId: sessionId, pid: nil)
                 .map { pane in
                     TerminalWindows.windowId(for: pane.sessionName)
