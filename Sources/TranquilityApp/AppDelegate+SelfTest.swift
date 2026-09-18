@@ -215,6 +215,14 @@ extension AppDelegate {
         refreshWaitingSnapshot()          // second call, same instant
         let startedByTwoCalls = waitingProbesStarted - startedBefore
 
+        let exitsStartedBefore = exitProbesStarted
+        let exitsCompletedBefore = exitProbesCompleted
+        let exitStart = Date()
+        observeExits()
+        observeExits()
+        let exitRequestTime = Date().timeIntervalSince(exitStart)
+        let exitsStartedByTwoCalls = exitProbesStarted - exitsStartedBefore
+
         // 15s, not 10: `sessions()` allows the CLI an 8-second deadline and
         // then two more seconds to drain its pipes, so 10 is exactly the worst
         // case it is meant to tolerate rather than comfortably past it.
@@ -224,9 +232,14 @@ extension AppDelegate {
                 ("paintNeverProbes", worst < 0.1),
                 ("probeCompletedOffMain", self.waitingProbesCompleted > completedBefore),
                 ("probeIsNotReentrant", startedByTwoCalls == 1),
+                ("exitObservationNeverBlocksPaint", exitRequestTime < 0.1),
+                ("exitObservationCompletedOffMain", self.exitProbesCompleted > exitsCompletedBefore
+                    && self.exitProbeRanOffMain),
+                ("exitObservationIsNotReentrant", exitsStartedByTwoCalls == 1),
             ])
             Permissions.log("refreshIsCheap: worstRefresh=\(Int(worst * 1000))ms "
-                            + "badge=\(self.waitingCountSnapshot)")
+                            + "badge=\(self.waitingCountSnapshot) "
+                            + "exitRequest=\(Int(exitRequestTime * 1000))ms")
         }
     }
 

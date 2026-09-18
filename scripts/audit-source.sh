@@ -29,6 +29,7 @@ echo "→ source audit $EXPECTED_COMMIT"
 python3 scripts/tests/test_source_audit.py
 python3 scripts/tests/test_deployment_state.py
 python3 scripts/tests/test_delivery.py
+python3 scripts/tests/test_queue_measurements.py
 python3 scripts/tests/test_test_gate.py
 python3 scripts/tests/test_run_stage.py
 python3 scripts/tests/test_prepared_dev.py
