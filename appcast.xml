@@ -6,6 +6,14 @@
     <description>Updates for Tranquility Base.</description>
     <language>en</language>
     <item>
+      <title>Version 0.3.1271</title>
+      <sparkle:version>1271</sparkle:version>
+      <sparkle:shortVersionString>0.3.1271</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <pubDate>Fri, 18 Sep 2026 17:38:34 +0000</pubDate>
+      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1271-8c16aecb2/TranquilityBase-0.3.1271.dmg" type="application/octet-stream" length="16338085" sparkle:edSignature="kyZN1sCs5fRDJrIDcbpmfvz5Qs5obdCCxe97ovKyA2kTte6odw92AooKwYiiL2IHB5yDx9xHT0l34JkM5pfIAg==" />
+    </item>
+    <item>
       <title>Version 0.3.1270</title>
       <sparkle:version>1270</sparkle:version>
       <sparkle:shortVersionString>0.3.1270</sparkle:shortVersionString>
@@ -77,16 +85,8 @@
       <pubDate>Thu, 17 Sep 2026 18:18:08 +0000</pubDate>
       <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1262-4e114d4e8/TranquilityBase-0.3.1262.dmg" type="application/octet-stream" length="16176270" sparkle:edSignature="hY8u34902lXtVGTvKo1PS+b+1sOPBcw3UiWOZgbrty5LoQ7FLWZ75hLJsaHX9cPPt06VpLTwx99fhKHieaqwAQ==" />
     </item>
-    <item>
-      <title>Version 0.3.1261</title>
-      <sparkle:version>1261</sparkle:version>
-      <sparkle:shortVersionString>0.3.1261</sparkle:shortVersionString>
-      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <pubDate>Thu, 17 Sep 2026 16:18:13 +0000</pubDate>
-      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1261-9ee390ab1/TranquilityBase-0.3.1261.dmg" type="application/octet-stream" length="16161815" sparkle:edSignature="7NGNvUGhRLXVL0sQICjoEtXpwGtjz4t3pt3lHYAQuhhFcCXZGb3N/YBrewRutuqteACt5j8r/T6WaWXHSZfXCQ==" />
-    </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: RocQ2N3sKjExGsMy7Bu5p3ua95OAf+k+o3pBvo8cj4XlGyLy0fRm045CKerF4lMfqttaVThgxhTx4PR//ihvDA==
+edSignature: v9H4f5pwo8/P4YMjiYLRnE1xEihsB+qPg9ytil+gOkg1paeDYsU6zU2U/OON+dfdpUdOYeJYkX/o4ckHyPNIBQ==
 length: 6457
 -->
