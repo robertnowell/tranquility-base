@@ -1663,8 +1663,22 @@ extension StatusHUD {
         defer { CollapsedStrip.glowSeconds = realGlow }
         flashArrival(.ready)
         let glowLit = collapsedGlowStrength > 0
-        RunLoop.current.run(until: Date().addingTimeInterval(0.45))
+        // A single run(until:) can return after a slow callback without giving
+        // the overdue glow timer another turn (#532). Observe the real timer's
+        // invalidation, pumping short slices; never call stepGlow from the
+        // drill or turn a stuck timer into a pass. Two seconds bounds scheduling
+        // delay, while the glow itself still has its 0.2-second test duration.
+        let glowWaitStarted = Date()
+        let glowDeadline = glowWaitStarted.addingTimeInterval(2)
+        while collapsedGlowTimerIsActive && Date() < glowDeadline {
+            RunLoop.current.run(mode: .default,
+                                before: min(Date().addingTimeInterval(0.02), glowDeadline))
+        }
+        let glowWait = Date().timeIntervalSince(glowWaitStarted)
         let glowDecayed = collapsedGlowStrength == 0
+        let glowTimerCompleted = !collapsedGlowTimerIsActive && glowWait < 2
+        Permissions.log("collapse glow: wait=\(Int(glowWait * 1000))ms "
+                        + "timerActive=\(collapsedGlowTimerIsActive) strength=\(collapsedGlowStrength)")
         setCollapsed(false)
         flashArrival(.ready)
         let glowIgnoredWhenExpanded = collapsedGlowStrength == 0
@@ -1852,6 +1866,7 @@ extension StatusHUD {
             ("expandRestoresTheGrid", expandedAgain),
             ("glowLit", glowLit),
             ("glowDecayedOnItsOwn", glowDecayed),
+            ("glowTimerCompletedWithinDeadline", glowTimerCompleted),
             ("glowOnlyWhenCollapsed", glowIgnoredWhenExpanded),
             ("dismissTakesItAway", wentAway && dismissedAgain),
             ("showIdleWouldRaise", showIdleDoesRaise),
