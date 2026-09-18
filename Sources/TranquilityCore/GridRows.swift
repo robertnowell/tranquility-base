@@ -42,6 +42,14 @@ public extension GridAssembler {
         public var discovered: [SessionDiscovery.Session]
         /// Already smoothed: see `smoothedLive`.
         public var liveById: [String: LiveSession]
+        /// Whether the liveness witness answered at all this tick. False only
+        /// when `ClaudeAgentsCLI.sessions()` returned nil (the registry could
+        /// not be read); an EMPTY answer is true, and means nobody is home.
+        /// Until 16 Sep the band below read "known" off `!liveById.isEmpty`,
+        /// which cannot tell those apart, so an empty machine — every reboot —
+        /// drew each remembered session green with no process behind it and
+        /// offered no revive anywhere. Twice.
+        public var livenessKnown: Bool
         public var boundaries: [String: SessionActivity.TurnBoundary]
         /// The user's own switch, both halves, read once per repaint.
         public var switchedOff: Set<String>
@@ -122,12 +130,14 @@ public extension GridAssembler {
             supersedesWaiting: @escaping (String, Int64) -> Bool,
             isInFlight: @escaping (String) -> Bool,
             closedCallsigns: [String: String] = [:],
-            remote: RemoteAgents = RemoteAgents()
+            remote: RemoteAgents = RemoteAgents(),
+            livenessKnown: Bool = true
         ) {
             self.waiting = waiting
             self.known = known
             self.discovered = discovered
             self.liveById = liveById
+            self.livenessKnown = livenessKnown
             self.boundaries = boundaries
             self.switchedOff = switchedOff
             self.switchedOn = switchedOn
@@ -300,11 +310,14 @@ public extension GridAssembler {
         // three-lamp ruling it is also incoherent: green means "your turn" and
         // there is nothing to take a turn.
         //
-        // Guarded on a NON-EMPTY probe, because "the CLI returned nothing"
-        // and "nothing is running" are the same value and only one of them
-        // should grey the whole panel. `smoothedLive` has already absorbed the
-        // transient misses by the time the rows are built.
-        let livenessKnown = !input.liveById.isEmpty
+        // Guarded on the witness having ANSWERED, not on it having found
+        // anyone: "the registry could not be read" and "nothing is running"
+        // are different answers and only the second greys the panel. Reading
+        // this off a non-empty map was the 10 Sep and 16 Sep failure: after a
+        // reboot nobody is running, so every remembered row stayed green.
+        // `smoothedLive` has already absorbed the transient misses by the
+        // time the rows are built.
+        let livenessKnown = input.livenessKnown
         var rows = input.waiting
             .filter { !providerOwned.contains($0.sessionId) }
             .map { (event: WaitingSession) -> SessionRow in

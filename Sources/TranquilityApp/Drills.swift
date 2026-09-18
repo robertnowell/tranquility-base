@@ -1450,6 +1450,59 @@ extension StatusHUD {
         SelfTest.report("openCodeRow", checks)
     }
 
+    /// The reboot, on the real panel. Every local process is gone, the
+    /// witness said so honestly, and the grid must draw the remembered
+    /// sessions greyed with revive on the lamp — not green, which is what it
+    /// drew for four hours on 10 Sep and twenty minutes on 16 Sep, when
+    /// "nobody is home" and "could not look" were one value. A cloud row in
+    /// the same repaint keeps its own provider's answer: the Mac rebooting
+    /// says nothing about an agent that does not run on it.
+    func rebootGridDrill() {
+        func owed(_ id: String) -> WaitingSession {
+            var w = WaitingSession(sessionId: id, latestId: 1, createdAtMs: 0, hookEvent: .stop)
+            w.cwd = "/tmp"
+            return w
+        }
+        let dead = "6d1a77e0-0000-4000-8000-00000000d0d0"
+        let deadToo = "6d1a77e0-0000-4000-8000-00000000d0d1"
+        let cloud = AgentSession.of("ses_drill_reboot_cloud", provider: "crobot",
+                                    title: "Still in the cloud", state: .working)
+        func assemble(livenessKnown: Bool) -> [SessionRow] {
+            GridAssembler.rows(GridAssembler.RowInputs(
+                waiting: [owed(dead), owed(deadToo)], known: [], discovered: [],
+                liveById: [:], boundaries: [:], switchedOff: [], switchedOn: [],
+                evidence: { _, _ in nil }, isHeadless: { _ in false }, family: { [$0] },
+                supersedesWaiting: { _, _ in false }, isInFlight: { _ in false },
+                remote: .init(agents: [cloud]), livenessKnown: livenessKnown)).rows
+        }
+        let after = assemble(livenessKnown: true)
+        let held = assemble(livenessKnown: false)
+        func lamp(_ rows: [SessionRow], _ id: String) -> Lamp? { rows.first { $0.id == id }?.lamp }
+
+        // Drawn for real, then the lamp is tapped through the row the panel
+        // built, and the verb it fires is captured rather than performed.
+        showIdle(rows: after)
+        let built = waitingRows.arrangedSubviews.compactMap { $0 as? GridRowView }
+        var revived: [String] = []
+        let saved = onRevive
+        onRevive = { id, _ in revived.append(id) }
+        built.first { $0.identifier?.rawValue == dead }?.onLampTap?()
+        onRevive = saved
+        showIdle(rows: [])
+
+        SelfTest.report("rebootGrid", [
+            ("emptyMachineGreysEveryLocalRow",
+             lamp(after, dead) == .unlit && lamp(after, deadToo) == .unlit),
+            ("andOffersReviveOnEach",
+             after.filter { $0.lamp == .unlit }.allSatisfy(\.revivable)),
+            ("theCloudRowIsUntouched", lamp(after, cloud.id) == .working),
+            ("aWitnessThatDidNotSpeakGreysNothing",
+             lamp(held, dead) == .ready && lamp(held, deadToo) == .ready),
+            ("everyRowIsDrawn", built.count == after.count),
+            ("theLampTapRevivesThatSession", revived == [dead]),
+        ])
+    }
+
     func closedRowsDrill() {
         func row(_ id: String, _ lamp: Lamp,
                  revivable: Bool = false) -> SessionRow {
