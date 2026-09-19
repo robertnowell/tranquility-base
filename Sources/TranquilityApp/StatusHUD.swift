@@ -3147,14 +3147,26 @@ final class StatusHUD: NSObject {
 
         // The strip's bottom rule, under "AGENTS ⚙".
         waitingRows.addArrangedSubview(hairline(StateLegend.Palette.hairline))
-        // Manager mode (19 Sep): the orb takes the grid's place. The rows are
-        // still the fleet; the manager is how you reach them without hands.
+        // Manager mode (19 Sep): voice only. The orb takes the grid's place
+        // and the only door left is the one that turns it off; NEW AGENT and
+        // PAST AGENTS are what the voice is for. The fleet is still there,
+        // reached by speaking, and the rows come back when the manager stops.
         if managerOn {
             waitingRows.addArrangedSubview(managerOrb)
             managerOrb.widthAnchor.constraint(equalToConstant: Self.gridWidth).isActive = true
             waitingRows.addArrangedSubview(hairline(StateLegend.Palette.hairlineSoft))
+            let stopRow = SplitPlacardRowView(
+                width: Self.gridWidth, target: self,
+                leadingHarness: AgentDefaults.defaultHarness,
+                leading: (StateLegend.managerTitle, "●", #selector(managerRowTapped)),
+                trailing: (StateLegend.managerOffTitle, "■", #selector(managerRowTapped)))
+            waitingRows.addArrangedSubview(stopRow)
+            stopRow.widthAnchor.constraint(equalToConstant: Self.gridWidth).isActive = true
+            waitingRows.addArrangedSubview(hairline(StateLegend.Palette.hairline))
+            Permissions.log("grid: manager mode, orb in place of \(face.sessionRows.count) rows")
+            return
         }
-        let shown = managerOn ? [] : Self.gridRows(face.sessionRows)
+        let shown = Self.gridRows(face.sessionRows)
         // ONE callsign column (ruled 05 Aug): sized to the widest callsign on
         // show, capped at 38% of the grid. Per-row widths made every name
         // truncate at its own x and the right side read as a rag, not a
@@ -3218,6 +3230,15 @@ final class StatusHUD: NSObject {
             trailing: (StateLegend.pastAgentsTitle, "↺", #selector(pastAgentsRowTapped)))
         waitingRows.addArrangedSubview(newRow)
         newRow.widthAnchor.constraint(equalToConstant: Self.gridWidth).isActive = true
+        waitingRows.addArrangedSubview(hairline(StateLegend.Palette.hairlineSoft))
+        // The manager's door (19 Sep): one placard row, both halves toggle it.
+        let managerRow = SplitPlacardRowView(
+            width: Self.gridWidth, target: self,
+            leadingHarness: AgentDefaults.defaultHarness,
+            leading: (StateLegend.managerTitle, "○", #selector(managerRowTapped)),
+            trailing: (StateLegend.managerOnTitle, "▶", #selector(managerRowTapped)))
+        waitingRows.addArrangedSubview(managerRow)
+        managerRow.widthAnchor.constraint(equalToConstant: Self.gridWidth).isActive = true
         // The key line's top rule; the hint label follows in the outer stack.
         waitingRows.addArrangedSubview(hairline(StateLegend.Palette.hairline))
 
