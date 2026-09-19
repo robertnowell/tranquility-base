@@ -386,6 +386,7 @@ class Manager(FrameProcessor):
                    project=nxt.get("project"))
         who = nxt.get("goal") or nxt.get("project") or "the next agent"
         await self._say_and_wait(f"Inviting {who} to speak.")
+        await asyncio.sleep(0.2)  # a breath between the manager's voice and the agent's
         brief = await self._brief(nxt["sessionId"])
         spoken = " ".join(x for x in ((brief or {}).get("recap"), (brief or {}).get("proposal")) if x)
         await emit(self, "speaking", voice="agent", session=nxt["sessionId"], text=spoken[:200])
