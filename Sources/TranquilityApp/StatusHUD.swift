@@ -3274,12 +3274,12 @@ final class StatusHUD: NSObject {
 
     func setManager(on: Bool) {
         managerOn = on
-        managerOrb.set("breathing", line: on ? "Tranquility · listening" : "Tranquility · off")
+        managerOrb.set("composing", line: on ? "listening" : "off")
         if case .idle = state { render() }
     }
 
-    func setManagerState(_ orbState: String, line: String) {
-        managerOrb.set(orbState, line: line)
+    func setManagerState(_ orbState: String, line: String, mood: String = "") {
+        managerOrb.set(orbState, line: line, mood: mood)
     }
 
     @objc nonisolated private func managerRowTapped() {

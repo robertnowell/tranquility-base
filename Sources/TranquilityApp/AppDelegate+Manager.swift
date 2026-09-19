@@ -99,14 +99,16 @@ extension AppDelegate {
         // The line under the orb is for the person, in words; the numbers live
         // in the event stream (tb-voice/server/tail.py) and in this log.
         switch e.event {
+        // The thinking orb (composing) is the resting face. Hearing you lights
+        // the gradient; addressed switches to solving; speaking weaves.
         case .hearing:
-            hud.setManagerState("listening", line: "hearing you")
+            hud.setManagerState("listening", line: "hearing you", mood: "hearing")
         case .listening:
-            hud.setManagerState("breathing", line: "listening")
+            hud.setManagerState("composing", line: "listening")
         case .addressed:
             hud.setManagerState("solving", line: Self.intentLine(e.intent))
         case .speaking:
-            hud.setManagerState("composing", line: e.voice == "agent" ? "the agent is speaking" : "speaking")
+            hud.setManagerState("weaving", line: e.voice == "agent" ? "the agent is speaking" : "speaking", mood: "speaking")
         case .stage:
             hud.setManagerState("connecting", line: "on stage: \(e.goal ?? e.project ?? "")")
         case .earcon:
@@ -114,7 +116,7 @@ extension AppDelegate {
         case .tool:
             hud.setManagerState("working", line: e.meaning.map { "sent: \($0)" } ?? "working")
         case .error:
-            hud.setManagerState("breathing", line: "something failed; check the log")
+            hud.setManagerState("composing", line: "something failed; check the log")
         }
     }
 

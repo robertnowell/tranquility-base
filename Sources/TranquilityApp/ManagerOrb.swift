@@ -15,7 +15,7 @@ final class ManagerOrbView: NSView {
     static let height: CGFloat = 112
     private let web: WKWebView
     private var ready = false
-    private var pending: (String, String)?
+    private var pending: (String, String, String)?
 
     override init(frame: NSRect) {
         let config = WKWebViewConfiguration()
@@ -45,9 +45,9 @@ final class ManagerOrbView: NSView {
     required init?(coder: NSCoder) { fatalError("not used") }
 
     /// One of the engine's states, and the line under the orb.
-    func set(_ state: String, line: String) {
-        guard ready else { pending = (state, line); return }
-        let js = "window.setOrb(\(Self.quote(state)), \(Self.quote(line)))"
+    func set(_ state: String, line: String, mood: String = "") {
+        guard ready else { pending = (state, line, mood); return }
+        let js = "window.setOrb(\(Self.quote(state)), \(Self.quote(line)), \(Self.quote(mood)))"
         web.evaluateJavaScript(js) { _, error in
             if let error { Permissions.log("orb: \(error.localizedDescription)") }
         }
@@ -74,6 +74,6 @@ final class ManagerOrbView: NSView {
 extension ManagerOrbView: WKNavigationDelegate {
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         ready = true
-        if let (state, line) = pending { pending = nil; set(state, line: line) }
+        if let (state, line, mood) = pending { pending = nil; set(state, line: line, mood: mood) }
     }
 }

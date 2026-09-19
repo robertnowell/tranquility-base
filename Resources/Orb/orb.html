@@ -3,10 +3,16 @@
 <style>
   html,body{margin:0;background:transparent;overflow:hidden}
   body{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;font:11px/1.3 -apple-system,"Helvetica Neue",sans-serif;color:rgba(255,255,255,.72);-webkit-font-smoothing:antialiased}
-  canvas{display:block;width:64px;height:64px}
+  #wrap{position:relative;width:64px;height:64px}
+  canvas{display:block;width:64px;height:64px;position:relative}
+  #glow{position:absolute;inset:-28px;border-radius:50%;opacity:0;transition:opacity .25s;
+        background:radial-gradient(circle,rgba(111,143,120,.55) 0%,rgba(111,143,120,.18) 45%,rgba(111,143,120,0) 70%)}
+  body.hearing #glow{opacity:1;animation:pulse 2.4s ease-in-out infinite}
+  body.speaking #glow{opacity:.7;background:radial-gradient(circle,rgba(201,167,90,.5) 0%,rgba(201,167,90,.15) 45%,rgba(201,167,90,0) 70%)}
+  @keyframes pulse{0%,100%{transform:scale(.92)}50%{transform:scale(1.08)}}
   #line{margin-top:8px;max-width:320px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;letter-spacing:.02em}
 </style></head>
-<body><canvas id="orb" role="img" aria-label="Tranquility"></canvas><div id="line">Tranquility · listening</div>
+<body><div id="wrap"><div id="glow"></div><canvas id="orb" role="img" aria-label="Tranquility"></canvas></div><div id="line">Tranquility · listening</div>
 <script>
 // thinking-orbs by Jakub Antalik (MIT), engine only: no React, plain 2D canvas.
 // Inlined: a file:// page cannot import an ES module, and the panel loads this from disk.
@@ -565,6 +571,9 @@ window.Orb = {MODE_DRAWS: Ct, MODE_FRAMES: vt, STATE_TO_MODE: Ot, finalizeFrame:
   const dpr = Math.min(2, devicePixelRatio || 1);
   canvas.width = Math.round(size * dpr); canvas.height = Math.round(size * dpr);
   const ctx = canvas.getContext("2d");
+  // The library's baked speeds are tuned for a chat avatar; on this panel they read
+  // frantic. Everything runs at this fraction of the preset speed.
+  const SLOW = 0.4;
   let draw, speed = 1, raf = 0;
   function frame() {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, size, size);
@@ -572,11 +581,12 @@ window.Orb = {MODE_DRAWS: Ct, MODE_FRAMES: vt, STATE_TO_MODE: Ot, finalizeFrame:
     raf = requestAnimationFrame(frame);
   }
   let drawOpts;
-  window.setOrb = function (state, line) {
+  window.setOrb = function (state, line, mood) {
+    document.body.className = mood || "";
     const p = resolvePreset(state, size);
-    draw = MODE_DRAWS[p.mode]; speed = p.speed; drawOpts = p.opts;
+    draw = MODE_DRAWS[p.mode]; speed = p.speed * SLOW; drawOpts = p.opts;
     if (line !== undefined) document.getElementById("line").textContent = line;
     if (!raf) frame();
   };
-  window.setOrb("breathing");
+  window.setOrb("composing");
 </script></body></html>
