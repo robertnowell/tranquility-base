@@ -334,6 +334,13 @@ class Manager(FrameProcessor):
             await self.push_frame(frame, direction)
             return
         self.heard += 1
+        # The handler runs detached: an interruption cancels the frame task it
+        # started from, and an invite that dies between "Inviting…" and the hear
+        # verb leaves nobody speaking (16:49:39).
+        self._handler = asyncio.create_task(self._handle_turn(text, frame, direction))
+        self._recent.append(text)
+
+    async def _handle_turn(self, text, frame, direction):
         try:
             if self.pending:
                 await self._resolve_pending(text, frame, direction)
@@ -346,7 +353,6 @@ class Manager(FrameProcessor):
         except Exception as e:  # the manager fails closed: silence, never a crash
             logger.exception(f"manager turn failed: {e}")
             await emit(self, "error", reason=str(e)[:160])
-        self._recent.append(text)
 
     async def _turn(self, text, frame, direction):
         t0 = time.monotonic()
@@ -475,12 +481,12 @@ class Manager(FrameProcessor):
         low = text.lower()
         if any(w in low for w in ("show", "see", "session", "agent", "who is", "who's", "what's going on", "waiting")):
             live = await self._targets()
-            waiting = await self._waiting()
+            waiting = await self._live_waiting()
             if not live and not waiting:
                 await self._say("I can't see any live sessions right now.")
                 return
             first = (waiting or live)[0]
-            who = first.get("name") or first.get("goal") or first.get("project") or "one"
+            who = first.get("name") or first.get("project") or "one"
             line = f"{len(live)} sessions live, {len(waiting)} waiting on you."
             line += f" First waiting: {who}." if waiting else f" First: {who}."
             await self._say(line + " Say what's next to hear it.")
@@ -497,15 +503,19 @@ class Manager(FrameProcessor):
 
     async def _do_speak(self, text, frame, direction):
         """Told to speak: one sentence about where things stand, then a door."""
+        low = text.lower()
+        if any(w in low for w in ("who are you", "what are you", "explain", "yourself", "introduce")):
+            await self._do_teach(text, frame, direction)
+            return
         if self.stage:
             await self._say(f"Listening. On stage: {self.stage.get('name') or self.stage.get('goal') or self.stage.get('project')}. Ask for the next step, or say next agent.")
             return
-        waiting = await self._waiting()
+        waiting = await self._live_waiting()
         if waiting:
             first = waiting[0]
-            await self._say(f"Listening. {len(waiting)} waiting on you; first is {first.get('name') or first.get('goal') or first.get('project')}. Say what's next.")
+            await self._say(f"Listening. {len(waiting)} waiting on you; first is {first.get('name') or first.get('project')}. Say what's next.")
         else:
-            await self._say("Listening. Nobody is waiting on you. Say invite the next agent, or name a project.")
+            await self._say("Listening. Nobody is waiting on you. Say what's next, or name a project.")
 
     # -- intents that need the LLM, with the stage handed over as a note ---------------
 
@@ -619,6 +629,18 @@ class Manager(FrameProcessor):
         code, out = await _run(TBASE, "brief", session_id, "--json")
         data = _json_or_text(code, out).get("data")
         return data if isinstance(data, dict) else None
+
+    async def _live_waiting(self) -> list[dict]:
+        """Waiting rows whose session is alive right now, named as the grid names
+        them. The store keeps rows for sessions long gone; those are not 'waiting
+        on you' in any sense worth saying aloud."""
+        live = {t["sessionId"]: t for t in await self._targets()}
+        out = []
+        for w in await self._waiting():
+            t = live.get(w["sessionId"])
+            if t:
+                out.append({**t, **{k: v for k, v in w.items() if v is not None}})
+        return out
 
     async def _next_session(self) -> dict | None:
         """Grid order: unheard waiting rows first, then the rest of the live list;
