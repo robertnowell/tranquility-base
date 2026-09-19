@@ -137,10 +137,38 @@ def _chosen(choice: dict) -> str:
     return choice.get("choice") or (max(probs.items(), key=lambda kv: kv[1])[0] if probs else "none")
 
 
+class Brain:
+    """One completion, no tools: the answer to a question about the session on
+    stage, from its brief and last message. MiniMax M2.7 on General Compute."""
+
+    def __init__(self):
+        self._client = httpx.AsyncClient(
+            base_url=os.getenv("GC_BASE_URL", "https://api.generalcompute.com/v1"),
+            headers={"Authorization": f"Bearer {os.environ.get('GC_API_KEY', '')}"}, timeout=20.0)
+        self.model = os.getenv("GC_MODEL", "minimax-m2.7")
+
+    async def answer(self, question: str, brief: dict, recent: list[str]) -> str:
+        facts = {k: brief.get(k) for k in ("goal", "recap", "proposal", "findings", "solution", "why", "lastAssistantMessage")}
+        msgs = [
+            {"role": "system", "content": (
+                "You are a coding-agent session answering its supervisor aloud, in first person "
+                "plural ('we'). Answer ONLY from the facts given. One or two sentences, 30 words "
+                "max, no lists, no markdown. If the facts do not say, say so in one sentence.")},
+            {"role": "user", "content": f"Facts about this session:\n{json.dumps(facts, ensure_ascii=False)}\n\n"
+                                        f"Recent words from the supervisor: {recent[-2:]}\n\nQuestion: {question}"},
+        ]
+        r = await self._client.post("/chat/completions", json={
+            "model": self.model, "messages": msgs, "max_tokens": 400, "temperature": 0.3})
+        r.raise_for_status()
+        text = (r.json()["choices"][0]["message"].get("content") or "").strip()
+        return " ".join(text.split())[:600]
+
+
 class Manager(FrameProcessor):
     def __init__(self, jev: JevClient):
         super().__init__()
         self._jev = jev
+        self._brain = Brain()
         self._recent: list[str] = []
         self.stage: dict | None = None
         self.pending: dict | None = None  # a confirmation waiting for yes/no
@@ -238,12 +266,39 @@ class Manager(FrameProcessor):
         if not rung:
             # No stored rung for that question: answer it from the session's own
             # context (brief, last message), in the session's voice.
-            await self._llm(frame, direction, text, "custom", brief=brief)
+            await self._answer_about_stage(text, brief)
             return
         # The session speaks its own rung: a speak-only deep link into the app.
         await emit(self, "speaking", voice="agent", session=self.stage["sessionId"],
                    rung=kind, text=rung["spoken"][:160])
         await _run("open", f"{SCHEME}://rung?session={self.stage['sessionId']}&kind={kind}")
+
+    async def _do_custom(self, text, frame, direction):
+        if not self.stage:
+            await self._llm(frame, direction, text, "custom")
+            return
+        await self._answer_about_stage(text, await self._brief(self.stage["sessionId"]))
+
+    async def _answer_about_stage(self, question: str, brief: dict | None):
+        """A question about the session on stage: one completion from its brief,
+        spoken by the session. No tools; nothing to wander off into."""
+        from urllib.parse import quote
+        sid = self.stage["sessionId"]
+        if not brief:
+            await self._say("That session has no brief stored yet.")
+            return
+        try:
+            answer = await self._brain.answer(question, brief, self._recent)
+        except Exception as e:
+            logger.error(f"brain failed: {e}")
+            await emit(self, "error", reason=f"brain: {str(e)[:120]}")
+            await self._say("I couldn't get an answer from the session's notes.")
+            return
+        if not answer:
+            await self._say("The session's notes don't say.")
+            return
+        await emit(self, "speaking", voice="agent", session=sid, text=answer[:160])
+        await _run("open", f"{SCHEME}://say?session={sid}&text={quote(answer)}")
 
     async def _do_teach(self, text, frame, direction):
         await self._llm(frame, direction, text, "teach")
