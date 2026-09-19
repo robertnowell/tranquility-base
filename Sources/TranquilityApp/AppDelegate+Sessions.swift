@@ -62,6 +62,7 @@ extension AppDelegate {
             case let .reply(s):      session = s; ref = nil
             case let .rung(s, _):    session = s; ref = nil
             case let .say(s, _):     session = s; ref = nil
+            case .mute:              session = nil; ref = nil
             case .show, .connect, .new, .unknown: session = nil; ref = nil
             }
             Permissions.log("deeplink: \(action) session=\(session?.prefix(8) ?? "-")")
@@ -93,6 +94,12 @@ extension AppDelegate {
                       let store, let rung = try? ManagerJSON.rung(store: store, sessionId: session, kind: kind)
                 else { hud.showResult("That rung is empty for this turn."); break }
                 speakForManager(session: session, spoken: rung.spoken, placard: rung.kind.rawValue)
+            case "mute":
+                // Stop the voice, whoever is speaking. Nothing else changes.
+                announceTask?.cancel()
+                coordinator?.speech.stop()
+                Permissions.log("manager: mute")
+                if managerIsOn { hud.setManagerState(StatusHUD.orbState, line: "listening") }
             case "say":
                 // The manager handing the session a line to say in its own
                 // voice: a custom answer about its work. Capped and sanitized;

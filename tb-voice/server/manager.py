@@ -44,6 +44,7 @@ INTENTS = {
     "summarize_recent": "Asks what has been going on recently across ALL agents, or what we did today or yesterday; not about one session",
     "teach": "Asks what the manager can do, what this is, or how it works",
     "speak": "Tells the manager to say something, speak, respond, answer, or prove it is listening",
+    "mute": "Tells whoever is talking to stop, pause, be quiet, mute, hold on, or that's enough",
     "none": "Addressed but nothing to do: an acknowledgement, a compliment, or filler",
 }
 
@@ -66,7 +67,7 @@ def names_the_manager(text: str) -> bool:
 # not produce "invite the next agent"; a clear one of these is addressed even
 # without the name.
 COMMANDS = {"invite_next", "send_message", "start_agent", "rung_goal", "rung_findings",
-            "rung_solution", "rung_why", "summarize_recent"}
+            "rung_solution", "rung_why", "summarize_recent", "mute"}
 
 # Intents that take seconds (a tool run, a model call) before anything is heard.
 SLOW_INTENTS = {"send_message", "start_agent", "summarize_recent", "custom", "teach", "speak"}
@@ -372,6 +373,12 @@ class Manager(FrameProcessor):
             await self._llm(frame, direction, text, intent)
 
     # -- intents handled without the LLM ---------------------------------------------
+
+    async def _do_mute(self, text, frame, direction):
+        """Stop whoever is talking: the app's voice via the mute verb, and the
+        manager's own by not saying anything."""
+        await emit(self, "tool", argv=["open", f"{SCHEME}://mute"])
+        await _run("open", f"{SCHEME}://mute")
 
     async def _do_none(self, text, frame, direction):
         pass  # the activation cue already played; nothing to add

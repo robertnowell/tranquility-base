@@ -119,6 +119,9 @@ public enum DeepLink {
         /// and sanitized on the way to the synthesizer like any spoken line.
         case rung(session: String?, kind: String?)
         case say(session: String?, text: String?)
+        /// Mute: stop whatever is being spoken. The one verb that makes the app
+        /// quieter, so it needs no argument and can do no harm.
+        case mute
         case show
         /// "Start a session", the same verb as the panel's button and the
         /// status menu's item, with the agent Settings has selected. Carries
@@ -161,6 +164,7 @@ public enum DeepLink {
         case "home":    return .home(session: value("session"), ref: value("ref"))
         case "hear":    return .hear(session: value("session"))
         case "rung":    return .rung(session: value("session"), kind: value("kind"))
+        case "mute":    return .mute
         case "say":     return .say(session: value("session"),
                                     text: value("text").map { String($0.prefix(sayLimit)) })
         case "reply":   return .reply(session: value("session"))

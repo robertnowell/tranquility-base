@@ -285,4 +285,9 @@ final class DeepLinkTests: XCTestCase {
         else { return XCTFail("expected say") }
         XCTAssertEqual(text?.count, DeepLink.sayLimit)
     }
+
+    func testMuteParsesAndCarriesNothing() {
+        XCTAssertEqual(DeepLink.parse(url("tranquilitybase://mute")), .mute)
+        XCTAssertEqual(DeepLink.parse(url("tranquilitybase://mute?session=abc")), .mute)
+    }
 }
