@@ -253,6 +253,20 @@ class Brain:
         return " ".join(text.split())[:600]
 
 
+    async def plain(self, question: str, exchange: list[str]) -> str:
+        """One tool-free answer as the manager itself: who it is, what this is."""
+        from prompt import SYSTEM
+        msgs = [
+            {"role": "system", "content": SYSTEM + "\nAnswer in one sentence, 30 words max, spoken aloud."},
+            {"role": "user", "content": "Exchange so far:\n" + "\n".join(exchange) + f"\n\nQuestion: {question}"},
+        ]
+        body = {"model": self.model, "messages": msgs, "max_tokens": 400, "temperature": 0.3}
+        t0 = time.monotonic()
+        r = await self._client.post("/chat/completions", json=body)
+        r.raise_for_status()
+        record("brain", body, r.json(), ms=int((time.monotonic() - t0) * 1000))
+        return " ".join(((r.json()["choices"][0]["message"].get("content") or "")).split())
+
     async def compose_message(self, request: str, exchange: list[str]) -> str:
         """The message to type into the agent's terminal, from the developer's own
         words: the request itself when it carries the instruction ('tell it to run
@@ -451,8 +465,34 @@ class Manager(FrameProcessor):
         note(self.stage.get("goal") or sid[:8], answer, "spoken")
         await _run("open", f"{SCHEME}://say?session={sid}&text={quote(answer)}")
 
+    CAPABILITIES = ("Say what's next to hear the next agent. Ask for the goal, findings, next step "
+                    "or why. Say tell it to, then your message. Say stop to mute. Say start an agent.")
+
     async def _do_teach(self, text, frame, direction):
-        await self._llm(frame, direction, text, "teach")
+        """Teach without a tool-choosing model: showing means reading the fleet
+        aloud, controls are a fixed line, and 'what is this' is one plain answer."""
+        low = text.lower()
+        if any(w in low for w in ("show", "see", "session", "agent", "who is", "who's", "what's going on", "waiting")):
+            live = await self._targets()
+            waiting = await self._waiting()
+            if not live and not waiting:
+                await self._say("I can't see any live sessions right now.")
+                return
+            first = (waiting or live)[0]
+            who = first.get("goal") or first.get("topic") or first.get("project") or "one"
+            line = f"{len(live)} sessions live, {len(waiting)} waiting on you."
+            line += f" First waiting: {who}." if waiting else f" First: {who}."
+            await self._say(line + " Say what's next to hear it.")
+            return
+        if any(w in low for w in ("control", "what can you", "how do i", "commands", "what do you do")):
+            await self._say(self.CAPABILITIES)
+            return
+        try:
+            answer = await self._brain.plain(text, exchange_lines())
+        except Exception as e:
+            logger.error(f"teach failed: {e}")
+            answer = ""
+        await self._say(answer or "I'm Tranquility, the hands-free manager for your coding agents. " + self.CAPABILITIES)
 
     async def _do_speak(self, text, frame, direction):
         """Told to speak: one sentence about where things stand, then a door."""
