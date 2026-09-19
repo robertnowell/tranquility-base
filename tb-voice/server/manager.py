@@ -323,6 +323,7 @@ class Manager(FrameProcessor):
         await super().process_frame(frame, direction)
         if isinstance(frame, BotStoppedSpeakingFrame):
             self._bot_stopped.set()
+            await emit(None, "quiet")  # the manager's voice stopped; the orb goes back to rest
         if not isinstance(frame, LLMContextFrame):
             await self.push_frame(frame, direction)
             return

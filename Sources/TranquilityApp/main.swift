@@ -176,6 +176,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Manager mode (19 Sep): the stdio child, its reader, and its lamp.
     var managerTransport: ACPProcessTransport?
     var managerTask: Task<Void, Never>?
+    var managerLastLine = "listening"
     /// Where the ⌃⌥ walk over an all-opened stack has got to. Nil means start
     /// at the top. In memory only, and reset by any fresh or named
     /// announcement — a walk is a gesture in progress, not durable state.

@@ -22,6 +22,8 @@ public struct ManagerEvent: Codable, Equatable, Sendable {
         case addressed
         /// The manager, or a session on its behalf, is about to speak.
         case speaking
+        /// The manager's own voice stopped.
+        case quiet
         /// A session took the stage.
         case stage
         /// The manager asks the app to play a cue by name.

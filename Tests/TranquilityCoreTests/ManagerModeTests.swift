@@ -18,6 +18,10 @@ final class ManagerModeTests: XCTestCase {
         XCTAssertEqual(e.goal, "ship the CRM")
     }
 
+    func testQuietParses() throws {
+        XCTAssertEqual(try XCTUnwrap(ManagerEvent.parse(Data(#"{"event":"quiet"}"#.utf8))).event, .quiet)
+    }
+
     func testHearingAndErrorParse() throws {
         XCTAssertEqual(try XCTUnwrap(ManagerEvent.parse(Data(#"{"event":"hearing"}"#.utf8))).event, .hearing)
         let e = try XCTUnwrap(ManagerEvent.parse(Data(#"{"event":"error","reason":"tbase missing"}"#.utf8)))

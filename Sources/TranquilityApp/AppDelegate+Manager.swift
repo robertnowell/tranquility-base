@@ -137,7 +137,11 @@ extension AppDelegate {
         case .addressed:
             hud.setManagerState(StatusHUD.orbState, line: Self.intentLine(e.intent))
         case .speaking:
-            hud.setManagerState(StatusHUD.orbState, line: e.text ?? (e.voice == "agent" ? "the agent is speaking" : "speaking"), mood: "speaking")
+            managerLastLine = e.text ?? (e.voice == "agent" ? "the agent is speaking" : "speaking")
+            hud.setManagerState(StatusHUD.orbState, line: managerLastLine, mood: "speaking")
+        case .quiet:
+            // Voice over: colour back to rest, the last words stay readable.
+            hud.setManagerState(StatusHUD.orbState, line: managerLastLine == "speaking" ? "listening" : managerLastLine)
         case .stage:
             hud.setManagerState(StatusHUD.orbState, line: "on stage: \(e.goal ?? e.project ?? "")")
         case .earcon:
