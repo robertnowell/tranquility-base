@@ -68,6 +68,9 @@ def names_the_manager(text: str) -> bool:
 COMMANDS = {"invite_next", "send_message", "start_agent", "rung_goal", "rung_findings",
             "rung_solution", "rung_why", "summarize_recent"}
 
+# Intents that take seconds (a tool run, a model call) before anything is heard.
+SLOW_INTENTS = {"send_message", "start_agent", "summarize_recent", "custom", "teach", "speak"}
+
 # With a session on stage, a confident question about its work is for the manager.
 STAGE_QUESTIONS = {"rung_goal", "rung_findings", "rung_solution", "rung_why", "custom", "send_message"}
 
@@ -317,7 +320,11 @@ class Manager(FrameProcessor):
         if not speak:
             return
         self.addressed += 1
-        await self._earcon("listening")  # heard you, acting: before any latency
+        # The activation cue covers latency you would otherwise fill by repeating
+        # yourself. An invite or a rung speaks within a second; a cue there lands
+        # on top of the voice. Only the slow intents get one.
+        if intent in SLOW_INTENTS:
+            await self._earcon("listening")
         handler = getattr(self, f"_do_{intent}", None)
         if handler:
             await handler(text, frame, direction)
@@ -337,7 +344,6 @@ class Manager(FrameProcessor):
         self.stage = nxt
         await emit(self, "stage", session=nxt["sessionId"], goal=nxt.get("goal"),
                    project=nxt.get("project"))
-        await self._earcon("returned")
         brief = await self._brief(nxt["sessionId"])
         spoken = " ".join(x for x in ((brief or {}).get("recap"), (brief or {}).get("proposal")) if x)
         await emit(self, "speaking", voice="agent", session=nxt["sessionId"], text=spoken[:200])
