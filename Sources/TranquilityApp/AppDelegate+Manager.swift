@@ -96,23 +96,44 @@ extension AppDelegate {
     private func handle(_ e: ManagerEvent) {
         let p = String(format: "%.2f", e.p ?? 0)
         Permissions.log("manager event: \(e.event.rawValue) p=\(p) intent=\(e.intent ?? "-") \(e.text?.prefix(60) ?? e.reason?.prefix(60) ?? "")")
+        // The line under the orb is for the person, in words; the numbers live
+        // in the event stream (tb-voice/server/tail.py) and in this log.
         switch e.event {
         case .hearing:
             hud.setManagerState("listening", line: "hearing you")
-        case .error:
-            hud.setManagerState("breathing", line: "error · \(e.reason ?? "")")
         case .listening:
-            hud.setManagerState("breathing", line: "heard · \(p) · silent")
+            hud.setManagerState("breathing", line: "listening")
         case .addressed:
-            hud.setManagerState("solving", line: "\(e.intent ?? "addressed") · \(p)")
+            hud.setManagerState("solving", line: Self.intentLine(e.intent))
         case .speaking:
-            hud.setManagerState("composing", line: e.voice == "agent" ? "the session speaks" : "Tranquility speaks")
+            hud.setManagerState("composing", line: e.voice == "agent" ? "the agent is speaking" : "speaking")
         case .stage:
-            hud.setManagerState("connecting", line: "on stage · \(e.goal ?? e.project ?? e.session?.prefix(8).description ?? "")")
+            hud.setManagerState("connecting", line: "on stage: \(e.goal ?? e.project ?? "")")
         case .earcon:
             if let name = e.name, let cue = EarconGate.Cue(rawValue: name) { Earcons.acknowledge(cue) }
         case .tool:
-            hud.setManagerState("working", line: "→ \(e.meaning ?? (e.text ?? "tool"))")
+            hud.setManagerState("working", line: e.meaning.map { "sent: \($0)" } ?? "working")
+        case .error:
+            hud.setManagerState("breathing", line: "something failed; check the log")
+        }
+    }
+
+    /// What the manager is doing about what you said, in words.
+    static func intentLine(_ intent: String?) -> String {
+        switch intent ?? "" {
+        case "invite_next": return "inviting the next agent"
+        case "rung_goal": return "reading the goal"
+        case "rung_findings": return "reading the findings"
+        case "rung_solution": return "reading the next step"
+        case "rung_why": return "reading the reasoning"
+        case "custom": return "answering"
+        case "send_message": return "sending"
+        case "start_agent": return "starting an agent"
+        case "summarize_recent": return "summarising recent work"
+        case "teach": return "explaining"
+        case "speak": return "here"
+        case let s where s.hasPrefix("confirm:"): return "confirming"
+        default: return "heard you"
         }
     }
 }

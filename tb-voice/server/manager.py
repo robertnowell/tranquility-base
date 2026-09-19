@@ -41,6 +41,7 @@ INTENTS = {
     "start_agent": "Asks to start, spin up, or open a new agent or session",
     "summarize_recent": "Asks what has been going on recently, across agents, or what we did",
     "teach": "Asks what the manager can do, what this is, or how it works",
+    "speak": "Tells the manager to say something, speak, respond, answer, or prove it is listening",
     "none": "Addressed but nothing to do: an acknowledgement, a compliment, or filler",
 }
 
@@ -221,6 +222,18 @@ class Manager(FrameProcessor):
 
     async def _do_teach(self, text, frame, direction):
         await self._llm(frame, direction, text, "teach")
+
+    async def _do_speak(self, text, frame, direction):
+        """Told to speak: one sentence about where things stand, then a door."""
+        if self.stage:
+            await self._say(f"Listening. On stage: {self.stage.get('goal') or self.stage.get('project')}. Ask for the next step, or say next agent.")
+            return
+        waiting = await self._waiting()
+        if waiting:
+            first = waiting[0]
+            await self._say(f"Listening. {len(waiting)} waiting on you; first is {first.get('goal') or first.get('project')}. Say invite the next agent.")
+        else:
+            await self._say("Listening. Nobody is waiting on you. Say invite the next agent, or name a project.")
 
     # -- intents that need the LLM, with the stage handed over as a note ---------------
 
