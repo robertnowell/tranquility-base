@@ -3155,11 +3155,9 @@ final class StatusHUD: NSObject {
             waitingRows.addArrangedSubview(managerOrb)
             managerOrb.widthAnchor.constraint(equalToConstant: Self.gridWidth).isActive = true
             waitingRows.addArrangedSubview(hairline(StateLegend.Palette.hairlineSoft))
-            let stopRow = SplitPlacardRowView(
+            let stopRow = PlacardRowView(
                 width: Self.gridWidth, target: self,
-                leadingHarness: AgentDefaults.defaultHarness,
-                leading: (StateLegend.managerTitle, "●", #selector(managerRowTapped)),
-                trailing: (StateLegend.managerOffTitle, "■", #selector(managerRowTapped)))
+                title: StateLegend.managerOffTitle, glyph: "■", action: #selector(managerRowTapped))
             waitingRows.addArrangedSubview(stopRow)
             stopRow.widthAnchor.constraint(equalToConstant: Self.gridWidth).isActive = true
             waitingRows.addArrangedSubview(hairline(StateLegend.Palette.hairline))
@@ -3232,11 +3230,9 @@ final class StatusHUD: NSObject {
         newRow.widthAnchor.constraint(equalToConstant: Self.gridWidth).isActive = true
         waitingRows.addArrangedSubview(hairline(StateLegend.Palette.hairlineSoft))
         // The manager's door (19 Sep): one placard row, both halves toggle it.
-        let managerRow = SplitPlacardRowView(
+        let managerRow = PlacardRowView(
             width: Self.gridWidth, target: self,
-            leadingHarness: AgentDefaults.defaultHarness,
-            leading: (StateLegend.managerTitle, "○", #selector(managerRowTapped)),
-            trailing: (StateLegend.managerOnTitle, "▶", #selector(managerRowTapped)))
+            title: StateLegend.managerOnTitle, glyph: "◯", action: #selector(managerRowTapped))
         waitingRows.addArrangedSubview(managerRow)
         managerRow.widthAnchor.constraint(equalToConstant: Self.gridWidth).isActive = true
         // The key line's top rule; the hint label follows in the outer stack.
