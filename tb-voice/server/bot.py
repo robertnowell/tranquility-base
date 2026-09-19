@@ -44,6 +44,7 @@ from pipecat.workers.runner import WorkerRunner
 
 from llm import RecordedLLMService
 from manager import JevClient, Manager
+from mute import WhileBotSpeaksMuteStrategy
 from prompt import SYSTEM
 from tools import SCHEMAS
 from tts import SpokenGradiumTTSService
@@ -72,6 +73,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
         context,
         user_params=LLMUserAggregatorParams(
             vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=0.2)),
+            user_mute_strategies=[WhileBotSpeaksMuteStrategy()],
             # A turn starts on words, not on VAD: in a loud room VAD fired 300 ms into
             # every answer and cancelled it before TTS. Two words of transcript start a
             # turn; noise and one-word backchannels do not.
