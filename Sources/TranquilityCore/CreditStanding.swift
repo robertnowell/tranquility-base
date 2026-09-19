@@ -42,8 +42,18 @@ public enum CreditStanding: Sendable, Equatable {
     }
 
     /// The amber line, short enough for the placard. Nil when nothing is amber.
-    public var line: String? {
+    public var line: String? { line(ownKey: false) }
+
+    /// The same, knowing whether the person has a key of their own.
+    ///
+    /// Out of credits with a pasted key is not a fault: the chain moves onto
+    /// that key and summaries carry on. Robert, 19 Sep, seeing the amber line
+    /// beside a green Anthropic row: "if I have an Anthropic key then it
+    /// shouldn't be an error". The state stays what it is, out of credits; the
+    /// alarm is for the person with nothing to fall to.
+    public func line(ownKey: Bool) -> String? {
         switch self {
+        case .floored(.outOfCredits, _) where ownKey: return nil
         case .notOnCredits(connectAgain: true): return "Connect this Mac again for credits"
         case .notOnCredits, .onCredits, .good, .balanceUnknown: return nil
         case .floored(.outOfCredits, _): return "Out of credits"
@@ -54,8 +64,12 @@ public enum CreditStanding: Sendable, Equatable {
     }
 
     /// The Settings row's detail: what is true and what to do.
-    public var detail: String {
+    public var detail: String { detail(ownKey: false) }
+
+    public func detail(ownKey: Bool) -> String {
         switch self {
+        case .floored(.outOfCredits, _) where ownKey:
+            return "out of credits · summaries use your own Anthropic key. Top-ups are coming"
         case .notOnCredits(connectAgain: false):
             return "sign in to your hub and summaries run on us, ten dollars to start"
         case .notOnCredits(connectAgain: true), .floored(.connectAgain, _):
@@ -86,8 +100,11 @@ public enum CreditStanding: Sendable, Equatable {
     }
 
     /// Whether the row is the person's to act on now.
-    public var needsAttention: Bool {
+    public var needsAttention: Bool { needsAttention(ownKey: false) }
+
+    public func needsAttention(ownKey: Bool) -> Bool {
         switch self {
+        case .floored(.outOfCredits, _) where ownKey: return false
         case .notOnCredits(connectAgain: true), .floored(.outOfCredits, _), .floored(.connectAgain, _): return true
         case .floored(.serviceUnavailable, _), .floored(.summaryFailed, _): return true
         case .notOnCredits, .onCredits, .good, .balanceUnknown: return false

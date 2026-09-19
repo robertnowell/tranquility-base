@@ -512,11 +512,12 @@ public enum Prerequisites {
                              detail: "not connected. Sign in and your agents' pages and turns appear in the hub")
             case .credits:
                 let standing = credits
+                let ownKey = probes.hasSecret(.anthropicAPIKey)
                 if standing.isOnCredits {
-                    return State(item: item, satisfied: true, detail: standing.detail)
+                    return State(item: item, satisfied: true, detail: standing.detail(ownKey: ownKey))
                 }
-                return State(item: item, satisfied: false, detail: standing.detail,
-                             attention: standing.needsAttention)
+                return State(item: item, satisfied: false, detail: standing.detail(ownKey: ownKey),
+                             attention: standing.needsAttention(ownKey: ownKey))
             default:
                 return State(item: item, satisfied: true, detail: "")
             }
