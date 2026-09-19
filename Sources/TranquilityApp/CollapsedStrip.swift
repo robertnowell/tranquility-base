@@ -173,6 +173,7 @@ final class CollapsedStrip: NSView {
 
     /// What the drill reads to prove the glow decays rather than lingering.
     var currentGlowStrength: CGFloat { glowColor == nil ? 0 : glowStrength }
+    var glowTimerIsActive: Bool { glowTimer?.isValid == true }
 
     /// The ink actually PAINTED at the centre of lamp `index`.
     ///

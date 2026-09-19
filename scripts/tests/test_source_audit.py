@@ -37,7 +37,10 @@ class SourceAuditTests(unittest.TestCase):
             "check-compat-comments.sh", "check-row-dates.sh", "tests/test_source_audit.py",
             "tests/test_deployment_state.py",
             "tests/test_delivery.py",
+            "tests/test_queue_measurements.py",
             "tests/test_test_gate.py",
+            "tests/test_run_stage.py",
+            "tests/test_prepared_dev.py",
         ):
             (self.repo / "scripts" / name).write_text(
                 "import os\nfrom pathlib import Path\n"
@@ -48,6 +51,7 @@ class SourceAuditTests(unittest.TestCase):
             "test-attribution.sh", "test-notary-log-parser.sh", "test-release-tag-verification.sh",
             "test-debug-symbols.sh", "test.sh", "test-dev-lanes.sh", "test-dispatch-tmux.sh",
             "test-past-agents-search.sh",
+            "test-credits-onboarding.sh",
         ):
             path = self.repo / "scripts" / name
             path.write_text('''#!/bin/bash
@@ -97,7 +101,7 @@ fi
     def assert_audited(self, result):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         steps = self.log.read_text().splitlines()
-        for required in ("test_source_audit.py", "test_deployment_state.py", "test_delivery.py", "test.sh", "test-dev-lanes.sh", "test-dispatch-tmux.sh", "test-past-agents-search.sh"):
+        for required in ("test_source_audit.py", "test_deployment_state.py", "test_delivery.py", "test_queue_measurements.py", "test.sh", "test-dev-lanes.sh", "test-dispatch-tmux.sh", "test-past-agents-search.sh", "test-credits-onboarding.sh"):
             self.assertIn(required, steps)
         self.assertIn("swift build", steps)
         self.assertIn("source audit passed for", result.stdout)

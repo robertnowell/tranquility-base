@@ -56,8 +56,47 @@ restore_if_down() {
   fi
 }
 
-# All installers and lane switches share this owner and preview policy.
+automatic_activation_guard() {
+  [ "${TB_DEPLOY_AUTOMATIC:-0}" = 1 ] || return 0
+  if [ -n "${TARGET:-}" ] && [ "$(git rev-parse origin/main)" != "$TARGET" ]; then
+    echo "deployment deferred: main advanced while preparing; build the newer target" >&2
+    exit 75
+  fi
+  if app_at_path_running "$PROD_APP"; then
+    APP_MUTATED=0
+    echo "deployment deferred: Prod is selected; choose Dev explicitly before retrying" >&2
+    exit 75
+  fi
+  if ! app_running; then
+    APP_MUTATED=0
+    echo "deployment deferred: app is stopped; automatic delivery does not undo Quit" >&2
+    exit 75
+  fi
+}
+tb_before_app_stop() {
+  automatic_activation_guard
+  tb_deployment_authorize relaunch "$TARGET" dev "$UNMERGED"
+  APP_MUTATED=1
+}
+automatic_activation_guard
+# Preparation owns only the build workspace. The child activation receives a
+# leased, source-stamped app and matching checks, never the mutable build tree.
+if [ "${1:-}" != --activate-prepared ]; then
+  exec python3 scripts/prepare-dev.py relaunch "$REF"
+fi
+[ "$#" -eq 3 ] || { echo "invalid prepared activation" >&2; exit 1; }
+TARGET="$2"
+REF="$TARGET"
+CLEAN_WORKTREE="$3"
+APP_PATH="$CLEAN_WORKTREE/$APP"
+python3 scripts/prepare-dev.py verify "$TARGET" "$CLEAN_WORKTREE"
+# Refresh before owning the app lock. A stale automatic candidate is deferred.
+git fetch -q origin
+automatic_activation_guard
+wait_for_microphone "before activation"
 tb_deployment_lock
+# If speech begins after the courtesy wait, defer immediately under the lock.
+TB_MIC_GIVE_UP_AFTER=0
 trap tb_deployment_unlock EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
@@ -107,23 +146,8 @@ cleanup_and_restore() {
 
 # Resolve against the remote, not the local branch: a session that has merged but
 # not pulled would otherwise relaunch the commit it already had.
-git fetch -q origin
-TARGET=$(git rev-parse --verify "$REF^{commit}")
-automatic_activation_guard() {
-  [ "${TB_DEPLOY_AUTOMATIC:-0}" = 1 ] || return 0
-  if app_at_path_running "$PROD_APP"; then
-    APP_MUTATED=0
-    echo "deployment deferred: Prod is selected; choose Dev explicitly before retrying" >&2
-    exit 75
-  fi
-  if ! app_running; then
-    APP_MUTATED=0
-    echo "deployment deferred: app is stopped; automatic delivery does not undo Quit" >&2
-    exit 75
-  fi
-}
-tb_before_app_stop() { automatic_activation_guard; APP_MUTATED=1; }
-automatic_activation_guard
+# TARGET was pinned during preparation and refreshed before taking the lock.
+
 UNMERGED=1
 git merge-base --is-ancestor "$TARGET" origin/main && UNMERGED=0
 tb_deployment_authorize relaunch "$TARGET" dev "$UNMERGED"
@@ -170,46 +194,8 @@ if [ -n "$SELF_HASH" ] && [ -n "$REF_HASH" ] && [ "$SELF_HASH" != "$REF_HASH" ];
   fi
 fi
 
-# Creating and validating the clean worktree now lives in scripts/build-clean.sh,
-# so install.sh can do it too — it could not before, which is why a fresh clone
-# hit an installer that refused and pointed back here. One copy, one behaviour.
-# The dirty-tree refusal therefore lands after the capture-marker wait below
-# rather than before it: on a dirty tree you now wait for the microphone before
-# being told no. Refusing later is the acceptable half of not maintaining this
-# block in two scripts.
-
-# Never kill a live microphone.
-#
-# The wait itself, and the constants behind it, live in lib/app-process.sh —
-# on `app_stop`, which is the line that actually does the killing. See the
-# comment there for why it moved: four scripts stop the app and only this one
-# was asking.
-#
-# This early call is a courtesy, not the guard. It keeps somebody mid-sentence
-# from paying for forty seconds of compiling that `app_stop` is about to refuse
-# anyway. The guard that matters runs immediately before the kill, which is the
-# half that was missing: measured 14 Sep, this script began at 04:21:21 with the
-# microphone shut, Robert started speaking at 04:21:24, and the app was killed
-# and replaced by 04:21:39. The old single check passed three seconds before he
-# opened his mouth and was never asked again.
-wait_for_microphone "before building"
-
-# BUILD FIRST, then stop, then launch.
-#
-# The old order stopped the app and then built, which left it down for the whole
-# build — around forty seconds — and anything that killed this script in there
-# left it down for good. The EXIT trap could not save it either, because
-# bundle.sh `rm -rf`s the .app it is about to recreate, so for most of that
-# window there was nothing on disk to reopen. Measured the hard way: a `| head`
-# closed the pipe mid-build and the menu bar item simply went away.
-#
-# Building first inverts that. The app keeps running while the slow part happens
-# and the window where it is down shrinks from the length of a build to the
-# length of a launch. The cost is that bundle.sh replaces the bundle underneath a
-# running process; that is safe here because this app loads nothing from its
-# bundle after launch — it draws its whole interface programmatically — and the
-# process is replaced seconds later anyway.
-APP_PATH=$(scripts/build-clean.sh "$TARGET")
+# The build finished before this process acquired app ownership. Validate its
+# pinned artifact again; a later build cannot change this app or its checks.
 BUILT_SHA=$(/usr/libexec/PlistBuddy -c "Print :TBSourceCommit" "$APP_PATH/Contents/Info.plist")
 [ "$BUILT_SHA" = "$TARGET" ] || { echo "✗ built source differs from reserved target" >&2; exit 1; }
 "$CLEAN_WORKTREE/scripts/audit-dev.sh" "$APP_PATH"
@@ -321,7 +307,7 @@ if app_at_path_running "$APP_PATH"; then
   # The bundle names its own commit now, so ask it.
   INSTALLED_VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" \
     "$APP_PATH/Contents/Info.plist" 2>/dev/null || echo "")
-  SHORT_TARGET=$(git -C "$CLEAN_WORKTREE" rev-parse --short "$TARGET" 2>/dev/null || echo "")
+  SHORT_TARGET=$(git rev-parse --short "$TARGET" 2>/dev/null || echo "")
   if [ -n "$SHORT_TARGET" ] && [ -n "$INSTALLED_VERSION" ] \
      && [ "${INSTALLED_VERSION#*+}" != "$SHORT_TARGET" ]; then
     echo "✗ the app that is running is not the build this script made:" >&2
@@ -394,29 +380,8 @@ if [ "${TB_SKIP_CANARY:-0}" != "1" ]; then
   fi
 fi
 
-# ---------------------------------------------------------------------------
-# The seam check. Unit tests cover each piece of the artifact→hub chain and
-# every failure this month still slipped through, because each bug lived
-# BETWEEN a hook, a log, a file and a rendered page. This asks the archive
-# whether the pieces still add up: a page a session made is on that session's
-# hub, a hub names its session, a page carries exactly one agent footer.
-#
-# Reporting, not refusing — same posture as the self-tests and the canary. It
-# runs against real data that other sessions are writing while this runs, so a
-# transient miss must not fail a good build; a persistent one shows up on
-# every deploy until someone looks.
-#
-# The deploy builds ONLY the app product (bundle.sh: `--product TranquilityApp`),
-# so `tbase` in the clean worktree is whatever a previous build happened to
-# leave there — or absent. This gate shipped reading that stale binary, which
-# printed the usage text and exited non-zero, so every deploy reported "the
-# archive and the hubs disagree" while the archive was fine. Build the tool
-# the gate runs, next to the gate that runs it.
-( cd "$CLEAN_WORKTREE" && swift build --configuration debug --product tbase >/dev/null 2>&1 ) || true
-if ! "$CLEAN_WORKTREE/.build/debug/tbase" doctor; then
-  echo "✗ the build is fine, but the archive and the hubs disagree — see above." >&2
-  echo "  \`tbase homebase <session-id>\` rewrites one hub; \`tbase doctor\` re-checks." >&2
-fi
+# Informational archive health runs after this receipt in prepare-dev.py, with
+# its own 30-second deadline and log. It cannot keep app ownership occupied.
 
 # A receipt is written under the same mutation lock only after a fresh process,
 # full source stamp and passing launch drills have been established.

@@ -128,6 +128,7 @@ final class StatusHUD: NSObject {
     /// ones never reach it.
     var collapsedLampCount: Int { strip?.lamps.count ?? 0 }
     var collapsedGlowStrength: CGFloat { strip?.currentGlowStrength ?? 0 }
+    var collapsedGlowTimerIsActive: Bool { strip?.glowTimerIsActive ?? false }
     /// The ink the column actually painted in a lamp's middle — a state colour
     /// when the lamp is solid, transparent when it is a ring.
     func collapsedLampCentreInk(_ index: Int) -> NSColor? {
@@ -322,6 +323,43 @@ final class StatusHUD: NSObject {
     /// Send with the microphone closed: the typed line (may be empty) and
     /// whatever the tray holds, to the card's session, now.
     var onSendTyped: ((String) -> Void)?
+    /// The typed line, kept (ruled 17 Sep: "I don't like losing half-written
+    /// messages"). `onDraftChanged` is called with the session and the whole
+    /// line, debounced, and with an empty line when it is sent or emptied;
+    /// `draftFor` is asked when a card is selected, to put the words back.
+    var onDraftChanged: ((String, String) -> Void)?
+    var draftFor: ((String) -> String?)?
+    private var draftSave: DispatchWorkItem?
+
+    /// What the keystroke path calls: a save 300 ms after the last change.
+    /// The session is the card's reply target, read now rather than at the
+    /// deadline so a face change in between cannot move the draft.
+    func scheduleDraftSave() {
+        guard let target = replyTargetForDrop?() else { return }
+        let session = target.sessionId
+        draftSave?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            onDraftChanged?(session, trayRow.composedText)
+        }
+        draftSave = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
+    }
+
+    /// For the drill: the debounced save, now.
+    func flushDraftSaveForTesting() {
+        guard let work = draftSave else { return }
+        draftSave = nil
+        work.perform()
+    }
+
+    /// The line was emptied by a send or a flush: the draft goes with it,
+    /// now, not after a debounce a crash could beat.
+    func noteDraftCleared() {
+        draftSave?.cancel(); draftSave = nil
+        guard let target = replyTargetForDrop?() else { return }
+        onDraftChanged?(target.sessionId, "")
+    }
 
     // MARK: - Public surface
 
@@ -598,6 +636,7 @@ final class StatusHUD: NSObject {
         guard !text.isEmpty else { return false }
         guard onItemsStaged?([.text(text)], .typed) == true else { return false }
         trayRow.compose.stringValue = ""
+        noteDraftCleared()
         Permissions.log("typed line: \(text.count) chars staged to ride the dictation")
         return true
     }
@@ -1120,6 +1159,7 @@ final class StatusHUD: NSObject {
                 let text = trayRow.composedText
                 releasePaste(because: "sent", repaint: false)
                 trayRow.clearComposed()
+                noteDraftCleared()
                 onSendTyped?(text)
             }
         }
@@ -3561,7 +3601,13 @@ final class StatusHUD: NSObject {
         Permissions.log("paste: armed for \(target.sessionId.prefix(8)) via \(door)")
         Track.record("paste_armed", ["via": .token(door)])
         // The type-or-attach row appears and takes the keys (ruled 15 Sep):
-        // selecting the card is what shows it.
+        // selecting the card is what shows it. The words you left on it
+        // come back first (17 Sep): a draft outlives the face, the process
+        // and the machine.
+        if trayRow.composedText.isEmpty, let kept = draftFor?(target.sessionId), !kept.isEmpty {
+            trayRow.compose.stringValue = kept
+            Permissions.log("draft: restored \(kept.count) chars for \(target.sessionId.prefix(8))")
+        }
         trayRow.setComposing(true)
         render()
         let took = panel.makeFirstResponder(trayRow.compose)
@@ -3700,20 +3746,96 @@ final class StatusHUD: NSObject {
     /// can put it back rather than leaving a stale progress line on screen.
     private var goToSessionPriorBody: String?
 
+    /// What a GO TO AGENT said when it ended: nothing (it opened the tab) or
+    /// the sentence it put on a card.
+    enum GoToSessionAnswer: Equatable {
+        case silent
+        case said(String)
+    }
+
+    /// When the in-flight guard last came down, for the drill that asserts it
+    /// comes down BEFORE the discovery walk rather than after it (#359).
+    private(set) var goToSessionGuardReleasedAt: Date?
+
+    /// Whoever is waiting for the next GO TO AGENT to answer, by ticket, so a
+    /// wait that gives up can withdraw its own ticket and nobody else's.
+    private var goToSessionAnswerWaiters: [UUID: CheckedContinuation<GoToSessionAnswer?, Never>] = [:]
+
+    /// The guard comes down without the jump being over.
+    ///
+    /// Split from `finishGoToSession` on 17 Sep. The not-live branch drops the
+    /// guard before its discovery walk (#359, so the button is pressable again
+    /// while the walk runs) and answers afterwards; while both went through
+    /// `finishGoToSession`, "the guard dropped" and "the jump answered" were
+    /// the same call, and nothing could wait for the second without also
+    /// waking on the first. The drill guessed with timers instead, and the
+    /// guess expired when the walk grew from 5 s to 14 s.
+    func releaseGoToSessionGuard() {
+        guard goToSessionInFlight else { return }
+        goToSessionInFlight = false
+        goToSessionGuardReleasedAt = Date()
+        bodyLabel.stringValue = goToSessionPriorBody ?? bodyLabel.stringValue
+        goToSessionPriorBody = nil
+    }
+
     /// The end of a GO TO AGENT, from wherever it started.
     ///
     /// The HUD decides how to say it, because the HUD is what knows whether a
     /// card is mid-flight: from the card, restore or replace its body and drop
     /// the guard; from a grid row, there is no card to restore, so a message
     /// gets its own result card and silence stays silent.
-    func finishGoToSession(_ message: String?) {
+    ///
+    /// `about` is the session the jump was FOR, and it is not optional. The
+    /// answer can arrive 14 s after the press (the discovery walk, measured
+    /// 17 Sep on 243 archived sessions), by which time the panel has moved on
+    /// and `showResult`'s fallback names whatever it addressed last. That is
+    /// how a refusal about `goto-drill` painted under the title "adopted", a
+    /// fixture from a different drill, on ten of ten launches.
+    func finishGoToSession(_ message: String?, about sessionId: String) {
+        defer {
+            let waiters = goToSessionAnswerWaiters.values
+            goToSessionAnswerWaiters = [:]
+            let answer: GoToSessionAnswer = message.map { .said($0) } ?? .silent
+            waiters.forEach { $0.resume(returning: answer) }
+        }
         if goToSessionInFlight {
             goToSessionInFlight = false
+            goToSessionGuardReleasedAt = Date()
             bodyLabel.stringValue = message ?? goToSessionPriorBody ?? bodyLabel.stringValue
             goToSessionPriorBody = nil
             return
         }
-        if let message { showResult(message) }
+        guard let message else { return }
+        // The name the panel already has for it, wherever it has one; the
+        // short id only when it has none, which is a card that is at least
+        // honest about whose it is.
+        let onStage = currentTarget.flatMap { $0.sessionId == sessionId ? $0 : nil }
+        let label = onStage?.label
+            ?? face.sessionRows.first(where: { $0.id == sessionId })?.name
+            ?? lastAddressed.flatMap { $0.sessionId == sessionId ? $0.label : nil }
+            ?? String(sessionId.prefix(8)).uppercased()
+        showResult(message, about: (sessionId: sessionId, pid: onStage?.pid, label: label))
+    }
+
+    /// Wait for the next GO TO AGENT to answer, however long its walk takes,
+    /// or `nil` once `seconds` have passed without one.
+    ///
+    /// For the drill, which used to sweep at 3 s and again at 9 s and call
+    /// that a round trip; the walk is a function of the archive's size and
+    /// has already outgrown two guesses. The ceiling is here rather than in
+    /// a cancelled task because a continuation that is never resumed is a
+    /// leak, and a cancelled `Task` does nothing to a continuation.
+    func awaitGoToSessionAnswer(within seconds: TimeInterval) async -> GoToSessionAnswer? {
+        let ticket = UUID()
+        return await withCheckedContinuation { continuation in
+            goToSessionAnswerWaiters[ticket] = continuation
+            DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { [weak self] in
+                guard let self,
+                      let gaveUp = self.goToSessionAnswerWaiters.removeValue(forKey: ticket)
+                else { return }
+                gaveUp.resume(returning: nil)
+            }
+        }
     }
 
     /// Advance the highlight to the character range currently being spoken.

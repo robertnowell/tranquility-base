@@ -14,7 +14,8 @@ final class TerminalTabFocusTests: XCTestCase {
         let attach = try XCTUnwrap(TerminalTabFocus.attachScript(
             binary: "/opt/homebrew/bin/tmux", socket: "tb",
             tmuxTmpDir: "/x", sessionName: "tb-e8c484b1"))
-        let raise = TerminalTabFocus.raiseScript(windowId: 4211)
+        let raise = try XCTUnwrap(
+            TerminalTabFocus.raiseScript(windowId: 4211, sessionName: "tb-e8c484b1"))
         for script in [attach, raise] {
             XCTAssertFalse(script.contains("tty"),
                            "no focus path may address a tab by tty: \(script)")
@@ -23,8 +24,9 @@ final class TerminalTabFocusTests: XCTestCase {
         }
     }
 
-    func testRaiseScriptAddressesOneWindowByIdAndSaysWhenItIsGone() {
-        let script = TerminalTabFocus.raiseScript(windowId: 4211)
+    func testRaiseScriptAddressesOneWindowByIdAndSaysWhenItIsGone() throws {
+        let script = try XCTUnwrap(
+            TerminalTabFocus.raiseScript(windowId: 4211, sessionName: "tb-e8c484b1"))
         XCTAssertTrue(script.contains("window id 4211"))
         XCTAssertTrue(script.contains("exists window id 4211"),
                       "a closed window must be a fact, not a near-miss")
@@ -38,12 +40,69 @@ final class TerminalTabFocusTests: XCTestCase {
         XCTAssertTrue(script.contains("return \"ok\""))
     }
 
+    // MARK: - The window we measured, not the window we guessed (17 Sep)
+
+    func testRaiseRefusesAWindowShowingAnotherSession() throws {
+        // A live window with a tab is not yet OUR window. The attach wrote
+        // down a stranger's id (below), and because that window was real,
+        // `exists` and the tab count both passed, the raise said "ok", and
+        // the fresh-attach fallback was never reached: four presses at
+        // 21:23, all to window 725 (tb-29124722) for a card naming
+        // tb-2894d1e0. The name check is what makes a wrong id
+        // self-correcting instead of sticky for the life of the process.
+        let script = try XCTUnwrap(
+            TerminalTabFocus.raiseScript(windowId: 725, sessionName: "tb-2894d1e0"))
+        XCTAssertTrue(script.contains("(name of window id 725) contains \"tb-2894d1e0\""),
+                      "the raise must ask whether the window still shows THIS session")
+        XCTAssertTrue(script.contains("return \"notfound|stranger\""),
+                      "a stranger's window takes the closed-window path")
+        // The order matters: the name is only read from a window that has
+        // a tab, so a zombie never gets asked its name.
+        let tabs = try XCTUnwrap(script.range(of: "count of tabs"))
+        let name = try XCTUnwrap(script.range(of: "name of window"))
+        XCTAssertLessThan(tabs.lowerBound, name.lowerBound)
+        // Both "not ours" answers map to the same outcome, and that outcome
+        // is the one focus() answers by forgetting and attaching fresh.
+        XCTAssertEqual(
+            TerminalTabFocus.outcome(of: .success("notfound|stranger"), timeout: 5), .tabGone)
+    }
+
+    func testRaiseRefusesToScriptAnUnexpectedSessionName() {
+        // The name goes into an AppleScript string literal, so it gets the
+        // same filter the attach applies. A name we would not attach is a
+        // name we cannot have a window for.
+        XCTAssertNil(TerminalTabFocus.raiseScript(
+            windowId: 1, sessionName: "tb-e8c\" then do shell script \"rm -rf ~\""))
+        XCTAssertNil(TerminalTabFocus.raiseScript(windowId: 1, sessionName: ""))
+    }
+
+    func testAttachMeasuresTheWindowItOpenedRatherThanReadingWindowOne() throws {
+        // `do script` opens a new window and leaves it frontmost, but
+        // Terminal has not re-ordered its windows at the instant the next
+        // line runs, so `window 1` is still the window that was frontmost
+        // BEFORE — another agent's. Probed live 17 Sep, twice: window 1 said
+        // 1028 when the new window was 1235, then 1235 when it was 1237.
+        // Off by one attach, every time, and the wrong id was remembered.
+        let script = try XCTUnwrap(TerminalTabFocus.attachScript(
+            binary: "/opt/homebrew/bin/tmux", socket: "tb",
+            tmuxTmpDir: "/x", sessionName: "tb-e8c484b1"))
+        XCTAssertFalse(script.contains("window 1"),
+                       "an index is a guess about ordering; the id must be measured")
+        XCTAssertTrue(script.contains("set newTab to do script"),
+                      "do script returns the tab it made; that is the window's identity")
+        XCTAssertTrue(script.contains("first window whose selected tab is newTab"))
+        XCTAssertTrue(script.contains("set idsBefore to id of windows"),
+                      "the before/after diff is the fallback when the tab lookup fails")
+        let before = try XCTUnwrap(script.range(of: "set idsBefore"))
+        let open = try XCTUnwrap(script.range(of: "do script"))
+        XCTAssertLessThan(before.lowerBound, open.lowerBound,
+                          "the before-list must be taken before the window opens")
+    }
+
     func testAttachReportsTheWindowItOpened() throws {
         let script = try XCTUnwrap(TerminalTabFocus.attachScript(
             binary: "/opt/homebrew/bin/tmux", socket: "tb",
             tmuxTmpDir: "/x", sessionName: "tb-e8c484b1"))
-        XCTAssertTrue(script.contains("id of window 1"),
-                      "the id is only knowable at the moment we open it")
         XCTAssertTrue(script.contains("\"ok|\""))
         XCTAssertEqual(TerminalTabFocus.windowId(fromAttach: "ok|4211"), 4211)
         XCTAssertEqual(TerminalTabFocus.windowId(fromAttach: "ok|4211\n"), 4211)

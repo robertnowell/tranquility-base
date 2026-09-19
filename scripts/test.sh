@@ -84,16 +84,21 @@ fi
 # on one of them. What this file adds on top is the floor — their version still
 # passes an "Executed 0 tests, with 0 failures".
 #
-# Captured, never piped — see the long note in preflight.sh about pipefail and
-# SIGPIPE. Same trap, same reason.
+# Keep both framework logs while streaming progress. The healthy release
+# 35243781312 spent 127s in this whole test phase; a 600s bound per framework
+# leaves substantial headroom while an individual stall cannot consume an hour.
+# A deadline is a failure. Do not continue to a second framework after timeout.
+DIAGNOSTICS="$PWD/.build/ci-diagnostics"
+mkdir -p "$DIAGNOSTICS"
 echo "→ swift test --enable-xctest"
-OUT=$("${RUNNER[@]}" swift test --enable-xctest --disable-swift-testing 2>&1) \
-  && STATUS=0 || STATUS=$?
+python3 scripts/run-stage.py --timeout 600 --log "$DIAGNOSTICS/xctest.log" -- \
+  "${RUNNER[@]}" swift test --enable-xctest --disable-swift-testing && STATUS=0 || STATUS=$?
+[ "$STATUS" -lt 124 ] || exit "$STATUS"
 echo "→ swift test --enable-swift-testing"
-ST_OUT=$("${RUNNER[@]}" swift test --disable-xctest --enable-swift-testing 2>&1) \
-  && ST_STATUS=0 || ST_STATUS=$?
-OUT="$OUT
-$ST_OUT"
+python3 scripts/run-stage.py --timeout 600 --log "$DIAGNOSTICS/swift-testing.log" -- \
+  "${RUNNER[@]}" swift test --disable-xctest --enable-swift-testing && ST_STATUS=0 || ST_STATUS=$?
+[ "$ST_STATUS" -lt 124 ] || exit "$ST_STATUS"
+OUT="$(cat "$DIAGNOSTICS/xctest.log" "$DIAGNOSTICS/swift-testing.log")"
 [ "$ST_STATUS" -eq 0 ] || STATUS=$ST_STATUS
 
 fail() {
@@ -132,10 +137,14 @@ ST=$(printf '%s\n' "$OUT" | grep -oE "Test run with [0-9]+ tests" | tail -1 | gr
 # Enumerate each framework separately, just as we execute them separately.
 # --skip-build observes the same compiled tests, without another compilation.
 # A new test raises the required count without every branch editing one number.
-XC_LIST=$("${RUNNER[@]}" swift test list --skip-build --enable-xctest --disable-swift-testing) \
+python3 scripts/run-stage.py --timeout 60 --log "$DIAGNOSTICS/xctest-inventory.log" -- \
+  "${RUNNER[@]}" swift test list --skip-build --enable-xctest --disable-swift-testing \
   || fail "XCTest discovery failed"
-ST_LIST=$("${RUNNER[@]}" swift test list --skip-build --disable-xctest --enable-swift-testing) \
+python3 scripts/run-stage.py --timeout 60 --log "$DIAGNOSTICS/swift-testing-inventory.log" -- \
+  "${RUNNER[@]}" swift test list --skip-build --disable-xctest --enable-swift-testing \
   || fail "Swift Testing discovery failed"
+XC_LIST=$(cat "$DIAGNOSTICS/xctest-inventory.log")
+ST_LIST=$(cat "$DIAGNOSTICS/swift-testing-inventory.log")
 EXPECTED_XC=$(printf '%s\n' "$XC_LIST" | grep -cE '^TranquilityCoreTests\.[^/]+/.+' || true)
 EXPECTED_ST=$(printf '%s\n' "$ST_LIST" | grep -cE '^TranquilityCoreTests\.[^/]+/.+' || true)
 [ "$EXPECTED_XC" -ge "$BASELINE_XCTEST" ] \

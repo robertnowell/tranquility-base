@@ -1621,7 +1621,7 @@ extension AppDelegate {
                 // launch self-test, whose 3 s round trip failed on the first
                 // deploy of this branch. Whatever follows paints for itself:
                 // the revive its receipt, the refusal its own result card.
-                await MainActor.run { [weak self] in self?.hud.finishGoToSession(nil) }
+                await MainActor.run { [weak self] in self?.hud.releaseGoToSessionGuard() }
                 // Not running, but on disk and revivable: bring it back, then
                 // come back here with `reviveIfGone: false` to open it.
                 if reviveIfGone,
@@ -1648,7 +1648,7 @@ extension AppDelegate {
                         ? "That agent isn't running any more, and I can't find its history "
                           + "to bring it back from."
                         : "That agent came back, but I can't find its process to open. "
-                          + "Try again in a moment.")
+                          + "Try again in a moment.", about: sessionId)
                 }
                 return
             }
@@ -1688,7 +1688,7 @@ extension AppDelegate {
                 report("elsewhere", why)
                 await MainActor.run { [weak self] in
                     self?.hud.finishGoToSession("That agent is running under another Tranquility "
-                        + "Base instance (\(why)). Nothing was closed.")
+                        + "Base instance (\(why)). Nothing was closed.", about: sessionId)
                 }
                 return
             case .unknown(let why):
@@ -1696,14 +1696,14 @@ extension AppDelegate {
                 report("location_unknown", why)
                 await MainActor.run { [weak self] in
                     self?.hud.finishGoToSession("I can't tell where that agent is right now "
-                        + "(\(why)). Nothing was closed. Try again in a moment.")
+                        + "(\(why)). Nothing was closed. Try again in a moment.", about: sessionId)
                 }
                 return
             case .gone:
                 Permissions.log("goTo: \(sessionId.prefix(8)) is gone by the ledger's account")
                 report("gone", nil)
                 await MainActor.run { [weak self] in
-                    self?.hud.finishGoToSession("That agent isn't running any more.")
+                    self?.hud.finishGoToSession("That agent isn't running any more.", about: sessionId)
                 }
                 return
             case .unhosted:
@@ -1752,7 +1752,7 @@ extension AppDelegate {
                             if case .focused = outcome {
                                 report("focused_other_holder", nil)
                                 await MainActor.run { [weak self] in
-                                    self?.hud.finishGoToSession(nil)
+                                    self?.hud.finishGoToSession(nil, about: sessionId)
                                 }
                                 return
                             }
@@ -1772,7 +1772,7 @@ extension AppDelegate {
                         message = ""
                     }
                     report("transfer_refused", message)
-                    await MainActor.run { [weak self] in self?.hud.finishGoToSession(message) }
+                    await MainActor.run { [weak self] in self?.hud.finishGoToSession(message, about: sessionId) }
                     return
                 }
                 await MainActor.run { [weak self] in
@@ -1786,7 +1786,12 @@ extension AppDelegate {
             // printed the PANE tty while the script raised a Terminal tab it
             // had found by a different tty entirely, so twelve wrong windows
             // in a row logged as twelve successes and the record could not be
-            // used to tell a hit from a corpse (13 Sep).
+            // used to tell a hit from a corpse (13 Sep). The window id here
+            // is only as honest as the raise that just used it: on 17 Sep the
+            // table held a stranger's id and four "focused … window 725"
+            // lines agreed with it. `TerminalTabFocus` now refuses to raise a
+            // window whose name does not carry this session, so an id that
+            // reaches this line has been checked against the window itself.
             let landedOn = TmuxOwnership.pane(forSessionId: sessionId, pid: nil)
                 .map { pane in
                     TerminalWindows.windowId(for: pane.sessionName)
@@ -1799,20 +1804,20 @@ extension AppDelegate {
                 case .focused:
                     Permissions.log("goTo: focused \(landedOn)")
                     report(location.pane == nil ? "focused_after_transfer" : "focused", nil)
-                    self.hud.finishGoToSession(nil)
+                    self.hud.finishGoToSession(nil, about: sessionId)
                 case .tabGone:
                     Permissions.log("goTo: tab not found for \(tty)")
                     report("tab_gone", nil)
-                    self.hud.finishGoToSession("That agent's window isn't open any more.")
+                    self.hud.finishGoToSession("That agent's window isn't open any more.", about: sessionId)
                 case .timedOut(let seconds):
                     Permissions.log("goTo TIMEOUT after \(seconds)s for \(tty)")
                     report("timed_out", nil)
                     self.hud.finishGoToSession("Terminal didn't answer within \(seconds) seconds. "
-                                        + "The session is fine. Try again in a moment.")
+                                        + "The session is fine. Try again in a moment.", about: sessionId)
                 case .failed(let message):
                     Permissions.log("goTo FAILED: \(message)")
                     report("failed", nil)
-                    self.hud.finishGoToSession("Couldn't control Terminal: \(message)")
+                    self.hud.finishGoToSession("Couldn't control Terminal: \(message)", about: sessionId)
                 }
             }
         }
@@ -1857,7 +1862,8 @@ extension AppDelegate {
             if let pane { _ = await TerminalTabFocus.focus(tty: pane.paneTty, sessionId: sessionId) }
             await MainActor.run {
                 self.hud.finishGoToSession("\(name) is still working in the background. "
-                    + "Tap again when it goes idle and it will come back as a normal session.")
+                    + "Tap again when it goes idle and it will come back as a normal session.",
+                    about: sessionId)
             }
             return
         }

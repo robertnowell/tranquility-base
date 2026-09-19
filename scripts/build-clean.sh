@@ -28,6 +28,13 @@ cd "$(dirname "$0")/.."
 . "$(dirname "$0")/lib/paths.sh"
 . "$(dirname "$0")/lib/app-process.sh"
 
+# All entry points must own the shared workspace before checkout or bundling.
+# The inherited descriptor keeps ownership alive if the parent exits while a
+# build child still uses it. Standalone calls also go through preparation.
+if ! python3 scripts/prepare-dev.py lock-held; then
+  exec python3 scripts/prepare-dev.py build "${1:-origin/main}"
+fi
+
 REF="${1:-origin/main}"
 CLEAN_WORKTREE="/private/tmp/tb-clean"
 APP="${VD_APP_NAME:-Tranquility Base}.app"

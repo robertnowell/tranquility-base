@@ -457,7 +457,12 @@ public enum Prerequisites {
     /// hooks audit parses a file, a keychain read is a round trip, and the tmux
     /// fallback spawns a login shell. None of that belongs on a 1 Hz UI timer.
     public static func snapshot(_ probes: Probes = .live) -> [State] {
-        items(harnesses: probes.harnesses(), providers: probes.providers()).map { item in
+        let credits = probes.creditStanding()
+        return items(harnesses: probes.harnesses(), providers: probes.providers()).map { item in
+            if item == .anthropicKey, credits.isOnCredits, !probes.hasSecret(.anthropicAPIKey) {
+                return State(item: item, satisfied: true,
+                             detail: "not required for credits · optional for direct use")
+            }
             if let secret = item.secret {
                 guard probes.hasSecret(secret) else {
                     return State(item: item, satisfied: false, detail: missingDetail(item))
@@ -506,11 +511,9 @@ public enum Prerequisites {
                 return State(item: item, satisfied: false,
                              detail: "not connected. Sign in and your agents' pages and turns appear in the hub")
             case .credits:
-                let standing = probes.creditStanding()
-                switch standing {
-                case .good, .onCredits:
+                let standing = credits
+                if standing.isOnCredits {
                     return State(item: item, satisfied: true, detail: standing.detail)
-                default: break
                 }
                 return State(item: item, satisfied: false, detail: standing.detail,
                              attention: standing.needsAttention)
@@ -539,7 +542,8 @@ public enum Prerequisites {
 
     /// The gate the Start door uses.
     ///
-    /// tmux and the Anthropic key are each required outright. The hooks are
+    /// tmux is required; summaries need either verified managed readiness or
+    /// the direct key. A stored Hub token alone is not readiness. The hooks are
     /// required COLLECTIVELY: at least one harness has to be wired, and a
     /// second broken one does not hold the door.
     ///
@@ -558,8 +562,10 @@ public enum Prerequisites {
     /// run Codex.
     public static func allRequiredSatisfied(_ states: [State]) -> Bool {
         var hooks: [State] = [], others: [State] = []
+        let managedReady = states.contains { $0.item == .credits && $0.satisfied }
         for state in states {
             if case .hooks = state.item { hooks.append(state) }
+            else if state.item == .anthropicKey && managedReady { continue }
             else if state.item.isRequired { others.append(state) }
         }
         guard others.allSatisfy(\.satisfied) else { return false }

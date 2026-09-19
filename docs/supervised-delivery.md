@@ -5,6 +5,11 @@ admission, merge completion, and running software have separate evidence.
 
 ## The operator's path
 
+For the supervised queue pilot, use `delivery.py admit --pr NUMBER --owner
+SESSION --head FULL_PR_HEAD_SHA` before any label-only admission. It persists
+delivery intent before requesting the queue. See [merge-queue.md](merge-queue.md)
+for cutover, coordinator ownership, explicit holds and conflict re-admission.
+
 After requesting a merge, keep one named supervisor on the request:
 
 ```sh
@@ -47,8 +52,9 @@ Newer main movement during that install is handled by a later request/tick.
 The same installer retains capture, preview, signing, channel, intentional Quit
 and launch-drill checks. Preview expiry only permits the next attempt; it is not
 a deadline by which a build must be running. Sleep delays the worker until wake.
-The build still holds the app-mutation lock; splitting preparation from activation
-is the remaining #519 slice, not part of this worker.
+Build preparation now owns a separate workspace lock and produces a leased
+artifact before app ownership. See `prepared-dev-builds.md` for activation
+checks and the bounded informational diagnostic after the runtime receipt.
 
 A failed source is held across ticks/restarts, including other requests for that
 same source. A newer main can be attempted; an operator can explicitly retry via
@@ -160,3 +166,11 @@ identity and ancestry, durable interrupted intent, idempotent runtime receipts,
 stale helpers, process reuse, wrong bundles, capture rechecks and hook parsing.
 The preview entrypoint tests additionally exercise automatic Quit/Prod deferral.
 These tests use temporary state and fixture processes; no live app is installed.
+
+## Prepared builds
+
+See [prepared-dev-builds.md](prepared-dev-builds.md) for separate build ownership,
+leased artifacts, activation rechecks and bounded archive diagnostics. Use
+`python3 scripts/update-deployment-tooling.py` to update the stable checkout
+under both locks. A preview can defer activation while a merged build is
+prepared and retained for its later handoff.

@@ -148,13 +148,17 @@ public struct ManagedSummaryClient: Sendable {
     }
 
     public func summarize(source: GatewaySource, request: SummaryRequest) async throws -> GatewayOperation {
+        try await result(source: source, request: request).operation
+    }
+
+    func result(source: GatewaySource, request: SummaryRequest) async throws -> (operation: GatewayOperation, replayed: Bool) {
         guard request.correctiveNote == nil else { throw ManagedSummaryFailure.correctiveRetryNotAllowed }
         let account = accountId.uuidString.lowercased()
         let id = source.operationId(accountId: accountId)
         let payload = try GatewayContract.encode(GatewaySummaryRequest(source: source, input: GatewaySummaryInput(request)))
         guard payload.count <= 131072 else { throw ManagedSummaryFailure.refused(code: "invalid_request", operationId: id) }
         let entry = try outbox.prepare(account: account, id: id, request: payload)
-        if let result = entry.result { return try decode(result, id: id) }
+        if let result = entry.result { return (try decode(result, id: id), true) }
         try Task.checkCancellation()
         let path = "/v1/accounts/\(account)/summaries/\(id)"
         do {
@@ -162,10 +166,10 @@ public struct ManagedSummaryClient: Sendable {
             // GET never invokes a provider. Only 404 permits same-key PUT.
             if !entry.isNew {
                 let found = try await transport.request(method: "GET", path: path, body: nil)
-                if found.status != 404 { return try accept(found, id: id) }
+                if found.status != 404 { return (try accept(found, id: id), true) }
             }
             try Task.checkCancellation()
-            return try accept(await transport.request(method: "PUT", path: path, body: entry.request), id: id)
+            return (try accept(await transport.request(method: "PUT", path: path, body: entry.request), id: id), !entry.isNew)
         } catch let error as ManagedSummaryFailure { throw error }
         catch is CancellationError { throw CancellationError() }
         catch { throw ManagedSummaryFailure.outcomeUnknown(operationId: id) }
@@ -255,11 +259,12 @@ public struct ManagedSummaryProvider: SummaryProvider {
     }
     public func delivery(for request: SummaryRequest) async throws -> SummaryDelivery {
         guard let source = request.managedSource else { throw ManagedSummaryFailure.missingSourceIdentity }
-        let op = try await client().summarize(source: source, request: request)
+        let result = try await client().result(source: source, request: request)
+        let op = result.operation
         switch op.state {
         case .succeeded:
             guard let brief = op.brief, let receipt = op.receipt else { throw ManagedSummaryFailure.invalidResponse }
-            return SummaryDelivery(brief: brief, receipt: receipt)
+            return SummaryDelivery(brief: brief, receipt: receipt, receiptWasReplayed: result.replayed)
         case .admitted, .running, .reconciling:
             throw ManagedSummaryFailure.pending(operationId: op.operationId, state: op.state)
         case .failed, .cancelled:
