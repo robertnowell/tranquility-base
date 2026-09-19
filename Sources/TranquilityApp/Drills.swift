@@ -1196,6 +1196,10 @@ extension StatusHUD {
             ? grid.frame.height > AgentGridRow.tileHeight
             : grid.frame.height >= AgentGridRow.tileHeight
         let fourAgents = tiles.count == 4
+        let readyAgent = AgentRoster.Agent(id: "codex", name: "Codex", glyph: "◇", standing: .ready)
+        let readyGrid = AgentGridRow(width: 320, agents: [readyAgent], selected: readyAgent.id)
+        let readyNameIsPlain = readyGrid.subviews.compactMap { $0 as? NSButton }.first?
+            .attributedTitle.string == "CODEX"
 
         // A greyed tile hands its step out and must not change the selection:
         // picking an agent you cannot use leaves the panel pointing at
@@ -1210,6 +1214,8 @@ extension StatusHUD {
         if let button = greyed.subviews.compactMap({ $0 as? NSButton }).first {
             button.performClick(nil)
         }
+        let setupArrowRemains = greyed.subviews.compactMap { $0 as? NSButton }.first?
+            .attributedTitle.string.hasSuffix(" →") == true
 
         // **Is it actually ON SCREEN?**
         //
@@ -1243,6 +1249,16 @@ extension StatusHUD {
         let tilesAreVisible = onScreen.map { grid in
             grid.subviews.contains { !$0.isHidden && $0.frame.width > 0 }
         } ?? false
+
+        let originalHarness = viewingHarness
+        let fieldInstructions = "Return saves a field · Choose… picks the folder"
+        showAgentFields(for: "claude-code")
+        let harnessFieldsHaveInstructions = !launchRow.isHidden && !directoryRow.isHidden
+            && hintLabel.stringValue == fieldInstructions
+        showAgentFields(for: "opencode")
+        let providerDirectoryHasInstructions = launchRow.isHidden && !directoryRow.isHidden
+            && hintLabel.stringValue == fieldInstructions
+        showAgentFields(for: originalHarness)
 
         // **Does the pane FIT?**
         //
@@ -1293,6 +1309,10 @@ extension StatusHUD {
             ("itIsAGridNotARow", itIsAGridNotARow),
             ("aGreyedTileOffersItsStep", handedOut != nil),
             ("aGreyedTileDoesNotBecomeTheSelection", selectedInstead == nil),
+            ("aReadyTileHasAPlainName", readyNameIsPlain),
+            ("aSetupTileKeepsItsArrow", setupArrowRemains),
+            ("harnessFieldsHaveInstructions", harnessFieldsHaveInstructions),
+            ("providerDirectoryHasInstructions", providerDirectoryHasInstructions),
         ])
     }
 

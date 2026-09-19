@@ -107,17 +107,18 @@ final class AgentGridRow: NSView {
 
     /// The whole visual language, in one place.
     ///
-    /// A tile carries its name and, when it is set up, a tick. The tick is
-    /// green because green already means "ready for you" everywhere else on
-    /// this panel; a tile that needs setting up wears the amber arrow, because
-    /// amber already means "something for you to do". Nothing new is invented
-    /// — the three-lamp ruling covers this surface too.
+    /// A ready tile carries its plain name. A tile needing setup keeps the
+    /// amber arrow for the action its tap opens; readiness adds no checkmark.
     private func paint() {
         for agent in agents {
             guard let button = tiles[agent.id] else { continue }
             let picked = agent.id == selected
             let ready = agent.standing.isReady
-            let mark: String = ready ? "✓" : "→"
+            // No tick (ruled 14 Sep, 21:45: "there shouldn't be checkmarks").
+            // Ready is the plain state, and a mark that says "fine" on three
+            // tiles out of four is noise. The arrow stays: it is not a status,
+            // it is the door a tap opens, and the dimmed tile already says why.
+            let mark: String = ready ? "" : " →"
             let ink: NSColor = ready
                 ? (picked ? StateLegend.Palette.ready : StateLegend.Palette.ink)
                 : StateLegend.Palette.fault
@@ -130,7 +131,7 @@ final class AgentGridRow: NSView {
             // `line(_:)` is "the one place a glyph meets a word in this app",
             // and this row shipped red for ignoring it.
             button.attributedTitle = ChromeType.line(
-                "\(agent.name.uppercased()) \(mark)",
+                "\(agent.name.uppercased())\(mark)",
                 font: StateLegend.Face.chrome(9), color: ink, tracking: 1.1)
             // An agent that is not set up reads back, so the eye lands on the
             // ones that are. It is still legible and still tappable: being

@@ -1401,6 +1401,10 @@ final class StatusHUD: NSObject {
         }
         directoryRow.show(AgentDefaults.directoryAsTyped(for: harness))
         directoryRow.setPlaceholder(AgentDefaults.fallbackDirectory)
+        // Providers now expose DIRECTORY too. Keep its instructions when
+        // LAUNCH is hidden, and refresh on selection as well as tab opening.
+        setHint(launchRow.isHidden && directoryRow.isHidden
+                ? "" : "Return saves a field · Choose… picks the folder")
     }
 
     /// Switch tabs without leaving `.settings`.
@@ -2653,7 +2657,6 @@ final class StatusHUD: NSObject {
                 agentGrid.update(agents: Self.agentTiles(), selected: viewingHarness)
                 showAgentFields(for: viewingHarness)
                 bodyLabel.stringValue = face.body
-                setHint("return to save · choose… picks a folder")
                 // Settings is the second face that asks for typing, so it takes
                 // the keyboard the way the list does, and gives it back through
                 // the same baseline door.
