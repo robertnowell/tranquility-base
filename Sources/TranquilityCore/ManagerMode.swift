@@ -14,6 +14,8 @@ import Foundation
 /// emits the same lines, and the orb does not know the difference.
 public struct ManagerEvent: Codable, Equatable, Sendable {
     public enum Kind: String, Codable, Sendable {
+        /// The user started speaking; nothing decided yet.
+        case hearing
         /// A finished turn the manager heard and stayed silent on.
         case listening
         /// A finished turn the manager was addressed by; `intent` says what.
@@ -26,6 +28,8 @@ public struct ManagerEvent: Codable, Equatable, Sendable {
         case earcon
         /// A door the manager walked through: `tbase send`, `open …://hear`.
         case tool
+        /// Something failed, with its reason; the manager said a fixed line.
+        case error
     }
     public var event: Kind
     public var t: Double?
@@ -40,6 +44,7 @@ public struct ManagerEvent: Codable, Equatable, Sendable {
     public var rung: String?
     public var ms: Int?
     public var meaning: String?
+    public var reason: String?
 
     public static func parse(_ line: Data) -> ManagerEvent? {
         try? JSONDecoder().decode(ManagerEvent.self, from: line)

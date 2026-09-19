@@ -95,9 +95,14 @@ extension AppDelegate {
     @MainActor
     private func handle(_ e: ManagerEvent) {
         let p = String(format: "%.2f", e.p ?? 0)
+        Permissions.log("manager event: \(e.event.rawValue) p=\(p) intent=\(e.intent ?? "-") \(e.text?.prefix(60) ?? e.reason?.prefix(60) ?? "")")
         switch e.event {
+        case .hearing:
+            hud.setManagerState("listening", line: "hearing you")
+        case .error:
+            hud.setManagerState("breathing", line: "error · \(e.reason ?? "")")
         case .listening:
-            hud.setManagerState("listening", line: "heard · \(p)")
+            hud.setManagerState("breathing", line: "heard · \(p) · silent")
         case .addressed:
             hud.setManagerState("solving", line: "\(e.intent ?? "addressed") · \(p)")
         case .speaking:

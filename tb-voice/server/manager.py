@@ -24,9 +24,11 @@ from tools import _json_or_text, _run
 JEV_URL = "https://api.typesafe.ai/v1/systemone"
 NAME = os.getenv("TB_MANAGER_NAME", "Tranquility")
 THRESHOLD = float(os.getenv("TB_ADDRESSED_THRESHOLD", "0.5"))
-TBASE = os.getenv("TBASE_BIN", "tbase")
 SCHEME = os.getenv("TB_URL_SCHEME", "tranquilitybase")
 SOUNDS = os.getenv("TB_SOUNDS", "")
+TBASE = os.getenv("TBASE_BIN", "tbase")
+if not os.path.exists(TBASE) and TBASE != "tbase":
+    logger.warning(f"TBASE_BIN {TBASE} does not exist; reads will fail closed")
 
 INTENTS = {
     "invite_next": "Invite the next agent or session to speak; 'next agent'; 'who is up'",
@@ -112,6 +114,10 @@ class Manager(FrameProcessor):
         self.heard = 0
         self.addressed = 0
 
+    async def hearing(self):
+        """The user started speaking: the orb shows it before any verdict."""
+        await emit(self, "hearing")
+
     # -- pipeline entry ------------------------------------------------------------
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
@@ -131,9 +137,13 @@ class Manager(FrameProcessor):
                 await self._resolve_pending(text, frame, direction)
             else:
                 await self._turn(text, frame, direction)
+        except FileNotFoundError as e:  # a read door is missing: say so, never infer
+            logger.error(f"manager read failed: {e}")
+            await emit(self, "error", reason=str(e)[:160])
+            await self._say("I can't read the fleet right now.")
         except Exception as e:  # the manager fails closed: silence, never a crash
             logger.exception(f"manager turn failed: {e}")
-            await emit(self, "listening", p=0.0, ms=0, text=text[:120], error=str(e)[:120])
+            await emit(self, "error", reason=str(e)[:160])
         self._recent.append(text)
 
     async def _turn(self, text, frame, direction):

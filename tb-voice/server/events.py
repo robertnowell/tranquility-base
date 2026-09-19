@@ -25,11 +25,21 @@ def _out():
     return _sink
 
 
+_file = None
+
+
 def line(event: str, **fields) -> dict:
+    global _file
     rec = {"event": event, "t": round(time.time(), 3), **fields}
+    text = json.dumps(rec, separators=(",", ":")) + "\n"
     out = _out()
-    out.write(json.dumps(rec, separators=(",", ":")) + "\n")
+    out.write(text)
     out.flush()
+    # And always to events.jsonl beside the log, so `tail -f` shows the stream
+    # whether the app, the playground, or nobody is listening.
+    if _file is None:
+        _file = open(os.path.join(os.path.dirname(__file__), "events.jsonl"), "a", buffering=1)
+    _file.write(text)
     return rec
 
 

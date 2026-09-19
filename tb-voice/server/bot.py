@@ -9,6 +9,10 @@ Run with keys injected from the Keychain: ./run.sh
 import os
 
 from dotenv import load_dotenv
+
+# .env first: manager.py and tools.py read TBASE_BIN and TB_URL_SCHEME at import.
+load_dotenv(override=True)
+
 from loguru import logger
 from pipecat.audio.turn.smart_turn.base_smart_turn import SmartTurnParams
 from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import LocalSmartTurnAnalyzerV3
@@ -41,8 +45,6 @@ from pipecat.workers.runner import WorkerRunner
 from manager import JevClient, Manager
 from prompt import SYSTEM
 from tools import SCHEMAS
-
-load_dotenv(override=True)
 
 
 async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> None:
@@ -96,6 +98,10 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
     )
 
     gate = Manager(JevClient(os.environ["JEV_API_KEY"]))
+
+    @user_aggregator.event_handler("on_user_turn_started")
+    async def on_user_turn_started(aggregator, *args):
+        await gate.hearing()
 
     pipeline = Pipeline(
         [
