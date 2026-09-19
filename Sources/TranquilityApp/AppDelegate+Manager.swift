@@ -43,3 +43,75 @@ extension AppDelegate {
         }
     }
 }
+
+// MARK: - Manager mode: the child, its events, and the orb
+
+extension AppDelegate {
+
+    var managerIsOn: Bool { managerTransport != nil }
+
+    @objc func toggleManagerMode() {
+        if managerIsOn { stopManager() } else { startManager() }
+        rebuildMenu()
+    }
+
+    @MainActor
+    func startManager() {
+        let argv = ManagerConfig.command()
+        let cwd = (argv[0] as NSString).deletingLastPathComponent
+        let transport = ACPProcessTransport(command: argv, cwd: cwd,
+                                            environment: ManagerConfig.environment())
+        do { try transport.start() } catch {
+            hud.showResult("Manager could not start: \(error.localizedDescription)")
+            Permissions.log("manager: start failed \(error)")
+            return
+        }
+        managerTransport = transport
+        let orb = managerOrb ?? ManagerOrb()
+        managerOrb = orb
+        orb.set(.idle, line: "Tranquility · listening")
+        orb.show()
+        Permissions.log("manager: started \(argv.joined(separator: " "))")
+        managerTask = Task { @MainActor [weak self] in
+            for await line in transport.lines() {
+                guard let self, let event = ManagerEvent.parse(line) else { continue }
+                self.handle(event)
+            }
+            // The child ended, by us or by itself. Either way the lamp goes out.
+            self?.managerOrb?.set(.idle, line: "Tranquility · off")
+            self?.managerOrb?.hide()
+            self?.managerTransport = nil
+            Permissions.log("manager: child ended")
+            self?.rebuildMenu()
+        }
+    }
+
+    @MainActor
+    func stopManager() {
+        managerTask?.cancel()
+        managerTask = nil
+        if let transport = managerTransport { Task { await transport.close() } }
+        managerTransport = nil
+        managerOrb?.hide()
+        Permissions.log("manager: stopped")
+    }
+
+    @MainActor
+    private func handle(_ e: ManagerEvent) {
+        guard let orb = managerOrb else { return }
+        switch e.event {
+        case .listening:
+            orb.set(.heard, line: "heard · \(String(format: "%.2f", e.p ?? 0))")
+        case .addressed:
+            orb.set(.addressed, line: "\(e.intent ?? "addressed") · \(String(format: "%.2f", e.p ?? 0))")
+        case .speaking:
+            orb.set(.speaking, line: e.voice == "agent" ? "the session speaks" : "Tranquility speaks")
+        case .stage:
+            orb.set(.stage, line: "on stage: \(e.goal ?? e.project ?? e.session?.prefix(8).description ?? "")")
+        case .earcon:
+            if let name = e.name, let cue = EarconGate.Cue(rawValue: name) { Earcons.acknowledge(cue) }
+        case .tool:
+            orb.set(.addressed, line: "→ \(e.meaning ?? (e.text ?? "tool"))")
+        }
+    }
+}

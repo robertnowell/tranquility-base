@@ -265,7 +265,7 @@ class Manager(FrameProcessor):
 
     async def _earcon(self, name: str):
         await emit(self, "earcon", name=name)
-        if SOUNDS:
+        if SOUNDS and os.getenv("TB_HOST") != "app":  # hosted by the app, the app plays it
             wav = os.path.join(SOUNDS, f"{'needs-you' if name == 'needsYou' else name}.wav")
             asyncio.create_task(_run("afplay", wav))
 
