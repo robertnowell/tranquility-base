@@ -107,11 +107,8 @@ final class AgentGridRow: NSView {
 
     /// The whole visual language, in one place.
     ///
-    /// A tile carries its name and, when it is set up, a tick. The tick is
-    /// green because green already means "ready for you" everywhere else on
-    /// this panel; a tile that needs setting up wears the amber arrow, because
-    /// amber already means "something for you to do". Nothing new is invented
-    /// — the three-lamp ruling covers this surface too.
+    /// A ready tile carries its plain name. A tile needing setup keeps the
+    /// amber arrow for the action its tap opens; readiness adds no checkmark.
     private func paint() {
         for agent in agents {
             guard let button = tiles[agent.id] else { continue }
