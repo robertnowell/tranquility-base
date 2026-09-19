@@ -9,7 +9,9 @@ func usage() -> Never {
     print("""
     tbase — Tranquility Base queue inspector
 
-      tbase status              counts by status, plus spool depth
+      tbase status [--json]     counts by status, plus spool depth
+      tbase targets [--json]    live sessions, with goal and waiting state under --json
+      tbase brief <id> --json   a session's latest brief and its ladder (the manager's read)
       tbase drain               move spooled hook events into the queue
       tbase events [status]     list events (optionally filtered)
       tbase utterances [status] list utterances
@@ -165,6 +167,23 @@ do {
         print("database  \(QueueStore.databaseURL.path)")
         print("audio     \(QueueStore.audioDirectory.path)")
         print("spool     \(QueueStore.supportDirectory.appendingPathComponent("spool.jsonl").path)")
+
+    case "status" where args.contains("--json"):
+        // The manager's read door. Shape is `ManagerJSON.Status`, tested in Core.
+        print(ManagerJSON.encode(try ManagerJSON.status(store: store)))
+
+    case "brief":
+        // `tbase brief <id|prefix> --json`: the latest brief and its ladder for one
+        // session, no model call. The manager reads rungs from here and hands them
+        // to the app to speak in the session's own voice.
+        guard args.count > 1 else { usage() }
+        let wanted = args[1]
+        let resolved = try store.sessionId(matching: wanted) ?? wanted
+        guard let brief = try ManagerJSON.brief(store: store, sessionId: resolved) else {
+            print(args.contains("--json") ? "null" : "no brief stored for \(wanted)")
+            exit(2)
+        }
+        print(ManagerJSON.encode(brief))
 
     case "status":
         let spool = QueueStore.supportDirectory.appendingPathComponent("spool.jsonl")
@@ -1223,11 +1242,17 @@ case "reconcile":
     case "targets":
         let enrolment = EnrolmentRegistry()
         guard let claudeLive = ClaudeAgentsCLI().sessions() else {
-            print("(liveness probe FAILED — the app is failing open right now)"); break
+            print(args.contains("--json") ? "null" : "(liveness probe FAILED — the app is failing open right now)"); break
         }
         // Codex has no probe to fail — its half of this list is whatever
         // `ownership` currently verifies as alive, unconditionally.
         let live = claudeLive + FileSessionOwnershipStore.shared.liveNonRegistrySessions()
+        if args.contains("--json") {
+            print(ManagerJSON.encode(ManagerJSON.targets(
+                store: store, live: live,
+                isEnrolled: { enrolment.isEnrolled(sessionId: $0, cwd: $1) })))
+            break
+        }
         if live.isEmpty { print("(no live sessions)"); break }
         print("\(pad("STATUS", 8))  \(pad("PID", 7))  \(pad("TTY", 14))  \(pad("ENROLLED", 9))  PROJECT")
         for s in live.sorted(by: { ($0.cwd ?? "") < ($1.cwd ?? "") }) {

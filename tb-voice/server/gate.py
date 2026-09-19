@@ -15,6 +15,8 @@ from loguru import logger
 from pipecat.frames.frames import Frame, LLMContextFrame
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
+from events import emit
+
 JEV_URL = "https://api.typesafe.ai/v1/systemone"
 NAME = os.getenv("TB_MANAGER_NAME", "Tranquility")
 THRESHOLD = float(os.getenv("TB_ADDRESSED_THRESHOLD", "0.5"))
@@ -92,6 +94,7 @@ class AddressedGate(FrameProcessor):
         speak = p >= THRESHOLD
         self.addressed += int(speak)
         logger.info(f"gate p={p:.2f} {ms}ms {'SPEAK' if speak else 'silent'} :: {text[:80]}")
+        await emit(self, "addressed" if speak else "listening", p=round(p, 2), ms=ms, text=text[:120])
         if self._on_verdict:
             await self._on_verdict(text, p, speak, ms)
         if speak:

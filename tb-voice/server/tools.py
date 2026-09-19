@@ -11,6 +11,8 @@ from loguru import logger
 from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.frames.frames import FunctionCallResultProperties
 
+from events import line
+
 TBASE = os.getenv("TBASE_BIN", "tbase")
 SCHEME = os.getenv("TB_URL_SCHEME", "tranquilitybase")
 SILENT = FunctionCallResultProperties(run_llm=False)
@@ -18,6 +20,7 @@ SILENT = FunctionCallResultProperties(run_llm=False)
 
 async def _run(*argv: str, timeout: float = 45.0) -> tuple[int, str]:
     logger.info("exec " + " ".join(argv))
+    line("tool", argv=list(argv))
     p = await asyncio.create_subprocess_exec(
         *argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT
     )
