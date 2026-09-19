@@ -43,9 +43,9 @@ es.addEventListener('event',m=>{const e=JSON.parse(m.data);const d=document.crea
  let x='';if(e.p!==undefined&&e.p!==null)x+='<span class="bar" style="width:'+Math.round(e.p*80)+'px"></span>'+e.p.toFixed(2)+' ';
  if(e.intent)x+='<b>'+e.intent+'</b> ';if(e.ms)x+='<span class="t">'+e.ms+'ms</span> ';if(e.text)x+='<span class="x">'+e.text.replace(/</g,'&lt;')+'</span>';
  if(e.goal)x+='<span class="x">'+e.goal+'</span>';if(e.name)x+=e.name;if(e.argv)x+=e.argv.join(' ');if(e.meaning)x+=' → '+e.meaning;if(e.reason)x+='<span class="x">'+e.reason+'</span>';if(e.voice)x+=' ['+e.voice+']';
- d.innerHTML='<span class="t">'+ts(e.t)+'</span><span class="k">'+e.event+'</span><span>'+x+'</span>';ev.prepend(d);while(ev.children.length>300)ev.lastChild.remove();});
+ d.innerHTML='<span class="t">'+ts(e.t)+'</span><span class="k">'+e.event+'</span><span>'+x+'</span>';ev.append(d);while(ev.children.length>300)ev.firstChild.remove();ev.parentElement.scrollTop=ev.parentElement.scrollHeight;});
 es.addEventListener('log',m=>{const o=JSON.parse(m.data);const d=document.createElement('div');d.className='l'+(o.line.includes('SPEAK')?' speak':'')+(o.level==='ERROR'?' err':'');
- d.textContent=o.time.slice(11,23)+'  '+o.line;lg.prepend(d);while(lg.children.length>300)lg.lastChild.remove();});
+ d.textContent=o.time.slice(11,23)+'  '+o.line;lg.append(d);while(lg.children.length>300)lg.firstChild.remove();lg.parentElement.scrollTop=lg.parentElement.scrollHeight;});
 </script></body></html>"""
 
 
