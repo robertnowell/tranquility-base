@@ -1,0 +1,173 @@
+# The hands-free manager: design decisions
+
+Voice AI Hackathon, AGI House SF, 19 September 2026. Track: voice-controlled software.
+
+Tranquility Base turns a fleet of terminal coding agents into a voice loop, but it is
+eyes-free, not hands-free: every action is a keyboard chord. This adds one always-listening
+manager that drives the same fleet by voice, says nothing until it is addressed, and never
+touches the app's own audio path. Every decision below states the alternatives considered
+and why they lost. Dated entries are rulings; undated ones are defaults that a measurement
+may overturn.
+
+## 1. What it is, and is not
+
+**It is** a second door onto the same targets. `tbase send`, `tbase new` and the
+`tranquilitybase://` scheme already exist as scriptable doors into the running app. The
+manager is a Pipecat bot that walks through them. The chords keep working.
+
+**It is not** a Claude Code session. It does no engineering work itself; it routes, starts,
+invites and summarises. It is a live agent, not a delegation agent.
+
+**It is not** a realtime voice agent in the usual sense. Default mode is silence. The app's
+own ruling ("the app is silent and the panel speaks") extends to the manager: it speaks only
+for content the user asked for.
+
+## 2. Silence by default: Jev decides, not the LLM
+
+**Decision.** Every finished user turn is sent to TypeSafe's Jev (`jev-latest`, one `noul`
+question: "is the speaker addressing Base directly, with a request or question meant for
+it?"). Probability >= 0.5 means the turn runs the LLM; below, the turn is appended to the
+context silently (`LLMMessagesAppendFrame(run_llm=False)`) so the manager still knows what
+you were thinking about when you do address it.
+
+**Measured (19 Sep, 12:50).** Six utterances, first try, no prompt tuning:
+
+| utterance | p(addressed) | ms |
+|---|---|---|
+| "hmm so the auth bug might be in the middleware, or maybe the session store" | 0.03 | 426 |
+| "why does this always break on Fridays" | 0.15 | 234 |
+| "Base, what's everyone up to right now?" | 0.98 | 287 |
+| "can you tell Kay to run the tests?" | 0.80 | 276 |
+| "yeah Alex, I'll grab lunch after this, want anything?" | 0.03 | 388 |
+| "the base config is fine, the problem is the reducer" | 0.06 | 434 |
+
+Margin on both sides of 0.5 is wide; 21 output tokens each; $0.042 per million input tokens.
+
+**Alternatives.**
+- *Wake phrase only* (`WakePhraseUserTurnStartStrategy`): zero false positives but gates
+  turn start, so unaddressed speech never enters context, and "can you tell Kay" without
+  the name would be missed. Kept as the fallback if Jev misbehaves in the room.
+- *The LLM decides* (MiniMax M2.7 classifier prompt): works, but costs a generative call
+  per turn and returns prose it must be told not to speak. Jev is a decision model; it
+  cannot generate, so it cannot accidentally talk.
+- *Pipecat Flows*: a task-stage state machine, not a per-turn speak/stay-silent gate.
+
+**Rule.** A rhetorical question is not a request. Thinking aloud is not a request. The
+manager is named Base; a sentence using "base" for something else is not a request. Jev
+holds these as criteria, not the prompt of a generative model.
+
+## 3. Aggressive end-of-turn, patient response
+
+**Decision.** Smart Turn v3 (bundled v3.2, CPU, local) with `SmartTurnParams(stop_secs=1.0)`
+and `SileroVADAnalyzer(VADParams(stop_secs=0.2))`. Turns end fast; the gate decides whether
+anything happens. Aggressive endpointing is safe *because* the default outcome of a turn is
+silence: a turn cut mid-thought is appended as context and the next fragment joins it.
+
+**Alternative.** Gradium's server-side `enable_turn_detection` with
+`ExternalUserTurnStrategies`. Not chosen on day one: Smart Turn runs locally in 12 ms and
+its knobs are documented in source; Gradium's are not.
+
+## 4. Brain: MiniMax M2.7 on General Compute
+
+**Decision.** `OpenAILLMService(base_url="https://api.generalcompute.com/v1",
+model="minimax-m2.7")` for tool selection and the one-sentence reply.
+
+**Measured (19 Sep, 12:40), same tool-call request, same endpoint.**
+
+| model | tool call | time to first token | tok/s after first | total |
+|---|---|---|---|---|
+| gemma-4-31B-it | clean | 0.81 s | 165 | 1.05 s |
+| minimax-m2.7 | clean | 0.12 s | 383 | 0.34 s |
+
+Gemma was the starter's default. Gemma 4 uses a custom tool-call syntax that needs a parser
+and vLLM has an open bug (issue 39468) leaking delimiters into string arguments. General
+Compute's wrapper returned clean arguments for both, so the parser is not the reason; the
+7x time-to-first-token is. A manager that answers in conversation time needs the 0.12 s.
+
+**Why not Claude or GPT.** The sponsors' endpoint is the point of the day, and M2.7 on
+SambaNova silicon is the hardware story. Reasoning tokens (33 in the smoke test) are cheap
+at this speed.
+
+## 5. Ears and mouth: Gradium
+
+**Decision.** `GradiumSTTService` (PCM 16 kHz) and `GradiumTTSService` (48 kHz fixed; the
+transport's `audio_out_sample_rate` is set to 48000). Free tier is 45k credits, STT costs
+3 credits/s, so an always-on mic has about four hours; coupon `HACKATHON-202609`.
+
+**Two voices, two roles.** The manager speaks in a Gradium voice. When it invites a session
+to speak, the *app* speaks in that session's own ElevenLabs voice through the existing
+`SpeechChain`. The manager never narrates a tool that speaks
+(`FunctionCallResultProperties(run_llm=False)`), so the two never overlap by design rather
+than by timing.
+
+**Alternative.** Route session briefs through Gradium too (read `tbase brief --json`, speak
+it in the manager's voice). Rejected for the demo: "each agent has a voice" is the product;
+the fallback exists if the app is not running.
+
+## 6. Driving the app: only the doors that exist
+
+| tool | door | exists? |
+|---|---|---|
+| `send_message(session, text)` | `tbase send <id> <text>`; exit 0 confirmed, 2 not dispatched, 4 ambiguous | yes |
+| `start_agent(dir, harness)` | `tbase new [dir] [--codex] --wait-live`; prints `registered: <id>` | yes |
+| `invite_to_speak(session)` | `open tranquilitybase://hear?session=<id>` | yes |
+| `list_agents()` / `whats_waiting()` | `tbase targets --json`, `tbase status --json` | new flag |
+| `brief(session)` | `tbase brief <id> --json` (recap, proposal, ladder rungs; no model call) | new |
+| `summarize_work()` | N briefs in one M2.7 call | new, bot-side |
+| `teach(question)` | system prompt carries README and the capability list | prompt |
+
+**Decision.** No command spool, no local HTTP server, no XPC. The app's rulings already
+name the failure: two routes to one answer is how they start disagreeing. The deep link
+"may speak but never record, send, or type" (DeepLink.swift), so speaking goes through the
+URL and sending goes through `tbase`, exactly as the app already divides them.
+
+**Swift changes, all additive.** `--json` on `targets`, `status`, `discover`; new
+`tbase brief <id> --json`. `replay-log` at main.swift:1507 is the JSON precedent. Codable
+structs live in Core so the shape is tested. Optional if time: a speak-only
+`tranquilitybase://rung?session=&n=` verb plus one `DeepLinkTests` case.
+
+## 7. Confirm before routing, unless the target was named
+
+**Decision.** If the user names the session ("tell Kay"), `send_message` runs and the exit
+code is read back in one clause. If not, the manager asks one question ("Kay or Sol?") and
+waits. This mirrors the app's own 4 s undo on typed replies and LangChain's
+notify / question / review vocabulary for ambient agents: question is the pattern here.
+
+## 8. Transport
+
+**Decision.** `SmallWebRTCTransport` with the dev playground page; a phone browser over a
+hotspot is the honest hands-free story on stage. The maintainer's own macOS reference
+(kwindla/macos-local-voice-agents) prefers it over `LocalAudioTransport`.
+
+**Fallback.** `LocalAudioTransport` (`pipecat-ai[local]`, `brew install portaudio`, sample
+rates set by hand) if venue wifi drops UDP.
+
+**Audio contention.** TB's Recorder opens the mic only during an ⌥ hold; the bot holds it
+through the browser. Both play to the speakers; the manager's silence rule after a speaking
+tool is what keeps them apart. ⌥⌥ hands-free lock stays off during the demo.
+
+## 9. Repository layout
+
+`tb-voice/` at the top level of the fork, beside `tools/` (the existing Python precedent),
+managed with `uv`. The Swift package is untouched except the `tbase` flags. The fork stays
+public; the design lives here so the judges can read the decisions, not just the demo.
+
+## 10. What we are not building today
+
+- Emotion or tone measurement. Hume dropped out; the "don't yell at your agents" idea is
+  packaging for later.
+- A rung deep link, unless everything above lands by 4 pm.
+- Any change to how sessions are transcribed, summarised or spoken by the app.
+
+## 11. Cut order if late
+
+1. `summarize_work` (the fan-out call).
+2. `teach` prompt content.
+3. `--json` on `discover` (keep `targets` and `status`).
+4. The rung verb.
+
+## Measurements to take before demo
+
+- Jev threshold on five live utterances in the venue, with the room's noise.
+- Time from end of speech to first manager audio, addressed case.
+- Zero false speaks across a 60 s think-aloud with four pauses.
