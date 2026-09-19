@@ -15,7 +15,7 @@ import time
 
 import httpx
 from loguru import logger
-from pipecat.frames.frames import Frame, LLMContextFrame, TTSSpeakFrame
+from pipecat.frames.frames import BotStoppedSpeakingFrame, Frame, LLMContextFrame, TTSSpeakFrame
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
 from calls import record
@@ -295,6 +295,8 @@ class Manager(FrameProcessor):
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
+        if isinstance(frame, BotStoppedSpeakingFrame):
+            self._bot_stopped.set()
         if not isinstance(frame, LLMContextFrame):
             await self.push_frame(frame, direction)
             return
@@ -371,6 +373,8 @@ class Manager(FrameProcessor):
         self.stage = nxt
         await emit(self, "stage", session=nxt["sessionId"], goal=nxt.get("goal"),
                    project=nxt.get("project"))
+        who = nxt.get("goal") or nxt.get("project") or "the next agent"
+        await self._say_and_wait(f"Inviting {who} to speak.")
         brief = await self._brief(nxt["sessionId"])
         spoken = " ".join(x for x in ((brief or {}).get("recap"), (brief or {}).get("proposal")) if x)
         await emit(self, "speaking", voice="agent", session=nxt["sessionId"], text=spoken[:200])
