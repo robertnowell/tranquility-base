@@ -84,4 +84,23 @@ final class CreditStandingTests: XCTestCase {
         XCTAssertEqual(Prerequisites.Item(id: "credits"), .credits)
         XCTAssertTrue(Prerequisites.items(harnesses: [], providers: []).contains(.credits))
     }
+
+    /// Out of credits with a pasted key is a state, not an alarm: the chain
+    /// moves onto the key and summaries carry on. Without a key it is amber
+    /// and the row wants attention.
+    func testOutOfCreditsIsOnlyAmberWhenThereIsNothingToFallTo() {
+        let out = CreditStanding.floored(.outOfCredits, at: now)
+        XCTAssertEqual(out.line(ownKey: false), "Out of credits")
+        XCTAssertNil(out.line(ownKey: true))
+        XCTAssertTrue(out.needsAttention(ownKey: false))
+        XCTAssertFalse(out.needsAttention(ownKey: true))
+        XCTAssertTrue(out.detail(ownKey: true).contains("your own Anthropic key"))
+        // Every other standing is indifferent to the key.
+        let down = CreditStanding.floored(.serviceUnavailable, at: now)
+        XCTAssertEqual(down.line(ownKey: true), down.line(ownKey: false))
+        let probes = Prerequisites.Probes(tmuxPath: { nil }, hooksProblem: { _ in nil },
+                                          hasSecret: { $0 == .anthropicAPIKey }, creditStanding: { out })
+        let row = Prerequisites.snapshot(probes).first { $0.item == .credits }!
+        XCTAssertFalse(row.attention, "a key on the row below means nothing is owed here")
+    }
 }
