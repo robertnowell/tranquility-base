@@ -6,6 +6,9 @@
 # its one-line-per-event stream to a FIFO (TB_EVENTS), and this outer shell, which
 # is NOT wrapped, relays the FIFO to stdout as it arrives. The log goes to bot.log.
 cd "$(dirname "$0")"
+# One manager at a time. A relaunch of the app kills the app, not its child, and
+# an orphaned manager keeps the mic and writes to a pipe nobody reads.
+pgrep -f "tb-voice/server/.venv/bin/python bot.py" | grep -v "^$$\$" | xargs -r kill 2>/dev/null
 export PATH="$HOME/.local/bin:$HOME/.claude/plugins/cache/claude-secrets-marketplace/claude-secrets/1.0.0/bin:$PATH"
 FIFO="$(mktemp -u /tmp/tb-voice-events.XXXXXX)"
 mkfifo "$FIFO"
