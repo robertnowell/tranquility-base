@@ -44,6 +44,21 @@ INTENTS = {
     "none": "Addressed but nothing to do: an acknowledgement, a compliment, or filler",
 }
 
+# How the transcriber has actually spelled the name, from bot.log. A word that
+# starts like one of these, at the start of a turn, is the name; the gate does
+# not get to disagree with the person saying it.
+NAME_SOUNDS = ("tranq", "trank", "drink", "tranc", "trinq", "tranguil", "tranqu")
+
+
+def names_the_manager(text: str) -> bool:
+    """The vocative: the FIRST word sounds like the name and is not 'tranquility
+    base' the product. 'Drinkody, can you…' yes; 'let me drink…' no."""
+    words = [w.strip(",.!?;:").lower() for w in text.split()[:2]]
+    if not words or not words[0].startswith(NAME_SOUNDS):
+        return False
+    return len(words) < 2 or words[1] != "base"
+
+
 RUNG_FOR = {"rung_goal": "goal", "rung_findings": "findings",
             "rung_solution": "solution", "rung_why": "why"}
 
@@ -64,7 +79,9 @@ class JevClient:
                "thinking aloud while supervising a fleet of coding agents, and speaks only "
                "when addressed.")
         state = {"context": ctx, "recent_turns": recent[-3:], "utterance": utterance,
-                 "agent_on_stage": (stage or {}).get("goal")}
+                 "agent_on_stage": (stage or {}).get("goal"),
+                 "note": (f"The transcriber often misspells the name {NAME}: Drinkody, Tranquillity, "
+                          "Tranquilly, Tranquil, Trank. A turn opening with such a word is addressed.")}
         answers = await self.ask(state, {
             "addressed": {"type": "noul",
                 "instructions": f"Is the speaker addressing the assistant {NAME} directly, with a request or a question meant for it?",
@@ -151,6 +168,8 @@ class Manager(FrameProcessor):
         p, intent_answer = await self._jev.turn(text, self._recent, self.stage)
         ms = int((time.monotonic() - t0) * 1000)
         intent = _chosen(intent_answer)
+        if names_the_manager(text):
+            p = max(p, 0.95)  # the name was said; the transcriber's spelling is not a veto
         speak = p >= THRESHOLD
         logger.info(f"gate p={p:.2f} {intent} {ms}ms {'SPEAK' if speak else 'silent'} :: {text[:80]}")
         await emit(self, "addressed" if speak else "listening",
