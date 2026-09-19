@@ -200,20 +200,21 @@ class Manager(FrameProcessor):
         await self._earcon("returned")
         await _run("open", f"{SCHEME}://hear?session={nxt['sessionId']}")
 
-    async def _do_rung_goal(self, t, f, d): await self._rung("goal")
-    async def _do_rung_findings(self, t, f, d): await self._rung("findings")
-    async def _do_rung_solution(self, t, f, d): await self._rung("solution")
-    async def _do_rung_why(self, t, f, d): await self._rung("why")
+    async def _do_rung_goal(self, t, f, d): await self._rung("goal", t, f, d)
+    async def _do_rung_findings(self, t, f, d): await self._rung("findings", t, f, d)
+    async def _do_rung_solution(self, t, f, d): await self._rung("solution", t, f, d)
+    async def _do_rung_why(self, t, f, d): await self._rung("why", t, f, d)
 
-    async def _rung(self, kind: str):
+    async def _rung(self, kind: str, text, frame, direction):
         if not self.stage:
             await self._say("Nobody is on stage yet. Say invite the next agent.")
             return
         brief = await self._brief(self.stage["sessionId"])
         rung = next((r for r in (brief or {}).get("rungs", []) if r["kind"] == kind), None)
         if not rung:
-            have = [r["kind"] for r in (brief or {}).get("rungs", []) if r["kind"] != "message"]
-            await self._say(f"That rung is empty for this turn. It has: {', '.join(have) or 'only the message'}.")
+            # No stored rung for that question: answer it from the session's own
+            # context (brief, last message), in the session's voice.
+            await self._llm(frame, direction, text, "custom", brief=brief)
             return
         # The session speaks its own rung: a speak-only deep link into the app.
         await emit(self, "speaking", voice="agent", session=self.stage["sessionId"],
@@ -286,10 +287,15 @@ class Manager(FrameProcessor):
         else:
             await self._say(f"Not sent: {meaning}.")
 
-    async def _llm(self, frame, direction, text, intent):
+    async def _llm(self, frame, direction, text, intent, brief=None):
         note = {"intent": intent, "stage": self.stage and {
             "sessionId": self.stage["sessionId"], "goal": self.stage.get("goal"),
             "project": self.stage.get("project")}}
+        if self.stage and intent == "custom":
+            brief = brief or await self._brief(self.stage["sessionId"])
+            if brief:
+                note["brief"] = {k: brief.get(k) for k in ("goal", "recap", "proposal", "findings", "solution", "why", "lastAssistantMessage")}
+                note["instruction"] = "Answer the question from this brief in the session's own voice via say_as_session, 30 words max."
         if intent == "send_message" and self.stage:
             note["instruction"] = ("Call send_message with the stage sessionId now; do not ask "
                                    "which session. Then confirm in one clause.")

@@ -102,21 +102,21 @@ extension AppDelegate {
         // The thinking orb (composing) is the resting face. Hearing you lights
         // the gradient; addressed switches to solving; speaking weaves.
         case .hearing:
-            hud.setManagerState("listening", line: "hearing you", mood: "hearing")
+            hud.setManagerState(StatusHUD.orbState, line: "hearing you", mood: "hearing")
         case .listening:
-            hud.setManagerState("composing", line: "listening")
+            hud.setManagerState(StatusHUD.orbState, line: "listening")
         case .addressed:
-            hud.setManagerState("solving", line: Self.intentLine(e.intent))
+            hud.setManagerState(StatusHUD.orbState, line: Self.intentLine(e.intent))
         case .speaking:
-            hud.setManagerState("weaving", line: e.voice == "agent" ? "the agent is speaking" : "speaking", mood: "speaking")
+            hud.setManagerState(StatusHUD.orbState, line: e.voice == "agent" ? "the agent is speaking" : "speaking", mood: "speaking")
         case .stage:
-            hud.setManagerState("connecting", line: "on stage: \(e.goal ?? e.project ?? "")")
+            hud.setManagerState(StatusHUD.orbState, line: "on stage: \(e.goal ?? e.project ?? "")")
         case .earcon:
             if let name = e.name, let cue = EarconGate.Cue(rawValue: name) { Earcons.acknowledge(cue) }
         case .tool:
-            hud.setManagerState("working", line: e.meaning.map { "sent: \($0)" } ?? "working")
+            hud.setManagerState(StatusHUD.orbState, line: e.meaning.map { "sent: \($0)" } ?? "working")
         case .error:
-            hud.setManagerState("composing", line: "something failed; check the log")
+            hud.setManagerState(StatusHUD.orbState, line: "something failed; check the log")
         }
     }
 

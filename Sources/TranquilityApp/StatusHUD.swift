@@ -3269,12 +3269,15 @@ final class StatusHUD: NSObject {
     /// Whether the orb is on the grid. Flipped by the app when the child
     /// starts or ends; the grid repaints on the next idle render.
     var managerOn = false
+    /// One globe, always. The dotted sphere is the manager's face; only its
+    /// colour changes (green while you talk, amber while something speaks).
+    static let orbState = "searching"
     lazy var managerOrb = ManagerOrbView(frame: .zero)
     var onManagerToggle: (() -> Void)?
 
     func setManager(on: Bool) {
         managerOn = on
-        managerOrb.set("composing", line: on ? "listening" : "off")
+        managerOrb.set(Self.orbState, line: on ? "listening" : "off")
         if case .idle = state { render() }
     }
 
