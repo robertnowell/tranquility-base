@@ -286,6 +286,17 @@ class Manager(FrameProcessor):
         self.pending: dict | None = None  # a confirmation waiting for yes/no
         self.heard = 0
         self.addressed = 0
+        self._bot_stopped = asyncio.Event()
+
+    async def _say_and_wait(self, text: str, timeout: float = 8.0):
+        """Speak in the manager's voice and return when the voice has stopped, so
+        what follows (an agent's voice) does not land on top of it."""
+        self._bot_stopped.clear()
+        await self._say(text)
+        try:
+            await asyncio.wait_for(self._bot_stopped.wait(), timeout)
+        except TimeoutError:
+            pass
 
     async def hearing(self):
         """The user started speaking: the orb shows it before any verdict."""
