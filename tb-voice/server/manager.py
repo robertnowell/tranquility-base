@@ -20,6 +20,7 @@ from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
 from calls import record
 from events import emit
+from spoken import spoken
 from tools import _json_or_text, _run
 
 JEV_URL = "https://api.typesafe.ai/v1/systemone"
@@ -193,7 +194,9 @@ class Brain:
             {"role": "system", "content": (
                 "You are a coding-agent session answering its supervisor aloud, in first person "
                 "plural ('we'). Answer ONLY from the facts given. One or two sentences, 30 words "
-                "max, no lists, no markdown. If the facts do not say, say so in one sentence.")},
+                "max, no lists, no markdown. If the facts do not say, say so in one sentence. "
+                "Spoken, so never say an id, hash, path, URL, branch or file name; say 'the file', "
+                "'the branch', 'the PR', 'PR five forty-seven'.")},
             {"role": "user", "content": f"Facts about this session:\n{json.dumps(facts, ensure_ascii=False)}\n\n"
                                         f"The end of the session's transcript:\n{tail}\n\n"
                                         f"Recent words from the supervisor: {recent[-2:]}\n\nQuestion: {question}"},
@@ -346,6 +349,7 @@ class Manager(FrameProcessor):
         if not answer:
             await self._say("The session's notes don't say.")
             return
+        answer = spoken(answer)
         await emit(self, "speaking", voice="agent", session=sid, text=answer[:160])
         note(self.stage.get("goal") or sid[:8], answer)
         await _run("open", f"{SCHEME}://say?session={sid}&text={quote(answer)}")

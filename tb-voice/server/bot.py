@@ -46,13 +46,14 @@ from llm import RecordedLLMService
 from manager import JevClient, Manager
 from prompt import SYSTEM
 from tools import SCHEMAS
+from tts import SpokenGradiumTTSService
 
 
 async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> None:
     logger.info("Starting tb-voice")
 
     stt = GradiumSTTService(api_key=os.environ["GRADIUM_API_KEY"])
-    tts = GradiumTTSService(
+    tts = SpokenGradiumTTSService(
         api_key=os.environ["GRADIUM_API_KEY"],
         settings=GradiumTTSService.Settings(voice=os.getenv("GRADIUM_VOICE_ID") or None),
     )

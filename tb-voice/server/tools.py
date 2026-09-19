@@ -83,7 +83,10 @@ async def start_agent(params):
     argv.append("--wait-live")
     code, out = await _run(*argv, timeout=60)
     reg = next((ln.split(":", 1)[1].strip() for ln in out.splitlines() if ln.startswith("registered:")), None)
-    await params.result_callback({"exit": code, "session": reg, "text": out[-500:]})
+    # The id is for tools, never for speech: the model gets "started" and the project.
+    await params.result_callback({"exit": code, "started": reg is not None,
+                                  "project": (a.get("directory") or "").rstrip("/").split("/")[-1] or "the default project",
+                                  "session": reg})
 
 
 async def _full_id(sid: str) -> str:
