@@ -554,7 +554,8 @@ class Manager(FrameProcessor):
 
     async def _say(self, text: str, voice: str = "manager", session: str | None = None):
         await emit(self, "speaking", voice=voice, session=session, text=text[:160])
-        note("Tranquility", text, "spoken")
+        # The synthesizer notes the line when it speaks it (tts.py), so every
+        # path the manager's voice takes lands in the transcript exactly once.
         await self.push_frame(TTSSpeakFrame(text))
 
     async def _earcon(self, name: str):
