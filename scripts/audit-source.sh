@@ -50,7 +50,7 @@ python3 scripts/check-house-copy.sh
 # reaches Slack) and withholds repeats. Added 19 Sep after five dialogs were
 # found with no record and one landed ten times in fourteen minutes.
 echo "→ alerts"
-scripts/check-alerts.sh
+python3 scripts/check-alerts.sh
 
 # Same shape again, but this one guards memory rather than prose. An AEDesc
 # borrowed from NSAppleEventDescriptor that we copy and dispose ourselves is a
