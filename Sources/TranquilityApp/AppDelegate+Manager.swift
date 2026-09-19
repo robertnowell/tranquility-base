@@ -35,7 +35,7 @@ extension AppDelegate {
                 _ = await previous?.value
                 guard !Task.isCancelled else { return }
                 let goal = (try? store.flatMap { try ManagerJSON.brief(store: $0, sessionId: session) })??.goal
-                hud.setManagerState(StatusHUD.orbState, line: "speaking: \(goal ?? String(session.prefix(8)))", mood: "speaking")
+                hud.setManagerState(StatusHUD.orbState, line: goal ?? "the session is speaking", mood: "speaking")
                 let voices = coordinator.voices(for: session)
                 _ = await coordinator.speech.speak(
                     spoken, voice: voices.cloud, systemVoice: voices.system, onWord: { _ in })
