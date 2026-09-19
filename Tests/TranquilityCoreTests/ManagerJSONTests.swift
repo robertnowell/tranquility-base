@@ -74,6 +74,7 @@ final class ManagerJSONTests: XCTestCase {
         XCTAssertEqual(targets.first?.goal, "ship the outreach CRM")
         XCTAssertEqual(targets.first?.waiting, true)
         XCTAssertEqual(targets.first?.enrolled, true)
+        XCTAssertFalse(targets.first?.name?.isEmpty ?? true)
     }
 
     func testEncodingIsStableAndSorted() throws {

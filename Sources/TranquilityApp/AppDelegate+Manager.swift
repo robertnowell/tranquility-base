@@ -143,7 +143,7 @@ extension AppDelegate {
             // Voice over: colour back to rest, the last words stay readable.
             hud.setManagerState(StatusHUD.orbState, line: managerLastLine == "speaking" ? "listening" : managerLastLine)
         case .stage:
-            hud.setManagerState(StatusHUD.orbState, line: "on stage: \(e.goal ?? e.project ?? "")")
+            hud.setManagerState(StatusHUD.orbState, line: "on stage: \(e.name ?? e.goal ?? e.project ?? "")")
         case .earcon:
             if let name = e.name, let cue = EarconGate.Cue(rawValue: name) { Earcons.acknowledge(cue) }
         case .tool:

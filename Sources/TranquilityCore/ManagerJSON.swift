@@ -16,6 +16,10 @@ public enum ManagerJSON {
         public var status: String?
         public var cwd: String?
         public var project: String
+        /// The grid's name for the session, by the grid's own rule
+        /// (transcript title, then callsign, then the directory). What the
+        /// manager says when it introduces one.
+        public var name: String?
         public var enrolled: Bool
         /// The brief's goal for the latest event. The closest thing to a
         /// callsign a stranger understands; the manager introduces sessions by it.
@@ -27,6 +31,7 @@ public enum ManagerJSON {
     public struct WaitingRow: Codable, Equatable, Sendable {
         public var sessionId: String
         public var project: String
+        public var name: String?
         public var topic: String?
         public var goal: String?
         public var eventId: Int64
@@ -76,6 +81,8 @@ public enum ManagerJSON {
             return Target(
                 sessionId: s.sessionId, harness: s.harness, pid: s.pid, status: s.status,
                 cwd: s.cwd, project: (s.cwd as NSString?)?.lastPathComponent ?? "",
+                name: stop.map { GridAssembler.tabDisplayName(for: $0, live: s) }
+                    ?? GridAssembler.tabDisplayName(live: s, callsign: nil),
                 enrolled: isEnrolled(s.sessionId, s.cwd),
                 goal: brief?.goal, topic: brief?.topic ?? stop?.briefTopic,
                 waiting: waiting.contains(s.sessionId))
@@ -88,6 +95,7 @@ public enum ManagerJSON {
             let brief = try? store.storedBrief(sessionId: w.sessionId, eventRowid: w.latestId)
             return WaitingRow(
                 sessionId: w.sessionId, project: w.projectLabel,
+                name: GridAssembler.tabDisplayName(for: w, live: nil),
                 topic: w.briefTopic ?? brief?.topic, goal: brief?.goal,
                 eventId: w.latestId, heard: w.heard)
         }

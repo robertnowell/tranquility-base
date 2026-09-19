@@ -132,7 +132,7 @@ class JevClient:
         return float(answers["addressed"]["noul"]), answers["intent"]
 
     async def target(self, utterance: str, candidates: list[dict]) -> dict:
-        crit = {c["sessionId"]: f"{c.get('goal') or c.get('topic') or c['project']}" for c in candidates}
+        crit = {c["sessionId"]: f"{c.get('name') or ''}: {c.get('goal') or c.get('topic') or c['project']}" for c in candidates}
         answers = await self.ask(
             {"utterance": utterance, "sessions": crit},
             {"target": {"type": "choice",
@@ -405,14 +405,14 @@ class Manager(FrameProcessor):
             return
         self.stage = nxt
         await emit(self, "stage", session=nxt["sessionId"], goal=nxt.get("goal"),
-                   project=nxt.get("project"))
-        who = nxt.get("goal") or nxt.get("project") or "the next agent"
+                   name=nxt.get("name"), project=nxt.get("project"))
+        who = nxt.get("name") or nxt.get("project") or "the next agent"
         await self._say_and_wait(f"Inviting {who} to speak.")
         await asyncio.sleep(0.2)  # a breath between the manager's voice and the agent's
         brief = await self._brief(nxt["sessionId"])
         spoken = " ".join(x for x in ((brief or {}).get("recap"), (brief or {}).get("proposal")) if x)
         await emit(self, "speaking", voice="agent", session=nxt["sessionId"], text=spoken[:200])
-        note(nxt.get("goal") or nxt.get("project") or nxt["sessionId"][:8], spoken or "(no brief stored)", "spoken")
+        note(nxt.get("name") or nxt.get("goal") or nxt["sessionId"][:8], spoken or "(no brief stored)", "spoken")
         await _run("open", f"{SCHEME}://hear?session={nxt['sessionId']}")
 
     async def _do_rung_goal(self, t, f, d): await self._rung("goal", t, f, d)
@@ -434,7 +434,7 @@ class Manager(FrameProcessor):
         # The session speaks its own rung: a speak-only deep link into the app.
         await emit(self, "speaking", voice="agent", session=self.stage["sessionId"],
                    rung=kind, text=rung["spoken"][:160])
-        note(self.stage.get("goal") or self.stage["sessionId"][:8], rung["spoken"], "spoken")
+        note(self.stage.get("name") or self.stage.get("goal") or self.stage["sessionId"][:8], rung["spoken"], "spoken")
         await _run("open", f"{SCHEME}://rung?session={self.stage['sessionId']}&kind={kind}")
 
     async def _do_custom(self, text, frame, direction):
@@ -463,7 +463,7 @@ class Manager(FrameProcessor):
             return
         answer = spoken(answer)
         await emit(self, "speaking", voice="agent", session=sid, text=answer[:160])
-        note(self.stage.get("goal") or sid[:8], answer, "spoken")
+        note(self.stage.get("name") or self.stage.get("goal") or sid[:8], answer, "spoken")
         await _run("open", f"{SCHEME}://say?session={sid}&text={quote(answer)}")
 
     CAPABILITIES = ("Say what's next to hear the next agent. Ask for the goal, findings, next step "
@@ -480,7 +480,7 @@ class Manager(FrameProcessor):
                 await self._say("I can't see any live sessions right now.")
                 return
             first = (waiting or live)[0]
-            who = first.get("goal") or first.get("topic") or first.get("project") or "one"
+            who = first.get("name") or first.get("goal") or first.get("project") or "one"
             line = f"{len(live)} sessions live, {len(waiting)} waiting on you."
             line += f" First waiting: {who}." if waiting else f" First: {who}."
             await self._say(line + " Say what's next to hear it.")
@@ -498,12 +498,12 @@ class Manager(FrameProcessor):
     async def _do_speak(self, text, frame, direction):
         """Told to speak: one sentence about where things stand, then a door."""
         if self.stage:
-            await self._say(f"Listening. On stage: {self.stage.get('goal') or self.stage.get('project')}. Ask for the next step, or say next agent.")
+            await self._say(f"Listening. On stage: {self.stage.get('name') or self.stage.get('goal') or self.stage.get('project')}. Ask for the next step, or say next agent.")
             return
         waiting = await self._waiting()
         if waiting:
             first = waiting[0]
-            await self._say(f"Listening. {len(waiting)} waiting on you; first is {first.get('goal') or first.get('project')}. Say invite the next agent.")
+            await self._say(f"Listening. {len(waiting)} waiting on you; first is {first.get('name') or first.get('goal') or first.get('project')}. Say what's next.")
         else:
             await self._say("Listening. Nobody is waiting on you. Say invite the next agent, or name a project.")
 
@@ -539,7 +539,7 @@ class Manager(FrameProcessor):
     async def _ask_confirm(self):
         sid, _ = self.pending["ranked"][self.pending["index"]]
         c = self.pending["live"][sid]
-        q = f"To the one working on {c.get('goal') or c.get('topic') or c['project']}?"
+        q = f"To {c.get('name') or c.get('goal') or c['project']}?"
         self.pending["question"] = q
         await self._say(q)
 
