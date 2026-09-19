@@ -6,7 +6,7 @@
 # its one-line-per-event stream to a FIFO (TB_EVENTS), and this outer shell, which
 # is NOT wrapped, relays the FIFO to stdout as it arrives. The log goes to bot.log.
 cd "$(dirname "$0")"
-export PATH="$HOME/.local/bin:$PATH"
+export PATH="$HOME/.local/bin:$HOME/.claude/plugins/cache/claude-secrets-marketplace/claude-secrets/1.0.0/bin:$PATH"
 FIFO="$(mktemp -u /tmp/tb-voice-events.XXXXXX)"
 mkfifo "$FIFO"
 trap 'rm -f "$FIFO"' EXIT
