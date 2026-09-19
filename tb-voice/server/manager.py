@@ -96,9 +96,12 @@ class JevClient:
     async def turn(self, utterance: str, recent: list[str], stage: dict | None):
         ctx = (f"The assistant is a voice manager named {NAME}. It listens to a developer "
                "thinking aloud while supervising a fleet of coding agents, and speaks only "
-               "when addressed.")
-        state = {"context": ctx, "recent_turns": recent[-3:], "utterance": utterance,
+               "when addressed. Lines marked 'you' are the developer; other lines were spoken "
+               "by the assistant or by an agent, and the developer heard them.")
+        state = {"context": ctx,
+                 "exchange_so_far": EXCHANGE[-8:],
                  "agent_on_stage": (stage or {}).get("goal"),
+                 "utterance": utterance,
                  "note": (f"The transcriber often misspells the name {NAME}: Drinkody, Tranquillity, "
                           "Tranquilly, Tranquil, Trank. A turn opening with such a word is addressed.")}
         answers = await self.ask(state, {
@@ -137,10 +140,28 @@ class JevClient:
 TRANSCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "transcript.md")
 
 
+EXCHANGE: list[str] = []  # "who: text", newest last; what Jev and the brain see
+
+
 def note(who: str, text: str):
-    """What was said, by whom, for a person to read later. Not a log."""
+    """What was said, by whom, for a person to read later, and for the models to
+    see as context. Seeded from the transcript on start so a restart forgets nothing."""
+    line = f"{who}: {text.strip()}"
+    EXCHANGE.append(line)
+    del EXCHANGE[:-12]
     with open(TRANSCRIPT, "a") as f:
-        f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')}  {who}: {text.strip()}\n")
+        f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')}  {line}\n")
+
+
+def seed_exchange():
+    try:
+        with open(TRANSCRIPT) as f:
+            for raw in f.readlines()[-12:]:
+                parts = raw.rstrip("\n").split("  ", 1)
+                if len(parts) == 2:
+                    EXCHANGE.append(parts[1])
+    except FileNotFoundError:
+        pass
 
 
 def _chosen(choice: dict) -> str:
@@ -199,7 +220,7 @@ class Brain:
                 "'the branch', 'the PR', 'PR five forty-seven'.")},
             {"role": "user", "content": f"Facts about this session:\n{json.dumps(facts, ensure_ascii=False)}\n\n"
                                         f"The end of the session's transcript:\n{tail}\n\n"
-                                        f"Recent words from the supervisor: {recent[-2:]}\n\nQuestion: {question}"},
+                                        f"The exchange so far (you = the supervisor):\n" + "\n".join(EXCHANGE[-8:]) + f"\n\nQuestion: {question}"},
         ]
         body = {"model": self.model, "messages": msgs, "max_tokens": 400, "temperature": 0.3}
         t0 = time.monotonic()
@@ -215,6 +236,7 @@ class Manager(FrameProcessor):
         super().__init__()
         self._jev = jev
         self._brain = Brain()
+        seed_exchange()
         self._recent: list[str] = []
         self.stage: dict | None = None
         self.pending: dict | None = None  # a confirmation waiting for yes/no
@@ -277,6 +299,7 @@ class Manager(FrameProcessor):
         if not speak:
             return
         self.addressed += 1
+        await self._earcon("listening")  # heard you, acting: before any latency
         handler = getattr(self, f"_do_{intent}", None)
         if handler:
             await handler(text, frame, direction)
@@ -286,7 +309,7 @@ class Manager(FrameProcessor):
     # -- intents handled without the LLM ---------------------------------------------
 
     async def _do_none(self, text, frame, direction):
-        await self._earcon("listening")
+        pass  # the activation cue already played; nothing to add
 
     async def _do_invite_next(self, text, frame, direction):
         nxt = await self._next_session()
