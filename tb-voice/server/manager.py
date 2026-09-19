@@ -33,7 +33,7 @@ if not os.path.exists(TBASE) and TBASE != "tbase":
     logger.warning(f"TBASE_BIN {TBASE} does not exist; reads will fail closed")
 
 INTENTS = {
-    "invite_next": "Invite the next agent or session to speak; 'next agent'; 'who is up'",
+    "invite_next": "Invite the next agent or session to speak; 'next agent'; 'who is up'; 'what's next' when no agent is on stage",
     "rung_goal": "Asks what this project or piece of work is, or what the goal is",
     "rung_findings": "Asks what the agent found or what happened",
     "rung_solution": "Asks for the recommended next step, the solution, or what it proposes",
@@ -301,6 +301,10 @@ class Manager(FrameProcessor):
         p, intent_answer = await self._jev.turn(text, self._recent, self.stage)
         ms = int((time.monotonic() - t0) * 1000)
         intent = _chosen(intent_answer)
+        if not self.stage and intent in RUNG_FOR:
+            # "What's next?" with nobody on stage is the ⌃⌥ question: the next
+            # agent's update, not a lecture about the stage being empty.
+            intent = "invite_next"
         raw_p = p
         rule = None
         if names_the_manager(text):
