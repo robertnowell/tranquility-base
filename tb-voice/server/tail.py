@@ -27,7 +27,9 @@ main{display:grid;grid-template-columns:1fr 1fr;height:calc(100vh - 45px)}
 section{overflow:auto;padding:8px 12px;border-right:1px solid #2c2b27}
 h2{font-size:11px;letter-spacing:.1em;color:#8a877e;margin:8px 0}
 .e{display:grid;grid-template-columns:70px 92px 1fr;gap:10px;padding:5px 0;border-bottom:1px dashed #2c2b27;align-items:baseline}
-.t{color:#8a877e}.k{font-weight:600}.hearing .k{color:#8a877e}.listening .k{color:#6f8f78}.addressed .k{color:#f3f1e9}
+.t{color:#8a877e}.k{font-weight:600}.hearing .k{color:#8a877e}.listening .k{color:#6f8f78}.addressed .k{color:#f3f1e9}.jev .k{color:#6d8fb5}
+.jev pre{margin:2px 0 0;font-size:11px;color:#9a978e;white-space:pre-wrap;max-height:0;overflow:hidden;transition:max-height .2s}
+.jev.open pre{max-height:600px}.jev .sum{cursor:pointer}
 .speaking .k{color:#c9a75a}.stage .k{color:#7fb08a}.tool .k{color:#8fb7d8}.error .k{color:#d86f6f}.earcon .k{color:#a58bd8}
 .bar{display:inline-block;height:6px;background:#3d7048;vertical-align:middle;margin-right:6px;border-radius:3px}
 .x{color:#c9c6bd}.l{padding:3px 0;border-bottom:1px dashed #2c2b27;white-space:pre-wrap}.l.speak{color:#f3f1e9}.l.err{color:#d86f6f}
@@ -40,6 +42,9 @@ function ts(t){const d=new Date(t*1000);return d.toTimeString().slice(0,8)+'.'+S
 const es=new EventSource('/stream');
 es.onopen=()=>s.textContent='live';es.onerror=()=>s.textContent='reconnecting…';
 es.addEventListener('event',m=>{const e=JSON.parse(m.data);const d=document.createElement('div');d.className='e '+e.event;
+ if(e.event==='jev'){const a=e.answers||{};const ad=a.addressed?a.addressed.noul:null;const it=a.intent||{};const top=Object.entries(it.probabilities||{}).sort((x,y)=>y[1]-x[1]).slice(0,3).map(([k,v])=>k+' '+v.toFixed(2)).join(' · ');
+  d.innerHTML='<span class="t">'+ts(e.t)+'</span><span class="k">jev</span><span><span class="sum">'+(e.ms||'?')+'ms · addressed '+(ad!==null?ad.toFixed(2):'?')+(e.rule?' → '+e.rule:'')+' · '+top+' <span class="t">(click for the call)</span></span><pre>'+JSON.stringify({state:e.state,answers:e.answers},null,1).replace(/</g,'&lt;')+'</pre></span>';
+  d.querySelector('.sum').onclick=()=>d.classList.toggle('open');ev.append(d);while(ev.children.length>300)ev.firstChild.remove();ev.parentElement.scrollTop=ev.parentElement.scrollHeight;return;}
  let x='';if(e.p!==undefined&&e.p!==null){x+='<span class="bar" style="width:'+Math.round(e.p*80)+'px"></span>'+e.p.toFixed(2)+' ';x+=e.event==='addressed'?'<b style="color:#f3f1e9">SPEAK</b> ':'<span class="t">silent</span> ';}
  if(e.intent)x+='<b>'+e.intent+'</b> ';if(e.ms)x+='<span class="t">'+e.ms+'ms</span> ';if(e.text)x+='<span class="x">'+e.text.replace(/</g,'&lt;')+'</span>';
  if(e.goal)x+='<span class="x">'+e.goal+'</span>';if(e.name)x+=e.name;if(e.argv)x+=e.argv.join(' ');if(e.meaning)x+=' → '+e.meaning;if(e.reason)x+='<span class="x">'+e.reason+'</span>';if(e.voice)x+=' ['+e.voice+']';

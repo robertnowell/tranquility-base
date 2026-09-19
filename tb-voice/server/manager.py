@@ -60,6 +60,12 @@ def names_the_manager(text: str) -> bool:
     return len(words) < 2 or words[1] != "base"
 
 
+# Intents that are commands only the manager can carry out. Thinking aloud does
+# not produce "invite the next agent"; a clear one of these is addressed even
+# without the name.
+COMMANDS = {"invite_next", "send_message", "start_agent", "rung_goal", "rung_findings",
+            "rung_solution", "rung_why", "summarize_recent"}
+
 RUNG_FOR = {"rung_goal": "goal", "rung_findings": "findings",
             "rung_solution": "solution", "rung_why": "why"}
 
@@ -69,11 +75,17 @@ class JevClient:
         self._client = httpx.AsyncClient(
             headers={"Authorization": f"Bearer {api_key}"}, timeout=8.0)
 
+    last: dict = {}
+
     async def ask(self, state: dict, questions: dict) -> dict:
+        t0 = time.monotonic()
         r = await self._client.post(
             JEV_URL, json={"state": state, "model": "jev-latest", "questions": questions})
         r.raise_for_status()
-        return r.json()["answers"]
+        answers = r.json()["answers"]
+        self.last = {"state": state, "questions": list(questions), "answers": answers,
+                     "ms": int((time.monotonic() - t0) * 1000)}
+        return answers
 
     async def turn(self, utterance: str, recent: list[str], stage: dict | None):
         ctx = (f"The assistant is a voice manager named {NAME}. It listens to a developer "
@@ -169,8 +181,14 @@ class Manager(FrameProcessor):
         p, intent_answer = await self._jev.turn(text, self._recent, self.stage)
         ms = int((time.monotonic() - t0) * 1000)
         intent = _chosen(intent_answer)
+        raw_p = p
+        rule = None
         if names_the_manager(text):
-            p = max(p, 0.95)  # the name was said; the transcriber's spelling is not a veto
+            p, rule = max(p, 0.95), "named"  # the transcriber's spelling is not a veto
+        elif intent in COMMANDS and float(intent_answer.get("confidence", 0)) >= 0.9 and p >= 0.3:
+            p, rule = max(p, 0.6), "fleet command"  # nobody else can execute it
+        await emit(self, "jev", ms=self._jev.last.get("ms"), state=self._jev.last.get("state"),
+                   answers=self._jev.last.get("answers"), raw_p=round(raw_p, 2), rule=rule)
         speak = p >= THRESHOLD
         logger.info(f"gate p={p:.2f} {intent} {ms}ms {'SPEAK' if speak else 'silent'} :: {text[:80]}")
         await emit(self, "addressed" if speak else "listening",
