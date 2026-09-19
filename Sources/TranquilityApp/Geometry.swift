@@ -64,9 +64,15 @@ extension StatusHUD {
         // the resize entirely and left the panel 40pt wide. `position` then
         // placed it from that 40pt width, and the grid rendered off the right of
         // the display. That is the bug the user reported, and this line is it.
-        let widthIsWrong = abs(panel.frame.width - 380) > 1
+        // The width against the width last ASKED for too (19 Sep 2026): a
+        // collapse whose animator has not ticked yet still reads 380 live, so
+        // an expand inside that window would skip the resize whenever the
+        // grid's height happened to equal the strip's. Same class as morph's
+        // guard below; fixed together.
+        let widthIsWrong = abs((intendedWidth ?? panel.frame.width) - 380) > 1
         if widthIsWrong || abs((intendedHeight ?? panel.frame.height) - height) > 1 {
             intendedHeight = height
+            intendedWidth = 380
             // The top edge holds still and the panel grows downward: origin is
             // bottom-left, so the height delta comes out of origin.y. Animated
             // when already on screen (ruled 06 Aug — the snap between
@@ -143,7 +149,21 @@ extension StatusHUD {
     private func morph(_ panel: NSPanel, to size: NSSize) {
         let width = size.width
         var frame = panel.frame
-        guard abs(frame.width - width) > 0.5 || abs(frame.height - size.height) > 0.5
+        // Against the size we last ASKED for, never the live frame — the same
+        // rule the expanded branch learned on 06 Aug, reached from the other
+        // side. The live frame does not move until the animator's first tick,
+        // which can be ~100ms out; until then it still reads as the strip's
+        // own 40×400. An arm that opened the grid's frame and reverted inside
+        // that window (⌥ then a key, 34–41ms apart, twice on 15 Sep) came
+        // through here with the frame unmoved, took the guard's "nothing to
+        // do", and the in-flight expansion landed anyway — a 380pt panel with
+        // the strip's lamps and plate centred on it, and nothing scheduled to
+        // repaint it until the next idle render. Reproduced from a debug
+        // build (--pose-shot collapsed-quick-arm, 19 Sep 2026). The
+        // `thinAfterAQuickArm` drill holds it.
+        let askedWidth = intendedWidth ?? frame.width
+        let askedHeight = intendedHeight ?? frame.height
+        guard abs(askedWidth - width) > 0.5 || abs(askedHeight - size.height) > 0.5
         else { return }
         frame.size.height = size.height
         // The right edge is computed, not inherited. Holding the CURRENT edge
@@ -163,6 +183,7 @@ extension StatusHUD {
         }
         frame.size.width = width
         intendedHeight = frame.height
+        intendedWidth = width
         if panel.isVisible {
             NSAnimationContext.runAnimationGroup { ctx in
                 ctx.duration = 0.16

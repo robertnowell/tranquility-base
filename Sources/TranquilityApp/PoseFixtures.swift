@@ -323,6 +323,26 @@ extension StatusHUD {
             ])
             return true
 
+        case "collapsed-quick-arm":
+            // The in-between state Robert photographed on 15 Sep at 19:19: the
+            // strip's lamps and plate centred on a panel the width of the
+            // grid. Collapsed and settled, then an arm that reverts before the
+            // expanded frame's animator has ticked — ⌥ and a key 34ms apart
+            // in the events. Posed rather than only drilled because this is
+            // the one that had to be SEEN to be believed: `--pose-shot
+            // collapsed-quick-arm` on the 19 Sep build before the fix
+            // reproduces the screenshot pixel for pixel. The frames are
+            // logged so the pose is also a measurement.
+            _ = pose("collapsed")
+            RunLoop.current.run(until: Date().addingTimeInterval(0.4))
+            showArming(target: nil)
+            revertArming(because: "pose: quick arm")
+            RunLoop.current.run(until: Date().addingTimeInterval(0.6))
+            Permissions.log("pose: collapsed-quick-arm settled "
+                + (panel.map { NSStringFromRect($0.frame) } ?? "-")
+                + " stripOnScreen=\(collapsedIsOnScreen)")
+            return true
+
         case "receipt":
             // The dictation receipt (ui-pass-7, ruling 5). No adopted target:
             // dictation is exactly the path with no agent, so the Delivered

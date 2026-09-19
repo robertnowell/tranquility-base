@@ -1731,6 +1731,31 @@ extension StatusHUD {
             + (panel.map { NSStringFromRect($0.frame) } ?? "-"))
         dropOverlay.isHidden = true
 
+        // A quick arm must not leave the strip on the grid's frame.
+        //
+        // What Robert photographed on 15 Sep at 19:19: a 380pt panel, ~110pt
+        // tall, with the strip's logo, lamps and plate centred on it. ⌥ opened
+        // the arm window (the expanded frame's animation scheduled), a key
+        // 34ms later reverted it (the collapsed render ran with the live frame
+        // still 40×400 because the animator had not ticked), morph's guard saw
+        // nothing to do, and the expansion landed with the strip up. The
+        // revert here is immediate, which is the worst case the events showed;
+        // at 40ms and 90ms the second animation replaced the first and the
+        // strip recovered on its own, which is why this went unreported for a
+        // month.
+        setCollapsed(true)
+        showIdle(rows: mixed)
+        settleAnimations()
+        showArming(target: nil)
+        revertArming(because: "collapse drill: quick arm")
+        settleAnimations()
+        let thinAfterQuickArm =
+            abs((panel?.frame.width ?? 0) - CollapsedStrip.width) < 1
+            && abs((panel?.frame.height ?? 0) - CollapsedStrip.height) < 1
+            && collapsedIsOnScreen
+        Permissions.log("collapse drill: after quick arm "
+            + (panel.map { NSStringFromRect($0.frame) } ?? "-"))
+
         // The column carries the READ state, and it carries the whole roster.
         //
         // Both halves of what Robert saw on 16 Aug, side by side: a grid with
@@ -1871,6 +1896,7 @@ extension StatusHUD {
             ("dismissTakesItAway", wentAway && dismissedAgain),
             ("showIdleWouldRaise", showIdleDoesRaise),
             ("thinAfterTheInvitation", thinAfterInvitation),
+            ("thinAfterAQuickArm", thinAfterQuickArm),
             ("unreadLampIsSolid", unreadIsSolidGreen),
             ("openedLampIsHollowCollapsedToo", openedIsHollow),
             ("wholeColumnShown", wholeColumnShown),
