@@ -38,6 +38,11 @@ public final class ACPProcessTransport: ACPTransport, @unchecked Sendable {
         try process.run()
     }
 
+    /// The child's exit status once it has ended; nil while it runs.
+    public var exitStatus: Int32? {
+        process.isRunning ? nil : process.terminationStatus
+    }
+
     public func write(_ line: Data) async throws {
         var out = line
         out.append(0x0A)

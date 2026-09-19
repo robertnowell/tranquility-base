@@ -6,6 +6,7 @@ Compute (tools via tbase) -> Gradium TTS. Design: ../docs/design.md.
 Run with keys injected from the Keychain: ./run.sh
 """
 
+import asyncio
 import os
 
 from dotenv import load_dotenv
@@ -126,6 +127,15 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
     )
     runner = WorkerRunner(handle_sigint=runner_args.handle_sigint)
     await runner.add_workers(worker)
+
+    if os.getenv("TB_HOST") == "app":
+        from events import emit
+        from reload import watch
+
+        async def _on_change(files):
+            await emit(None, "reloading", text=", ".join(files))
+
+        asyncio.get_event_loop().create_task(watch(_on_change))
 
     try:
         @transport.event_handler("on_client_connected")

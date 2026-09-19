@@ -24,6 +24,8 @@ public struct ManagerEvent: Codable, Equatable, Sendable {
         case speaking
         /// The manager's own voice stopped.
         case quiet
+        /// The child's source changed; it is about to exit 75 for a restart.
+        case reloading
         /// A session took the stage.
         case stage
         /// The manager asks the app to play a cue by name.

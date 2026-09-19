@@ -103,11 +103,21 @@ extension AppDelegate {
                 guard let self, let event = ManagerEvent.parse(line) else { continue }
                 self.handle(event)
             }
-            // The child ended, by us or by itself. Either way the lamp goes out.
-            self?.hud.setManager(on: false)
-            self?.managerTransport = nil
-            Permissions.log("manager: child ended")
-            self?.rebuildMenu()
+            guard let self else { return }
+            let status = transport.exitStatus
+            Permissions.log("manager: child ended (exit \(status.map(String.init) ?? "?"))")
+            // 75 is the child's own "reload me": its source changed under it.
+            // Restart in place; the orb never drops. Anything else is the end.
+            if status == 75, self.managerTransport === transport {
+                self.managerTransport = nil
+                self.hud.setManagerState(StatusHUD.orbState, line: "reloading")
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                self.startManager()
+                return
+            }
+            self.hud.setManager(on: false)
+            self.managerTransport = nil
+            self.rebuildMenu()
         }
     }
 
@@ -139,6 +149,8 @@ extension AppDelegate {
         case .speaking:
             managerLastLine = e.text ?? (e.voice == "agent" ? "the agent is speaking" : "speaking")
             hud.setManagerState(StatusHUD.orbState, line: managerLastLine, mood: "speaking")
+        case .reloading:
+            hud.setManagerState(StatusHUD.orbState, line: "reloading")
         case .quiet:
             // Voice over: colour back to rest, the last words stay readable.
             hud.setManagerState(StatusHUD.orbState, line: managerLastLine == "speaking" ? "listening" : managerLastLine)
