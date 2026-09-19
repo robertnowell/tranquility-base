@@ -252,6 +252,29 @@ class Brain:
         return " ".join(text.split())[:600]
 
 
+    async def compose_message(self, request: str, exchange: list[str]) -> str:
+        """The message to type into the agent's terminal, from the developer's own
+        words: the request itself when it carries the instruction ('tell it to run
+        the tests'), or the dictated turns before it ('send that message')."""
+        msgs = [
+            {"role": "system", "content": (
+                "You turn a developer's spoken words into the exact message to type into a coding "
+                "agent's terminal. Use their words; drop filler, false starts and asides about the "
+                "assistant itself. If the request carries the instruction ('tell it to run the tests'), "
+                "the message is that instruction addressed to the agent ('Run the tests'). If the "
+                "request refers to a message they just dictated ('send that message', 'send it'), the "
+                "message is the dictated turns marked 'you (silent)' that come after the last spoken "
+                "or acted line, joined into clean prose. Output ONLY the message text, no preamble.")},
+            {"role": "user", "content": "Exchange (oldest first):\n" + "\n".join(exchange) + f"\n\nRequest: {request}"},
+        ]
+        body = {"model": self.model, "messages": msgs, "max_tokens": 600, "temperature": 0.2}
+        t0 = time.monotonic()
+        r = await self._client.post("/chat/completions", json=body)
+        r.raise_for_status()
+        record("brain", body, r.json(), ms=int((time.monotonic() - t0) * 1000))
+        return (r.json()["choices"][0]["message"].get("content") or "").strip()
+
+
 class Manager(FrameProcessor):
     def __init__(self, jev: JevClient):
         super().__init__()
@@ -424,7 +447,21 @@ class Manager(FrameProcessor):
 
     async def _do_send_message(self, text, frame, direction):
         if self.stage:
-            await self._llm(frame, direction, text, "send_message")
+            # The stage is the target. Compose from the developer's words and send;
+            # no tool-choosing model in the loop to ask which project.
+            try:
+                message = await self._brain.compose_message(text, exchange_lines(12))
+            except Exception as e:
+                logger.error(f"compose failed: {e}")
+                await emit(self, "error", reason=f"compose: {str(e)[:120]}")
+                await self._say("I couldn't put that message together.")
+                return
+            if not message:
+                await self._say("I don't have a message to send. Say it, then say send.")
+                return
+            await emit(self, "speaking", voice="manager", text=f"message: {message[:160]}")
+            note("Tranquility", f"(typing into {self.stage.get('goal') or 'the stage'}) {message}", "acted")
+            await self._send(self.stage["sessionId"], message)
             return
         live = await self._targets()
         if not live:
