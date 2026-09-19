@@ -1,101 +1,79 @@
 import AppKit
+import WebKit
 
-/// The manager's face: one orb, four states, one line of text.
+/// The manager's face on the grid: the thinking orb.
 ///
-/// Idle breathes slowly and dim. Heard flashes once (a turn the manager kept
-/// as context). Addressed goes bright. Speaking rings outward. Stage tints
-/// green and writes the session's goal underneath, because the goal is the
-/// name a stranger understands. Nothing here is interactive; it is a lamp.
+/// The orb is `thinking-orbs` (Jakub Antalik, MIT), a plain 2D-canvas engine
+/// with nine hand-tuned states, vendored under Resources/Orb and drawn in a
+/// transparent web view sized to one grid cell. Nothing here is interactive;
+/// it is a lamp with a line of text under it. States are mapped from the
+/// manager's events: breathing when idle, listening when a turn was heard,
+/// solving when addressed, composing while the manager speaks, connecting
+/// while a session holds the stage.
 @MainActor
-final class ManagerOrb {
-    enum State { case idle, heard, addressed, speaking, stage }
+final class ManagerOrbView: NSView {
+    static let height: CGFloat = 112
+    private let web: WKWebView
+    private var ready = false
+    private var pending: (String, String)?
 
-    private let panel: NSPanel
-    private let view: OrbView
-    private let label = NSTextField(labelWithString: "")
-
-    init() {
-        let frame = NSRect(x: 0, y: 0, width: 240, height: 120)
-        panel = NSPanel(contentRect: frame,
-                        styleMask: [.borderless, .nonactivatingPanel, .hudWindow],
-                        backing: .buffered, defer: false)
-        panel.level = .floating
-        panel.isOpaque = false
-        panel.backgroundColor = .clear
-        panel.hasShadow = false
-        panel.collectionBehavior = [.canJoinAllSpaces, .stationary]
-        panel.ignoresMouseEvents = true
-        view = OrbView(frame: frame)
-        view.wantsLayer = true
-        panel.contentView = view
-        label.frame = NSRect(x: 8, y: 6, width: 224, height: 18)
-        label.alignment = .center
-        label.font = .systemFont(ofSize: 11, weight: .medium)
-        label.textColor = NSColor.white.withAlphaComponent(0.85)
-        label.lineBreakMode = .byTruncatingTail
-        view.addSubview(label)
-        if let screen = NSScreen.main {
-            let v = screen.visibleFrame
-            panel.setFrameOrigin(NSPoint(x: v.maxX - frame.width - 16, y: v.maxY - frame.height - 16))
+    override init(frame: NSRect) {
+        let config = WKWebViewConfiguration()
+        web = WKWebView(frame: .zero, configuration: config)
+        super.init(frame: frame)
+        translatesAutoresizingMaskIntoConstraints = false
+        web.translatesAutoresizingMaskIntoConstraints = false
+        web.setValue(false, forKey: "drawsBackground")
+        web.underPageBackgroundColor = .clear
+        web.navigationDelegate = self
+        addSubview(web)
+        NSLayoutConstraint.activate([
+            web.leadingAnchor.constraint(equalTo: leadingAnchor),
+            web.trailingAnchor.constraint(equalTo: trailingAnchor),
+            web.topAnchor.constraint(equalTo: topAnchor),
+            web.bottomAnchor.constraint(equalTo: bottomAnchor),
+            heightAnchor.constraint(equalToConstant: Self.height),
+        ])
+        if let page = Self.pageURL() {
+            web.loadFileURL(page, allowingReadAccessTo: page.deletingLastPathComponent())
+        } else {
+            Permissions.log("orb: Resources/Orb/orb.html not found; the manager has no face")
         }
     }
 
-    func show() { panel.orderFrontRegardless(); view.start() }
-    func hide() { view.stop(); panel.orderOut(nil) }
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("not used") }
 
-    func set(_ state: State, line: String? = nil) {
-        view.state = state
-        if let line { label.stringValue = line }
+    /// One of the engine's states, and the line under the orb.
+    func set(_ state: String, line: String) {
+        guard ready else { pending = (state, line); return }
+        let js = "window.setOrb(\(Self.quote(state)), \(Self.quote(line)))"
+        web.evaluateJavaScript(js) { _, error in
+            if let error { Permissions.log("orb: \(error.localizedDescription)") }
+        }
+    }
+
+    private static func quote(_ s: String) -> String {
+        let data = try? JSONSerialization.data(withJSONObject: [s])
+        let arr = data.flatMap { String(data: $0, encoding: .utf8) } ?? "[\"\"]"
+        return String(arr.dropFirst().dropLast())
+    }
+
+    /// Bundled first (bundle.sh copies Resources/Orb), the repo copy in
+    /// development, the same two-step lookup Earcons uses for its sounds.
+    private static func pageURL() -> URL? {
+        if let bundled = Bundle.main.resourceURL?.appendingPathComponent("Orb/orb.html"),
+           FileManager.default.fileExists(atPath: bundled.path) { return bundled }
+        let repo = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Resources/Orb/orb.html")
+        return FileManager.default.fileExists(atPath: repo.path) ? repo : nil
     }
 }
 
-@MainActor
-final class OrbView: NSView {
-    var state: ManagerOrb.State = .idle { didSet { flash = state == .heard ? 1 : flash } }
-    private var timer: Timer?
-    private var phase: CGFloat = 0
-    private var flash: CGFloat = 0
-
-    func start() {
-        timer = Timer.scheduledTimer(withTimeInterval: 1 / 30, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated {
-                guard let self else { return }
-                self.phase += 0.05
-                self.flash = max(0, self.flash - 0.04)
-                if self.state == .heard, self.flash == 0 { self.state = .idle }
-                self.needsDisplay = true
-            }
-        }
-    }
-    func stop() { timer?.invalidate(); timer = nil }
-
-    override func draw(_ dirtyRect: NSRect) {
-        let center = NSPoint(x: bounds.midX, y: bounds.midY + 12)
-        let breath = 0.5 + 0.5 * sin(phase)
-        let (base, radius, alpha): (NSColor, CGFloat, CGFloat)
-        switch state {
-        case .idle:      (base, radius, alpha) = (.systemGray, 18 + 2 * breath, 0.35 + 0.15 * breath)
-        case .heard:     (base, radius, alpha) = (.systemGray, 20 + 4 * flash, 0.45 + 0.4 * flash)
-        case .addressed: (base, radius, alpha) = (.white, 24 + 2 * breath, 0.95)
-        case .speaking:  (base, radius, alpha) = (.white, 22, 0.9)
-        case .stage:     (base, radius, alpha) = (NSColor(calibratedRed: 0.24, green: 0.44, blue: 0.28, alpha: 1), 24 + 2 * breath, 0.95)
-        }
-        if state == .speaking {
-            for i in 0..<3 {
-                let r = radius + 10 + CGFloat(i) * 9 + 6 * breath
-                let ring = NSBezierPath(ovalIn: NSRect(x: center.x - r, y: center.y - r, width: 2 * r, height: 2 * r))
-                base.withAlphaComponent(0.25 / CGFloat(i + 1)).setStroke()
-                ring.lineWidth = 1.5
-                ring.stroke()
-            }
-        }
-        let glow = NSBezierPath(ovalIn: NSRect(x: center.x - radius - 8, y: center.y - radius - 8,
-                                               width: 2 * radius + 16, height: 2 * radius + 16))
-        base.withAlphaComponent(alpha * 0.25).setFill()
-        glow.fill()
-        let orb = NSBezierPath(ovalIn: NSRect(x: center.x - radius, y: center.y - radius,
-                                              width: 2 * radius, height: 2 * radius))
-        base.withAlphaComponent(alpha).setFill()
-        orb.fill()
+extension ManagerOrbView: WKNavigationDelegate {
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        ready = true
+        if let (state, line) = pending { pending = nil; set(state, line: line) }
     }
 }

@@ -67,10 +67,7 @@ extension AppDelegate {
             return
         }
         managerTransport = transport
-        let orb = managerOrb ?? ManagerOrb()
-        managerOrb = orb
-        orb.set(.idle, line: "Tranquility · listening")
-        orb.show()
+        hud.setManager(on: true)
         Permissions.log("manager: started \(argv.joined(separator: " "))")
         managerTask = Task { @MainActor [weak self] in
             for await line in transport.lines() {
@@ -78,8 +75,7 @@ extension AppDelegate {
                 self.handle(event)
             }
             // The child ended, by us or by itself. Either way the lamp goes out.
-            self?.managerOrb?.set(.idle, line: "Tranquility · off")
-            self?.managerOrb?.hide()
+            self?.hud.setManager(on: false)
             self?.managerTransport = nil
             Permissions.log("manager: child ended")
             self?.rebuildMenu()
@@ -92,26 +88,26 @@ extension AppDelegate {
         managerTask = nil
         if let transport = managerTransport { Task { await transport.close() } }
         managerTransport = nil
-        managerOrb?.hide()
+        hud.setManager(on: false)
         Permissions.log("manager: stopped")
     }
 
     @MainActor
     private func handle(_ e: ManagerEvent) {
-        guard let orb = managerOrb else { return }
+        let p = String(format: "%.2f", e.p ?? 0)
         switch e.event {
         case .listening:
-            orb.set(.heard, line: "heard · \(String(format: "%.2f", e.p ?? 0))")
+            hud.setManagerState("listening", line: "heard · \(p)")
         case .addressed:
-            orb.set(.addressed, line: "\(e.intent ?? "addressed") · \(String(format: "%.2f", e.p ?? 0))")
+            hud.setManagerState("solving", line: "\(e.intent ?? "addressed") · \(p)")
         case .speaking:
-            orb.set(.speaking, line: e.voice == "agent" ? "the session speaks" : "Tranquility speaks")
+            hud.setManagerState("composing", line: e.voice == "agent" ? "the session speaks" : "Tranquility speaks")
         case .stage:
-            orb.set(.stage, line: "on stage: \(e.goal ?? e.project ?? e.session?.prefix(8).description ?? "")")
+            hud.setManagerState("connecting", line: "on stage · \(e.goal ?? e.project ?? e.session?.prefix(8).description ?? "")")
         case .earcon:
             if let name = e.name, let cue = EarconGate.Cue(rawValue: name) { Earcons.acknowledge(cue) }
         case .tool:
-            orb.set(.addressed, line: "→ \(e.meaning ?? (e.text ?? "tool"))")
+            hud.setManagerState("working", line: "→ \(e.meaning ?? (e.text ?? "tool"))")
         }
     }
 }

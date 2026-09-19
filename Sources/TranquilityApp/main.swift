@@ -176,7 +176,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Manager mode (19 Sep): the stdio child, its reader, and its lamp.
     var managerTransport: ACPProcessTransport?
     var managerTask: Task<Void, Never>?
-    var managerOrb: ManagerOrb?
     /// Where the ⌃⌥ walk over an all-opened stack has got to. Nil means start
     /// at the top. In memory only, and reset by any fresh or named
     /// announcement — a walk is a gesture in progress, not durable state.
@@ -1028,6 +1027,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // The separate waiting-list face is gone: the idle grid IS the list.
         hud.onPickWaiting = { [weak self] id in self?.announceNext(only: id) }
         hud.onNewSession = { [weak self] in self?.newSession() }
+        hud.onManagerToggle = { [weak self] in self?.toggleManagerMode() }
         hud.onContinueWork = { [weak self] id, name in
             self?.continueWork(from: id, name: name)
         }

@@ -3147,7 +3147,14 @@ final class StatusHUD: NSObject {
 
         // The strip's bottom rule, under "AGENTS ⚙".
         waitingRows.addArrangedSubview(hairline(StateLegend.Palette.hairline))
-        let shown = Self.gridRows(face.sessionRows)
+        // Manager mode (19 Sep): the orb takes the grid's place. The rows are
+        // still the fleet; the manager is how you reach them without hands.
+        if managerOn {
+            waitingRows.addArrangedSubview(managerOrb)
+            managerOrb.widthAnchor.constraint(equalToConstant: Self.gridWidth).isActive = true
+            waitingRows.addArrangedSubview(hairline(StateLegend.Palette.hairlineSoft))
+        }
+        let shown = managerOn ? [] : Self.gridRows(face.sessionRows)
         // ONE callsign column (ruled 05 Aug): sized to the widest callsign on
         // show, capped at 38% of the grid. Per-row widths made every name
         // truncate at its own x and the right side read as a rag, not a
@@ -3239,6 +3246,28 @@ final class StatusHUD: NSObject {
 
     /// Wired by the app onto SessionLauncher.launch().
     var onNewSession: (() -> Void)?
+
+    // MARK: Manager mode (19 Sep)
+
+    /// Whether the orb is on the grid. Flipped by the app when the child
+    /// starts or ends; the grid repaints on the next idle render.
+    var managerOn = false
+    lazy var managerOrb = ManagerOrbView(frame: .zero)
+    var onManagerToggle: (() -> Void)?
+
+    func setManager(on: Bool) {
+        managerOn = on
+        managerOrb.set("breathing", line: on ? "Tranquility · listening" : "Tranquility · off")
+        if case .idle = state { render() }
+    }
+
+    func setManagerState(_ orbState: String, line: String) {
+        managerOrb.set(orbState, line: line)
+    }
+
+    @objc nonisolated private func managerRowTapped() {
+        MainActor.assumeIsolated { onManagerToggle?() }
+    }
 
     /// Wired by the app: build the list and show it.
     var onOpenPastAgents: (() -> Void)?

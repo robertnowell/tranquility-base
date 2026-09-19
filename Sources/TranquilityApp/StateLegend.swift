@@ -720,6 +720,10 @@ enum StateLegend {
     /// The other half of the same row: not starting an agent, but bringing one
     /// back. Ruled 12 Aug.
     static let pastAgentsTitle = "PAST AGENTS"
+    /// Manager mode's placard (19 Sep): the hands-free manager on the grid.
+    static let managerTitle = "TRANQUILITY"
+    static let managerOnTitle = "HANDS-FREE"
+    static let managerOffTitle = "STOP"
 
     /// The empty room has no sentence of its own any more (ruled 14 Sep
     /// 2026). It used to replace the grid, ten seconds in, with "Control +

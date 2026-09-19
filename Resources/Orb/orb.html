@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html data-theme="dark"><head><meta charset="utf-8">
+<style>
+  html,body{margin:0;background:transparent;overflow:hidden}
+  body{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;font:11px/1.3 -apple-system,"Helvetica Neue",sans-serif;color:rgba(255,255,255,.72);-webkit-font-smoothing:antialiased}
+  canvas{display:block;width:64px;height:64px}
+  #line{margin-top:8px;max-width:320px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;letter-spacing:.02em}
+</style></head>
+<body><canvas id="orb" role="img" aria-label="Tranquility"></canvas><div id="line">Tranquility · listening</div>
+<script type="module">
+  // thinking-orbs by Jakub Antalik (MIT), engine only: no React, plain 2D canvas.
+  import { resolvePreset, MODE_DRAWS } from "./engine.js";
+  const size = 64, canvas = document.getElementById("orb");
+  const dpr = Math.min(2, devicePixelRatio || 1);
+  canvas.width = Math.round(size * dpr); canvas.height = Math.round(size * dpr);
+  const ctx = canvas.getContext("2d");
+  let draw, speed = 1, raf = 0;
+  function frame() {
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, size, size);
+    draw(ctx, size, performance.now() / 1000 * speed, true, drawOpts);
+    raf = requestAnimationFrame(frame);
+  }
+  let drawOpts;
+  window.setOrb = function (state, line) {
+    const p = resolvePreset(state, size);
+    draw = MODE_DRAWS[p.mode]; speed = p.speed; drawOpts = p.opts;
+    if (line !== undefined) document.getElementById("line").textContent = line;
+    if (!raf) frame();
+  };
+  window.setOrb("breathing");
+</script></body></html>
