@@ -3494,6 +3494,10 @@ final class StatusHUD: NSObject {
     /// The height last requested of the panel — the resize's own memory, so an
     /// in-flight animation cannot be mistaken for a settled size.
     var intendedHeight: CGFloat?
+    /// The width last requested — the strip's 40 or the grid's 380 — for the
+    /// same reason. Both morph directions guard on these, never on the live
+    /// frame (19 Sep 2026; see `morph`).
+    var intendedWidth: CGFloat?
     /// `internal`, not `private` (App-lane P5, 24 Aug): set by `build()` (now
     /// in `Build.swift`), read by `Receipt.swift`'s receipt/acknowledge code —
     /// both moved out of this file, this stayed for the same reason `ackBar`
