@@ -35,7 +35,7 @@ from pipecat.turns.user_stop.turn_analyzer_user_turn_stop_strategy import (
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from pipecat.workers.runner import WorkerRunner
 
-from gate import AddressedGate, JevClient
+from manager import JevClient, Manager
 from prompt import SYSTEM
 from tools import SCHEMAS
 
@@ -89,7 +89,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
         ),
     )
 
-    gate = AddressedGate(JevClient(os.environ["JEV_API_KEY"]))
+    gate = Manager(JevClient(os.environ["JEV_API_KEY"]))
 
     pipeline = Pipeline(
         [
