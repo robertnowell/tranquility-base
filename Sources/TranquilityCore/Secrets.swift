@@ -9,6 +9,10 @@ import Security
 /// genuinely hard to diagnose — it cost an hour during development. Anything that
 /// shells out (the `claude -p` fallback provider) must likewise scrub it.
 public enum Secrets {
+    /// Local credential changes notify the one managed session, without carrying
+    /// credentials in notification payloads. Other-process changes are caught
+    /// by the uncached Hub-token read before every managed operation.
+    public static let hubIdentityDidChange = Notification.Name("TranquilityHubIdentityDidChange")
     /// The Keychain service name, deliberately NOT renamed with the product.
     ///
     /// This string is the lookup key for every stored credential. Changing it does
@@ -28,6 +32,11 @@ public enum Secrets {
         /// minted by the hub when the Mac was connected. Not a key a person
         /// pastes, so no console URL.
         case hubToken = "hub-token"
+        /// This Mac's proof-of-possession key. For an enclave key this is the
+        /// enclave's own wrapped blob, which is useless on any other machine;
+        /// for the software fallback it is a real private key. Never leaves
+        /// this file, and never travels anywhere: only signatures do.
+        case deviceKey = "device-key"
         /// crobot, through Jarvis. Minted in Jarvis under user settings, API
         /// Keys tab, with NO permissions: crobot only calls `/api/auth/me`
         /// with it and that route enforces no scope. Jarvis refuses an empty
@@ -49,6 +58,7 @@ public enum Secrets {
             case .assemblyAIAPIKey: return "AssemblyAI"
             case .openAIAPIKey: return "OpenAI"
             case .hubToken: return "Tranquility Knowledge Base"
+            case .deviceKey: return "This Mac's key"
             case .crobotAPIKey: return "crobot"
             case .openCodePassword: return "OpenCode"
             }
@@ -62,8 +72,28 @@ public enum Secrets {
             case .assemblyAIAPIKey: return "the live transcript while you speak"
             case .openAIAPIKey: return "Whisper, the durable transcript when streaming fails"
             case .hubToken: return "the mirror: every page and turn, in the hub"
+            case .deviceKey: return "proves this Mac is this Mac, for anything that spends"
             case .crobotAPIKey: return "your crobot agents, as rows you can answer"
             case .openCodePassword: return "a local OpenCode server that asks for one"
+            }
+        }
+
+        /// Whether a person ever types this in.
+        ///
+        /// Most of these are pasted from somebody's console, and every one of
+        /// those needs a checklist row to paste it into: a credential the app
+        /// can store but offers nowhere to enter is a dead end, which is what
+        /// `testEveryPastableCredentialHasARowToTypeItIn` exists to prevent.
+        ///
+        /// Two are not pasted. The hub mints its token during the connect
+        /// flow, and this Mac makes its own device key. Neither has a row
+        /// because neither has anything for a person to do, and stating that
+        /// here rather than as an exception in the test means the next key
+        /// added has to answer the question rather than inherit an omission.
+        public var isPasted: Bool {
+            switch self {
+            case .hubToken, .deviceKey: return false
+            default: return true
             }
         }
 
@@ -80,6 +110,9 @@ public enum Secrets {
             case .assemblyAIAPIKey: return URL(string: "https://www.assemblyai.com/dashboard/api-keys")
             case .openAIAPIKey: return URL(string: "https://platform.openai.com/api-keys")
             case .hubToken: return nil
+            // Made on this machine, by this machine. There is nowhere to go
+            // and get one, which is the property that makes it worth having.
+            case .deviceKey: return nil
             // Jarvis mints it, under user settings. No stable deep link to that
             // tab exists, so the console root is the honest answer rather than
             // a guessed fragment that 404s.
@@ -209,7 +242,8 @@ public enum Secrets {
     /// happens once, from `tbase` — the binary that owns the keychain items — so the
     /// app has no keychain code path at all.
     public static func read(_ key: Key) -> String? {
-        cache.value(for: key) { readFile()[key.rawValue].flatMap { $0.isEmpty ? nil : $0 } }
+        if key == .hubToken { return readFile()[key.rawValue].flatMap { $0.isEmpty ? nil : $0 } }
+        return cache.value(for: key) { readFile()[key.rawValue].flatMap { $0.isEmpty ? nil : $0 } }
     }
 
     /// Explicit, one-time move of every key out of the keychain into the file.
@@ -253,6 +287,7 @@ public enum Secrets {
         values[key.rawValue] = value
         try writeFile(values)
         cache.invalidate(key)
+        if key == .hubToken { NotificationCenter.default.post(name: hubIdentityDidChange, object: nil) }
     }
 
     /// Legacy keychain writer, kept only so existing items remain readable for the

@@ -60,40 +60,49 @@ Multiple Claude sessions work this repo in parallel. The rules that keep it safe
    the old rule stands underneath this one: **one session in the app layer at
    a time** (Sources/TranquilityApp/). Core and tools/ parallelize safely; the
    panel does not.
-6. **Merges to main deploy AUTOMATICALLY; the merging session verifies, and
-   deploys by hand only when the robot didn't.** A global PostToolUse hook
-   (`~/.claude/settings.json`) runs `scripts/relaunch.sh` when it sees a merge —
-   discovered 14 Aug after a week of "phantom" deploys firing seconds after
-   every merge with no session claiming them: the hook rode every session's
-   merges and, being a shell script, could not announce. Ruled 14 Aug ("one
-   deployer", the same single-writer principle as the panel arbiter): the hook
-   IS the deployer. Do not run relaunch.sh reflexively after your merge — that
-   is how the 14 Aug lock collisions happened, twice in one day, and most
-   likely the 13 Aug 05:06 race too (hook vs session, not session vs session).
-   Instead, after merging: within ~a minute, check `logs/deploys.log` gained
-   your ref and /private/tmp/tb-clean sits on it, and the launch self-tests
-   report PASS. Only if the ledger shows nothing did the hook miss — then run
-   relaunch.sh yourself, with a note.
-   Mechanics that still hold: merging is not deploying (a merged microphone
-   fix once sat unrunning while the microphone kept failing, 07 Aug); the
-   script is the only relaunch path — resolves against origin/main, refuses a
-   dirty worktree, stops the old instance (two instances race for one global
-   hotkey), gates on the launch self-tests.
-   **Every deploy is on the record.** relaunch.sh writes `logs/deploys.log` at
-   lock-take (invoker, ppid, session id when exported) and at ref-resolve —
-   the ledger is the script's fact where the old announcement was a session's
-   promise; attributing a deploy is a grep, not pid forensics. Announcements
-   to other sessions remain the courtesy for anything UNUSUAL — a branch
-   build, a manual deploy, a rollback — because a relaunch REPLACES whatever
-   build is live, including a branch build mid-acceptance (earned 12 Aug:
-   7bb2fe1 silently swapped out the ⌃⌃-fix build minutes before its dogfooding
-   session; only a deploy note caught it).
-   **One deployer runs at a time**, enforced by relaunch.sh's lockfile: a
-   second concurrent run is refused outright, never interleaved. Earned 13 Aug
-   at 05:06: two relaunches raced, one script's app_stop killed the other's
-   freshly-drilled instance, and the restore trap resurrected the app bare,
-   with no drills — the correct build running unverified behind a
-   green-looking log, quieter and therefore worse than a loud collision.
+6. **Observe the merge, then supervise delivery.** A request or queue admission
+   is not a completed merge. After requesting one, run from the updated shared
+   deployment checkout:
+
+       python3 scripts/delivery.py watch --pr NUMBER --owner SESSION --wait
+
+   This observes GitHub's actual merge SHA, records pending intent before any
+   install, and verifies the running full commit and process after launch drills.
+   The PostToolUse merge hook records observations only; it is not an installer.
+   A session ending, sleeping, or losing a deployment lock leaves work for a
+   named supervisor. Continue with `delivery.py resume --owner SESSION --wait`.
+   Never report "running" from a checkout HEAD or a queued merge request.
+
+   **Queue admission records delivery first.** For the supervised queue pilot,
+   the named coordinator uses `delivery.py admit --pr NUMBER --owner SESSION
+   --head FULL_PR_HEAD_SHA` from the current deployment checkout. Do not merely
+   add a label; that bypasses the merge-command hook. Other sessions must not
+   independently update/rebase or arm auto-merge on an admitted PR. A conflict
+   can remove admission and requires explicit review/re-admission. The active
+   cohort is recorded in #493; see `docs/merge-queue.md`. Existing open PRs are
+   not automatically authorized for that cohort.
+
+   **All four mutation paths use the current deployment checkout.** Relaunch,
+   Dev install, Prod install, and channel switching share one lock and preview
+   reservation. Do not use an older worktree's installer to bypass a deferral.
+   Update that checkout with `python3 scripts/update-deployment-tooling.py`,
+   which excludes both builds and activation before changing its files.
+   Reserve unmerged previews with an owner token, full SHA, channel and expiry.
+   Main and other branches wait until release or expiry. Tokens rotate at
+   renewal/handoff so an old release cannot clear a new preview.
+
+   Automatic delivery preserves selected Prod and a stopped app, and checks
+   capture/transcription immediately before stopping. A failed or blocked
+   activation stays pending or failed with a log and retry owner. A historical
+   runtime receipt is not proof the app is still up: `delivery.py status` reports
+   the current process match separately. Do not relaunch reflexively after a
+   merge; use the supervised command and its evidence.
+
+   See `docs/preview-ownership.md` and `docs/supervised-delivery.md` for commands,
+   recovery, hook cutover, and the optional durable delivery worker. A failed
+   activation stops a foreground wait and holds automatic retry of that source;
+   inspect the failure before explicitly retrying. The worker never replays old
+   refused preview/switch attempts as if they were delivery requests.
 7. **`swift test` is not evidence about the panel.** `Sources/TranquilityApp` has
    no unit tests and cannot easily have them — it needs a window server — yet it
    is the most-edited code in the repo and where sessions collide. Its evidence
@@ -104,11 +113,13 @@ Multiple Claude sessions work this repo in parallel. The rules that keep it safe
    it. New panel behaviour adds a drill; "252 tests green" says nothing about it.
 8. **Run `scripts/preflight.sh` before landing a branch.** It refuses a dirty or
    behind tree, catches local `main` drifting from origin/main (which happened,
-   unnoticed, for a day on 08 Aug), builds, tests, and then deliberately stops
-   without pushing. Landing stays a decision, because with no CI and no panel
-   tests, green is necessary and not sufficient. Move `main` with `git branch -f`
-   rather than `git checkout` — the ref moves without touching a working tree
-   another session may be editing.
+   unnoticed, for a day on 08 Aug), then runs the shared source audit and local
+   informational drills. It does not push or deploy. CI and release builds call
+   `scripts/audit-source.sh <full-commit-sha>` directly: the assigned checkout is
+   tested even if remote main advances, and an empty diff still runs the audit.
+   Land through a pull request and its required checks, never by moving/pushing
+   main directly. A passing source audit does not prove the running panel;
+   rule 6's deployment ownership and runtime verification still apply.
 9. **The main actor draws; everything else is off-main.** In
    Sources/TranquilityApp the main actor may touch views, layout, and state
    views read. Anything whose cost a human would feel as a frozen frame, a slow

@@ -49,12 +49,14 @@ public struct GatewaySummaryInput: Codable, Sendable, Equatable {
     public let cwd: String?
     public let hookEvent: HookEventKind
     public let notificationMatcher: String?
+    public let earlierThisTurn: String?
 
     public init(_ request: SummaryRequest) {
         lastAssistantMessage = request.lastAssistantMessage; projectLabel = request.projectLabel
         firstUserMessage = request.firstUserMessage; previousGoal = request.previousGoal
         gitBranch = request.gitBranch; cwd = request.cwd; hookEvent = request.hookEvent
         notificationMatcher = request.notificationMatcher
+        earlierThisTurn = request.earlierThisTurn
     }
 }
 

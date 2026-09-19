@@ -104,16 +104,68 @@ public enum AgentDefaults {
     }
 
     /// Where a new agent starts when you have not said otherwise, for a given
-    /// harness. The home directory, as it always was — ruled 15 Aug that this
-    /// becomes a setting alongside the command, global for now: "we could
-    /// just make that a global setting for now and see if we need more
-    /// granular later." (Per-harness as of 25 Aug is exactly the "more
-    /// granular later.")
+    /// harness. Ruled 15 Aug that this becomes a setting alongside the
+    /// command, global for now: "we could just make that a global setting for
+    /// now and see if we need more granular later." (Per-harness as of 25 Aug
+    /// is exactly the "more granular later.")
+    ///
+    /// Until 14 Sep 2026 the fallback was the home directory, and on a new
+    /// Mac that day it produced a cascade of permission prompts: an agent
+    /// started in `~` looks around, and every glance at Desktop, Downloads or
+    /// Documents is a separate macOS dialog for the terminal, on top of the
+    /// harness's own "trust this folder?" for the whole home. Ruled the same
+    /// day: "the root is not the answer." The fallback is now a folder of the
+    /// app's own beside the agents folder, `~/Documents/tranquility-base`
+    /// (named 15 Sep), made on first use. Beside, not inside: agents build
+    /// things where they start, and the agents folder is the hub's source of
+    /// pages, mirrored and indexed, so a build tree in there would be a page
+    /// nobody wrote. One folder for every agent rather than one each, on
+    /// purpose: a folder is a harness project, with its own trust prompt and
+    /// its own history, and one prompt answered once is the whole point. The
+    /// terminal already needs Documents for the pages agents write, so this
+    /// adds no dialog.
+    ///
+    /// Home only when the folder cannot be used, and every way that happens
+    /// is handled rather than assumed away: Documents missing (created with
+    /// intermediates), the path taken by a file (home, and a log line, never
+    /// a launch into a file), a Documents the app cannot write to (home). The
+    /// check is on the resolved path, so a symlinked Documents is followed.
     ///
     /// A REVIVED agent ignores this entirely and uses the directory its own
     /// transcript records, because resuming a conversation somewhere it never
     /// ran is not the same session in any sense that matters.
-    public static var fallbackDirectory: String { NSHomeDirectory() }
+    public static let workspaceName = "tranquility-base"
+
+    public static var fallbackDirectory: String {
+        let workspace = HomeBase.root.deletingLastPathComponent()
+            .appendingPathComponent(workspaceName, isDirectory: true)
+        return usableDirectory(workspace) ?? NSHomeDirectory()
+    }
+
+    /// The path if it is, or can be made into, a writable directory; nil
+    /// otherwise. Split out so the cases can be driven in a test without a
+    /// real home.
+    static func usableDirectory(_ url: URL, fm: FileManager = .default) -> String? {
+        var isDir: ObjCBool = false
+        if fm.fileExists(atPath: url.path, isDirectory: &isDir) {
+            guard isDir.boolValue else {
+                Track.trace?("workspace: \(url.path) exists and is not a directory; starting at home")
+                return nil
+            }
+        } else {
+            do {
+                try fm.createDirectory(at: url, withIntermediateDirectories: true)
+            } catch {
+                Track.trace?("workspace: could not create \(url.path): \(error.localizedDescription); starting at home")
+                return nil
+            }
+        }
+        guard fm.isWritableFile(atPath: url.path) else {
+            Track.trace?("workspace: \(url.path) is not writable; starting at home")
+            return nil
+        }
+        return url.path
+    }
 
     /// Overridable for tests; the app always uses the support directory. The
     /// filename is the old one so a machine that has already set a command

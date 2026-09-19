@@ -26,15 +26,19 @@ final class RemoteRowsTests: XCTestCase {
 
     // MARK: - Lamps
 
-    /// **A question is GREEN** (ruled 14 Sep). Amber is for the unanticipated,
-    /// not for the agent doing the one thing this app exists to carry.
-    func testAnAgentAskingSomethingIsGreenAndSpendsItsColumnOnTheQuestion() {
+    /// **A pending permission is AMBER** (revised 15 Sep 7:47 PM; a question
+    /// that ends a turn is still green, 14 Sep). The agent is blocked on it
+    /// the way a local agent is blocked on a dialog, and local dialogs are
+    /// amber with the reason in the column. Robert: "it seems hung, and the
+    /// lamp is not amber, and there is no decision or anything."
+    func testAnAgentBlockedOnAPermissionIsAmberAndSpendsItsColumnOnTheQuestion() {
         let agent = remote("a", state: .inputRequired)
         let out = rows(.init(agents: [agent],
                              requests: [agent.id: PendingRequest(
                                 id: "q", session: agent.id, asked: "Merge to main?")]))
-        XCTAssertEqual(out.first?.lamp, .ready)
+        XCTAssertEqual(out.first?.lamp, .fault)
         XCTAssertEqual(out.first?.aux, "Merge to main?")
+        XCTAssertEqual(out.first?.read, .unread, "unread until answered, so the tap brings the decision back")
     }
 
     func testSomethingUnreadIsGreenAndReadsAsUnread() {
@@ -81,7 +85,7 @@ final class RemoteRowsTests: XCTestCase {
                              requests: [agent.id: PendingRequest(id: "q", session: agent.id,
                                                                  asked: "?")],
                              unread: [agent.id]))
-        XCTAssertEqual(out.first?.lamp, .ready)
+        XCTAssertEqual(out.first?.lamp, .fault, "a permission outranks working, and it is amber")
     }
 
     /// **The tripwire.** Three lamps light a remote row and there is no fourth:
@@ -117,6 +121,25 @@ final class RemoteRowsTests: XCTestCase {
     func testAnAgentWithNeitherDoorOffersNothing() {
         let out = rows(.init(agents: [remote("a", state: .working, url: nil)]))
         XCTAssertEqual(SessionRow.action(for: out[0]), SessionRow.RowAction.none)
+    }
+
+    /// A served OpenCode agent's screen is a pane of ours with its TUI
+    /// attached since it started; that pane is the door, and outranks the
+    /// attach command it also carries (the command is the fallback for a
+    /// pane that could not be made, and a fresh attach never shows an ask
+    /// raised before it; 17 Sep).
+    func testAnAgentWithAPaneGoesToItRatherThanAttachingAfresh() {
+        var agent = remote("a", state: .working)
+        agent.shell = AgentSession.ShellDoor(command: "opencode attach http://127.0.0.1:1 --session a",
+                                             directory: "/tmp")
+        XCTAssertEqual(SessionRow.action(for: rows(.init(agents: [agent]))[0]),
+                       .openShell("opencode attach http://127.0.0.1:1 --session a", directory: "/tmp"))
+        agent.pane = "tb-oc-a"
+        let out = rows(.init(agents: [agent]))
+        XCTAssertEqual(out[0].door, .pane("tb-oc-a"))
+        XCTAssertEqual(SessionRow.action(for: out[0]), .attachPane("tb-oc-a"))
+        XCTAssertTrue(out[0].door.isRemote)
+        XCTAssertEqual(DeepLink.discussDestination(rowAction: .attachPane("tb-oc-a"), lamp: .fault, hasCompletedTurn: true), .agentPane("tb-oc-a"))
     }
 
     /// Every local row keeps the door it always had, which is what makes this
@@ -167,12 +190,12 @@ final class RemoteRowsTests: XCTestCase {
 
     /// The SHARED rule, and the assertion is deliberately about peers.
     ///
-    /// `quietRowsLast` ranks ready, working and fault together at the top and
-    /// keeps their arrival order; only merely-alive and dead rows sink. So a
-    /// blocked remote agent does NOT jump above a working one, exactly as a
-    /// blocked local session does not. That is the point: the fifth band is
-    /// subject to the same ordering as the other four, including the parts
-    /// somebody might expect to work differently.
+    /// `quietRowsLast` ranks the lamps that ask for you (green, amber) above
+    /// blue, and each tier by recency (ruled 15 Sep); only merely-alive and
+    /// dead rows sink below all of them. So a working remote agent sits under
+    /// a finished one, exactly as a working local session does. That is the
+    /// point: the fifth band is subject to the same ordering as the other
+    /// four, including the parts somebody might expect to work differently.
     func testRemoteRowsObeyTheSameOrderingAsLocalOnes() {
         let asking = remote("asking", state: .inputRequired)
         let working = remote("working", state: .working)
@@ -180,8 +203,8 @@ final class RemoteRowsTests: XCTestCase {
         let out = rows(.init(agents: [done, working, asking],
                              requests: [asking.id: PendingRequest(id: "q", session: asking.id,
                                                                   asked: "?")]))
-        XCTAssertEqual(out.map(\.lamp), [.ready, .working, .ready],
-                       "lit rows keep arrival order, and under the three-lamp ruling "
+        XCTAssertEqual(out.map(\.lamp), [.ready, .fault, .working],
+                       "green and amber above blue, and under the three-lamp ruling "
                        + "a finished agent is lit rather than sunk")
         XCTAssertEqual(out.map(\.lamp), SessionRow.quietRowsLast(out).map(\.lamp),
                        "and the band is already in the shared rule's order")
@@ -228,9 +251,11 @@ extension RemoteRowsTests {
     }
 
     /// And a green LOCAL row still announces, which is the app's daily loop
-    /// and must not have been traded away for the fix above.
+    /// and must not have been traded away for the fix above. A local green row
+    /// always carries a read state — band 1 stamps one — which is what makes
+    /// announce meaningful.
     func testAGreenLocalRowStillAnnounces() {
-        let local = SessionRow(id: "local", name: "n", aux: "a", lamp: .ready)
+        let local = SessionRow(id: "local", name: "n", aux: "a", lamp: .ready, read: .unread)
         XCTAssertEqual(SessionRow.action(for: local), .announce)
     }
 
@@ -243,8 +268,35 @@ extension RemoteRowsTests {
     /// So the door decides only whether there is somewhere BETTER to go, and
     /// announce stays the fallback rather than being traded away.
     func testAGreenRemoteAgentWithNoPageStillAnnounces() {
-        let row = rows(.init(agents: [remote("a", state: .completed)])).first
+        let agent = remote("a", state: .completed)
+        let row = rows(.init(agents: [agent], unread: [agent.id])).first
         XCTAssertEqual(row?.door, SessionRow.Door.none)
         XCTAssertEqual(SessionRow.action(for: row!), .announce)
+    }
+
+    /// **And one that has never spoken does nothing rather than announcing
+    /// nothing.** Robert, 15 Sep, on twenty-nine such rows in Past Agents:
+    /// "clicking on them does nothing. It's very weird that they're there."
+    /// They were probe sessions that had finished a turn (green, correctly)
+    /// and never written a line to the store (nothing to announce). The verb
+    /// says so now instead of pretending.
+    func testAGreenRemoteAgentThatNeverSpokeDoesNotAnnounce() {
+        let row = rows(.init(agents: [remote("a", state: .completed)])).first
+        XCTAssertEqual(row?.read, ReadState.none)
+        XCTAssertEqual(SessionRow.action(for: row!), SessionRow.RowAction.none,
+                       "announce would read a turn that does not exist")
+    }
+}
+
+/// The pane's name carries the served port, so last launch's pane can never
+/// read as this launch's; and the sweep at connect removes exactly the panes
+/// on ports nobody serves.
+final class OpenCodePaneTests: XCTestCase {
+    func testTheNameCarriesThePortAndRefusesAnUnsafeId() {
+        XCTAssertEqual(OpenCodePane.name(for: "ses_abc123", port: 59814), "tb-oc-59814-ses_abc123")
+        XCTAssertEqual(OpenCodePane.portInName("tb-oc-59814-ses_abc123"), 59814)
+        XCTAssertNil(OpenCodePane.portInName("tb-2276a76f"), "a local pane is not ours to sweep")
+        XCTAssertNil(OpenCodePane.name(for: "ses_a b; rm", port: 1), "refused, not mangled")
+        XCTAssertNil(OpenCodePane.name(for: String(repeating: "x", count: 70), port: 1))
     }
 }

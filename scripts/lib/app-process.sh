@@ -82,12 +82,16 @@ wait_for_microphone() {
       return 0
     fi
     if [ "$waited" -ge "$TB_MIC_GIVE_UP_AFTER" ]; then
-      echo "✗ microphone still open after ${waited}s (${when}) — not stopping the app." >&2
+      echo "✗ an utterance is still in flight after ${waited}s (${when}) — not stopping the app." >&2
       echo "  It stays on its current build. Run this again when you're done," >&2
       echo "  or TB_KILL_ANYWAY=1 if the marker is wedged." >&2
+      # An ongoing utterance is a safe deferral, not evidence that the source
+      # failed. Let the durable worker retry after it ends without holding the
+      # source indefinitely. Manual callers retain their existing failure code.
+      if [ "${TB_DEPLOY_AUTOMATIC:-0}" = "1" ]; then exit 75; fi
       exit 1
     fi
-    [ "$waited" -eq 0 ] && echo "→ microphone is open (${when}); waiting for the utterance to finish"
+    [ "$waited" -eq 0 ] && echo "→ an utterance is in flight — mic open, transcribing, or delivering (${when}); waiting for it to land"
     sleep 2
     waited=$(( waited + 2 ))
   done
@@ -97,6 +101,7 @@ wait_for_microphone() {
 app_stop_path() {
   if app_at_path_running "$1"; then
     wait_for_microphone "stopping $1"
+    if declare -F tb_before_app_stop >/dev/null; then tb_before_app_stop; fi
     echo "→ stopping $1"
     pkill -f "$1/Contents/MacOS/TranquilityApp" || true
     sleep 1
@@ -112,6 +117,7 @@ app_stop_path() {
 app_stop() {
   if app_running; then
     wait_for_microphone "stopping the running instance"
+    if declare -F tb_before_app_stop >/dev/null; then tb_before_app_stop; fi
     echo "→ stopping the running instance"
     pkill -f "$APP_PROC_PATTERN" || true
     sleep 1

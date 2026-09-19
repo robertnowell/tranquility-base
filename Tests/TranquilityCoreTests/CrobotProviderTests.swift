@@ -35,7 +35,10 @@ final class CrobotProviderTests: XCTestCase {
             prompts.append((id, text))
             return promptResult
         }
-        func create(repo: String, prompt: String, baseBranch: String?) async throws -> String {
+        func composeURL(repo: String?) -> URL? {
+            URL(string: "https://crobot.example/new" + (repo.map { "?repo=\($0)" } ?? ""))
+        }
+                func create(repo: String, prompt: String, baseBranch: String?) async throws -> String {
             created.append((repo, prompt, baseBranch))
             return "0de592c1-382e-4760-8e39-b95206cec31c"
         }
@@ -284,5 +287,77 @@ final class CrobotProviderTests: XCTestCase {
         g.detail[a] = task(a, status: "running")
         g.openCodeRoutes["GET /session"] = (200, "[]")
         try await AgentProviderConformance.run(provider(g), egress: true)
+    }
+}
+
+// MARK: - crobot begins at its own door (15 Sep 2026, "one verb, one place")
+
+extension CrobotProviderTests {
+
+    /// New Agent opens crobot's own web page; it does not start crobot in the
+    /// app. The first question (which repo?) is answered there.
+    func testCrobotBeginsAtItsWebComposePage() {
+        let url = provider(Gateway()).composeURL(for: Brief(prompt: ""))
+        XCTAssertEqual(url?.absoluteString, "https://crobot.example/new")
+    }
+
+    /// When a repo is already known, it is pre-selected on that page — the same
+    /// door, aimed.
+    func testAKnownRepoIsPreselectedOnTheComposePage() {
+        var brief = Brief(prompt: "go"); brief.repository = "Coframe/crobot"
+        let url = provider(Gateway()).composeURL(for: brief)
+        XCTAssertEqual(url?.absoluteString, "https://crobot.example/new?repo=Coframe/crobot")
+    }
+
+    /// The rule is general: an agent begun in the app has no compose URL, so it
+    /// is not sent to a browser. This is what keeps "crobot opens a web page"
+    /// from being a special case — it is one branch on one declared fact.
+    func testAnAgentWithoutAWebUIHasNoComposeURL() {
+        struct Local: AgentProvider {
+            let id = "local"; let can = Capabilities()
+            func changes() -> AsyncStream<AgentEvent>? { nil }
+            func mine() async throws -> [AgentSession] { [] }
+            func refine(_ id: AgentSession.ID) async throws -> AgentSession { .of(id, provider: "local") }
+            func request(_ id: AgentSession.ID) async throws -> PendingRequest? { nil }
+            func transcript(_ id: AgentSession.ID) async throws -> [Turn] { [] }
+            func send(_ t: String, to id: AgentSession.ID) async throws -> SendOutcome { .accepted }
+            func respond(to r: PendingRequest, with response: Response) async throws -> SendOutcome { .accepted }
+            func start(_ brief: Brief) async throws -> AgentSession.ID { "x" }
+            func cancel(_ id: AgentSession.ID) async throws -> SendOutcome { .accepted }
+            func url(for id: AgentSession.ID) -> URL? { nil }
+        }
+        XCTAssertNil(Local().composeURL(for: Brief(prompt: "hi")))
+    }
+}
+
+// MARK: - A crobot row has a door (15 Sep 2026) — through the provider, not a fixture
+
+extension CrobotProviderTests {
+
+    /// **Robert clicked a crobot row and the card said "nowhere to land."**
+    /// Every real crobot session came through `mine()` with `url == nil`, so
+    /// its row's door was `.none`. `CrobotTask.agentSession` builds from wire
+    /// fields and has no base URL; the provider sets it.
+    ///
+    /// This test goes THROUGH `mine()` on purpose. #459's test set `url` on a
+    /// hand-built fixture and passed while production was broken — the exact
+    /// "verify the artifact, not the fixture" trap. A row's door is only real
+    /// if the provider put it there.
+    func testEveryCrobotSessionFromMineCarriesItsPageURL() async throws {
+        let g = Gateway()
+        g.list = [task("api-abc", status: "idle")]
+        let session = try await provider(g).mine().first
+        XCTAssertEqual(session?.url?.absoluteString, "https://crobot.coframe.com/tasks/api-abc",
+                       "a crobot row with no url has no door and cannot be opened")
+    }
+
+    /// And refine — the detail path — carries it too, so a poller's second tier
+    /// does not strip the door off a row the list gave one.
+    func testRefineAlsoCarriesThePageURL() async throws {
+        let g = Gateway()
+        g.list = [task("api-def", status: "running")]     // so rawID resolves the id
+        g.detail["api-def"] = task("api-def", status: "running")
+        let refined = try await provider(g).refine(AgentSession.id("api-def", provider: "crobot"))
+        XCTAssertEqual(refined.url?.absoluteString, "https://crobot.coframe.com/tasks/api-def")
     }
 }

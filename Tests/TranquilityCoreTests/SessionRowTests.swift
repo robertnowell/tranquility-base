@@ -9,11 +9,20 @@ import XCTest
 /// cannot easily have any (CLAUDE.md rule 7).
 final class SessionRowTests: XCTestCase {
 
+    /// A green fixture carries an unread turn, because that is what a green
+    /// LOCAL row always has: band 1 stamps `.unread` or `.opened` and nothing
+    /// else builds one. A green row with `read: .none` is a remote agent that
+    /// has never spoken, and since 15 Sep it does not announce (there is
+    /// nothing in the store to read out). The fixtures used to build green
+    /// rows with no read state and assert they announced — describing a row
+    /// production never makes, and hiding the one it does.
     private func row(id: String = "a1b2c3d4e5", lamp: Lamp = .ready, revivable: Bool = false,
-                     switchedOff: Bool = false, aux: String = "aux", detail: String? = nil
+                     switchedOff: Bool = false, aux: String = "aux", detail: String? = nil,
+                     read: ReadState? = nil
     ) -> SessionRow {
         SessionRow(id: id, name: "name", aux: aux, lamp: lamp,
-                  revivable: revivable, switchedOff: switchedOff, detail: detail)
+                   revivable: revivable, read: read ?? (lamp == .ready ? .unread : .none),
+                   switchedOff: switchedOff, detail: detail)
     }
 
     // MARK: - Lamp
@@ -41,29 +50,33 @@ final class SessionRowTests: XCTestCase {
         XCTAssertEqual(SessionRow.action(for: row(lamp: .fault)), .goToAgent)
     }
 
-    func testTapOnWorkingGoesToAgent() {
-        // Blue joined amber on 24 Aug: a row with work in hand has no
-        // unread turn, so the announcement has nothing to say. The door
-        // does — the pane is already writing what a summary would
-        // paraphrase.
-        XCTAssertEqual(SessionRow.action(for: row(lamp: .working)), .goToAgent)
+    func testTapOnWorkingOpensTheCardWhenItHasOne() {
+        // Ruled 15 Sep 2026, reversing 24 Aug: only amber goes straight to
+        // the agent. A blue row with a recorded turn reads its card, which
+        // carries GO TO AGENT; a blue row with nothing recorded still takes
+        // the door, exactly as green does.
+        XCTAssertEqual(SessionRow.action(for: row(lamp: .working, read: .opened)), .announce)
+        XCTAssertEqual(SessionRow.action(for: row(lamp: .working, read: .unread)), .announce)
+        XCTAssertEqual(SessionRow.action(for: row(lamp: .working, read: .none)), .goToAgent)
     }
 
-    func testTapOnQuietGoesToAgent() {
-        // The dark lamp joined them the same day. Its turn is complete and
-        // already heard, so announce had nothing left to read and fell
-        // through to nothingWaiting — a tap that logged a line and did
-        // nothing. Three lamps, three reasons, one verb.
-        XCTAssertEqual(SessionRow.action(for: row(lamp: .running)), .goToAgent)
+    func testTapOnQuietOpensTheCardWhenItHasOne() {
+        // Same ruling, same shape, for the quiet lamp.
+        XCTAssertEqual(SessionRow.action(for: row(lamp: .running, read: .opened)), .announce)
+        XCTAssertEqual(SessionRow.action(for: row(lamp: .running, read: .none)), .goToAgent)
     }
 
-    func testGreenIsTheOnlyLampThatAnnounces() {
-        // The whole rule in one assertion: announce is for a row with an
-        // unread turn, and green is the only lamp that has one.
-        for lamp: Lamp in [.ready, .working, .running, .fault] {
-            let expected: SessionRow.RowAction = lamp == .ready ? .announce : .goToAgent
-            XCTAssertEqual(SessionRow.action(for: row(lamp: lamp)), expected,
-                           "\(lamp) took the wrong verb")
+    func testOnlyAmberGoesStraightToTheAgent() {
+        // The whole 15 Sep rule in one assertion: with a turn to read, every
+        // lamp but amber opens the card; amber points at the terminal
+        // whatever it has recorded.
+        for lamp: Lamp in [.ready, .working, .running] {
+            XCTAssertEqual(SessionRow.action(for: row(lamp: lamp, read: .opened)), .announce,
+                           "\(lamp) with a turn must open the card")
+        }
+        for read: ReadState in [.none, .unread, .opened] {
+            XCTAssertEqual(SessionRow.action(for: row(lamp: .fault, read: read)), .goToAgent,
+                           "amber must go to the agent, read=\(read)")
         }
     }
 
@@ -182,8 +195,94 @@ final class SessionRowTests: XCTestCase {
                      row("r1", .ready), row("i2", .running), row("d2", .unlit),
                      row("f1", .fault), row("w2", .working)]
         let sorted = SessionRow.quietRowsLast(mixed).map(\.id)
-        XCTAssertEqual(sorted, ["w1", "r1", "f1", "w2", "i1", "i2", "d1", "d2"],
-                       "lit rows in arrival order, then quiet, then closed")
+        XCTAssertEqual(sorted, ["r1", "f1", "w1", "w2", "i1", "i2", "d1", "d2"],
+                       "asks-for-you, then blue, each in arrival order; then quiet, then closed")
+    }
+
+    // MARK: - A green row with nothing to say is still alive (15 Sep 2026)
+
+    /// #458 made a green row with `read: .none` answer `.none`, and `isLive`
+    /// reads liveness off that verb: so the row lost Go to Agent and End
+    /// Session, and the panel's `terminate` drill went red on every launch
+    /// from 14:02 that day. Green means its agent finished a turn; it is alive
+    /// by definition, and like every other live lamp that cannot announce it
+    /// gets its door. The remote case with no pane and no page still answers
+    /// `.none`, through the door, and RemoteRowsTests holds that.
+    func testAGreenRowWithNothingToAnnounceGetsItsDoorAndIsLive() {
+        let silent = SessionRow(id: "s", name: "s", aux: "", lamp: .ready, read: .none)
+        XCTAssertEqual(SessionRow.action(for: silent), .goToAgent)
+        XCTAssertTrue(SessionRow.isLive(silent))
+        let heard = SessionRow(id: "h", name: "h", aux: "", lamp: .ready, read: .opened)
+        XCTAssertEqual(SessionRow.action(for: heard), .announce,
+                       "a row with a turn in the store still announces it")
+    }
+
+    /// And a REMOTE green row is no different (15 Sep, second witness): its
+    /// turn is in the local store by the spool, so with something unread it
+    /// announces; its door is for when it has nothing to say, and for Go to
+    /// Agent on the card. Robert clicked the row after OpenCode answered and
+    /// got a Terminal instead of the answer.
+    /// Amber goes to the agent, remote or local: a remote row's door is the
+    /// pane its TUI has been attached in since it started, where the
+    /// permission is on screen (15 Sep 9:11 PM; pane, not a fresh attach,
+    /// 17 Sep: a TUI attached after the ask never shows it).
+    func testAnAmberRemoteRowGoesToItsDoorWhereTheQuestionIs() {
+        let door = SessionRow.Door.pane("tb-oc-ses_1")
+        let asking = SessionRow(id: "r", name: "r", aux: "Read x.png?", lamp: .fault, read: .unread,
+                                harness: "opencode", door: door)
+        XCTAssertEqual(SessionRow.action(for: asking), .attachPane("tb-oc-ses_1"))
+        let broken = SessionRow(id: "r", name: "r", aux: "cannot reach it", lamp: .fault, read: .none,
+                                harness: "opencode", door: door)
+        XCTAssertEqual(SessionRow.action(for: broken), .attachPane("tb-oc-ses_1"))
+        // A row whose pane could not be made keeps the old door.
+        let shell = SessionRow(id: "r", name: "r", aux: "Read x.png?", lamp: .fault, read: .unread,
+                               harness: "opencode",
+                               door: .shell("opencode attach http://127.0.0.1:1 --session ses_1", directory: "/tmp"))
+        XCTAssertEqual(SessionRow.action(for: shell),
+                       .openShell("opencode attach http://127.0.0.1:1 --session ses_1", directory: "/tmp"))
+        let local = SessionRow(id: "l", name: "l", aux: "needs input", lamp: .fault, read: .unread)
+        XCTAssertEqual(SessionRow.action(for: local), .goToAgent, "a local dialog is answered in its pane")
+    }
+
+    func testAGreenRemoteRowWithAnUnreadTurnAnnouncesBeforeItsDoor() {
+        let door = SessionRow.Door.shell("opencode --session ses_1", directory: "/tmp")
+        let unread = SessionRow(id: "r", name: "r", aux: "", lamp: .ready, read: .unread,
+                                harness: "opencode", door: door)
+        XCTAssertEqual(SessionRow.action(for: unread), .announce)
+        let silent = SessionRow(id: "r", name: "r", aux: "", lamp: .ready, read: .none,
+                                harness: "opencode", door: door)
+        XCTAssertEqual(SessionRow.action(for: silent),
+                       .openShell("opencode --session ses_1", directory: "/tmp"))
+        XCTAssertTrue(SessionRow.isLive(silent))
+    }
+
+    // MARK: - Green above blue (ruled 15 Sep 2026)
+
+    /// Robert, on the screenshot #458 produced: "the green lamps should
+    /// always be above the blue lamps." A working session writes its
+    /// transcript every few seconds, so on a pure recency sort it is always
+    /// the newest row on the panel; the blue here is newer than every green
+    /// by a wide margin and must still sit under all of them.
+    func testBlueSitsBelowEveryGreenHoweverRecentItIs() {
+        let sorted = SessionRow.quietRowsLast([
+            lit("blue-now", 0, lamp: .working),
+            lit("green-yesterday", 16 * 3600),
+            lit("green-this-morning", 5 * 3600),
+        ]).map(\.id)
+        XCTAssertEqual(sorted, ["green-this-morning", "green-yesterday", "blue-now"])
+    }
+
+    /// Amber is the other channel that asks (`Lamp.asksForYou`), and it sits
+    /// WITH green rather than above it: which of the two asked most recently
+    /// is the order that matters. Blue orders among itself the same way.
+    func testTheAskingTierAndTheBlueTierEachOrderByRecency() {
+        let sorted = SessionRow.quietRowsLast([
+            lit("blue-old", 300, lamp: .working),
+            lit("amber", 60, lamp: .fault),
+            lit("blue-new", 10, lamp: .working),
+            lit("green", 30),
+        ]).map(\.id)
+        XCTAssertEqual(sorted, ["green", "amber", "blue-new", "blue-old"])
     }
 
     // MARK: - gridRows / shownCount: the grid's own membership
@@ -281,5 +380,85 @@ final class SessionRowTests: XCTestCase {
         XCTAssertTrue(ReadState.unread.isAsking)
         XCTAssertFalse(ReadState.opened.isAsking)
         XCTAssertFalse(ReadState.none.isAsking)
+    }
+}
+
+// MARK: - Lit rows order by recency (#454, ruled 14 Sep 2026)
+
+extension SessionRowTests {
+
+    private func lit(_ id: String, _ ago: TimeInterval?, lamp: Lamp = .ready) -> SessionRow {
+        SessionRow(id: id, name: id, aux: "", lamp: lamp,
+                   lastActivity: ago.map { Date(timeIntervalSinceNow: -$0) })
+    }
+
+    /// The whole point: newest first, whatever band enumerated it.
+    func testLitRowsSortNewestFirst() {
+        let sorted = SessionRow.quietRowsLast([
+            lit("old", 900), lit("newest", 5), lit("middle", 60),
+        ]).map(\.id)
+        XCTAssertEqual(sorted, ["newest", "middle", "old"])
+    }
+
+    /// **The case that motivated it.** A remote row is enumerated last by
+    /// construction, so before this it could never win a slot however recently
+    /// it had spoken. Measured on the real panel beforehand: 0 of 12.
+    func testARecentRemoteRowOutranksStaleLocalOnes() {
+        let sorted = SessionRow.quietRowsLast([
+            lit("local-old", 3600), lit("local-older", 7200),
+            lit("remote-just-now", 2),          // arrives last, sorts first
+        ]).map(\.id)
+        XCTAssertEqual(sorted.first, "remote-just-now")
+    }
+
+    /// **Hearing a row must not move it** — Robert's own rule, and the reason
+    /// the read-state ranking was reverted. Read-state bolds a row and drives
+    /// the announcer; it does not order the grid.
+    func testReadingARowDoesNotChangeItsPlace() {
+        let before = SessionRow.quietRowsLast([
+            lit("a", 10), lit("b", 20), lit("c", 30),
+        ]).map(\.id)
+        let afterReading = SessionRow.quietRowsLast([
+            SessionRow(id: "a", name: "a", aux: "", lamp: .ready, read: .opened,
+                       lastActivity: Date(timeIntervalSinceNow: -10)),
+            lit("b", 20), lit("c", 30),
+        ]).map(\.id)
+        XCTAssertEqual(before, afterReading)
+    }
+
+    /// A band that cannot say when keeps its arrival place at the END of the
+    /// lit rows. "I don't know" is not "never", and sorting it to 1970 would
+    /// bury a live agent under every dated one.
+    func testRowsWithNoTimestampKeepArrivalOrderAtTheEnd() {
+        let sorted = SessionRow.quietRowsLast([
+            lit("undated-first", nil), lit("dated", 100), lit("undated-second", nil),
+        ]).map(\.id)
+        XCTAssertEqual(sorted, ["dated", "undated-first", "undated-second"])
+    }
+
+    /// The partition is untouched: recency orders WITHIN the lit band only,
+    /// and a quiet or dead row does not climb past a lit one by being recent.
+    func testRecencyDoesNotDisturbTheLampPartition() {
+        let sorted = SessionRow.quietRowsLast([
+            SessionRow(id: "dead", name: "", aux: "", lamp: .unlit,
+                       lastActivity: Date()),
+            SessionRow(id: "quiet", name: "", aux: "", lamp: .running,
+                       lastActivity: Date()),
+            lit("lit", 9999),
+        ]).map(\.id)
+        XCTAssertEqual(sorted, ["lit", "quiet", "dead"])
+    }
+
+    /// Equal timestamps must not shuffle between repaints: `sorted(by:)` is
+    /// not stable in Swift, so arrival is the tiebreak.
+    func testEqualTimestampsKeepArrivalOrderEveryTime() {
+        let at = Date()
+        let rows = (1...6).map {
+            SessionRow(id: "r\($0)", name: "", aux: "", lamp: .ready, lastActivity: at)
+        }
+        let expected = rows.map(\.id)
+        for _ in 0..<50 {
+            XCTAssertEqual(SessionRow.quietRowsLast(rows).map(\.id), expected)
+        }
     }
 }

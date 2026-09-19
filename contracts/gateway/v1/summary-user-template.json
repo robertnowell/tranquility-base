@@ -1,0 +1,40 @@
+{
+  "_": "The user half of the summary prompt, as ordered segments. Appended in order when each condition holds; slots are literal tokens substituted by replacement, never by a format function, because the prompt contains JSON braces. Deliberately not a template language: a mini-language is itself a thing two implementations can disagree about. The conditions are a closed vocabulary and the only logic is presence.",
+  "defaults": {
+    "notification_matcher": "needs input"
+  },
+  "segments": [
+    {
+      "when": "always",
+      "text": "Project: {project_label}"
+    },
+    {
+      "when": "notification",
+      "text": "\n\nTHIS SESSION IS BLOCKED AND WAITING ON THE USER ({notification_matcher}). The message below is what it is asking about. Say what it wants to do and what the decision is — approving a plan is a decision, and reading out \"waiting for permission\" tells them nothing they did not already know."
+    },
+    {
+      "when": "git_branch",
+      "text": "\nBranch: {git_branch}"
+    },
+    {
+      "when": "previous_goal",
+      "text": "\n\nThe goal this session is already carrying. KEEP IT WORD FOR WORD unless this turn shows the work has moved to something it does not cover:\n{previous_goal}"
+    },
+    {
+      "when": "first_user_message",
+      "text": "\n\nHow this session opened, HOURS AGO and possibly abandoned since. Use it only to disambiguate names. Never describe it as current work, and never propose a next step from it:\n{first_user_message}"
+    },
+    {
+      "when": "earlier_this_turn",
+      "text": "\n\nEarlier this turn, before the final message, the agent said (oldest first):\n{earlier_this_turn}"
+    },
+    {
+      "when": "always",
+      "text": "\n\nThe agent's final message this turn:\n{last_assistant_message}"
+    },
+    {
+      "when": "corrective_note",
+      "text": "\n\n{corrective_note}"
+    }
+  ]
+}

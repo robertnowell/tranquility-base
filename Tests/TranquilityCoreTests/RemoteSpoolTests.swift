@@ -35,13 +35,52 @@ final class RemoteSpoolTests: XCTestCase {
         XCTAssertTrue(RemoteSpool.lines(for: event(.said(turn)), agent: agent()).isEmpty)
     }
 
-    func testAQuestionBecomesANotificationCarryingWhy() {
-        let request = PendingRequest(id: "q", session: agent().id, asked: "Which branch?")
+    /// A question is a TURN (a Stop line), because the answer goes through
+    /// this app: only a Stop is waiting, unread, announced, and a reply
+    /// target. As a Notification it was none of those (15 Sep, 5:20 PM). The
+    /// matcher still says why.
+    func testAQuestionIsATurnCarryingWhyAndTheChoices() {
+        let request = PendingRequest(id: "q", session: agent().id, asked: "Run cat hq.json?",
+                                     options: [.init(id: "allow_once", label: "Allow once", kind: .allowOnce),
+                                               .init(id: "reject_once", label: "Reject", kind: .rejectOnce)])
         let lines = RemoteSpool.lines(for: event(.asks(request)), agent: agent())
         XCTAssertEqual(lines.count, 1)
-        XCTAssertEqual(lines[0].hookEvent, .notification)
+        XCTAssertEqual(lines[0].hookEvent, .stop)
         XCTAssertEqual(lines[0].notificationMatcher, "agent_question")
-        XCTAssertEqual(lines[0].lastAssistantMessage, "Which branch?")
+        XCTAssertEqual(lines[0].lastAssistantMessage,
+                       "The agent is asking permission: Run cat hq.json?. Options: Allow once, Reject.")
+        let own = PendingRequest(id: "q2", session: agent().id, asked: "How deep?",
+                                 options: [.init(id: "Thorough", label: "Thorough"), .init(id: "Quick", label: "Quick")])
+        XCTAssertEqual(RemoteSpool.lines(for: event(.asks(own)), agent: agent())[0].lastAssistantMessage,
+                       "The agent is asking: How deep?. Options: Thorough, Quick.", "the agent's own question is not a permission")
+    }
+
+    /// A question that died with the process is written as a turn at adoption.
+    func testAnAdoptedAgentWhoseLastWordWasAQuestionSaysItExpired() {
+        let adopted = agent(state: .completed)
+        let asked = WaitingSession(sessionId: adopted.id, latestId: 9, createdAtMs: 1_000,
+                                   lastAssistantMessage: "The agent is asking permission: x",
+                                   notificationMatcher: "agent_question", hookEvent: .stop)
+        let lines = RemoteSpool.expiredQuestion(for: event(.appeared(adopted)), agent: adopted, latest: asked)
+        XCTAssertEqual(lines.count, 1)
+        XCTAssertEqual(lines[0].hookEvent, .stop)
+        XCTAssertEqual(lines[0].notificationMatcher, "agent_question_expired")
+        XCTAssertTrue(lines[0].lastAssistantMessage?.contains("interrupted") == true)
+        let finished = WaitingSession(sessionId: adopted.id, latestId: 9, createdAtMs: 1_000,
+                                      lastAssistantMessage: "Done.", hookEvent: .stop)
+        XCTAssertEqual(RemoteSpool.expiredQuestion(for: event(.appeared(adopted)), agent: adopted, latest: finished), [],
+                       "a finished turn is not an expired question")
+        XCTAssertEqual(RemoteSpool.expiredQuestion(for: event(.changed(adopted)), agent: adopted, latest: asked), [],
+                       "only adoption writes it; a live change is not a restart")
+    }
+
+    /// The decision the card shows: the ask verbatim, the choices as the proposal.
+    func testAQuestionsBriefIsTheDecisionNotASummary() {
+        let words = "The agent is asking permission: Read ~/Downloads/x.png. Options: Allow once, Always allow, Reject."
+        let brief = RemoteSpool.decision(from: words, projectLabel: "toy")
+        XCTAssertEqual(brief.topic, "Permission")
+        XCTAssertEqual(brief.recap, "The agent is asking permission: Read ~/Downloads/x.png.")
+        XCTAssertEqual(brief.proposal, "Allow once, Always allow, Reject. Which?")
     }
 
     /// **The one that is easy to miss.** The green lamp comes from an
@@ -56,6 +95,27 @@ final class RemoteSpoolTests: XCTestCase {
             XCTAssertEqual(lines.count, 1, "\(state.rawValue) wrote no turn-ended event")
             XCTAssertEqual(lines[0].hookEvent, .stop)
         }
+    }
+
+    /// **Only the transition is a turn.** A change while already finished (a
+    /// title arriving, a list re-read) wrote a bare stop line AFTER the words,
+    /// and the announcer reads a session's latest: Robert's first OpenCode
+    /// turn was spoken as "finished a turn" (15 Sep). The poller stamps what
+    /// it knew before; unknown fails open.
+    func testAChangeWhileAlreadyFinishedIsNotASecondTurn() {
+        var finished = agent(state: .completed)
+        finished.title = "Recent work recap"
+        var again = event(.changed(finished))
+        again.previously = .completed
+        XCTAssertEqual(RemoteSpool.lines(for: again, agent: finished), [])
+
+        var ending = event(.changed(finished))
+        ending.previously = .working
+        XCTAssertEqual(RemoteSpool.lines(for: ending, agent: finished).count, 1)
+
+        let unknown = event(.changed(finished))
+        XCTAssertEqual(RemoteSpool.lines(for: unknown, agent: finished).count, 1,
+                       "with no memory of before, the ending is written rather than lost")
     }
 
     func testAFailureCarriesItsReason() {

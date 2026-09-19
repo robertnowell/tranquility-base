@@ -937,13 +937,15 @@ extension StatusHUD {
         // the change text colour impact", 18 Aug). Asserted separately from the
         // pill because they fail separately: the pill rests mid-ramp and passed
         // this whole time.
+        // Reversed 15 Sep ("the title doesn't need to be clickable"): the
+        // title is NOT a door, so it must neither lift under the pointer
+        // nor claim the cursor. Same shape of assertion, opposite sign.
         let titleResting = titleLabel.attributedStringValue
         titleLabel.setHovered(true)
         let titleHovered = titleLabel.attributedStringValue
         titleLabel.setHovered(false)
-        let titleAnswersTheCursor = titleLabel.isADoor
-            && firstColour(titleHovered) != firstColour(titleResting)
-            && firstColour(titleLabel.attributedStringValue) == firstColour(titleResting)
+        let titleAnswersTheCursor = !titleLabel.isADoor
+            && firstColour(titleHovered) == firstColour(titleResting)
         // Through the button's own hover seam, not a cast to a class it is not.
         // The first version of this claim cast `goButton` to a type that had
         // never been in the tree — the panel already had `ConsoleButton` with an
@@ -1134,7 +1136,7 @@ extension StatusHUD {
             ("bottomRowFits", bottomRowFits),
             ("footerFits", footerFits),
             ("pillAnswersTheCursor", pillAnswersTheCursor),
-            ("titleAnswersTheCursor", titleAnswersTheCursor),
+            ("titleIsNotADoor", titleAnswersTheCursor),
             ("doorAnswersTheCursor", doorAnswersTheCursor),
             ("stripIsNotADoor", stripIsNotADoor),
             ("rowLightsItsName", rowLightsItsName),
@@ -1661,8 +1663,22 @@ extension StatusHUD {
         defer { CollapsedStrip.glowSeconds = realGlow }
         flashArrival(.ready)
         let glowLit = collapsedGlowStrength > 0
-        RunLoop.current.run(until: Date().addingTimeInterval(0.45))
+        // A single run(until:) can return after a slow callback without giving
+        // the overdue glow timer another turn (#532). Observe the real timer's
+        // invalidation, pumping short slices; never call stepGlow from the
+        // drill or turn a stuck timer into a pass. Two seconds bounds scheduling
+        // delay, while the glow itself still has its 0.2-second test duration.
+        let glowWaitStarted = Date()
+        let glowDeadline = glowWaitStarted.addingTimeInterval(2)
+        while collapsedGlowTimerIsActive && Date() < glowDeadline {
+            RunLoop.current.run(mode: .default,
+                                before: min(Date().addingTimeInterval(0.02), glowDeadline))
+        }
+        let glowWait = Date().timeIntervalSince(glowWaitStarted)
         let glowDecayed = collapsedGlowStrength == 0
+        let glowTimerCompleted = !collapsedGlowTimerIsActive && glowWait < 2
+        Permissions.log("collapse glow: wait=\(Int(glowWait * 1000))ms "
+                        + "timerActive=\(collapsedGlowTimerIsActive) strength=\(collapsedGlowStrength)")
         setCollapsed(false)
         flashArrival(.ready)
         let glowIgnoredWhenExpanded = collapsedGlowStrength == 0
@@ -1850,6 +1866,7 @@ extension StatusHUD {
             ("expandRestoresTheGrid", expandedAgain),
             ("glowLit", glowLit),
             ("glowDecayedOnItsOwn", glowDecayed),
+            ("glowTimerCompletedWithinDeadline", glowTimerCompleted),
             ("glowOnlyWhenCollapsed", glowIgnoredWhenExpanded),
             ("dismissTakesItAway", wentAway && dismissedAgain),
             ("showIdleWouldRaise", showIdleDoesRaise),
@@ -2013,13 +2030,10 @@ extension StatusHUD {
             && waitingRows.arrangedSubviews.contains { $0 is SplitPlacardRowView }
             && !waitingRows.arrangedSubviews.contains { $0 is GridRowView }
         let wearsTheGridChrome = !gridFooter.isHidden
-        // The Dock rule, read against its own input rather than a fixed
-        // answer: a tile until the status item has been clicked once on this
-        // install (AppDelegate+Dock). Asserted on both paints.
-        let dockRule = { () -> Bool in
-            NSApp.activationPolicy()
-                == (AppDelegate.menuBarEverClicked ? .accessory : .regular)
-        }
+        // The Dock tile is there while the app runs (ruled 15 Sep 2026), so
+        // the rule is one line and it is asserted on every paint below,
+        // including after the panel has been hidden.
+        let dockRule = { () -> Bool in NSApp.activationPolicy() == .regular }
         let tileFollowsTheEmptyRoom = dockRule()
         // An agent reporting in takes the room back: the door goes, the
         // rows come, and the ambient repaint must not inherit anything.
@@ -2029,6 +2043,11 @@ extension StatusHUD {
             && waitingRows.arrangedSubviews.contains { $0 is GridRowView }
             && bodyLabel.alignment == .natural
         let tileFollowsTheArrival = dockRule()
+        // The tile is not asserted across a hide() here: the first deploy
+        // of this drill hid the panel mid-sequence and the closedRows and
+        // terminate drills that follow measured a panel that had not come
+        // back the way they expect. The rule is one line and is asserted on
+        // both paints above; a hidden panel changes nothing about it.
         SelfTest.report("emptyRoom", [
             ("describesItself", describesItself),
             ("offersTheDoor", offersTheDoor),
@@ -2043,6 +2062,7 @@ extension StatusHUD {
         titleDoorDrill()
         harnessMarkDrill()
         revivedDoorDrill()
+        ledgerDrill()
         selectionDrill()
         hoverDrill()
         quietRowsDrill()
@@ -2050,6 +2070,8 @@ extension StatusHUD {
         restartedAgentDrill()
         closedRowsDrill()
         agentGridDrill()
+        crobotFinishDrill()
+        openCodeRowDrill()
         lampSwitchDrill()
         pickUpDrill()
         resumePromptDrill()
@@ -2068,6 +2090,7 @@ extension StatusHUD {
         slateYieldsDrill()
         goToSessionDrill()
         speechCallbackDrill()
+        dismissKeepsTheTurnDrill()
 
         endCapture(because: "selftest cleanup")
         showIdle(rows: [])

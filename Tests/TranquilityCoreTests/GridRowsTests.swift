@@ -168,6 +168,39 @@ final class GridRowsTests: XCTestCase {
         XCTAssertEqual(rows.map(\.id), [C, B, A])
     }
 
+    // MARK: - A row is dated by its conversation, never by its file (15 Sep)
+
+    /// The screenshot that ruled it: "Calendar approved state UX", last turn
+    /// 22:01 the night before, second on the panel at 14:09 because Remote
+    /// Control had appended a `bridge-session` line to its transcript five
+    /// minutes earlier. The file's clock and the conversation's clock
+    /// disagree here by sixteen hours, in the direction that lies, and the
+    /// row must take the conversation's.
+    func testARowIsDatedByItsLastTurnNotByTheFileMovingUnderneathIt() {
+        let now = Date()
+        let evidence: (String, SessionActivity.TurnBoundary?) -> SessionActivity.Evidence? = { path, _ in
+            switch path {
+            case "/stale.jsonl":
+                // Turn last night; file touched just now by bookkeeping.
+                return .init(activity: .idle, observedAt: now.addingTimeInterval(-16 * 3600),
+                             modifiedAt: now.addingTimeInterval(-5 * 60))
+            case "/fresh.jsonl":
+                // Turn an hour ago; file untouched since.
+                return .init(activity: .idle, observedAt: now.addingTimeInterval(-3600),
+                             modifiedAt: now.addingTimeInterval(-3600))
+            default: return nil
+            }
+        }
+        let rows = GridAssembler.rows(inputs(
+            waiting: [waiting(A, latestId: 20, path: "/stale.jsonl"),
+                      waiting(B, latestId: 10, path: "/fresh.jsonl")],
+            live: [A: live(A), B: live(B)], evidence: evidence)).rows
+        XCTAssertEqual(rows.map(\.id), [B, A],
+                       "the file moved under A; A's conversation did not, so A is older")
+        XCTAssertEqual(rows.first { $0.id == A }?.lastActivity,
+                       now.addingTimeInterval(-16 * 3600))
+    }
+
     /// A live session with no stored events has no recorded transcript path, so
     /// that band derives one, and it must still get a row rather than being
     /// skipped for having nothing to rank it by.
@@ -317,8 +350,17 @@ final class GridRowsTests: XCTestCase {
     func testHearingARowDoesNotMoveItBelowAnUnreadOne() {
         var agent = AgentSession.of("remote-1", provider: "crobot", state: .completed)
         agent.title = "the cloud one"
+        agent.updatedAt = Date(timeIntervalSinceNow: -600)
+        // The local row needs a REAL time since #454. `waiting(_:)` stamps
+        // `createdAtMs: 0`, so under recency ordering this fixture's local row
+        // sat in 1970 and the remote one led on merit — which would have been
+        // this test reporting a fixture's clock rather than its own claim.
+        // Its claim is that HEARING a row does not move it, and that holds at
+        // any timestamp; it just needs the two rows to be comparable.
+        var local = waiting(A, heardThrough: 9)
+        local.createdAtMs = Int64(Date().timeIntervalSince1970 * 1000)
         let verdict = GridAssembler.rows(inputs(
-            waiting: [waiting(A, heardThrough: 9)], live: [A: live(A)],
+            waiting: [local], live: [A: live(A)],
             remote: .init(agents: [agent], unread: [agent.id])))
         XCTAssertEqual(verdict.rows.map(\.read), [.opened, .unread],
                        "the local row is heard and the remote one is not")
@@ -334,5 +376,51 @@ final class GridRowsTests: XCTestCase {
             live: [A: live(A), B: live(B, harness: CodexAdapter().id)]))
         XCTAssertEqual(verdict.harnessById[A], ClaudeCodeAdapter().id)
         XCTAssertEqual(verdict.harnessById[B], CodexAdapter().id)
+    }
+}
+
+// MARK: - A provider owns its agents' rows (#459, 15 Sep 2026)
+
+extension GridRowsTests {
+
+    /// **Driving a remote agent must not make its row disappear.** Sending to
+    /// it wrote a local `waiting` record under its addressable id; band 1 used
+    /// to claim that id and draw a husk — no harness, a terminal door, an
+    /// unlit lamp — while band 5 skipped the real remote row as already placed.
+    /// Measured on Robert's panel: the crobot task drawn twice, the tap opening
+    /// a tmux pane that exited on arrival.
+    func testAProviderOwnsItsRowEvenWhenDrivingItWroteALocalRecord() {
+        let id = AgentSession.id("ui-task", provider: "crobot")
+        var agent = AgentSession.of("ui-task", provider: "crobot", state: .completed)
+        agent.title = "the real one"
+        agent.repository = "Coframe/crobot"
+        agent.url = URL(string: "https://crobot.example/task/ui-task")
+
+        // The husk the drive left behind: a waiting turn AND a known session,
+        // both under the agent's addressable id.
+        var husk = WaitingSession(sessionId: id, latestId: 1, createdAtMs: 0, hookEvent: .stop)
+        husk.heardThrough = nil
+
+        let rows = GridAssembler.rows(inputs(
+            waiting: [husk], known: [husk], live: [id: live(id)],
+            remote: .init(agents: [agent]))).rows
+
+        let forID = rows.filter { $0.id == id }
+        XCTAssertEqual(forID.count, 1, "the agent must have exactly one row, not a husk plus a real one")
+        let row = forID.first
+        XCTAssertEqual(row?.harness, "crobot", "the row is the provider's, so it names the provider")
+        XCTAssertEqual(row?.name, "the real one", "with the provider's own title, not a short id")
+        XCTAssertEqual(row?.door, .page(URL(string: "https://crobot.example/task/ui-task")!),
+                       "and its door is the page, never a terminal onto a pane we do not own")
+        XCTAssertNotEqual(row?.lamp, .unlit, "a finished cloud turn is green, not a dead husk")
+    }
+
+    /// The guard is narrow: a purely local session that a provider does NOT
+    /// own is untouched, so this cannot swallow ordinary rows.
+    func testALocalSessionAProviderDoesNotOwnIsUnaffected() {
+        let verdict = GridAssembler.rows(inputs(
+            waiting: [waiting(A)], live: [A: live(A)],
+            remote: .init(agents: [AgentSession.of("elsewhere", provider: "crobot")])))
+        XCTAssertTrue(verdict.rows.contains { $0.id == A }, "the local row is still drawn")
     }
 }

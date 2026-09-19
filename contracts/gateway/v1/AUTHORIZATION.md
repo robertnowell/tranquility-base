@@ -24,6 +24,10 @@ claim that the authorization exchange or managed onboarding has shipped.
 5. Payment setup comes when needed for further paid usage. It is not authentication.
    Recurring recharge consent remains explicit and separate from signing in.
 
+The wire format that carries this authority, and what the Gateway checks before
+honouring it, is [TOKEN.md](TOKEN.md). It was written 14 Sep and implements no
+new decision: the Principal it produces is already frozen in `Gateway.authorize`.
+
 ## Shared session; separate service authority
 
 - **Identity:** Hub's immutable internal user UUID is the trusted Gateway
@@ -61,7 +65,7 @@ claim that the authorization exchange or managed onboarding has shipped.
 | Hub sign-in succeeds; credit account still loading | Signed in; managed services are preparing. No second sign-in. |
 | Short-lived Gateway token expires; app session valid | Refresh in the background; preserve operation identity. |
 | Gateway/exchange unavailable | Signed in; managed service temporarily unavailable with retry. Free Hub remains available. |
-| Insufficient credit | Signed in; balance/payment action. Do not request authentication or silently use a personal API key. |
+| Insufficient credit | Signed in; balance/payment action. Under the 15 September ruling, an already-pasted personal key may take over, with the credit-standing warning explaining the fallback. Do not request authentication. |
 | Confirmed app credential invalid/revoked | Clear that session's authority; return to the same app Sign in action. |
 | Missing managed-app capability | Use the existing connection/authorization flow, not a Gateway login or silent scope escalation. |
 | Managed operation admitted before disconnect/expiry | Existing operation may finish; reconnect retrieves it without another debit. |
@@ -104,8 +108,10 @@ Inspected native `32ac004` (main baseline `8282490`) and HQ `d3f2ad2`:
   and does not create a second welcome grant.
 - Expiry refresh, concurrent refresh, sign-out during refresh, account switch,
   wrong audience/scope, legacy mirror-only credential and revoked device tests.
-- Exchange outage and empty balance keep the user signed in; neither silently
-  falls through to BYOK. A valid Hub session alone does not fake credit readiness.
+- Exchange outage and empty balance keep the user signed in. Outage uses the
+  free floor; empty balance may use an already-pasted key with an explicit
+  standing warning (15 September ruling). A valid Hub session alone does not
+  fake credit readiness.
 - Actual panel drill confirms a single sign-in action, background preparation,
   correct mode-specific prerequisites and no separate Gateway authentication UI.
 

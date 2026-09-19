@@ -35,6 +35,8 @@ final class SetupChecklistView: NSStackView {
     enum Mode { case onboarding, reference }
 
     private let mode: Mode
+    private let probes: Prerequisites.Probes?
+    private var creditObserver: UUID?
 
     /// Fired on every render with whether every REQUIRED row is satisfied.
     /// Onboarding enables its start button from this; Settings ignores it.
@@ -52,11 +54,17 @@ final class SetupChecklistView: NSStackView {
     private var prereqScanQueued = false
     private var prereqNote: [Prerequisites.Item: String] = [:]
 
-    init(frame: NSRect, mode: Mode = .onboarding) {
+    init(frame: NSRect, mode: Mode = .onboarding, probes: Prerequisites.Probes? = nil) {
         self.mode = mode
+        self.probes = probes
         super.init(frame: frame)
         setUpRows()
+        creditObserver = CreditStanding.observe { [weak self] _ in
+            Task { @MainActor in self?.scanPrerequisites() }
+        }
     }
+
+    deinit { if let creditObserver { CreditStanding.removeObserver(creditObserver) } }
 
     /// IS the stack rather than containing one.
     ///
@@ -74,7 +82,9 @@ final class SetupChecklistView: NSStackView {
         // has not landed yet on the frame this runs in.
         // `items()`, not a constant list: the hooks rows depend on which
         // harnesses this machine has, one row each.
-        for (index, item) in Prerequisites.live().enumerated() {
+        let items = probes.map { Prerequisites.items(harnesses: $0.harnesses(), providers: $0.providers()) }
+            ?? Prerequisites.live()
+        for (index, item) in items.enumerated() {
             addArrangedSubview(prerequisiteRow(item, step: index + 1))
         }
         // The SETUP tab gets a restart door and onboarding does not.
@@ -323,7 +333,11 @@ final class SetupChecklistView: NSStackView {
         case .anthropicKey, .elevenLabsKey, .assemblyAIKey, .openAIKey, .provider:
             promptForKey(item)
 
-        case .hub:
+        case .hub, .credits:
+            // One door for both rows. Credits ride the same sign-in: pairing
+            // again is also what enrols this Mac's key, which is what a Mac
+            // connected before credits existed needs. The note lands on
+            // whichever row was pressed.
             // The browser is where signing in happens; the app never asks for
             // a password or a code and never receives a token through a link.
             // This Mac invents a secret, shows the phrase derived from it on
@@ -332,7 +346,7 @@ final class SetupChecklistView: NSStackView {
             // one here. See HubConnect and Core's HubPairing.
             HubConnect.shared.onChange = { [weak self] in
                 guard let self else { return }
-                self.prereqNote[.hub] = HubConnect.shared.note
+                self.prereqNote[item] = HubConnect.shared.note
                 self.renderPrerequisites()
                 // Same repair as the keys (14 Sep): the note said "connected
                 // as garys-macbook-pro" under a lamp that still read the
@@ -340,7 +354,7 @@ final class SetupChecklistView: NSStackView {
                 self.scanPrerequisites()
             }
             HubConnect.shared.begin()
-            prereqNote[.hub] = HubConnect.shared.note
+            prereqNote[item] = HubConnect.shared.note
             renderPrerequisites()
         }
     }
@@ -401,6 +415,7 @@ final class SetupChecklistView: NSStackView {
         guard !prereqScanInFlight else { prereqScanQueued = true; return }
         prereqScanInFlight = true
         let demo = ProcessInfo.processInfo.environment["TB_PREREQ_DEMO"] != nil
+        let probes = probes
         Task.detached {
             // The state a NEW user sees is the one worth looking at, and it is
             // the one a developer machine can never show: tmux is installed and
@@ -408,7 +423,7 @@ final class SetupChecklistView: NSStackView {
             // rightly does not touch (they are the real ones). Rather than
             // delete somebody's credentials to photograph a screen, inject a
             // snapshot where nothing is present. Reads nothing, writes nothing.
-            let states = demo
+            let states = probes.map { Prerequisites.snapshot($0) } ?? (demo
                 ? Prerequisites.snapshot(Prerequisites.Probes(
                     tmuxPath: { nil },
                     // The LONGEST true detail this row can carry, not the
@@ -431,7 +446,7 @@ final class SetupChecklistView: NSStackView {
                             : nil
                     },
                     hasSecret: { _ in false }))
-                : Prerequisites.snapshot()
+                : Prerequisites.snapshot())
             await MainActor.run {
                 self.prereqScanInFlight = false
                 defer {

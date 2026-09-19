@@ -27,6 +27,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 . "$(dirname "$0")/lib/app-process.sh"
+. "$(dirname "$0")/lib/deployment.sh"
 DEST="/Applications/Tranquility Base.app"
 BUNDLE_ID="com.robertnowell.voice-dispatch"
 TEAM_ID="FKE587SZ6H"
@@ -63,6 +64,8 @@ if [ "$SRC_BUNDLE_ID" != "$BUNDLE_ID" ]; then
 fi
 
 # --- the release identity check, before anything is copied -----------------
+# Reject invalid candidates before acquiring deployment ownership. These are
+# read-only checks, also used by packaging acceptance during a live preview.
 codesign --verify --deep --strict "$SRC" 2>/dev/null \
   || { echo "✗ source signature does not verify" >&2; exit 1; }
 SRC_SIGNING=$(codesign -dv --verbose=4 "$SRC" 2>&1 || true)
@@ -73,6 +76,15 @@ case "$SRC_SIGNING" in
     echo "  Local Apple Development builds belong in Dev: scripts/install-dev.sh" >&2
     exit 1 ;;
 esac
+
+tb_deployment_lock
+trap tb_deployment_unlock EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 141' PIPE
+SOURCE_SHA=$(/usr/libexec/PlistBuddy -c "Print :TBSourceCommit" "$SRC/Contents/Info.plist")
+tb_deployment_authorize install "$SOURCE_SHA" prod
+
 SRC_ASSESS=$(/usr/sbin/spctl --assess --type execute -vv "$SRC" 2>&1 || true)
 case "$SRC_ASSESS" in
   *": accepted"*"source=Notarized Developer ID"*) ;;

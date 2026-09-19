@@ -113,6 +113,11 @@ public enum KeyCheck {
         -> URLRequest? {
         var request: URLRequest
         switch key {
+        // Nothing to ask. There is no provider to validate it against: it is
+        // this machine's own key, and the only thing that can tell you it
+        // works is a signature the Gateway accepts. A checked, working row
+        // here would be a claim nobody made.
+        case .deviceKey: return nil
         case .hubToken:
             // The hub lists this Mac's own devices: read-only, tenant-scoped,
             // and a 401 is exactly "this token is not yours any more".

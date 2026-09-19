@@ -169,11 +169,49 @@ public struct SessionRow: Equatable, Sendable {
     /// unchanged.
     public let door: Door
 
+    /// **When this agent last did something.** The sort key for lit rows.
+    ///
+    /// Added 14 Sep 2026 (#454), and it is the field whose absence caused two
+    /// sessions to rule opposite ways on ordering within hours: #428 ranked by
+    /// read-state, #439 reverted that under the title "Green orders by
+    /// recency" and then tied every lit row, because ordering by recency was
+    /// not something the row could do. A tie falls back to arrival order,
+    /// arrival order is BAND order, and band 5 is last — which is why a remote
+    /// agent could never win a slot however recently it had spoken.
+    ///
+    /// `nil` means the band had nothing to offer, and those rows keep their
+    /// arrival order at the end rather than being flung to 1970.
+    ///
+    /// **Dated by what the conversation last said, never by its file.** Ruled
+    /// 15 Sep 2026, the day after this field landed reading the transcript's
+    /// mtime. Claude Code's Remote Control bridge appends a `bridge-session`
+    /// line to every idle transcript when it reconnects (55 of them on one
+    /// session), and each one moves the file; so a green row whose last turn
+    /// was 22:01 the night before sat second on the panel at 14:09, above
+    /// agents that had spoken within the hour. `SessionActivity.Evidence`
+    /// already separates the two clocks and warns which one is dangerous;
+    /// `observedAt` is the turn's own timestamp and is the only local source
+    /// this field may have. `scripts/check-row-dates.sh` holds that.
+    public let lastActivity: Date?
+
     public enum Door: Equatable, Sendable {
         /// A tmux pane this Mac owns. Every local agent.
         case terminal
         /// A page in the provider's own interface. crobot has one per task.
         case page(URL)
+        /// A program on this Mac that opens the agent: OpenCode's own TUI on
+        /// the session. Run in a Terminal window in `directory`.
+        case shell(String, directory: String)
+        /// A tmux session on this app's own socket that the agent's screen
+        /// lives in, by name. Go to Agent raises the Terminal window already
+        /// attached to it, or attaches one, never a second copy. This is the
+        /// local rows' door with the pane named rather than looked up: an
+        /// OpenCode agent's TUI is attached to its served session from the
+        /// start, in a pane, because a TUI attached AFTER a permission was
+        /// asked never shows it (measured 17 Sep against 1.18.31), and a
+        /// second attach per tap left the first window behind (Robert, 17 Sep
+        /// 8:50 AM: "it attaches a new window and you don't see the prompt").
+        case pane(String)
         /// Neither, and that is honest rather than a gap: a local
         /// `opencode serve` has no web page and no terminal of ours. Go to
         /// Agent has nowhere to go, so it is not offered.
@@ -183,6 +221,15 @@ public struct SessionRow: Equatable, Sendable {
         public var isPage: Bool {
             if case .page = self { return true }
             return false
+        }
+
+        /// Opens somewhere, and it is not a pane this Mac owns: a page or a
+        /// program. The card offers Go to Agent for either.
+        public var isRemote: Bool {
+            switch self {
+            case .page, .shell, .pane: return true
+            case .terminal, .none: return false
+            }
         }
 
         /// The page, when there is one. The card asks for this to decide
@@ -196,13 +243,15 @@ public struct SessionRow: Equatable, Sendable {
     public init(id: String, name: String, aux: String, lamp: Lamp,
                revivable: Bool = false, read: ReadState = .none,
                switchedOff: Bool = false, detail: String? = nil,
-               harness: String? = nil, door: Door = .terminal) {
+               harness: String? = nil, door: Door = .terminal,
+               lastActivity: Date? = nil) {
         self.id = id
         self.name = name
         self.aux = aux
         self.lamp = lamp
         self.revivable = revivable
         self.read = read
+        self.lastActivity = lastActivity
         self.switchedOff = switchedOff
         self.detail = detail
         self.harness = harness
@@ -293,6 +342,10 @@ public struct SessionRow: Equatable, Sendable {
         /// Go to Agent for a row whose agent lives on a web page rather than
         /// in a pane. Same verb to the user, different door.
         case openPage(URL)
+        /// A remote agent whose interface is a program on this Mac.
+        case openShell(String, directory: String)
+        /// A remote agent whose screen lives in a named tmux pane of ours.
+        case attachPane(String)
         /// Proven gone, and its directory is still there: bring it back.
         case revive
         /// Unlit but unproven — the probe could not answer, or the
@@ -305,7 +358,42 @@ public struct SessionRow: Equatable, Sendable {
 
     public static func action(for row: SessionRow) -> RowAction {
         switch row.lamp {
-        case .fault, .working, .running: return goTo(row)
+        // ONLY AMBER GOES STRAIGHT TO THE AGENT (ruled 15 Sep 2026). Amber
+        // means needs you, and the terminal is where; nothing on a card can
+        // repair a usage limit or a permission prompt.
+        //
+        // A REMOTE row too, since 15 Sep 9:11 PM: its door is a terminal
+        // attached to the same served session, where the permission is on
+        // screen and Enter answers it (OpenCodeServer). For one afternoon the
+        // tap on an amber remote row announced a card with the decision
+        // instead, because the door of the day (a second OpenCode on the
+        // stored session) could not show the question. Robert: "Amber goes
+        // to agent. When you go to agent, it should work to answer the
+        // question." It does now, so amber is one verb again.
+        case .fault: return goTo(row)
+        // Blue and quiet open the card when they have one (ruled 15 Sep,
+        // reversing 24 Aug's "blue joined amber"). Robert, on the Past
+        // Agents list where blue had kept the card: *"I actually like that
+        // it opens the card rather than going straight to the agent. So only
+        // amber should go straight to the agent, and blue and green
+        // obviously should open the card."* Asked whether that was the list
+        // or everywhere: *"Everywhere."* The 24 Aug reason was that announce
+        // had nothing to say for a row with no unread turn; since #439 a
+        // heard turn is still read on request and the card carries GO TO
+        // AGENT, so the card is a superset of the door. The one case the
+        // door still wins is the one green already has: a row with nothing
+        // recorded to read, or a remote row with no local transcript.
+        // Blue and quiet mirror green (15 Sep): the card when there is a turn
+        // to read, the door only when there is not. The earlier `door.isRemote`
+        // clause sent every blue/quiet CROBOT row straight to its web page even
+        // when it had a recorded turn to recap — so a working crobot task with
+        // a prior summary skipped its own card. Robert: "blue and green
+        // obviously should open the card." A row with nothing recorded still
+        // takes its door, which is the only honest thing for a mid-turn agent
+        // that has not spoken yet.
+        case .working, .running:
+            if row.read == .none { return goTo(row) }
+            return .announce
         // **Green consults the door too, since 14 Sep.** Announce reads a
         // finished turn out of the LOCAL store, so it is the right verb only
         // for a row that has one. A remote agent has no local transcript and
@@ -318,7 +406,34 @@ public struct SessionRow: Equatable, Sendable {
         // three lamps above; making them green under the three-lamp ruling
         // stranded it. A row that carries a page has somewhere to go, and that
         // is true whatever colour it is.
-        case .ready: return row.door.isPage ? goTo(row) : .announce
+        // A green row ANNOUNCES only when there is something to announce.
+        // Announce reads a turn out of the local store, and a row with
+        // `read: .none` has no turn there — it is green because its agent
+        // finished (the three-lamp ruling, and right), not because it said
+        // anything. Robert, 15 Sep, on 29 such rows in Past Agents: "clicking
+        // on them does nothing. It's very weird that they're there." Every
+        // one was a probe session that had never spoken. So: the door if it
+        // has one, and never an announce that finds nothing.
+        //
+        // THE DOOR, not `.none`. #458 returned `.none` here, and `isLive`
+        // reads liveness off this verb, so a green row with nothing to say
+        // was reported dead: no Go to Agent, no End Session, and the panel's
+        // `terminate` drill went red on every launch from 14:02 on 15 Sep
+        // until this. A green row is an agent that finished a turn. It is
+        // alive by definition, and every other live lamp that cannot announce
+        // gets its door; this one does too. A remote row with no pane and no
+        // page still lands on `.none`, through `goTo`, for the reason stated
+        // there.
+        //
+        // And the announce comes FIRST for a remote row too (15 Sep, second
+        // witness): the turn is in the local store now, by the spool, so a
+        // green remote row with an unread turn has something to say, and
+        // Robert clicking the row after OpenCode answered got a Terminal
+        // instead of the answer. The door is for a row with nothing to say,
+        // and for Go to Agent on the card, whatever the row's colour.
+        case .ready:
+            if row.read == .none { return goTo(row) }
+            return .announce
         case .unlit: return row.revivable ? .revive : .none
         }
     }
@@ -332,6 +447,8 @@ public struct SessionRow: Equatable, Sendable {
         switch row.door {
         case .terminal: return .goToAgent
         case .page(let url): return .openPage(url)
+        case .shell(let command, let directory): return .openShell(command, directory: directory)
+        case .pane(let name): return .attachPane(name)
         // Offering a door that opens on nothing is worse than offering none:
         // it reads as broken rather than as absent.
         case .none: return .none
@@ -401,18 +518,29 @@ public struct SessionRow: Equatable, Sendable {
         // same verb through a different door, and an agent you can open is an
         // agent that exists. Listing it here rather than defaulting, because a
         // default is what let the menu and the left-click drift apart before.
-        case .announce, .goToAgent, .openPage: return true
+        case .announce, .goToAgent, .openPage, .openShell, .attachPane: return true
         case .revive, .none: return false
         }
     }
 
-    /// Four bands: sessions doing something, then sessions merely alive,
-    /// then sessions the user switched off by hand, then sessions that
-    /// have exited — which sink below all of them, because a row you
-    /// cannot speak to must never sit between two you can.
+    /// Five bands: sessions asking for you (green and amber), then sessions
+    /// working on their own (blue), then sessions merely alive, then sessions
+    /// the user switched off by hand, then sessions that have exited — which
+    /// sink below all of them, because a row you cannot speak to must never
+    /// sit between two you can.
     ///
-    /// Order WITHIN each band is untouched: the caller has already
-    /// established recency, and a stable partition keeps it.
+    /// Within the two lit bands, newest turn first (`lastActivity`), and a
+    /// stable partition keeps every other band in the order it arrived.
+    ///
+    /// **Green above blue** was ruled 15 Sep 2026, on a screenshot of five
+    /// blue rows over every green one: "the green lamps should always be
+    /// above the blue lamps." One band had held all three lit colours since
+    /// the partition was written, and it did not show until #458 sorted that
+    /// band by time — a working session writes its transcript every few
+    /// seconds, so it is always the newest thing on the panel and blue won
+    /// every repaint by construction. Amber sits with green, not above it:
+    /// both are the channels that ask (`Lamp.asksForYou`), and which of them
+    /// asked most recently is the order the user wants.
     public static func quietRowsLast(_ rows: [SessionRow]) -> [SessionRow] {
         func band(_ row: SessionRow) -> Int {
             // A row the user switched off is ALIVE — `switchedOffCopy()`
@@ -438,30 +566,57 @@ public struct SessionRow: Equatable, Sendable {
             // prefix of this array any more, so the only thing the old rank
             // still did was rank a live session below a dead one on the one
             // face built to show it.
-            if row.switchedOff { return 2 }
+            if row.switchedOff { return 3 }
             switch row.lamp {
-            // LIT, and ranked TOGETHER. Split in two for one afternoon (14
-            // Sep, #428: unread green above read green, so a remote agent
-            // enumerated last could win a slot) and reversed the same day on
-            // Robert's report: "right now Read is all at the top, but then if
-            // you read something it moves in the order and it's hard to find
-            // again ... just order green by recency, whether or not they're
-            // read or unread." Hearing a row must not move it. Read-state
-            // bolds a row and drives the announcer; it does not order the
-            // grid. The bands above have already put every lit row in recency
-            // order, and a stable partition keeps it.
-            //
-            // The remote-agent placement that motivated the split is a real
-            // gap and is still open: the fifth band arrives last by
-            // construction, so it needs a recency field of its own to join
-            // this order, not a read-state tiebreak that reshuffles the local
-            // rows every time one is heard.
-            case .ready, .working, .fault: return 0
-            case .running: return 1
-            case .unlit: return 3
+            // LIT, in two tiers: the lamps that ask for you, then the one
+            // that does not. Ranked by LAMP and never by read-state. Split
+            // by read-state for one afternoon (14 Sep, #428: unread green
+            // above read green, so a remote agent enumerated last could win
+            // a slot) and reversed the same day on Robert's report: "right
+            // now Read is all at the top, but then if you read something it
+            // moves in the order and it's hard to find again ... just order
+            // green by recency, whether or not they're read or unread."
+            // Hearing a row must not move it. Read-state bolds a row and
+            // drives the announcer; it does not order the grid.
+            case .ready, .fault: return 0
+            case .working: return 1
+            case .running: return 2
+            case .unlit: return 4
             }
         }
-        return (0...3).flatMap { rank in rows.filter { band($0) == rank } }
+        // **Each lit band orders by recency** (#454), newest turn first.
+        //
+        // The local bands already arrive in recency order, so for them this is
+        // a no-op that happens to be explicit. What it adds is the fifth band:
+        // a remote agent is enumerated last by construction, and without a
+        // timestamp of its own it could never join the order however recently
+        // it had spoken. Measured before this landed: 0 of 12 panel rows were
+        // remote, and the crobot row was not in the grid at all.
+        //
+        // Read-state is deliberately not consulted. Hearing a row must not
+        // move it — that is the rule this replaces a read-state tiebreak with,
+        // not a rule it overturns.
+        //
+        // A row whose band could not say when keeps its arrival position at
+        // the end of the lit band rather than sorting to 1970: "I don't know"
+        // is not "never".
+        // One pass. `sorted(by:)` is not stable in Swift, so the arrival index
+        // is the tiebreak — otherwise rows with equal timestamps, or none at
+        // all, would shuffle between repaints.
+        func byRecency(_ lit: [SessionRow]) -> [SessionRow] {
+            lit.enumerated().sorted { a, b in
+                switch (a.element.lastActivity, b.element.lastActivity) {
+                case let (x?, y?): return x == y ? a.offset < b.offset : x > y
+                case (_?, nil): return true
+                case (nil, _?): return false
+                case (nil, nil): return a.offset < b.offset
+                }
+            }.map(\.element)
+        }
+        return (0...4).flatMap { rank -> [SessionRow] in
+            let inBand = rows.filter { band($0) == rank }
+            return rank <= 1 ? byRecency(inBand) : inBand
+        }
     }
 
     /// A session id in the shape of a commit hash: the leading eight,

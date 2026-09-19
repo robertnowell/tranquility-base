@@ -33,17 +33,32 @@ public enum RemoteSpool {
             // back is already in the log by the route that sent it, and
             // storing it again would announce the user's own sentence to them.
             guard turn.role == .agent, !turn.text.isEmpty else { return [] }
-            return [SpoolLine(kind: .stop, event: event, text: turn.text, agent: agent)]
+            // Keyed by the TURN, not the moment: the same message seen twice
+            // (streamed as it ended, then adopted at the next launch from the
+            // server's store) is one turn, and the drainer's dedupe needs the
+            // same id both times.
+            var line = SpoolLine(kind: .stop, event: event, text: turn.text, agent: agent, key: turn.id)
+            line.earlierThisTurn = turn.earlier
+            return [line]
 
         case .asks(let request):
-            // A question is a Notification, which is what the local path uses
-            // for a session that has stopped and needs somebody. The matcher
-            // carries WHY, the same way a permission prompt does locally.
-            return [SpoolLine(kind: .notification, event: event,
-                              text: request.asked, agent: agent,
+            // A question is a TURN, not a Notification. Locally a permission
+            // prompt is a Notification because the answer is typed into the
+            // pane: the row goes amber with the reason and the tap opens the
+            // terminal. A remote agent's answer goes through this app, by
+            // voice, so the question has to be what the announcer reads, what
+            // the returned earcon fires on, what the row's unread state is,
+            // and what the reply target points at. `waitingSessions` counts a
+            // session only when its LATEST event is a Stop; as a Notification
+            // the question was in none of those (Robert, 15 Sep 5:20 PM: a
+            // green row nobody spoke, and the tap opened a Terminal). The
+            // matcher still says why, for the hover and the brief.
+            return [SpoolLine(kind: .stop, event: event,
+                              text: Self.question(request), agent: agent,
                               matcher: "agent_question")]
 
-        case .changed(let session) where session.state.isFinished:
+        case .changed(let session) where session.state.isFinished
+            && event.previously?.isFinished != true:
             // A TURN THAT ENDED HAS TO BE WRITTEN, and this is the part that is
             // easy to miss: the green lamp comes from an undismissed stop event
             // in the local database, not from the provider's verdict. Without a
@@ -65,6 +80,13 @@ public enum RemoteSpool {
             // A state change that is not an ending is not news either: the row
             // already shows it from the poller's snapshot, and a spool line
             // would speak every transition from working to idle out loud.
+            //
+            // Nor is a change while ALREADY finished: a title arriving, a list
+            // re-read. Only the transition into finished is a turn ending, and
+            // `AgentEvent.previously` is how that is told apart. Robert's
+            // first OpenCode turn (15 Sep) was announced as "finished a turn"
+            // because the title update that followed the words wrote a bare
+            // stop line after them, and the announcer reads the latest.
             return []
 
         case .appeared, .answered:
@@ -75,6 +97,56 @@ public enum RemoteSpool {
         }
     }
 
+    /// **A question that died with the process.** The ask lives in the
+    /// agent's child process; a relaunch kills the child, and OpenCode marks
+    /// the turn interrupted. The next launch adopts the session as finished
+    /// (green) with no request, while this app's last word on it is still the
+    /// question: the row reads as done, the tap opens the door, and the person
+    /// waits on an answer nobody will ask for again (Robert, 15 Sep 8:26 PM:
+    /// "same issue with this one, seems stuck, no questions, green lamp").
+    /// So when an agent appears with no request and the store's latest turn
+    /// for it is an unanswered question, the truth is written as a turn.
+    public static func expiredQuestion(for event: AgentEvent, agent: AgentSession?,
+                                       latest: WaitingSession?) -> [SpoolLine] {
+        guard case .appeared = event.kind,
+              let latest, latest.notificationMatcher == "agent_question"
+        else { return [] }
+        var stamped = event
+        stamped.at = max(event.at, Date(timeIntervalSince1970: Double(latest.createdAtMs) / 1000 + 1))
+        return [SpoolLine(kind: .stop, event: stamped,
+                          text: "The permission it was waiting on expired when the app restarted, "
+                              + "and that turn was interrupted. Say what to do next and it will continue.",
+                          agent: agent, matcher: "agent_question_expired")]
+    }
+
+    /// The question as a turn's words: what it asks and what the choices
+    /// are, so the brief has something to recap and the person hears the
+    /// options before answering.
+    static func question(_ request: PendingRequest) -> String {
+        let asked = request.asked.trimmingCharacters(in: .whitespacesAndNewlines)
+        let options = request.questions.first?.options.map(\.label).filter { !$0.isEmpty } ?? []
+        let choices = options.isEmpty ? "" : " Options: " + options.joined(separator: ", ") + "."
+        // A permission is one kind of question; the other kind is the
+        // agent's own ("How deep should this research run?"), which is not
+        // a permission and must not be read as one (16 Sep, 2:23 PM).
+        let verb = request.isPermission ? "asking permission" : "asking"
+        return "The agent is \(verb): \(asked).\(choices)"
+    }
+
+    /// The brief for a question, built from the words `question(_:)` wrote,
+    /// without a model: the ask is the recap, the choices are the proposal.
+    public static func decision(from words: String, projectLabel: String) -> SessionBrief {
+        var asked = words
+        var choices: String?
+        if let range = words.range(of: " Options: ") {
+            asked = String(words[..<range.lowerBound])
+            choices = String(words[range.upperBound...]).trimmingCharacters(in: CharacterSet(charactersIn: ". "))
+        }
+        let proposal = choices.map { "\($0). Which?" } ?? "Allow, or reject?"
+        return SessionBrief(topic: "Permission", happened: asked, question: proposal,
+                            recap: asked, proposal: proposal)
+    }
+
     /// One spool line, in the wire shape `SpoolDrainer` already decodes.
     public struct SpoolLine: Sendable, Equatable {
         public var id: String
@@ -83,16 +155,17 @@ public enum RemoteSpool {
         public var sessionId: String
         public var cwd: String?
         public var lastAssistantMessage: String?
+        public var earlierThisTurn: String?
         public var notificationMatcher: String?
 
         init(kind: HookEventKind, event: AgentEvent, text: String,
-             agent: AgentSession?, matcher: String? = nil) {
+             agent: AgentSession?, matcher: String? = nil, key: String? = nil) {
             // DETERMINISTIC, not a fresh UUID. The drainer dedupes on the
             // record id, so a poller that sees the same change twice (a retry,
             // a restart, an overlapping tick) must produce the same id or the
             // agent says everything twice. `AgentPoll`'s digest already makes
             // re-emission rare; this makes a duplicate harmless.
-            self.id = Self.stableID(event: event, kind: kind, text: text)
+            self.id = Self.stableID(event: event, kind: kind, text: text, key: key)
             self.createdAtMs = Int64(event.at.timeIntervalSince1970 * 1000)
             self.hookEvent = kind
             self.sessionId = event.session
@@ -103,14 +176,17 @@ public enum RemoteSpool {
             // repository, and "importer" is a better name than eight hex
             // characters. Nil for a provider with no repository, which
             // projectLabel already handles by falling back to the id.
-            self.cwd = agent?.repository
+            // A real directory when the agent has one on this Mac (an ACP
+            // child's cwd): the summary request and the branch lookup read it.
+            self.cwd = agent?.directory ?? agent?.repository
             self.lastAssistantMessage = text.isEmpty ? nil : text
             self.notificationMatcher = matcher
         }
 
-        static func stableID(event: AgentEvent, kind: HookEventKind, text: String) -> String {
+        static func stableID(event: AgentEvent, kind: HookEventKind, text: String,
+                             key: String? = nil) -> String {
             let seed = "\(event.provider)\u{0}\(event.session)\u{0}\(kind.rawValue)"
-                + "\u{0}\(Int64(event.at.timeIntervalSince1970 * 1000))\u{0}\(text)"
+                + "\u{0}\(key ?? String(Int64(event.at.timeIntervalSince1970 * 1000)))\u{0}\(text)"
             return SHA256.hash(data: Data(seed.utf8))
                 .map { String(format: "%02x", $0) }.joined()
         }
@@ -125,6 +201,7 @@ public enum RemoteSpool {
             ]
             if let cwd { line["cwd"] = cwd }
             if let lastAssistantMessage { line["lastAssistantMessage"] = lastAssistantMessage }
+            if let earlierThisTurn { line["earlierThisTurn"] = earlierThisTurn }
             if let notificationMatcher { line["notificationMatcher"] = notificationMatcher }
             // transcriptPath and tty are deliberately ABSENT rather than empty.
             // Both are local facts a remote agent does not have, both are

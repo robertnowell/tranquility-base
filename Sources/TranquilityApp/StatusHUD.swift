@@ -38,6 +38,16 @@ final class StatusHUD: NSObject {
     /// are the interface.
     var dontSendButton: ConsoleButton!
     var micSettingsButton: ConsoleButton!
+    /// The microphone's buttons (ruled 15 Sep, twice). A small mic, centred
+    /// in the slot the waveform takes while the microphone is open, above
+    /// the Controls word; and Send, in the bottom line's centre, in the place
+    /// Controls vacates while the microphone is open. So the two never share
+    /// a face, and each sits where the eye already is for that face: the
+    /// waveform's slot when there is no waveform, the Controls slot when
+    /// there is no Controls.
+    var recordButton: ConsoleButton!
+    var micRow: NSView!
+    var sendButton: ConsoleButton!
     var newSessionButton: ConsoleButton!
     var restartAudioButton: ConsoleButton!
     var openPageButton: ConsoleButton!
@@ -118,6 +128,7 @@ final class StatusHUD: NSObject {
     /// ones never reach it.
     var collapsedLampCount: Int { strip?.lamps.count ?? 0 }
     var collapsedGlowStrength: CGFloat { strip?.currentGlowStrength ?? 0 }
+    var collapsedGlowTimerIsActive: Bool { strip?.glowTimerIsActive ?? false }
     /// The ink the column actually painted in a lamp's middle — a state colour
     /// when the lamp is solid, transparent when it is a ring.
     func collapsedLampCentreInk(_ index: Int) -> NSColor? {
@@ -275,6 +286,15 @@ final class StatusHUD: NSObject {
     /// Wired by the app. Nil is a complete answer — a session never
     /// summarized has no hub and no report to open.
     var doorForSession: ((String) -> SecondDoor?)?
+    /// Where a REMOTE agent's Go to Agent goes, when the card holds a
+    /// session the grid is not currently drawing: the greeting card and the
+    /// reply card exist before and between grid repaints, and
+    /// `remoteDoorForCurrentTarget` used to read the door off
+    /// `face.sessionRows` alone, so a card bound to a fresh OpenCode agent
+    /// never offered Go to Agent (Robert, 15 Sep, three times). Wired by the
+    /// app from the poller's own snapshot, which is what the row would be
+    /// drawn from anyway.
+    var agentDoorForSession: ((String) -> SessionRow.Door?)?
     /// Which harness a session runs, so the card can wear its mark.
     ///
     /// A closure rather than a lookup, for the same reason `doorForSession` is
@@ -292,6 +312,54 @@ final class StatusHUD: NSObject {
     var onOpenRepository: (() -> Void)?
     /// Wired by the app onto the workspace's focus-or-open call.
     var onOpenReport: ((String) -> Void)?
+    /// The chords' doors. Each is wired by the app to the SAME handler the
+    /// key reaches, so a click and a chord cannot mean different things.
+    var onNextDoor: (() -> Void)?
+    var onSpeakDoor: (() -> Void)?
+    var onHearMoreDoor: (() -> Void)?
+    /// The tray row's Attach door: the app opens the picker and stages what
+    /// was picked through `onItemsStaged`, the same way a drop is staged.
+    var onAttach: (() -> Void)?
+    /// Send with the microphone closed: the typed line (may be empty) and
+    /// whatever the tray holds, to the card's session, now.
+    var onSendTyped: ((String) -> Void)?
+    /// The typed line, kept (ruled 17 Sep: "I don't like losing half-written
+    /// messages"). `onDraftChanged` is called with the session and the whole
+    /// line, debounced, and with an empty line when it is sent or emptied;
+    /// `draftFor` is asked when a card is selected, to put the words back.
+    var onDraftChanged: ((String, String) -> Void)?
+    var draftFor: ((String) -> String?)?
+    private var draftSave: DispatchWorkItem?
+
+    /// What the keystroke path calls: a save 300 ms after the last change.
+    /// The session is the card's reply target, read now rather than at the
+    /// deadline so a face change in between cannot move the draft.
+    func scheduleDraftSave() {
+        guard let target = replyTargetForDrop?() else { return }
+        let session = target.sessionId
+        draftSave?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            onDraftChanged?(session, trayRow.composedText)
+        }
+        draftSave = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
+    }
+
+    /// For the drill: the debounced save, now.
+    func flushDraftSaveForTesting() {
+        guard let work = draftSave else { return }
+        draftSave = nil
+        work.perform()
+    }
+
+    /// The line was emptied by a send or a flush: the draft goes with it,
+    /// now, not after a debounce a crash could beat.
+    func noteDraftCleared() {
+        draftSave?.cancel(); draftSave = nil
+        guard let target = replyTargetForDrop?() else { return }
+        onDraftChanged?(target.sessionId, "")
+    }
 
     // MARK: - Public surface
 
@@ -508,8 +576,27 @@ final class StatusHUD: NSObject {
     /// same note serves both. Centred on the panel rather than aligned to the
     /// word — the note is wider than the word is long, so a leading-aligned
     /// note hung off a centred word would run off the right edge.
+    /// The pending close of the note, if the pointer has left the word or
+    /// the note and not yet arrived on the other.
+    var controlsNoteClose: DispatchWorkItem?
+
+    /// Close the note in a beat, unless the pointer lands on it first. 250 ms
+    /// is the 8pt gap at any speed a hand crosses it; it is not long enough
+    /// to feel like the note is sticking.
+    func closeControlsNoteSoon() {
+        controlsNoteClose?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            controlsNoteClose = nil
+            setControlsNote(open: false)
+        }
+        controlsNoteClose = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: work)
+    }
+
     func setControlsNote(open: Bool, above host: NSView? = nil) {
         guard let controlsSticky else { return }
+        if open { controlsNoteClose?.cancel(); controlsNoteClose = nil }
         if open, let host, let background = controlsSticky.superview {
             NSLayoutConstraint.deactivate(stickyPlacement)
             stickyPlacement = [
@@ -533,6 +620,25 @@ final class StatusHUD: NSObject {
         forceTransition(to: stash.state, because: "arm reverted: \(reason)")
         face = stash.face
         render()
+    }
+
+    /// Whatever is on the typed line becomes a chip, now: the same chip a
+    /// pasted sentence makes, staged after any files already there, so it
+    /// rides the next send after the attachments and before the words
+    /// (ruled 15 Sep: "when the mic is used, the typed text should be sent
+    /// the same, right after the attachments, before the user message").
+    /// Called when the capture CLOSES, and only then (ruled 15 Sep: "only
+    /// on close"): the line stays yours to edit for as long as you are
+    /// talking, and leaves with the words. Nothing on the line is a no-op.
+    @discardableResult
+    func flushTypedLineIntoTray() -> Bool {
+        let text = trayRow.composedText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return false }
+        guard onItemsStaged?([.text(text)], .typed) == true else { return false }
+        trayRow.compose.stringValue = ""
+        noteDraftCleared()
+        Permissions.log("typed line: \(text.count) chars staged to ride the dictation")
+        return true
     }
 
     func showListening(level: @escaping () -> Float) {
@@ -1021,6 +1127,44 @@ final class StatusHUD: NSObject {
     // therefore redundant, and it was not free: it crashed in swift_getObjectType
     // on a bad executor pointer, killing the app on a button press. `nonisolated`
     // plus assumeIsolated keeps the isolation guarantee without the check.
+    @objc nonisolated func recordTapped() {
+        MainActor.assumeIsolated {
+            Track.record("door_opened", ["door": "record"])
+            onSpeakDoor?()
+        }
+    }
+
+    /// The one thing a keystroke on the typed line changes: Send stands in
+    /// for Controls while there is something to send. Cheap on purpose;
+    /// render() decides the same thing on a full repaint.
+    func refreshSendDoor() {
+        guard state.isCardOnStage || isCapturingAudio else { return }
+        let hasWords = !trayRow.composedText.trimmingCharacters(in: .whitespaces).isEmpty
+        let hasChips = !trayRow.fragments.isEmpty
+        let sending = isCapturingAudio || hasWords || hasChips
+        if sendButton.isHidden == sending { sendButton.isHidden = !sending }
+        let controls = state.isCardOnStage && !sending
+        if cardControls.isHidden == controls { cardControls.isHidden = !controls }
+    }
+
+    @objc nonisolated func sendTapped() {
+        MainActor.assumeIsolated {
+            Track.record("door_opened", ["door": "send"])
+            // With the microphone open, Send is the tap that ends the
+            // capture, and the words go the way a dictation goes. With it
+            // closed, Send is the typed line and the chips, now.
+            if isCapturingAudio {
+                onSpeakDoor?()
+            } else {
+                let text = trayRow.composedText
+                releasePaste(because: "sent", repaint: false)
+                trayRow.clearComposed()
+                noteDraftCleared()
+                onSendTyped?(text)
+            }
+        }
+    }
+
     @objc nonisolated func cancelPendingSendTapped() {
         // FALSE (ruling §D, "no outcome reopens the microphone on its own").
         // Don't send meant "don't send, and start listening again", so the one
@@ -1063,8 +1207,24 @@ final class StatusHUD: NSObject {
     private var breadcrumbIsADoor: Bool {
         switch state {
         case .speaking, .preparing: return true
-        default: return false
+        // The amber credits line lives in the grid's placard and is a door to
+        // the Settings row that says how to resolve it (ruled 15 Sep).
+        default: return state.name == "idle" && creditStanding != nil
         }
+    }
+
+    /// Where this Mac stands with credits, when that is worth a line: the
+    /// last managed summary fell back, or this Mac needs connecting again.
+    /// Persistent, unlike a notice: it stays until the standing changes,
+    /// because the condition it names has not gone away. Set by the app from
+    /// `CreditStanding.observe`; written nowhere else.
+    private(set) var creditStanding: String?
+
+    func setCreditStanding(_ line: String?) {
+        guard line != creditStanding else { return }
+        creditStanding = line
+        Permissions.log("credits: standing \(line ?? "clear")")
+        render()
     }
 
     @objc nonisolated func breadcrumbClicked() {
@@ -1076,7 +1236,10 @@ final class StatusHUD: NSObject {
             // change your mind, so it gets the same pill and the same verb.
             switch state {
             case .speaking, .preparing: onBreadcrumbHome?()
-            default: return
+            default:
+                guard state.name == "idle", creditStanding != nil else { return }
+                Track.record("door_opened", ["door": "credits"])
+                showSetupSettings()
             }
         }
     }
@@ -1221,17 +1384,21 @@ final class StatusHUD: NSObject {
     /// their own `onCommit`/browse-completion handlers) rather than round-
     /// tripping back through here.
     func showAgentFields(for harness: String) {
-        // **A provider has no launch command and no working directory**, and
-        // showing empty ones would invite the user to configure something
-        // nothing reads. The fields belong to a harness this Mac starts; an
-        // agent that lives behind an API or a pipe is configured by its
-        // credential and nothing else.
+        // **A provider has no launch command**, and showing an empty one
+        // would invite the user to configure something nothing reads: an
+        // agent behind a pipe is started by the catalog's own argv. It DOES
+        // have a working directory, the workspace a new agent starts in and
+        // the one `session/list` is filtered to, and the registry reads it
+        // from the same setting a terminal harness uses (#471). Before this
+        // the pane was empty for a provider default and two launch drills
+        // went red on every deploy after Robert chose OpenCode.
         let isHarness = KnownHarnesses.all.contains { $0.id == harness }
         launchRow.isHidden = !isHarness
-        directoryRow.isHidden = !isHarness
-        guard isHarness else { return }
-        launchRow.show(AgentDefaults.load(for: harness))
-        launchRow.setPlaceholder(AgentDefaults.fallback(for: harness))
+        directoryRow.isHidden = false
+        if isHarness {
+            launchRow.show(AgentDefaults.load(for: harness))
+            launchRow.setPlaceholder(AgentDefaults.fallback(for: harness))
+        }
         directoryRow.show(AgentDefaults.directoryAsTyped(for: harness))
         directoryRow.setPlaceholder(AgentDefaults.fallbackDirectory)
     }
@@ -2236,16 +2403,30 @@ final class StatusHUD: NSObject {
         micSettingsButton.isHidden = true
         newSessionButton.isHidden = true
         restartAudioButton.isHidden = true
+        // The mic sits in the waveform's slot on a card whose microphone is
+        // closed; the waveform takes the slot back while it is open. Send
+        // takes the Controls word's place whenever there is something to
+        // send (ruled 15 Sep): the microphone open, a chip in the tray, or
+        // words on the typed line. Baseline properties like every other
+        // widget; the tray branch below re-derives Send once it knows the
+        // chips.
+        micRow.isHidden = !state.isCardOnStage
+        sendButton.isHidden = !isCapturingAudio
         countdownBar.isHidden = true; meter.isHidden = true
         // The strip belongs to the capture arms alone. Both the label AND its
         // rule are baselined — a rule left behind is the residue class this
         // funnel exists to close, and it would draw a line across a card that
         // has nothing under it.
         stripLabel.isHidden = true; stripRule.isHidden = true
-        // The chips are baselined off like every other widget and re-derived
-        // below. Never left standing from a previous face: a chip belongs to
-        // one session, and a face that addresses nobody must not show one.
-        trayRow.isHidden = true
+        // The chips are re-derived below like every other widget, and never
+        // left standing from a previous face: a chip belongs to one session,
+        // and a face that addresses nobody must not show one. But NOT
+        // baselined to hidden first (15 Sep): hiding a view, even for the
+        // length of one render, ends the field editor's editing inside it,
+        // and render runs twenty times a second while the microphone is
+        // open. "You lose the focus on every keystroke" was this line. The
+        // decision is made once, below, and written only when it changes.
+        var trayShown = false
         // The footer belongs to the grid alone, and the sticky dies with it: a
         // note left open while the face changes underneath is exactly the
         // residue class render()'s baseline exists to make impossible.
@@ -2518,6 +2699,18 @@ final class StatusHUD: NSObject {
             }
         }
 
+        // The credits standing takes the grid's placard, in amber, for as
+        // long as it holds; a transient notice below still wins for its five
+        // seconds, because it is newer.
+        if notice == nil, state.name == "idle", let creditStanding {
+            stateLabel.isHidden = false
+            stateLabel.textColor = StateLegend.Lens.fault.color
+            stateLabel.attributedStringValue = Widgets.placardText(
+                "\(StateLegend.Glyph.needsYou) \(creditStanding) · Settings ›",
+                color: StateLegend.Lens.fault.color)
+            stateLabel.isADoor = true
+        }
+
         // A card's notice uses the strip beneath it; a grid notice uses the
         // otherwise empty placard. Neither changes the card's own identity.
         if let notice {
@@ -2549,11 +2742,20 @@ final class StatusHUD: NSObject {
             if let target = replyTargetForDrop?() {
                 let staged = stagedFragments?(target.sessionId) ?? []
                 trayRow.apply(staged)
-                trayRow.isHidden = staged.isEmpty
+                // The tray shows for its chips on any conversational face, as
+                // it always did, and for the type-or-attach row while the
+                // card is selected or the line has words (ruled 15 Sep,
+                // second pass). Never for nothing.
+                trayShown = !staged.isEmpty || trayRow.isComposeRowShown
+                // Something to send: Send stands in for Controls (ruled 15
+                // Sep), on a card as well as during a capture.
+                let hasWords = !trayRow.composedText.trimmingCharacters(in: .whitespaces).isEmpty
+                if state.isCardOnStage, !staged.isEmpty || hasWords { sendButton.isHidden = false }
             } else {
                 trayRow.apply([])
             }
         }
+        if trayRow.isHidden != !trayShown { trayRow.isHidden = !trayShown }
 
         // Controls belongs to every face where a gesture is the next thing you
         // might do, not to the grid alone (ruled 18 Aug). That is the grid — in
@@ -2563,7 +2765,7 @@ final class StatusHUD: NSObject {
         // mid-transaction, and a note explaining how to start the thing you are
         // already doing is furniture. Written as one rule off the state rather
         // than unhidden by each arm, so a face added later inherits the answer.
-        cardControls.isHidden = !state.isCardOnStage
+        cardControls.isHidden = !state.isCardOnStage || !sendButton.isHidden
 
         // The action row exists exactly when a quiet action is visible. (The
         // slow-transcription tick unhides its own actions later and re-runs
@@ -2686,7 +2888,10 @@ final class StatusHUD: NSObject {
         // is not a session — it is cleared going idle and again by showVoices,
         // so "Voices" and the empty room's "Tranquility Base" cannot inherit the
         // last session's tab. `titleDoorDrill` holds that alignment.
-        titleLabel.isADoor = currentTarget?.pid != nil
+        // Not a door any more (ruled 15 Sep: "the title doesn't need to be
+        // clickable"). GO TO AGENT is the way to the session, and it is
+        // getting the cursor it never actually had; see PointerCursor.
+        titleLabel.isADoor = false
     }
 
     /// The listening pill: the live dot in channel green (mic open = go), the
@@ -3031,6 +3236,10 @@ final class StatusHUD: NSObject {
     var onOpenPastAgents: (() -> Void)?
     /// Wired by the app: focus a LIVE session's terminal tab.
     var onGoToSession: ((String) -> Void)?
+    /// Go to Agent through a program on this Mac (`SessionRow.Door.shell`).
+    var onOpenShell: ((String, String) -> Void)?
+    /// Go to Agent for a row whose screen lives in a named pane of ours.
+    var onAttachPane: ((String) -> Void)?
     /// Wired by the app: create an ordinary agent under the other harness,
     /// carrying this live row's context into its first explicit user message.
     var onContinueWork: ((_ id: String, _ name: String) -> Void)?
@@ -3075,18 +3284,7 @@ final class StatusHUD: NSObject {
         MainActor.assumeIsolated { onOpenPastAgents?() }
     }
 
-    /// Enter the list face. The rows are handed in whole and applied once —
-    /// see `PastAgentsList`: this face does not refresh while it is read.
-    /// Widen the open list's haystacks with what the sessions said, once the
-    /// background read has finished. Refused unless the list is still the face
-    /// on stage: a harvest that lands after the reader has moved on must not
-    /// reach into a face nobody is looking at.
-    func widenPastAgents(_ extra: [String: [UInt8]]) {
-        guard case .pastAgents = state else { return }
-        pastList?.widen(extra)
-        hintLabel.stringValue = pastList?.summary ?? ""
-    }
-
+    /// Enter the list face; preparation is guarded by the list opening.
     func showPastAgents(items: [PastAgentsList.Item]) {
         guard transition(to: .pastAgents, because: "past agents opened") else { return }
         currentTarget = nil
@@ -3354,6 +3552,7 @@ final class StatusHUD: NSObject {
     private var preparingPaint: DispatchWorkItem?
 
     func goHomeFromPastAgents() {
+        pastList?.cancelSearch()
         releaseKeyboard()
         showIdle(rows: [])
     }
@@ -3406,7 +3605,20 @@ final class StatusHUD: NSObject {
         panel.makeKeyAndOrderFront(nil)
         Permissions.log("paste: armed for \(target.sessionId.prefix(8)) via \(door)")
         Track.record("paste_armed", ["via": .token(door)])
+        // The type-or-attach row appears and takes the keys (ruled 15 Sep):
+        // selecting the card is what shows it. The words you left on it
+        // come back first (17 Sep): a draft outlives the face, the process
+        // and the machine.
+        if trayRow.composedText.isEmpty, let kept = draftFor?(target.sessionId), !kept.isEmpty {
+            trayRow.compose.stringValue = kept
+            Permissions.log("draft: restored \(kept.count) chars for \(target.sessionId.prefix(8))")
+        }
+        trayRow.setComposing(true)
         render()
+        let took = panel.makeFirstResponder(trayRow.compose)
+        trayRow.hideCaret()
+        Permissions.log("paste: typed line \(took ? "took" : "REFUSED") the keys; editing="
+            + "\(trayRow.compose.currentEditor() != nil) hidden=\(trayRow.compose.isHiddenOrHasHiddenAncestor)")
     }
 
     /// Give the keyboard back. `repaint` is false from inside a transition,
@@ -3415,6 +3627,9 @@ final class StatusHUD: NSObject {
         guard let panel, panel.pasteArmed else { return }
         Permissions.log("paste: released (\(reason))")
         releaseKeyboard()
+        // The line stays if it has words (they are not lost by looking
+        // away) and goes if it is empty.
+        trayRow.setComposing(false)
         if repaint { render() }
     }
 
@@ -3439,6 +3654,8 @@ final class StatusHUD: NSObject {
             render(); return
         }
         pasteNote = nil
+        // One rule (re-ruled 15 Sep, second pass): a paste is an attachment,
+        // words included. The typed line is for typing only.
         _ = onItemsStaged?(reading.items, .paste)
         Permissions.log("paste: \(reading.items.count) item(s) for \(target.sessionId.prefix(8))")
         render()
@@ -3494,9 +3711,14 @@ final class StatusHUD: NSObject {
     /// reason `currentDoor` gives just above it: a second copy of a fact the
     /// row already carries is a second thing to keep in step, and this one
     /// changes on every poll.
-    var remoteDoorForCurrentTarget: URL? {
+    /// The current target's door when it is not a pane of ours: a page or a
+    /// program. Nil for a terminal (the pid is the door) and for none.
+    var remoteDoorForCurrentTarget: SessionRow.Door? {
         guard let target = currentTarget else { return nil }
-        return face.sessionRows.first { $0.id == target.sessionId }?.door.url
+        let door = face.sessionRows.first(where: { $0.id == target.sessionId })?.door
+            ?? agentDoorForSession?(target.sessionId)
+        guard let door, door.isRemote else { return nil }
+        return door
     }
 
     @objc nonisolated func goToSession() {
@@ -3505,8 +3727,13 @@ final class StatusHUD: NSObject {
             // The remote door first: a session with no pid of ours is not
             // "no longer running", it is running somewhere this Mac cannot
             // focus, and saying otherwise is the lie this branch used to tell.
-            if currentTarget?.pid == nil, let page = remoteDoorForCurrentTarget {
-                NSWorkspace.shared.open(page)
+            if currentTarget?.pid == nil, let door = remoteDoorForCurrentTarget {
+                switch door {
+                case .page(let url): NSWorkspace.shared.open(url)
+                case .shell(let command, let directory): onOpenShell?(command, directory)
+                case .pane(let name): onAttachPane?(name)
+                case .terminal, .none: break
+                }
                 return
             }
             guard let target = currentTarget else {
@@ -3524,20 +3751,96 @@ final class StatusHUD: NSObject {
     /// can put it back rather than leaving a stale progress line on screen.
     private var goToSessionPriorBody: String?
 
+    /// What a GO TO AGENT said when it ended: nothing (it opened the tab) or
+    /// the sentence it put on a card.
+    enum GoToSessionAnswer: Equatable {
+        case silent
+        case said(String)
+    }
+
+    /// When the in-flight guard last came down, for the drill that asserts it
+    /// comes down BEFORE the discovery walk rather than after it (#359).
+    private(set) var goToSessionGuardReleasedAt: Date?
+
+    /// Whoever is waiting for the next GO TO AGENT to answer, by ticket, so a
+    /// wait that gives up can withdraw its own ticket and nobody else's.
+    private var goToSessionAnswerWaiters: [UUID: CheckedContinuation<GoToSessionAnswer?, Never>] = [:]
+
+    /// The guard comes down without the jump being over.
+    ///
+    /// Split from `finishGoToSession` on 17 Sep. The not-live branch drops the
+    /// guard before its discovery walk (#359, so the button is pressable again
+    /// while the walk runs) and answers afterwards; while both went through
+    /// `finishGoToSession`, "the guard dropped" and "the jump answered" were
+    /// the same call, and nothing could wait for the second without also
+    /// waking on the first. The drill guessed with timers instead, and the
+    /// guess expired when the walk grew from 5 s to 14 s.
+    func releaseGoToSessionGuard() {
+        guard goToSessionInFlight else { return }
+        goToSessionInFlight = false
+        goToSessionGuardReleasedAt = Date()
+        bodyLabel.stringValue = goToSessionPriorBody ?? bodyLabel.stringValue
+        goToSessionPriorBody = nil
+    }
+
     /// The end of a GO TO AGENT, from wherever it started.
     ///
     /// The HUD decides how to say it, because the HUD is what knows whether a
     /// card is mid-flight: from the card, restore or replace its body and drop
     /// the guard; from a grid row, there is no card to restore, so a message
     /// gets its own result card and silence stays silent.
-    func finishGoToSession(_ message: String?) {
+    ///
+    /// `about` is the session the jump was FOR, and it is not optional. The
+    /// answer can arrive 14 s after the press (the discovery walk, measured
+    /// 17 Sep on 243 archived sessions), by which time the panel has moved on
+    /// and `showResult`'s fallback names whatever it addressed last. That is
+    /// how a refusal about `goto-drill` painted under the title "adopted", a
+    /// fixture from a different drill, on ten of ten launches.
+    func finishGoToSession(_ message: String?, about sessionId: String) {
+        defer {
+            let waiters = goToSessionAnswerWaiters.values
+            goToSessionAnswerWaiters = [:]
+            let answer: GoToSessionAnswer = message.map { .said($0) } ?? .silent
+            waiters.forEach { $0.resume(returning: answer) }
+        }
         if goToSessionInFlight {
             goToSessionInFlight = false
+            goToSessionGuardReleasedAt = Date()
             bodyLabel.stringValue = message ?? goToSessionPriorBody ?? bodyLabel.stringValue
             goToSessionPriorBody = nil
             return
         }
-        if let message { showResult(message) }
+        guard let message else { return }
+        // The name the panel already has for it, wherever it has one; the
+        // short id only when it has none, which is a card that is at least
+        // honest about whose it is.
+        let onStage = currentTarget.flatMap { $0.sessionId == sessionId ? $0 : nil }
+        let label = onStage?.label
+            ?? face.sessionRows.first(where: { $0.id == sessionId })?.name
+            ?? lastAddressed.flatMap { $0.sessionId == sessionId ? $0.label : nil }
+            ?? String(sessionId.prefix(8)).uppercased()
+        showResult(message, about: (sessionId: sessionId, pid: onStage?.pid, label: label))
+    }
+
+    /// Wait for the next GO TO AGENT to answer, however long its walk takes,
+    /// or `nil` once `seconds` have passed without one.
+    ///
+    /// For the drill, which used to sweep at 3 s and again at 9 s and call
+    /// that a round trip; the walk is a function of the archive's size and
+    /// has already outgrown two guesses. The ceiling is here rather than in
+    /// a cancelled task because a continuation that is never resumed is a
+    /// leak, and a cancelled `Task` does nothing to a continuation.
+    func awaitGoToSessionAnswer(within seconds: TimeInterval) async -> GoToSessionAnswer? {
+        let ticket = UUID()
+        return await withCheckedContinuation { continuation in
+            goToSessionAnswerWaiters[ticket] = continuation
+            DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { [weak self] in
+                guard let self,
+                      let gaveUp = self.goToSessionAnswerWaiters.removeValue(forKey: ticket)
+                else { return }
+                gaveUp.resume(returning: nil)
+            }
+        }
     }
 
     /// Advance the highlight to the character range currently being spoken.
@@ -3732,7 +4035,12 @@ final class StatusHUD: NSObject {
     }
 
     /// Set by the app so Dismiss can silence the voice, not just hide the panel.
-    var onDismiss: (() -> Void)?
+    /// The argument is `PanelState.dismissKeepsTheTurn` read from the face the
+    /// dismiss landed on, BEFORE `endCapture` moves it: by the time the
+    /// closure runs the state is already idle, and idle would say the turn is
+    /// done with. Ruled 14 Sep: a dismiss that ends a reply leaves the turn
+    /// green.
+    var onDismiss: ((_ turnStaysOwed: Bool) -> Void)?
     var onOpenSettings: (() -> Void)?
     var onLeaveSettings: (() -> Void)?
 
@@ -3795,6 +4103,8 @@ final class StatusHUD: NSObject {
             // has no pane to focus, and its provider already said where it
             // lives; opening that is what Go to Agent MEANS for it.
             case .openPage(let url): NSWorkspace.shared.open(url)
+            case .openShell(let command, let directory): onOpenShell?(command, directory)
+            case .attachPane(let name): onAttachPane?(name)
             case .revive: onRevive?(id, row.name)
             case .none: refuseRowTap(id)
             }
@@ -3931,8 +4241,9 @@ final class StatusHUD: NSObject {
         MainActor.assumeIsolated {
             // Through the capture teardown, not around it: raw timer invalidation
             // here once dropped a mid-countdown send with no record of the cancel.
+            let turnStaysOwed = state.dismissKeepsTheTurn
             endCapture(because: "dismissed")
-            onDismiss?()
+            onDismiss?(turnStaysOwed)
             hide()
         }
     }

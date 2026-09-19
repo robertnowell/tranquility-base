@@ -542,6 +542,34 @@ public final class QueueStore: Sendable {
                 );
                 """)
         }
+        m.registerMigration("v21_earlier_this_turn") { db in
+            // What the agent said before its final message, when the source
+            // knew it at ingest (a polled provider). File-based harnesses
+            // leave it null and the transcript is read at announce time.
+            try db.execute(sql: "ALTER TABLE events ADD COLUMN earlierThisTurn TEXT")
+            try db.execute(sql: "DROP VIEW latest_per_session")
+            try db.execute(sql: """
+                CREATE VIEW latest_per_session AS
+                SELECT sessionId, max(rowid) AS latestId, hookEvent, createdAtMs,
+                       cwd, tty, promptId, transcriptPath, lastAssistantMessage,
+                       notificationMatcher, summaryText, earlierThisTurn
+                FROM events GROUP BY sessionId
+                """)
+        }
+        m.registerMigration("v22_typed_drafts") { db in
+            // Half-written typed messages (ruled 17 Sep 2026: "I don't like
+            // losing half-written messages"). One row per session, written
+            // as you type, gone when sent. Same file, same durability as the
+            // utterances: a crash keeps everything but the last few hundred
+            // milliseconds.
+            try db.execute(sql: """
+                CREATE TABLE typed_drafts (
+                    sessionId TEXT PRIMARY KEY NOT NULL,
+                    text TEXT NOT NULL,
+                    updatedAtMs INTEGER NOT NULL
+                )
+                """)
+        }
         return m
     }
 
@@ -730,6 +758,62 @@ public final class QueueStore: Sendable {
         try dbQueue.read { db in try Utterance.fetchOne(db, key: id) }
     }
 
+    // MARK: - Typed drafts (17 Sep 2026)
+
+    /// Keep what is on the typed line for a session. Empty text is the
+    /// absence of a draft and deletes the row, so "cleared" and "never
+    /// typed" are one state.
+    public func saveDraft(_ text: String, session: String) throws {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        try dbQueue.write { db in
+            if trimmed.isEmpty {
+                try db.execute(sql: "DELETE FROM typed_drafts WHERE sessionId = ?", arguments: [session])
+            } else {
+                try db.execute(
+                    sql: """
+                        INSERT INTO typed_drafts (sessionId, text, updatedAtMs) VALUES (?, ?, ?)
+                        ON CONFLICT(sessionId) DO UPDATE SET text = excluded.text, updatedAtMs = excluded.updatedAtMs
+                        """,
+                    arguments: [session, text, Int64(Date().timeIntervalSince1970 * 1000)])
+            }
+        }
+    }
+
+    /// The draft for a session, or nil.
+    public func draft(session: String) throws -> String? {
+        try dbQueue.read { db in
+            try String.fetchOne(db, sql: "SELECT text FROM typed_drafts WHERE sessionId = ?", arguments: [session])
+        }
+    }
+
+    public func clearDraft(session: String) throws {
+        try dbQueue.write { db in
+            try db.execute(sql: "DELETE FROM typed_drafts WHERE sessionId = ?", arguments: [session])
+        }
+    }
+
+    /// Every draft, newest first: what Recents will list one day, and what
+    /// a test reads back after a reopen.
+    public func drafts() throws -> [(session: String, text: String, updatedAtMs: Int64)] {
+        try dbQueue.read { db in
+            try Row.fetchAll(db, sql: "SELECT sessionId, text, updatedAtMs FROM typed_drafts ORDER BY updatedAtMs DESC")
+                .map { ($0["sessionId"], $0["text"], $0["updatedAtMs"]) }
+        }
+    }
+
+    /// The first thing the user said to a session through this app, or nil.
+    /// A remote agent has no transcript on this Mac to read an opening from;
+    /// the utterance the app dispatched is the same fact from the other side.
+    public func firstUtteranceText(to sessionId: String) throws -> String? {
+        try dbQueue.read { db in
+            try String.fetchOne(db, sql: """
+                SELECT transcriptText FROM utterances
+                WHERE targetSessionId = ? AND transcriptText IS NOT NULL AND transcriptText != ''
+                ORDER BY createdAtMs ASC LIMIT 1
+                """, arguments: [sessionId])
+        }
+    }
+
     public func utterances(status: UtteranceStatus? = nil, limit: Int = 50) throws -> [Utterance] {
         try dbQueue.read { db in
             var request = Utterance.order(Column("createdAtMs").desc).limit(limit)
@@ -817,7 +901,7 @@ public final class QueueStore: Sendable {
             try WaitingSession.fetchAll(db, sql: """
                 SELECT l.sessionId, l.latestId, l.createdAtMs, l.cwd, l.tty,
                        l.promptId, l.transcriptPath, l.lastAssistantMessage,
-                       l.notificationMatcher, l.summaryText, l.hookEvent,
+                       l.notificationMatcher, l.summaryText, l.hookEvent, l.earlierThisTurn,
                        cs.callsign, b.topic AS briefTopic,
                        c.heardThrough AS heardThrough
                 FROM latest_per_session l
@@ -868,7 +952,7 @@ public final class QueueStore: Sendable {
             try WaitingSession.fetchOne(db, sql: """
                 SELECT l.sessionId, l.latestId, l.createdAtMs, l.cwd, l.tty,
                        l.promptId, l.transcriptPath, l.lastAssistantMessage,
-                       l.notificationMatcher, l.summaryText, l.hookEvent,
+                       l.notificationMatcher, l.summaryText, l.hookEvent, l.earlierThisTurn,
                        cs.callsign
                 FROM session_cursor c
                 JOIN latest_per_session l ON l.sessionId = c.sessionId
@@ -892,7 +976,7 @@ public final class QueueStore: Sendable {
             try WaitingSession.fetchAll(db, sql: """
                 SELECT l.sessionId, l.latestId, l.createdAtMs, l.cwd, l.tty,
                        l.promptId, l.transcriptPath, l.lastAssistantMessage,
-                       l.notificationMatcher, l.summaryText, l.hookEvent,
+                       l.notificationMatcher, l.summaryText, l.hookEvent, l.earlierThisTurn,
                        cs.callsign, b.topic AS briefTopic
                 FROM latest_per_session l
                 LEFT JOIN session_callsign cs ON cs.sessionId = l.sessionId
@@ -949,7 +1033,7 @@ public final class QueueStore: Sendable {
             try WaitingSession.fetchOne(db, sql: """
                 SELECT e.sessionId, max(e.rowid) AS latestId, e.createdAtMs, e.cwd,
                        e.tty, e.promptId, e.transcriptPath, e.lastAssistantMessage,
-                       e.notificationMatcher, e.summaryText, e.hookEvent,
+                       e.notificationMatcher, e.summaryText, e.hookEvent, e.earlierThisTurn,
                        cs.callsign
                 FROM events e
                 LEFT JOIN session_callsign cs ON cs.sessionId = e.sessionId
@@ -1365,7 +1449,18 @@ public final class QueueStore: Sendable {
         public var adoptedAudio: [String] = []
     }
 
-    public func reconcileOnBoot(audioDirectory: URL = QueueStore.audioDirectory) throws -> ReconciliationReport {
+    /// `soleOwner` says the caller holds the app's ownership lock, so no other
+    /// process can be writing a `.wav.live` right now and a file modified a
+    /// moment ago is a capture the dead process was mid-word on — the one
+    /// case this sweep exists for. Without it (tbase's reconcile, run beside
+    /// a live app) the age guard stays.
+    ///
+    /// Measured 14 Sep 2026 21:53: a deploy killed the app at key-up, the
+    /// replacement booted four seconds later, and the age guard skipped the
+    /// 2m04s file as "may still be under a writer". It sat invisible until
+    /// the NEXT deploy adopted it three and a half minutes on.
+    public func reconcileOnBoot(audioDirectory: URL = QueueStore.audioDirectory,
+                                soleOwner: Bool = false) throws -> ReconciliationReport {
         var report = ReconciliationReport()
 
         try dbQueue.write { db in
@@ -1395,6 +1490,10 @@ public final class QueueStore: Sendable {
                         // recoverable — promote it and let it transcribe by the
                         // ordinary path. Discarding here would be the durability
                         // feature undone by the cleanup feature.
+                        if let partial = LiveAudioCapture.takePartialTranscript(beside: url) {
+                            u.transcriptText = partial
+                            u.transcriptProvider = "streamed-partial"
+                        }
                         if let promoted = try? LiveAudioCapture.adopt(
                             LiveAudioCapture.Interrupted(
                                 utteranceId: u.id, url: url,
@@ -1432,7 +1531,7 @@ public final class QueueStore: Sendable {
             }
         }
 
-        report.adoptedAudio = try adoptKeptLiveCaptures(in: audioDirectory)
+        report.adoptedAudio = try adoptKeptLiveCaptures(in: audioDirectory, minimumAge: soleOwner ? 0 : 5)
         report.orphanedAudio = try orphanedAudioFiles(in: audioDirectory)
         return report
     }
@@ -1458,7 +1557,8 @@ public final class QueueStore: Sendable {
     /// the app is single-instance, but the guard costs nothing and a capture
     /// in progress appends every ~64ms — so those wait for the next boot.
     @discardableResult
-    func adoptKeptLiveCaptures(in directory: URL, now: Date = Date()) throws -> [String] {
+    func adoptKeptLiveCaptures(in directory: URL, now: Date = Date(),
+                               minimumAge: TimeInterval = 5) throws -> [String] {
         let known = Set(try dbQueue.read { db in
             try String.fetchAll(db, sql: "SELECT id FROM utterances")
         })
@@ -1466,7 +1566,7 @@ public final class QueueStore: Sendable {
         var adopted: [String] = []
         for interrupted in LiveAudioCapture.interrupted(in: directory) {
             guard !known.contains(interrupted.utteranceId) else { continue }
-            guard now.timeIntervalSince(interrupted.modifiedAt) > 5 else { continue }
+            guard now.timeIntervalSince(interrupted.modifiedAt) >= minimumAge else { continue }
             // The recorder's own keep rule, applied to a file it never got to
             // judge: committed length, or speech by the same silence floor.
             // Ruled 14 Sep 2026: "any audio we have access to should not be
@@ -1514,6 +1614,8 @@ public final class QueueStore: Sendable {
     /// One row for one kept file, whichever sweep found it.
     private func adopt(_ interrupted: LiveAudioCapture.Interrupted,
                        outcome: String, trace: String) throws -> String {
+        // Read before the move: the sidecar is named for the live file.
+        let partial = LiveAudioCapture.takePartialTranscript(beside: interrupted.url)
         let url = try LiveAudioCapture.adopt(interrupted)
         let data = (try? Data(contentsOf: url)) ?? Data()
         var row = Utterance(
@@ -1525,9 +1627,19 @@ public final class QueueStore: Sendable {
             audioSha256: SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined(),
             audioDurationMs: interrupted.durationMs())
         row.transcriptionOutcome = outcome
+        if let partial {
+            // The words the stream had heard before the process died: on the
+            // row now, as the floor. Still `.recorded`, so the one unasked
+            // pass over the audio can replace them with a full transcript,
+            // and a pass that fails leaves them standing.
+            row.transcriptText = partial
+            row.transcriptProvider = "streamed-partial"
+        }
         try update(utterance: row)
         Self.trace?("\(trace): adopted kept capture \(row.id.prefix(16)) "
-            + "(\(interrupted.durationMs() / 1000)s) into Recents")
+            + "(\(interrupted.durationMs() / 1000)s"
+            + (partial.map { ", \($0.count) chars of partial transcript" } ?? "")
+            + ") into Recents")
         return row.id
     }
 
@@ -1538,6 +1650,9 @@ public final class QueueStore: Sendable {
             at: directory, includingPropertiesForKeys: nil) else { return [] }
         let known = Set(try dbQueue.read { db in try String.fetchAll(db, sql: "SELECT id FROM utterances") })
         return files
+            // Audio only: a `.partial` sidecar is not an orphan recording, and
+            // a `.partial` whose audio is gone is cleaned by the reap.
+            .filter { $0.pathExtension == "wav" || $0.pathExtension == LiveAudioCapture.liveExtension }
             // Through AudioStore, not by hand: a bare deletingPathExtension turns
             // `u4.wav.live` into `u4.wav`, which matches no row id, so every
             // interrupted capture reported as an orphan forever — breaking the one
@@ -1622,7 +1737,19 @@ public final class QueueStore: Sendable {
                 .contentModificationDate ?? .distantPast
             guard modified < cutoff else { continue }
             try? fm.removeItem(at: url)
+            try? fm.removeItem(at: LiveAudioCapture.partialURL(beside: url))
             deleted += 1
+        }
+        // A sidecar with no audio beside it in either state describes
+        // nothing. Adoption consumes sidecars, finish and discard remove
+        // them, so one here is a crash between two writes; it goes.
+        for url in files where url.pathExtension == LiveAudioCapture.partialExtension {
+            let id = url.deletingPathExtension().lastPathComponent
+            let finished = directory.appendingPathComponent("\(id).wav")
+            let live = finished.appendingPathExtension(LiveAudioCapture.liveExtension)
+            if !fm.fileExists(atPath: finished.path), !fm.fileExists(atPath: live.path) {
+                try? fm.removeItem(at: url)
+            }
         }
         return deleted
     }

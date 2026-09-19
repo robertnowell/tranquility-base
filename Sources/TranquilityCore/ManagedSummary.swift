@@ -15,18 +15,24 @@ private final class GatewayRedirectGuard: NSObject, URLSessionTaskDelegate, @unc
     }
 }
 
+/// The headers one Gateway request carries. Produced per request because the
+/// proof is made for exactly this method and URL, and the token behind it may
+/// have been refreshed since the last one.
+public typealias GatewayCredential = @Sendable (_ method: String, _ url: String)
+    async throws -> GatewayAuthority.Credential
+
 public final class GatewayHTTPTransport: GatewayTransport, Sendable {
     private let base: URL
-    private let bearer: @Sendable () async throws -> String
+    private let credential: GatewayCredential
     private let session: URLSession
     public init(base: URL, allowLoopbackFixture: Bool = false,
-                bearer: @escaping @Sendable () async throws -> String) throws {
+                credential: @escaping GatewayCredential) throws {
         guard base.user == nil, base.password == nil, base.query == nil, base.fragment == nil,
               base.path.isEmpty || base.path == "/",
               base.host != nil,
               base.scheme == "https" || (allowLoopbackFixture && base.scheme == "http" && base.host == "127.0.0.1")
         else { throw ManagedSummaryFailure.invalidResponse }
-        self.base = base; self.bearer = bearer
+        self.base = base; self.credential = credential
         let config = URLSessionConfiguration.ephemeral
         config.httpShouldSetCookies = false; config.urlCache = nil
         config.timeoutIntervalForRequest = 30; config.timeoutIntervalForResource = 45
@@ -40,7 +46,20 @@ public final class GatewayHTTPTransport: GatewayTransport, Sendable {
         else { throw ManagedSummaryFailure.invalidResponse }
         var request = URLRequest(url: url)
         request.httpMethod = method; request.httpBody = body
-        request.setValue("Bearer \(try await bearer())", forHTTPHeaderField: "Authorization")
+        // DPoP, never Bearer: the verifier refuses a bound token presented as
+        // a bearer token (RFC 9449 section 7.2), and there is no mode in which
+        // both work. The proof is over the URL as the Gateway will rebuild it
+        // from its configured origin, which is this absolute URL exactly.
+        let presented: GatewayAuthority.Credential
+        do { presented = try await credential(method, url.absoluteString) }
+        catch let failure as GatewayAuthority.Failure {
+            // Nothing was sent, so nothing is unknown: this is a refusal with
+            // a name, and the chain reads the name. Two of them mean "this Mac
+            // is not on credits" rather than "credits failed".
+            throw ManagedSummaryFailure.refused(code: failure.code, operationId: nil)
+        }
+        request.setValue(presented.authorization, forHTTPHeaderField: "Authorization")
+        request.setValue(presented.proof, forHTTPHeaderField: "DPoP")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         if body != nil { request.setValue("application/json", forHTTPHeaderField: "Content-Type") }
         let (data, response) = try await session.data(for: request)
@@ -129,13 +148,17 @@ public struct ManagedSummaryClient: Sendable {
     }
 
     public func summarize(source: GatewaySource, request: SummaryRequest) async throws -> GatewayOperation {
+        try await result(source: source, request: request).operation
+    }
+
+    func result(source: GatewaySource, request: SummaryRequest) async throws -> (operation: GatewayOperation, replayed: Bool) {
         guard request.correctiveNote == nil else { throw ManagedSummaryFailure.correctiveRetryNotAllowed }
         let account = accountId.uuidString.lowercased()
         let id = source.operationId(accountId: accountId)
         let payload = try GatewayContract.encode(GatewaySummaryRequest(source: source, input: GatewaySummaryInput(request)))
         guard payload.count <= 131072 else { throw ManagedSummaryFailure.refused(code: "invalid_request", operationId: id) }
         let entry = try outbox.prepare(account: account, id: id, request: payload)
-        if let result = entry.result { return try decode(result, id: id) }
+        if let result = entry.result { return (try decode(result, id: id), true) }
         try Task.checkCancellation()
         let path = "/v1/accounts/\(account)/summaries/\(id)"
         do {
@@ -143,10 +166,10 @@ public struct ManagedSummaryClient: Sendable {
             // GET never invokes a provider. Only 404 permits same-key PUT.
             if !entry.isNew {
                 let found = try await transport.request(method: "GET", path: path, body: nil)
-                if found.status != 404 { return try accept(found, id: id) }
+                if found.status != 404 { return (try accept(found, id: id), true) }
             }
             try Task.checkCancellation()
-            return try accept(await transport.request(method: "PUT", path: path, body: entry.request), id: id)
+            return (try accept(await transport.request(method: "PUT", path: path, body: entry.request), id: id), !entry.isNew)
         } catch let error as ManagedSummaryFailure { throw error }
         catch is CancellationError { throw CancellationError() }
         catch { throw ManagedSummaryFailure.outcomeUnknown(operationId: id) }
@@ -174,22 +197,74 @@ public struct ManagedSummaryClient: Sendable {
     }
 }
 
+/// The account this Mac spends from, resolved once and remembered.
+///
+/// `POST /v1/account` is the call that creates the personal account and lands
+/// the welcome grant, and it is idempotent, so asking on first use rather than
+/// at launch costs nothing and keeps a network call off the launch path.
+/// Coalesced so ten first summaries produce one request.
+public actor ManagedAccount {
+    private let transport: any GatewayTransport
+    private var resolved: UUID?
+    private var inFlight: Task<UUID, Error>?
+
+    public init(transport: any GatewayTransport) { self.transport = transport }
+
+    public func id() async throws -> UUID {
+        if let resolved { return resolved }
+        if let inFlight { return try await inFlight.value }
+        let task = Task { () throws -> UUID in
+            let account = try await ManagedSummaryClient.connect(transport: transport)
+            guard let id = UUID(uuidString: account.accountId) else { throw ManagedSummaryFailure.invalidResponse }
+            return id
+        }
+        inFlight = task
+        defer { inFlight = nil }
+        let id = try await task.value
+        resolved = id
+        return id
+    }
+}
+
 public struct ManagedSummaryProvider: SummaryProvider {
     public let name = "tranquility-gateway"
     public let isConfigured = true
     public let usesManagedCredits = true
-    public let client: ManagedSummaryClient
-    public init(client: ManagedSummaryClient) { self.client = client }
+
+    private enum Source: Sendable {
+        case fixed(ManagedSummaryClient)
+        case resolved(ManagedAccount, any GatewayTransport, ManagedSummaryOutbox)
+    }
+    private let source: Source
+
+    /// A client with its account already known. Tests, and any caller that
+    /// connected up front.
+    public init(client: ManagedSummaryClient) { self.source = .fixed(client) }
+
+    /// The app's shape: the account is asked for on the first summary.
+    public init(transport: any GatewayTransport, outbox: ManagedSummaryOutbox) {
+        self.source = .resolved(ManagedAccount(transport: transport), transport, outbox)
+    }
+
+    private func client() async throws -> ManagedSummaryClient {
+        switch source {
+        case let .fixed(client): return client
+        case let .resolved(account, transport, outbox):
+            return ManagedSummaryClient(accountId: try await account.id(), transport: transport, outbox: outbox)
+        }
+    }
+
     public func brief(for request: SummaryRequest) async throws -> SessionBrief {
         try await delivery(for: request).brief
     }
     public func delivery(for request: SummaryRequest) async throws -> SummaryDelivery {
         guard let source = request.managedSource else { throw ManagedSummaryFailure.missingSourceIdentity }
-        let op = try await client.summarize(source: source, request: request)
+        let result = try await client().result(source: source, request: request)
+        let op = result.operation
         switch op.state {
         case .succeeded:
             guard let brief = op.brief, let receipt = op.receipt else { throw ManagedSummaryFailure.invalidResponse }
-            return SummaryDelivery(brief: brief, receipt: receipt)
+            return SummaryDelivery(brief: brief, receipt: receipt, receiptWasReplayed: result.replayed)
         case .admitted, .running, .reconciling:
             throw ManagedSummaryFailure.pending(operationId: op.operationId, state: op.state)
         case .failed, .cancelled:

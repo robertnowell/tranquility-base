@@ -36,6 +36,11 @@ final class HubConnect {
     func begin() {
         guard !inFlight else { onChange?(); return }
         let pairing = HubPairing(base: Self.base)
+        // The one moment the MACHINE talks to the hub: register the key it
+        // will prove possession with, so the pairing can spend later. Made
+        // now if it does not exist yet. Without it the Mac still pairs and
+        // still mirrors; it simply cannot be granted spending authority.
+        pairing.publicKey = ManagedCredits.deviceSigner(log: { Permissions.log($0) })?.publicJWK
         guard let session = pairing.begin() else {
             note = "could not start. The hub address is not usable"
             onChange?()

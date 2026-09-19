@@ -57,6 +57,20 @@ public enum CaptureMarker {
 
     public static func end() { remove(at: url) }
 
+    /// The app's one-second verdict on whether anything is in flight. The
+    /// marker used to mean "the microphone is open" and was removed at
+    /// key-up, so `relaunch.sh` could wait for the mic and then kill the app
+    /// in the seconds between key-up and delivery — which it did at 21:53 on
+    /// 14 Sep 2026, 2m04s of dictation, transcribing when the process died.
+    /// Ruled that night: "we shouldn't be quitting the app while a
+    /// transcription has not been delivered." So the marker now stands for
+    /// the whole promise — mic open, transcribing, read-back countdown,
+    /// dispatch — and the app settles it from its own state every second:
+    /// refreshed while any of those is true, removed when none is.
+    public static func settle(inFlight: Bool, now: Date = Date()) {
+        if inFlight { write(to: url, now: now) } else { remove(at: url) }
+    }
+
     public static func isCapturing(now: Date = Date()) -> Bool {
         decide(contents: try? String(contentsOf: url, encoding: .utf8), now: now)
     }

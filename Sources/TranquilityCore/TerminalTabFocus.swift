@@ -34,9 +34,10 @@ public enum TerminalTabFocus {
         /// The tab is selected, its window raised, Terminal activated — or,
         /// for a tmux pane, a fresh window is now attached to it.
         case focused
-        /// Every tab answered; none carries this tty. Never returned for the
-        /// tmux branch — a live server attach either succeeds or fails, it
-        /// does not report "gone" the way a stale tab search can.
+        /// The window we remembered for this session is closed, or is open
+        /// but no longer showing it (its name carries another session's
+        /// attach). Internal to the focus path: it is the signal to forget
+        /// the id and attach fresh, and a fresh attach never returns it.
         case tabGone
         /// Terminal did not answer inside the deadline. The tab may well
         /// still exist — the honest message is "busy", not "gone".
@@ -115,9 +116,7 @@ public enum TerminalTabFocus {
     static func attachScript(
         binary: String, socket: String?, tmuxTmpDir: String, sessionName: String
     ) -> String? {
-        guard !sessionName.isEmpty, sessionName.count <= 64,
-              sessionName.unicodeScalars.allSatisfy({ sessionNameCharset.contains($0) })
-        else { return nil }
+        guard isSessionName(sessionName) else { return nil }
         // Built once, reused for both tmux invocations below — same pattern
         // `SessionLauncher.resume()`'s own
         // `cd … && …` build already use: every dynamic piece goes through
@@ -145,17 +144,44 @@ public enum TerminalTabFocus {
         let attach = tmuxCommand("attach -d")
         // The window id comes back with the "ok", because we OPENED this
         // window and that is the only moment its identity is knowable without
-        // guessing. `do script` with no `in` clause makes a new window and
-        // leaves it frontmost, so `window 1` is it. Wrapped in a try: an id we
-        // fail to read costs a future reopen, never this attach.
+        // guessing. It is MEASURED, never read off `window 1`: `do script`
+        // makes a new window and leaves it frontmost, but Terminal has not
+        // re-ordered its windows at the instant the next line runs, so
+        // `window 1` is still whatever was frontmost BEFORE the attach — a
+        // different agent's window. Probed live 17 Sep, twice: `window 1`
+        // answered 1028 when the new window was 1235, then 1235 when it was
+        // 1237. Off by exactly one attach, every time. That id went into
+        // `TerminalWindows` and every later GO TO AGENT raised somebody else's
+        // session with a green "focused" (four presses at 21:23, all to
+        // window 725, which was showing tb-29124722 for a card naming
+        // tb-2894d1e0).
+        //
+        // Two measurements, neither of which depends on ordering. `do script`
+        // returns the tab it created, so the window whose selected tab IS
+        // that tab is the one we opened. If Terminal will not answer that,
+        // the window whose id is in the list after and was not in the list
+        // before is the same fact from the other side. Wrapped in a try: an
+        // id we fail to read costs a future reopen, never this attach — and
+        // never a wrong window, because "" is not remembered.
         return """
             tell application "Terminal"
+              set idsBefore to id of windows
               activate
-              do script \(resize) & " && " & \(attach)
+              set newTab to do script \(resize) & " && " & \(attach)
               set wid to ""
               try
-                set wid to (id of window 1) as text
+                set wid to (id of (first window whose selected tab is newTab)) as text
               end try
+              if wid is "" then
+                try
+                  repeat with w in (id of windows)
+                    if (contents of w) is not in idsBefore then
+                      set wid to (contents of w) as text
+                      exit repeat
+                    end if
+                  end repeat
+                end try
+              end if
               return "ok|" & wid
             end tell
             """
@@ -179,19 +205,48 @@ public enum TerminalTabFocus {
     /// A window with no tabs has nothing to show, so the tab count is the
     /// honest test. `visible` separates the two cases too, but would also
     /// reject a merely minimised window, which is somebody's real terminal.
-    static func raiseScript(windowId: Int) -> String {
-        """
-        tell application "Terminal"
-          if (exists window id \(windowId)) then
-            if (count of tabs of window id \(windowId)) > 0 then
-              set index of window id \(windowId) to 1
-              activate
-              return "ok"
-            end if
-          end if
-          return "notfound"
-        end tell
-        """
+    ///
+    /// **And a live window is not yet OUR window.** Existence and a tab count
+    /// say the id names something on screen; neither says it is showing this
+    /// agent. 17 Sep: the attach recorded the wrong id (see `attachScript`),
+    /// and because the wrong window was real and had a tab, every raise
+    /// passed both checks, returned "ok", and `focus()` never reached the
+    /// fresh-attach fallback that would have corrected it. The bad entry was
+    /// sticky for the life of the process, and the log line derived from the
+    /// same table agreed with it. So the raise asks the one question that
+    /// closes the class rather than the instance: does this window's name
+    /// still carry the attach command for THIS session? Terminal titles the
+    /// window with the command `do script` ran (`… tmux -L tb attach -d -t
+    /// tb-2894d1e0 …`), so the session name is in it, and a stranger's window
+    /// is a stranger's name. A mismatch is reported as not found, which is
+    /// the same answer as a closed window and takes the same path: forget
+    /// the id, attach fresh, which is always right. The cost of a profile
+    /// that leaves the command out of the title is one extra attach per
+    /// press; the cost of not checking was the wrong agent, silently.
+    static func raiseScript(windowId: Int, sessionName: String) -> String? {
+        guard isSessionName(sessionName) else { return nil }
+        return """
+            tell application "Terminal"
+              if (exists window id \(windowId)) then
+                if (count of tabs of window id \(windowId)) > 0 then
+                  if (name of window id \(windowId)) contains "\(sessionName)" then
+                    set index of window id \(windowId) to 1
+                    activate
+                    return "ok"
+                  end if
+                  return "notfound|stranger"
+                end if
+              end if
+              return "notfound"
+            end tell
+            """
+    }
+
+    /// Only a name shaped the way `launchTmux` makes one is ever put in a
+    /// script — the same filter `attachScript` applies, in one place.
+    static func isSessionName(_ name: String) -> Bool {
+        !name.isEmpty && name.count <= 64
+            && name.unicodeScalars.allSatisfy { sessionNameCharset.contains($0) }
     }
 
     /// The window id an attach reported, or nil when it did not say.
@@ -251,6 +306,32 @@ public enum TerminalTabFocus {
         return outcome(of: result, timeout: 5)
     }
 
+    /// Raise a remembered window, or say it is not ours any more. A name the
+    /// charset refuses cannot have been attached by us, so there is nothing
+    /// to raise and the answer is the same as a closed window.
+    static func raise(windowId: Int, sessionName: String,
+                      timeout: TimeInterval) async -> Outcome {
+        guard let script = raiseScript(windowId: windowId, sessionName: sessionName)
+        else { return .tabGone }
+        return outcome(of: await AppleScript.run(script: script, timeout: timeout),
+                       timeout: timeout)
+    }
+
+    /// The same door for a pane addressed by NAME, on this app's socket: an
+    /// OpenCode agent's screen. Raise the window already attached to it if
+    /// it is still open, otherwise attach one (which detaches any other, so
+    /// there is never a second copy).
+    public static func focus(tmuxSession name: String, timeout: TimeInterval = 5) async -> Outcome {
+        let pane = TmuxPaneAddress(socketName: Tmux.socketName, paneId: "", sessionName: name, paneTty: "")
+        if let known = TerminalWindows.windowId(for: name) {
+            let raised = await raise(windowId: known, sessionName: name, timeout: timeout)
+            if raised != .tabGone { return raised }
+            TerminalWindows.forget(sessionName: name)
+        }
+        return await attachFresh(pane: pane, timeout: timeout)
+    }
+
+
     /// Never call from the main actor: the one Apple event still blocks for
     /// up to `timeout` when Terminal is busy, and a main-thread block past
     /// ~1 s trips the event-tap watchdog and silently kills the hotkeys.
@@ -287,12 +368,11 @@ public enum TerminalTabFocus {
             return .failed("no tmux pane owns \(tty), so there is no window to open")
         }
         if let known = TerminalWindows.windowId(for: pane.sessionName) {
-            let raised = outcome(
-                of: await AppleScript.run(script: raiseScript(windowId: known),
-                                          timeout: timeout),
-                timeout: timeout)
+            let raised = await raise(windowId: known, sessionName: pane.sessionName,
+                                     timeout: timeout)
             // `.tabGone` here means the window was closed by hand since we
-            // opened it. Forget it and open a fresh one, which is the same
+            // opened it, or — 17 Sep — that it is open but showing another
+            // agent. Forget it and open a fresh one, which is the same
             // answer as never having known it. Any other outcome — raised, or
             // a real Automation failure — is this call's answer.
             if raised != .tabGone { return raised }

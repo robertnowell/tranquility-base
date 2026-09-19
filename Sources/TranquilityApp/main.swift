@@ -26,7 +26,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var hotkey: HotkeyMonitor!
     let recorder = Recorder()
     var store: QueueStore?
+    let pastAgentSearch = SessionKeywordIndex(cacheURL:
+        QueueStore.supportDirectory.appendingPathComponent("session-search.sqlite"))
+    var pastAgentPreparation: Task<Void, Never>?
     var coordinator: Coordinator?
+    var managedCredits: ManagedCreditSession?
+    private var creditIdentityObserver: NSObjectProtocol?
+    /// The providers this build can drive, kept so New Agent can start one.
+    /// The same instance the coordinator and the poller share, by the rule at
+    /// its construction: a reply must never reach a provider the grid is not
+    /// showing, and neither must a launch.
+    var providerRegistry: AgentProviderRegistry?
     /// Agents running somewhere else, kept current off the main thread.
     ///
     /// Nil on a machine with no provider configured, which is most of them:
@@ -45,6 +55,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         "com.robertnowell.tranquilitybase.forwarded-deep-link")
     var permissionTimer: Timer?
     var intakeTimer: Timer?
+    /// The intake beat, callable out of turn (a remote turn landing).
+    var intakeBeat: (@Sendable () -> Void)?
+    var inFlightTimer: Timer?
+    var utteranceWasInFlight = false
     let onboarding = OnboardingWindow()
     let utterancePlayer = UtterancePlayer()
     let hud = StatusHUD()
@@ -329,6 +343,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// first seen and kept so the name is still in hand after the agent is
     /// gone from the registry and can no longer be looked up.
     var paneNameById: [String: String] = [:]
+    var exitObservationInFlight = false
+    var exitProbesStarted = 0
+    var exitProbesCompleted = 0
+    var exitProbeRanOffMain = false
     let launchedAt = Date()
     /// Which sessions were already waiting on the previous tick.
     ///
@@ -511,6 +529,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         Track.record("capture_kept", ["reason": "abandoned", "outcome": "kept_untranscribed",
                                                       "audio_ms": .int(Int(seconds * 1000))])
                         self.hud.updateRecentAudio(events: self.recentAudioEvents())
+                        self.transcribeRecovered([id], because: "recovered_after_abandon")
                     }
                 } catch {
                     Permissions.log("capture: kept file could not be adopted: \(error)")
@@ -579,9 +598,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // through it and the poller watches through it, so a reply can
             // never reach a provider the grid is not showing.
             let registry = AgentProviders.registry()
+            self.providerRegistry = registry
             let poller = registry.configured().isEmpty ? nil : AgentPoller(registry: registry)
+            // Present before pairing. The session changes accounts; the
+            // coordinator and its immutable provider chain do not need replacing.
+            let managed = ManagedCredits.session(log: { Permissions.log($0) })
+            self.managedCredits = managed
+            creditIdentityObserver = ManagedCredits.observeIdentityChanges(managed)
+            Task { await managed.refresh() }
             self.coordinator = Coordinator(
                 store: store,
+                summarizer: SummarizerChain(providers: [managed, AnthropicSummaryProvider(), DeterministicSummarizer()]),
+                localSummaryOriginId: ManagedCredits.originId(),
                 remoteTransport: poller.map { p in
                     RemoteDispatchTransport(
                         registry: registry,
@@ -625,12 +653,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 poller.onEvents = { [weak self] events in
                     guard let self else { return }
                     let snapshot = self.agents?.snapshot
-                    let lines = events.flatMap {
-                        RemoteSpool.lines(for: $0, agent: snapshot?.agent($0.session))
+                    let lines = events.flatMap { event -> [RemoteSpool.SpoolLine] in
+                        let agent = snapshot?.agent(event.session)
+                        var out = RemoteSpool.lines(for: event, agent: agent)
+                        // An adopted agent whose last word here was a question
+                        // nobody can answer any more: say so, as a turn.
+                        if case .appeared = event.kind, snapshot?.requests[event.session] == nil,
+                           let latest = try? self.store?.latestStop(for: event.session) {
+                            out += RemoteSpool.expiredQuestion(for: event, agent: agent, latest: latest)
+                        }
+                        return out
+                    }
+                    // A question answered elsewhere (the attached terminal,
+                    // with Enter) is done here too: the "asking permission"
+                    // turn is dismissed, or the row would stay unread for a
+                    // decision already made.
+                    for event in events {
+                        if case .answered = event.kind, let store = self.store,
+                           let latest = try? store.latestStop(for: event.session),
+                           latest.notificationMatcher == "agent_question" {
+                            try? store.advanceCursor(sessionId: event.session,
+                                                     heardThrough: latest.latestId,
+                                                     dismissedThrough: latest.latestId)
+                        }
                     }
                     guard !lines.isEmpty else { return }
                     RemoteSpool.append(lines, to: QueueStore.supportDirectory
                         .appendingPathComponent("spool.jsonl"))
+                    // Now, not on the next tick: the turn is a row to read
+                    // the moment it lands.
+                    self.intakeBeat?()
                     // The drainer runs on the same beat the hooks' lines are
                     // picked up on, so nothing new schedules it.
                 }
@@ -639,12 +691,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 Permissions.log("agents: polling \(registry.configured().map(\.id).joined(separator: ", "))")
             }
 
-            let report = try store.reconcileOnBoot()
+            // Sole owner: the ownership lock above is held, so a live file
+            // modified seconds ago belongs to the process this one replaced.
+            let report = try store.reconcileOnBoot(soleOwner: true)
             if !report.adoptedAudio.isEmpty {
                 // Speech a previous process left unclaimed — a death, or an
                 // abandon that kept it — is in Recents now, not on the reap.
                 Permissions.log("boot: \(report.adoptedAudio.count) kept capture(s) adopted into Recents")
                 Track.record("audio_adopted_at_boot", ["count": .int(report.adoptedAudio.count)])
+                transcribeRecovered(report.adoptedAudio, because: "recovered_at_boot")
             }
             lastStatusLine = report.needsDeliveryCheck.isEmpty
                 ? "ready"
@@ -664,7 +719,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Pull spooled hook events in on a timer. The hook only appends to a file,
         // so nothing is lost while the app is closed — this just moves them across.
-        intakeTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+        // The deploy scripts wait on `CaptureMarker` before stopping the app.
+        // It used to mean "mic open" and vanished at key-up, and on 14 Sep
+        // 2026 at 21:53 a relaunch killed the app in the seconds between
+        // key-up and delivery. The marker now covers the whole promise, and
+        // it is derived, not event-driven: a terminal point nobody wired
+        // cannot leave it standing, and one nobody wired cannot drop it early.
+        inFlightTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                let inFlight = self.utteranceInFlight
+                if inFlight != self.utteranceWasInFlight {
+                    Permissions.log("in-flight: \(inFlight ? "held" : "released") (\(self.utteranceInFlightReason))")
+                    self.utteranceWasInFlight = inFlight
+                }
+                CaptureMarker.settle(inFlight: inFlight)
+            }
+        }
+        // One intake beat: drain the spool, prepare the next brief, repaint
+        // the grid, sound the arrival. On the five-second timer, and ALSO the
+        // moment a remote turn lands in the spool (`intakeBeat`): a remote
+        // agent's answer is appended by the poller and used to wait for the
+        // next tick, so for up to five seconds the row was green with nothing
+        // to read and a tap went to the door instead of the card (Robert,
+        // 15 Sep 8:37 PM, six seconds after OpenCode answered: "green lamp
+        // went to agent with no summary, no card").
+        let beat: @Sendable () -> Void = { [weak self] in
             Task { @MainActor in
                 guard let self, let coordinator = self.coordinator else { return }
                 // A dead tap is a mic that cannot be closed and gestures that
@@ -756,7 +836,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // Identity, not count: a turn replacing an older turn on the same
                 // session leaves both the count and the membership unchanged, and
                 // that is exactly the case that should not make a noise.
-                let waitingIds = Set(rows.filter { $0.lamp == .ready }.map(\.id))
+                let waitingIds = EarconGate.arrivalKeys(rows)
                 let primed = self.lastWaitingIds
                 self.lastWaitingIds = waitingIds
                 let newlyWaiting = EarconGate.hasNewArrival(waiting: waitingIds, previous: primed)
@@ -802,6 +882,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
         }
+        intakeBeat = beat
+        intakeTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { _ in beat() }
 
         // Lifted ABOVE the hotkey on purpose (ruled 18 Aug). A screenshot
         // tool has no business installing a global event tap: `--pose-shot`
@@ -947,6 +1029,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         //
         // Probe, signal and poll off-main (rule 9); only the repaint hops back.
         hud.onTerminateSession = { [weak self] id, name in
+            // A REMOTE ROW ENDS THROUGH ITS PROVIDER. There is no pid to
+            // signal; the poller drops it, the store's turns are dismissed so
+            // no local band draws a husk, and the grid repaints without it.
+            if let poller = self?.agents, poller.snapshot.agent(id) != nil {
+                Task { @MainActor in
+                    await poller.end(id)
+                    if let store = self?.store,
+                       let latest = try? store.latestStop(for: id)?.latestId {
+                        try? store.advanceCursor(sessionId: id, heardThrough: latest,
+                                                 dismissedThrough: latest)
+                    }
+                    Permissions.log("terminate: \(name) (\(id.prefix(8))) ended through its provider")
+                    Track.record("agent_ended", ["agent_id": Track.hash(id), "outcome": "remote"])
+                    self?.refreshGridAfterTerminate()
+                }
+                return
+            }
             Task.detached {
                 // `agents` alone made this a permanent no-op for a live Codex
                 // session (26 Aug) — logged "already gone" and refused to
@@ -1014,6 +1113,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // A live session does not need reviving — it needs finding, which is
         // the same door the card's GO TO AGENT opens.
         hud.onGoToSession = { [weak self] id in self?.goToSession(id) }
+        hud.onOpenShell = { [weak self] command, directory in self?.openShell(command, in: directory) }
+        hud.onAttachPane = { [weak self] name in self?.attachPane(name) }
         hud.onNewSessionForArtifact = { [weak self] ref in
             self?.newSession(forArtifact: ref)
         }
@@ -1026,12 +1127,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // report's own "Open hub" footer button.
         // The card asks, the app answers from what the grid already knows.
         hud.harnessForSession = { [weak self] id in self?.harnessById[id] }
+        hud.agentDoorForSession = { [weak self] id in
+            self?.agents?.snapshot.agent(id)?.door
+        }
         hud.doorForSession = { [weak self] session in
             if let report = self?.freshReport(session: session) {
                 return .report(report)
             }
             return HomeBase.existingPage(sessionId: session) != nil ? .hub : nil
         }
+        // The chords' doors reach the SAME handler the keys do, so a click is
+        // a chord in every respect the state machine can see: the mic-open
+        // guard, home-first from a card, the pending-send commit, the
+        // hands-free latch, all of it, once.
+        hud.onNextDoor = { [weak self] in self?.handle(.next) }
+        hud.onSpeakDoor = { [weak self] in self?.handle(.optionTapped) }
+        hud.onHearMoreDoor = { [weak self] in self?.handle(.controlDoubleTapped) }
         hud.onOpenHub = { [weak self] session in
             _ = self?.openHub(session: session)
         }
@@ -1071,8 +1182,84 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Track.record("chip_removed", ["agent_id": Track.hash(session)])
             self?.coordinator?.attachments.unstage(fragment, session: session)
         }
+        // The Attach door (ruled 15 Sep). A picker needs the app in front
+        // for the moment it is open; the panel stays non-activating and the
+        // terminal gets the keyboard back when the sheet closes. What was
+        // picked is staged exactly as a drop is.
+        hud.onAttach = { [weak self] in
+            guard let self else { return }
+            let picker = NSOpenPanel()
+            picker.canChooseFiles = true
+            picker.canChooseDirectories = false
+            picker.allowsMultipleSelection = true
+            picker.prompt = StateLegend.attachTitle
+            picker.message = "Send with your reply"
+            NSApp.activate(ignoringOtherApps: true)
+            picker.begin { [weak self] response in
+                guard let self else { return }
+                guard response == .OK, !picker.urls.isEmpty else {
+                    Permissions.log("picker: cancelled")
+                    Track.record("files_picked", ["count": .int(0), "accepted": false, "staged": 0])
+                    return
+                }
+                let items = picker.urls.map { DroppedItem.file($0.path) }
+                let accepted = hud.onItemsStaged?(items, .picker) ?? false
+                if accepted { hud.render() }
+            }
+        }
+        // Send with the microphone closed (ruled 15 Sep): the typed line and
+        // the chips go now. The click is the consent, so there is no undo
+        // window; the same `send` the countdown hands off to does the rest.
+        // The typed line is kept in the queue store as you type and read
+        // back when the card is selected (17 Sep). Off the main actor: the
+        // store has its own queue, and a keystroke must not wait on a disk.
+        hud.onDraftChanged = { [weak self] session, text in
+            guard let store = self?.store else { return }
+            DispatchQueue.global(qos: .utility).async {
+                do { try store.saveDraft(text, session: session) }
+                catch { Permissions.log("draft: save failed: \(error)") }
+            }
+        }
+        hud.draftFor = { [weak self] session in
+            (try? self?.store?.draft(session: session)) ?? nil
+        }
+        hud.onSendTyped = { [weak self] text in
+            guard let self, let coordinator, let target = dropTarget else {
+                self?.lastStatusLine = "nothing to send to yet"
+                return
+            }
+            Task { @MainActor in
+                do {
+                    let outcome = try await coordinator.submitTypedReply(text: text, to: target.sessionId)
+                    switch outcome {
+                    case .readyToSend(let utteranceId, _, let label, let sessionId):
+                        let answering = (try? coordinator.waiting())?
+                            .first { $0.sessionId == sessionId }?.latestId
+                        self.delivering.began(sessionId: sessionId, answering: answering)
+                        self.hud.render()
+                        self.send(utteranceId: utteranceId, label: label, sessionId: sessionId)
+                    case .noTarget:
+                        self.lastStatusLine = "nothing to send"
+                        Permissions.log("typed send: nothing typed and nothing staged")
+                        self.hud.render()
+                    default:
+                        Permissions.log("typed send: unexpected outcome \(outcome)")
+                    }
+                } catch {
+                    Permissions.log("typed send threw: \(error)")
+                    Failures.report(.deliveryFailed, reason: "typed send threw: \(error)")
+                }
+            }
+        }
         hud.onItemsStaged = { [weak self] items, via in
-            let event = via == .drop ? "files_dropped" : "pasted"
+            let event: String = {
+                switch via {
+                case .drop: return "files_dropped"
+                case .paste: return "pasted"
+                case .picker: return "files_picked"
+                case .typed: return "typed_line"
+                }
+            }()
             guard let self, let coordinator, let target = dropTarget else {
                 // Refused rather than swallowed. The overlay never appears
                 // without a target, so this is the race where the last
@@ -1272,6 +1459,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         hud.onShowRecentAudio = { [weak self] in self?.showRecentAudio() }
+        // Where this Mac stands with credits, as one amber line on the grid
+        // that opens Setup. The summariser keeps the standing; the panel only
+        // shows it. Ruled 15 Sep after a floor summary read as a broken prompt.
+        CreditStanding.observe { [weak self] _ in
+            DispatchQueue.main.async { self?.hud.setCreditStanding(CreditStanding.current.line) }
+        }
         // One door per pane. The panel asks for a tab; the host assembles that
         // tab's data and shows it. Nothing re-renders a pane it has not fed.
         hud.onOpenSettingsTab = { [weak self] tab in
@@ -1343,7 +1536,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
-        hud.onDismiss = { [weak self] in
+        hud.onDismiss = { [weak self] turnStaysOwed in
             guard let self else { return }
             self.coordinator?.speech.stop()
             GreetingCache.stop()
@@ -1365,7 +1558,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.isBusy = false
             // Dismiss means the item is done with — not "hide the window and leave
             // it in the queue", which is what made the button meaningless.
-            if let sessionId = self.hud.currentEventId { self.dismissCurrent(sessionId) }
+            // Unless it ended a reply: then the turn stays owed (ruled 14 Sep,
+            // `PanelState.dismissKeepsTheTurn`), so the row stays green and on
+            // the grid, and Discuss on its page still reads the card.
+            if let sessionId = self.hud.currentEventId {
+                if turnStaysOwed {
+                    Permissions.log("dismiss: ended the reply to \(sessionId.prefix(8)); turn stays owed")
+                } else {
+                    self.dismissCurrent(sessionId)
+                }
+            }
             self.activeConversation = nil
             self.updateTitle()
             self.rebuildMenu()
@@ -1466,6 +1668,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Tmux.trace = { Permissions.log($0) }
         ClaudeAgentsCLI.trace = { Permissions.log("liveness: \($0)") }
         SessionOwnershipReconciliation.trace = { Permissions.log($0) }
+        AgentLedger.trace = { Permissions.log($0) }
         SessionLauncher.trace = { Permissions.log("launcher: \($0)") }
         Recorder.trace = { Permissions.log($0) }
         AudioSystemHealth.trace = { Permissions.log($0) }
@@ -1646,6 +1849,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             || CommandLine.arguments.contains("--show-prerequisites") {
             onboarding.show { }
         }
+        // The Dock tile, before the drills and before either onboarding
+        // branch: a menu-bar-only app on a full menu bar is invisible, and
+        // this is the door that is always there. It sat after the drills
+        // for one deploy (20:50, 15 Sep) and the emptyRoom drill measured a
+        // tile that had not been asked for yet.
+        showDockTile(because: "launch")
         if CommandLine.arguments.contains("--selftest-hud") {
             refreshIsCheapDrill()
             permissionSurfacesDrill()
@@ -1832,12 +2041,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // for, and a collapsed column teaches nothing.
                 self?.hud.setCollapsed(false)
                 self?.showIdleGrid()
-                self?.refreshDockPresence(because: "onboarding done")
             }
         }
-        // After the gate, whichever branch ran: the first thing a new install
-        // can rely on seeing is the Dock tile, not the status item.
-        refreshDockPresence(because: "launch")
         deepLinksReady = true
         drainPendingDeepLinksIfReady()
     }
@@ -1909,6 +2114,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        // The OpenCode server this instance started goes with it (a child
+        // does not die with its parent on macOS; a stale one is reaped at
+        // the next launch by its pid file).
+        OpenCodeServer.stopAll()
         DistributedNotificationCenter.default().removeObserver(self,
                                                                name: Self.forwardedDeepLink,
                                                                object: nil)
@@ -1917,6 +2126,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Analytics.flush()
         permissionTimer?.invalidate()
         intakeTimer?.invalidate()
+        inFlightTimer?.invalidate()
         hotkey?.stop()
         if recorder.isRecording { recorder.abandon() }
         // Last, and after everything above has had its say: log writes are
@@ -1990,6 +2200,28 @@ if CommandLine.arguments.contains("--selftest-capture-diagnostics") {
     Permissions.flushLog()
     print(passed ? "capture diagnostics UI: PASS" : "capture diagnostics UI: FAIL")
     exit(passed ? 0 : 1)
+}
+
+// Isolated search regression: a window and list, with no live app services.
+if CommandLine.arguments.contains("--selftest-past-search") {
+    let probeApplication = NSApplication.shared
+    Task { @MainActor in
+        let passed = await PastAgentsSearchDrill.run()
+        exit(passed ? 0 : 1)
+    }
+    probeApplication.run()
+    exit(1)
+}
+
+// Isolated credits regression: the real checklist, with only fixture services.
+if CommandLine.arguments.contains("--selftest-credits-onboarding") {
+    let probeApplication = NSApplication.shared
+    Task { @MainActor in
+        let passed = await CreditsOnboardingDrill.run()
+        exit(passed ? 0 : 1)
+    }
+    probeApplication.run()
+    exit(1)
 }
 
 // Product choices lived in the production bundle's defaults before Dev had a

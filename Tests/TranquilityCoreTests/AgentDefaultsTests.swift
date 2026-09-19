@@ -5,22 +5,139 @@ import XCTest
 /// Per-harness launch settings (App-lane, default launcher, 25 Aug): each
 /// harness gets its own command and directory, one of them is the default,
 /// and a file written before this shape existed still reads correctly.
+/// A trace sink the Sendable checker accepts: the closure is nonisolated
+/// and must not mutate a captured var.
+private final class SaidLines: @unchecked Sendable {
+    private let lock = NSLock()
+    private var store: [String] = []
+    func add(_ line: String) { lock.lock(); store.append(line); lock.unlock() }
+    var lines: [String] { lock.lock(); defer { lock.unlock() }; return store }
+}
+
 final class AgentDefaultsTests: XCTestCase {
 
     private var savedURL: URL!
     private let claude = ClaudeCodeAdapter().id
     private let codex = CodexAdapter().id
 
+    private var savedRoot: URL?
+    private var scratch: URL!
+
     override func setUp() {
         super.setUp()
         savedURL = AgentDefaults.fileURL
         AgentDefaults.fileURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("agent-defaults-\(UUID().uuidString).json")
+        // The fallback directory is a sibling of the agents root; point the
+        // root at scratch so the test makes its workspace there, not beside
+        // the real ~/Documents/agents.
+        savedRoot = HomeBase.rootOverride
+        scratch = FileManager.default.temporaryDirectory
+            .appendingPathComponent("agent-defaults-root-\(UUID().uuidString)", isDirectory: true)
+        HomeBase.rootOverride = scratch.appendingPathComponent("agents", isDirectory: true)
     }
 
     override func tearDown() {
         AgentDefaults.fileURL = savedURL
+        HomeBase.rootOverride = savedRoot
+        try? FileManager.default.removeItem(at: scratch)
         super.tearDown()
+    }
+
+    // MARK: - Where an agent starts
+
+    /// 14 Sep 2026, a new Mac: agents started in `~` and every glance at
+    /// Desktop, Downloads or Documents was another permission dialog. The
+    /// fallback is a folder beside the agents folder, made on first use,
+    /// and never home.
+    func testTheFallbackDirectoryIsAFolderBesideTheAgentsFolder() {
+        let expected = scratch.appendingPathComponent("tranquility-base").path
+        XCTAssertFalse(FileManager.default.fileExists(atPath: expected))
+        XCTAssertEqual(AgentDefaults.fallbackDirectory, expected)
+        var isDir: ObjCBool = false
+        XCTAssertTrue(FileManager.default.fileExists(atPath: expected, isDirectory: &isDir))
+        XCTAssertTrue(isDir.boolValue)
+        XCTAssertNotEqual(AgentDefaults.fallbackDirectory, NSHomeDirectory())
+        // Beside the pages, not among them: the hub mirrors the agents root.
+        XCTAssertFalse(expected.hasPrefix(HomeBase.root.path))
+    }
+
+    /// Nothing configured, and a typo'd setting, both land in the folder.
+    func testAnUnsetOrMissingDirectoryLandsInTheFolder() {
+        let workspace = scratch.appendingPathComponent("tranquility-base").path
+        XCTAssertEqual(AgentDefaults.directory(for: claude), workspace)
+        AgentDefaults.save(directory: scratch.appendingPathComponent("not-there").path, for: claude)
+        XCTAssertEqual(AgentDefaults.directory(for: claude), workspace)
+    }
+
+    /// The card's label is the directory's last path component, so the word
+    /// a new agent wears is the folder's name (ruled 15 Sep).
+    func testTheFolderIsNamedForTheApp() {
+        XCTAssertEqual((AgentDefaults.fallbackDirectory as NSString).lastPathComponent, "tranquility-base")
+        XCTAssertEqual(AgentDefaults.workspaceName, "tranquility-base")
+    }
+
+    // MARK: - Every way the folder can fail lands at home, never in a launch that cannot start
+
+    /// Documents itself missing: the whole chain is created, not refused.
+    func testAMissingParentIsCreatedWithIt() {
+        let deep = scratch.appendingPathComponent("Documents/tranquility-base", isDirectory: true)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: scratch.appendingPathComponent("Documents").path))
+        XCTAssertEqual(AgentDefaults.usableDirectory(deep), deep.path)
+        var isDir: ObjCBool = false
+        XCTAssertTrue(FileManager.default.fileExists(atPath: deep.path, isDirectory: &isDir) && isDir.boolValue)
+    }
+
+    /// A FILE where the folder should be: `cd` into it would fail inside a
+    /// detached tmux pane nobody can see. Home instead, and a line says why.
+    func testAFileInTheWayFallsBackToHome() {
+        let path = scratch.appendingPathComponent("tranquility-base")
+        try? FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        FileManager.default.createFile(atPath: path.path, contents: Data("x".utf8))
+        let said = SaidLines()
+        let saved = Track.trace; defer { Track.trace = saved }
+        Track.trace = { said.add($0) }
+        XCTAssertNil(AgentDefaults.usableDirectory(path))
+        XCTAssertEqual(AgentDefaults.fallbackDirectory, NSHomeDirectory())
+        XCTAssertTrue(said.lines.contains { $0.contains("not a directory") }, "\(said.lines)")
+    }
+
+    /// A parent that cannot be written to: creation fails, home, and a line.
+    func testAnUnwritableParentFallsBackToHome() throws {
+        try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        let locked = scratch.appendingPathComponent("locked", isDirectory: true)
+        try FileManager.default.createDirectory(at: locked, withIntermediateDirectories: true)
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: locked.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: locked.path) }
+        // root ignores mode bits; the case is only meaningful for a user.
+        try XCTSkipIf(getuid() == 0)
+        let said = SaidLines()
+        let saved = Track.trace; defer { Track.trace = saved }
+        Track.trace = { said.add($0) }
+        XCTAssertNil(AgentDefaults.usableDirectory(locked.appendingPathComponent("tranquility-base")))
+        XCTAssertTrue(said.lines.contains { $0.contains("could not create") }, "\(said.lines)")
+    }
+
+    /// An existing folder that has been made read-only: exists, is a
+    /// directory, and still cannot hold a build. Home.
+    func testAReadOnlyFolderFallsBackToHome() throws {
+        let ro = scratch.appendingPathComponent("tranquility-base", isDirectory: true)
+        try FileManager.default.createDirectory(at: ro, withIntermediateDirectories: true)
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: ro.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: ro.path) }
+        try XCTSkipIf(getuid() == 0)
+        XCTAssertNil(AgentDefaults.usableDirectory(ro))
+        XCTAssertEqual(AgentDefaults.fallbackDirectory, NSHomeDirectory())
+    }
+
+    /// Second call finds the folder already there and does not recreate or
+    /// touch it: a file inside survives.
+    func testAnExistingFolderIsLeftAlone() throws {
+        let first = AgentDefaults.fallbackDirectory
+        let marker = URL(fileURLWithPath: first).appendingPathComponent("keep.txt")
+        try Data("keep".utf8).write(to: marker)
+        XCTAssertEqual(AgentDefaults.fallbackDirectory, first)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: marker.path))
     }
 
     func testMissingFileFallsBackPerHarness() {

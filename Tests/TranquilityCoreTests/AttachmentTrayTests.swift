@@ -7,6 +7,19 @@ final class AttachmentTrayTests: XCTestCase {
 
     // MARK: - Staging
 
+    /// The typed line rides the dictation as a text chip staged after the
+    /// files (ruled 15 Sep): the message the agent receives is the
+    /// attachments, then what was typed, then what was said.
+    func testATypedLineRidesAfterTheAttachmentsAndBeforeTheWords() {
+        var tray = AttachmentTray()
+        XCTAssertTrue(tray.stage("'/tmp/shot.png'", session: "A"))
+        XCTAssertTrue(tray.stage("see the red box", session: "A"))
+        let riding = tray.snapshot(session: "A", utteranceId: "u1")
+        XCTAssertEqual(AttachmentTray.compose(transcript: "fix that", fragments: riding),
+                       "'/tmp/shot.png'\n\nsee the red box\n\nfix that")
+        XCTAssertTrue(tray.staged(for: "A").isEmpty, "the line left with the send")
+    }
+
     func testStagingIsPerSessionAndOrdered() {
         var tray = AttachmentTray()
         tray.stage("/a/one.png", session: "A")

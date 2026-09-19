@@ -35,6 +35,9 @@ func usage() -> Never {
                                 end a live session, same path as the grid's
                                 right-click: SIGTERM to its process group, and
                                 SIGKILL only if it has to. Never touches the tab
+      tbase locate <id|prefix>  where the ledger says an agent is, verified now:
+                                here (pane, pid), elsewhere, unhosted, gone, or
+                                unknown. The answer every send and end reads
       tbase cursors             how far you have got with each session
       tbase calls [n]           full input and output of the last n model calls
       tbase dogfood [days]      WS-E counters summary (default 7 days)
@@ -508,6 +511,30 @@ do {
             let message = truncate(e.summaryText ?? e.lastAssistantMessage, 56)
             print(when + "  " + kind + "  " + project + "  " + message)
         }
+
+    case "locate":
+        // The one resolver, on the command line, so a misroute can be
+        // reproduced against a real second tmux server without a build of
+        // the panel (15 Sep: two servers, both with a pane %1).
+        guard args.count > 1 else {
+            print("usage: tbase locate <sessionId | id-prefix>")
+            break
+        }
+        let needle = args[1]
+        AgentLedger.trace = { print("  " + $0) }
+        let ids = Set(
+            (ClaudeAgentsCLI().sessions() ?? []).map(\.sessionId)
+            + FileSessionOwnershipStore.shared.all().map(\.sessionId)
+            + SessionRegistry.all().map(\.sessionId))
+        let matches = ids.filter { $0 == needle || $0.hasPrefix(needle) }.sorted()
+        guard let sessionId = matches.first, matches.count == 1 else {
+            print(matches.isEmpty ? "no session matching \(needle)"
+                                  : "ambiguous: \(matches.map { String($0.prefix(8)) }.joined(separator: ", "))")
+            break
+        }
+        let pid = (ClaudeAgentsCLI().sessions() ?? []).first { $0.sessionId == sessionId }?.pid
+        let location = AgentLedger.locate(sessionId: sessionId, pid: pid)
+        print("\(sessionId.prefix(8)): \(location.summary)")
 
     case "cursors":
         // The only mutable state left, so it gets its own command.

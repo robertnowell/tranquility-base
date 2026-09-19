@@ -226,7 +226,7 @@ if [ "${TB_SKIP_SOURCE_AUDIT:-0}" = "1" ]; then
   echo "→ exact-source audit completed in the credential-free build job"
 else
   step "source audit"
-  TB_SKIP_LIVE_HARNESS_DRILLS=1 scripts/preflight.sh "$TARGET^"
+  scripts/audit-source.sh "$TARGET"
 fi
 
 step "building $VERSION (release, universal)"

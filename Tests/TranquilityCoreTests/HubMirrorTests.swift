@@ -148,6 +148,65 @@ final class HubMirrorTests: XCTestCase {
         XCTAssertNil(HubMirror.turnPayload(b, session: nil, live: nil)["agent_title"])
     }
 
+    /// The turn itself rides with the summary of it, copied not written.
+    ///
+    /// The hub had the brief and nothing else, and for about a quarter of
+    /// turns the brief is one sentence. Robert, 15 Sep: "it used to have
+    /// verbatim turn text of both the user message and the agent reply... it
+    /// should be a deterministic copy." Both halves go, and an empty half is
+    /// absent rather than blank, because the hub coalesces on these.
+    func testATurnCarriesWhatWasSaidOnBothSides() {
+        let b = brief(rowid: 7, atMs: 1_700_000_000_000)
+        let said = TurnText.Turn(prompt: "make the send button work",
+                                 prose: "Both rulings are built and deploying to Dev.")
+        let json = HubMirror.turnPayload(b, session: nil, live: nil, said: said)
+        XCTAssertEqual(json["prompt"] as? String, "make the send button work")
+        XCTAssertEqual(json["prose"] as? String, "Both rulings are built and deploying to Dev.")
+        XCTAssertNil(HubMirror.turnPayload(b, session: nil, live: nil, said: nil)["prose"])
+        let onlyProse = TurnText.Turn(prompt: "", prose: "carried on from before")
+        let one = HubMirror.turnPayload(b, session: nil, live: nil, said: onlyProse)
+        XCTAssertNil(one["prompt"], "a turn nobody prompted has no prompt, not an empty one")
+        XCTAssertEqual(one["prose"] as? String, "carried on from before")
+    }
+
+    /// A brief covers the transcript turn that OPENED at or before it, and no
+    /// two briefs may be handed the same words.
+    ///
+    /// The join is on two timestamps rather than on position, because the
+    /// transcript is read as a tail and the tail does not know how many turns
+    /// came before it. The claim is kept for the whole run, not per batch: a
+    /// session's briefs routinely span two batches of a hundred, and a
+    /// per-batch join would hand the same words out twice without failing.
+    func testEachBriefClaimsItsOwnTranscriptTurnAtMostOnce() {
+        let t0 = Date().addingTimeInterval(-300)
+        var pool: [String: [TurnText.Turn]] = [session: [
+            TurnText.Turn(prompt: "first", prose: "one", at: t0),
+            TurnText.Turn(prompt: "second", prose: "two", at: t0.addingTimeInterval(60)),
+        ]]
+        let earlier = brief(rowid: 1, atMs: Int64(t0.addingTimeInterval(30).timeIntervalSince1970 * 1000))
+        let later = brief(rowid: 2, atMs: Int64(t0.addingTimeInterval(90).timeIntervalSince1970 * 1000))
+        XCTAssertEqual(HubMirror.claimWords(&pool, for: earlier)?.prompt, "first")
+        XCTAssertEqual(HubMirror.claimWords(&pool, for: later)?.prompt, "second")
+        XCTAssertNil(HubMirror.claimWords(&pool, for: later), "the pool is empty; nothing repeats")
+
+        // A brief older than every turn in the tail claims nothing at all.
+        var pool2: [String: [TurnText.Turn]] = [session: [
+            TurnText.Turn(prompt: "later", prose: "words", at: t0),
+        ]]
+        XCTAssertNil(HubMirror.claimWords(&pool2, for: brief(
+            rowid: 3, atMs: Int64(t0.addingTimeInterval(-600).timeIntervalSince1970 * 1000))))
+    }
+
+    private func brief(rowid: Int64, atMs: Int64) -> StoredBrief {
+        StoredBrief(eventRowid: rowid, sessionId: session, atMs: atMs,
+                    topic: "Deploy running; waiting for self-tests.",
+                    goal: nil, happened: "Deploy running; waiting for self-tests.",
+                    nextStep: nil, question: nil, risk: nil,
+                    rationale: nil, findings: nil, solution: nil, recap: nil, proposal: nil,
+                    headline: nil, deck: nil, pullRequests: nil, branch: nil,
+                    callsign: nil, provider: "test")
+    }
+
     // MARK: - Robots
 
     /// A transcript whose first line declares how it was started. `sdk-cli` is

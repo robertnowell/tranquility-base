@@ -1,0 +1,21 @@
+version = 1
+
+[merge]
+automerge_label = "merge-queue"
+require_automerge_label = true
+method = "squash"
+prioritize_ready_to_merge = false
+optimistic_updates = true
+block_on_neutral_required_check_runs = true
+blocking_labels = ["queue-hold"]
+delete_branch_on_merge = false
+
+[merge.message]
+title = "pull_request_title"
+body = "pull_request_body"
+include_coauthors = false
+include_pull_request_author = false
+
+[update]
+always = false
+require_automerge_label = true

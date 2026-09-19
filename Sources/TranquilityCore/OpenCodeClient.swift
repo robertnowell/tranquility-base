@@ -81,6 +81,14 @@ public struct OpenCodeClient: Sendable {
     /// Caller-scoped by construction for a local server: it is your own
     /// process. For crobot the gateway has already scoped the proxy to one
     /// task, so this returns that task's sessions and nobody else's.
+    /// The sessions that are somebody's subagent: OpenCode lists them beside
+    /// their parents, with `parentID` set. A subagent is the parent's
+    /// business, not a row (Claude Code's and Codex's never were).
+    public func childSessionIDs() async throws -> Set<String> {
+        let data = try await call("GET", "/session")
+        return Set(decodeList(data, as: Wire.Session.self).filter { $0.parentID != nil }.map(\.id))
+    }
+
     public func sessions() async throws -> [AgentSession] {
         let data = try await call("GET", "/session")
         let busy = await busySessions()
@@ -153,8 +161,44 @@ public struct OpenCodeClient: Sendable {
     /// crobot (task ui-owxd968g5sbf, 11 Sep 2026). Their client carries that
     /// comment; this one inherits it rather than rediscovering it.
     ///
-    /// Permissions ARE session-scoped, and under `/api/session/...` rather than
-    /// `/session/...`. The inconsistent prefix is OpenCode's, not a typo here.
+    /// **Permissions are unscoped too**, at `/permission`, and filtered here
+    /// exactly like questions. The session-scoped `/api/session/{id}/permission`
+    /// exists and answers `{"data":[]}` even while one is pending for that
+    /// session; measured live on 14 Sep 2026 against 1.18.30, where an agent
+    /// with `edit: ask` sat blocked for 240 s reading as `working` because
+    /// this client asked the wrong route. Same for the reply: the scoped
+    /// route answers PermissionNotFoundError, the unscoped one clears it.
+    /// The prompt, accepted rather than finished: `POST .../prompt_async`
+    /// answers 204 the moment the message is queued, where `/message` holds
+    /// the connection for the whole turn. The turn's words arrive on the
+    /// event stream, which is where a provider that owns the server reads
+    /// them.
+    public func sendAsync(_ text: String, to session: String) async throws -> SendOutcome {
+        let payload: [String: Any] = ["parts": [["type": "text", "text": text]]]
+        guard let body = try? JSONSerialization.data(withJSONObject: payload) else {
+            return .failed(reason: "could not encode the message")
+        }
+        do {
+            _ = try await call("POST", "/session/\(esc(session))/prompt_async", body: body)
+            return .accepted
+        } catch ClientError.asleep {
+            return .busy
+        } catch {
+            return .failed(reason: String(describing: error))
+        }
+    }
+
+    /// Stop the turn that is running, if one is.
+    public func abort(_ session: String) async throws {
+        _ = try await call("POST", "/session/\(esc(session))/abort")
+    }
+
+    /// One session, as the server has it now: the model's title lands here
+    /// after the first turn.
+    public func session(_ raw: String) async throws -> AgentSession? {
+        try await sessions().first { $0.providerID == raw }
+    }
+
     public func pendingRequest(_ session: String) async throws -> PendingRequest? {
         if let question = try await questions(session).first { return question }
         return try await permissions(session).first
@@ -168,8 +212,9 @@ public struct OpenCodeClient: Sendable {
     }
 
     func permissions(_ session: String) async throws -> [PendingRequest] {
-        let data = try await call("GET", "/api/session/\(esc(session))/permission")
+        let data = try await call("GET", "/permission")
         return decodeList(data, as: Wire.Permission.self)
+            .filter { $0.sessionID == session }
             .map { $0.pending(session: AgentSession.id(session, provider: provider)) }
     }
 
@@ -191,10 +236,10 @@ public struct OpenCodeClient: Sendable {
             case .permission:
                 let reply = permissionReply(response)
                 let body = try JSONSerialization.data(withJSONObject: ["reply": reply])
-                _ = try await call(
-                    "POST",
-                    "/api/session/\(esc(session))/permission/\(esc(request.id))/reply",
-                    body: body)
+                // Unscoped, like the read. `/api/session/{sid}/permission/{pid}/reply`
+                // is 404 PermissionNotFoundError on a live server for a permission
+                // that `/permission` lists; `/permission/{pid}/reply` returns true.
+                _ = try await call("POST", "/permission/\(esc(request.id))/reply", body: body)
             }
             return .accepted
         } catch ClientError.asleep {

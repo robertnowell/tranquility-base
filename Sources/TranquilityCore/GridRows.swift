@@ -90,14 +90,23 @@ public extension GridAssembler {
             /// Providers that could not be reached, by id, with the reason.
             public var unreachable: [String: String]
 
+            /// Sessions with a turn in the store that HAS been heard and not
+            /// dismissed: `.opened`, the state a local row has between hearing
+            /// a turn and dismissing it, when a tap reads it again. Without
+            /// this a heard remote row read as `.none`, "nothing to say", and
+            /// its tap went to the door (Robert, 16 Sep 1:43 PM, on a green
+            /// row he had already heard: "not opening the card").
+            public var heard: Set<AgentSession.ID>
             public init(agents: [AgentSession] = [],
                         requests: [AgentSession.ID: PendingRequest] = [:],
                         unread: Set<AgentSession.ID> = [],
-                        unreachable: [String: String] = [:]) {
+                        unreachable: [String: String] = [:],
+                        heard: Set<AgentSession.ID> = []) {
                 self.agents = agents
                 self.requests = requests
                 self.unread = unread
                 self.unreachable = unreachable
+                self.heard = heard
             }
         }
 
@@ -254,6 +263,25 @@ public extension GridAssembler {
             $0[$1.key] = $1.value.harness
         }
 
+        // **A provider owns its agents' rows.** (#459, 15 Sep 2026.)
+        //
+        // Driving a remote agent writes a record into the LOCAL store under
+        // the agent's addressable id: a reply is a `waiting` turn, a sighting
+        // is a `known` session. So the better an agent was integrated, the more
+        // certainly a local band claimed its id first and drew a husk — no
+        // harness, a terminal door onto a pane this Mac never opened, and an
+        // unlit lamp because the liveness probe finds no local process, which
+        // is correct and beside the point. Measured on the real panel: the one
+        // crobot task drawn as `harness=nil door=terminal`, its tap opening a
+        // tmux session that exited on arrival.
+        //
+        // The remote row is the true one — it has the provider's own title,
+        // state, page and lamp — so the local bands skip any id a provider
+        // owns, and band 5 draws it. `placed` is NOT pre-seeded with these:
+        // band 5 itself checks `!placed.contains`, and seeding would make it
+        // skip the very rows this exists to rescue.
+        let providerOwned = Set(input.remote.agents.map(\.id))
+
         // BAND 1: sessions with an unanswered turn.
         //
         // **An unanswered turn does not keep a dead process lit** (fixed 14 Sep
@@ -277,7 +305,9 @@ public extension GridAssembler {
         // should grey the whole panel. `smoothedLive` has already absorbed the
         // transient misses by the time the rows are built.
         let livenessKnown = !input.liveById.isEmpty
-        var rows = input.waiting.map { (event: WaitingSession) -> SessionRow in
+        var rows = input.waiting
+            .filter { !providerOwned.contains($0.sessionId) }
+            .map { (event: WaitingSession) -> SessionRow in
             let evidence = event.transcriptPath.flatMap {
                 input.evidence($0, input.boundaries[event.sessionId])
             }
@@ -333,7 +363,14 @@ public extension GridAssembler {
                 // The hover carries the whole sentence, as it does on every
                 // other amber row — the column can only hold a clause.
                 detail: blocked?.detail,
-                harness: input.liveById[event.sessionId]?.harness)
+                harness: input.liveById[event.sessionId]?.harness,
+                // The timestamp of the transcript entry the verdict rests on,
+                // and otherwise when the turn arrived at the hook. NEVER the
+                // file's mtime: it moves for reasons that are not the
+                // conversation (15 Sep: Remote Control's `bridge-session`
+                // lines put a sixteen-hour-old green row second on the panel).
+                lastActivity: evidence?.observedAt
+                    ?? Date(timeIntervalSince1970: Double(event.createdAtMs) / 1000))
         }
 
         // BAND 2: live sessions with nothing waiting. Quiet rows, so a skipped
@@ -341,8 +378,14 @@ public extension GridAssembler {
         // latestId DESC — so the band is recency-ordered like the one above it,
         // never Dictionary.values hash order, which reshuffled between
         // refreshes.
-        var placed = Set(input.waiting.map(\.sessionId))
-        for stored in input.known where !placed.contains(stored.sessionId) {
+        // Seeded from the DRAWN waiting rows, not the raw input: a
+        // provider-owned id was filtered out of band 1 above, and if it stayed
+        // in `placed` band 5 would skip the real remote row as already placed —
+        // which is the exact husk this fix removes, reappearing one band later.
+        var placed = Set(input.waiting.map(\.sessionId)
+            .filter { !providerOwned.contains($0) })
+        for stored in input.known
+        where !placed.contains(stored.sessionId) && !providerOwned.contains(stored.sessionId) {
             guard let live = input.liveById[stored.sessionId] else { continue }
             // Ruled 12 Aug: headless is headless whether it is running or not.
             // Liveness used to hide these by accident — a cron job is gone
@@ -364,12 +407,16 @@ public extension GridAssembler {
                 id: stored.sessionId,
                 name: GridAssembler.tabDisplayName(for: stored, live: live),
                 aux: storedLamp.reason ?? SessionRow.shortId(stored.sessionId),
-                lamp: storedLamp.lamp, detail: storedLamp.detail, harness: live.harness))
+                lamp: storedLamp.lamp, detail: storedLamp.detail, harness: live.harness,
+                // The conversation's clock, then the hook's; never the file's.
+                lastActivity: evidence?.observedAt
+                    ?? Date(timeIntervalSince1970: Double(stored.createdAtMs) / 1000)))
         }
 
         // BAND 3: live sessions with no stored events yet. Nothing to rank them
         // by, so they close the live half of the grid.
-        for live in input.liveById.values where !placed.contains(live.sessionId) {
+        for live in input.liveById.values
+        where !placed.contains(live.sessionId) && !providerOwned.contains(live.sessionId) {
             let path = live.cwd.map {
                 TranscriptTitles.defaultPath(cwd: $0, sessionId: live.sessionId)
             }
@@ -389,7 +436,9 @@ public extension GridAssembler {
                 id: live.sessionId,
                 name: GridAssembler.tabDisplayName(live: live, callsign: nil),
                 aux: liveLamp.reason ?? SessionRow.shortId(live.sessionId),
-                lamp: liveLamp.lamp, detail: liveLamp.detail, harness: live.harness))
+                lamp: liveLamp.lamp, detail: liveLamp.detail, harness: live.harness,
+                // The conversation's clock, then the process start; never the file's.
+                lastActivity: evidence?.observedAt ?? live.startedAtDate))
         }
 
         // BAND 4: the sessions that are not awake (ruled 11 Aug). Everything
@@ -403,7 +452,8 @@ public extension GridAssembler {
         // and two routes to one answer is how they start disagreeing. Disk
         // enumerates only the population the process list cannot: the dead.
         for found in input.discovered
-        where !placed.contains(found.sessionId) && found.liveness != .live {
+        where !placed.contains(found.sessionId) && found.liveness != .live
+              && !providerOwned.contains(found.sessionId) {
             placed.insert(found.sessionId)
             // One conversation, one row (ruled 10 Sep). A session Claude Code
             // continued under a new id (the left arrow does this) is the same
@@ -432,7 +482,8 @@ public extension GridAssembler {
                 // whole second band for this line.
                 detail: found.activity?.fullReason
                     ?? (found.harness == CodexAdapter().id ? "Codex session" : nil),
-                harness: found.harness))
+                harness: found.harness,
+                lastActivity: found.lastActivityAt))
         }
 
         // BAND 5: agents running somewhere else.
@@ -453,8 +504,13 @@ public extension GridAssembler {
             let request = input.remote.requests[agent.id]
             let bucket = AgentPresentation.bucket(
                 state: agent.state, hasPendingRequest: request != nil)
-            // Read-state is carried alongside the lamp, never inside it.
-            let unread = input.remote.unread.contains(agent.id)
+            // Read-state is carried alongside the lamp, never inside it. A
+            // pending request stays unread until it is answered: the tap has
+            // to bring the decision back however many times you heard it,
+            // and the door is for a row with nothing left to decide.
+            let unread = input.remote.unread.contains(agent.id) || request != nil
+            let read: ReadState = unread ? .unread
+                : (input.remote.heard.contains(agent.id) ? .opened : .none)
             let silent = input.remote.unreachable[agent.provider]
             rows.append(SessionRow(
                 id: agent.id,
@@ -478,13 +534,17 @@ public extension GridAssembler {
                 // constant — a declared capability nothing reads is worse than
                 // no capability (provider seam, rule 5).
                 revivable: false,
-                read: unread ? .unread : .none,
+                read: read,
                 detail: Self.remoteDetail(request: request, silent: silent, agent: agent),
                 harness: agent.provider,
                 // The provider said where this agent lives, or said it lives
                 // nowhere you can open. Either way the row carries the answer
                 // and nothing downstream asks what kind of agent it is.
-                door: agent.url.map { .page($0) } ?? SessionRow.Door.none))
+                door: agent.door,
+                // The provider's own answer, which is the whole point: this
+                // band is enumerated last, so without a timestamp it could
+                // never join the order however recently the agent spoke.
+                lastActivity: agent.updatedAt))
         }
 
         // The user's own switch, applied last and to every band at once.

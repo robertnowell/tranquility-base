@@ -34,6 +34,11 @@ public struct SummaryRequest: Sendable {
     public var correctiveNote: String?
     /// Required only by managed composition. Never inferred from a rowid/fork.
     public var managedSource: GatewaySource?
+    /// What the agent said this turn BEFORE its final message, oldest first,
+    /// capped. Context for the recap and the findings; never the source of a
+    /// proposal, which still comes only from the final message. Absent when
+    /// the turn was one message, or the adapter cannot say. See `EarlierThisTurn`.
+    public var earlierThisTurn: String?
 
     public init(
         lastAssistantMessage: String,
@@ -45,7 +50,8 @@ public struct SummaryRequest: Sendable {
         hookEvent: HookEventKind = .stop,
         notificationMatcher: String? = nil,
         correctiveNote: String? = nil,
-        managedSource: GatewaySource? = nil
+        managedSource: GatewaySource? = nil,
+        earlierThisTurn: String? = nil
     ) {
         self.lastAssistantMessage = lastAssistantMessage
         self.projectLabel = projectLabel
@@ -57,6 +63,7 @@ public struct SummaryRequest: Sendable {
         self.notificationMatcher = notificationMatcher
         self.correctiveNote = correctiveNote
         self.managedSource = managedSource
+        self.earlierThisTurn = earlierThisTurn
     }
 }
 
@@ -78,7 +85,10 @@ public struct Summary: Sendable {
 public struct SummaryDelivery: Sendable {
     public let brief: SessionBrief
     public let receipt: GatewayReceipt?
-    public init(brief: SessionBrief, receipt: GatewayReceipt? = nil) { self.brief = brief; self.receipt = receipt }
+    public let receiptWasReplayed: Bool
+    public init(brief: SessionBrief, receipt: GatewayReceipt? = nil, receiptWasReplayed: Bool = false) {
+        self.brief = brief; self.receipt = receipt; self.receiptWasReplayed = receiptWasReplayed
+    }
 }
 
 public protocol SummaryProvider: Sendable {
@@ -184,6 +194,20 @@ public struct AnthropicSummaryProvider: SummaryProvider {
     /// stale background to ignore — two blocks whose difference is the feature,
     /// and neither was reachable from a test while this lived inside a function
     /// that needs an API key to run.
+    /// The same user half, rendered from the shared template.
+    ///
+    /// Exists so the managed Gateway can produce a byte-identical prompt
+    /// without a second implementation of the conditionals below. Both read
+    /// `contracts/gateway/v1/summary-user-template.json`, and
+    /// `UserPromptTemplateTests` asserts this and `userPrompt(for:)` agree
+    /// across every combination of the optional blocks. When they agree, the
+    /// one below can go; until they do, the shipped path is unchanged.
+    static func userPromptFromTemplate(
+        for request: SummaryRequest, template: UserPromptTemplate = .shared
+    ) -> String {
+        template.render(for: request)
+    }
+
     public static func userPrompt(for request: SummaryRequest) -> String {
         var context = "Project: \(request.projectLabel)"
         if request.hookEvent == .notification {
@@ -222,6 +246,15 @@ public struct AnthropicSummaryProvider: SummaryProvider {
                 Use it only to disambiguate names. Never describe it as current \
                 work, and never propose a next step from it:
                 \(ask)
+                """
+        }
+
+        if let earlier = request.earlierThisTurn {
+            context += """
+
+
+                Earlier this turn, before the final message, the agent said (oldest first):
+                \(earlier)
                 """
         }
 
@@ -475,6 +508,26 @@ public struct AnthropicSummaryProvider: SummaryProvider {
         return Completion(text: text, raw: raw, elapsedMs: elapsedMs)
     }
 
+    /// The first sentence of what the agent said, for a turn the model could
+    /// not recap. Up to the first sentence end followed by whitespace or the
+    /// end, else the first line, capped at 200 characters. The Gateway's
+    /// `firstSentence` in brief.ts is this function; keep them identical.
+    static func firstSentence(_ text: String) -> String? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        var sentence: Substring = trimmed[...]
+        if let end = trimmed.indices.first(where: { i in
+            ".!?".contains(trimmed[i]) && (trimmed.index(after: i) == trimmed.endIndex
+                || trimmed[trimmed.index(after: i)].isWhitespace)
+        }) {
+            sentence = trimmed[...end]
+        } else if let newline = trimmed.firstIndex(where: \.isNewline) {
+            sentence = trimmed[..<newline]
+        }
+        let capped = String(sentence.prefix(200)).trimmingCharacters(in: .whitespacesAndNewlines)
+        return capped.isEmpty ? nil : capped
+    }
+
     public static func parse(_ text: String, request: SummaryRequest) throws -> SessionBrief {
         // Tolerate a stray code fence or leading prose.
         guard let start = text.firstIndex(of: "{"), let end = text.lastIndex(of: "}") else {
@@ -498,13 +551,33 @@ public struct AnthropicSummaryProvider: SummaryProvider {
         }
 
         let recap = field("recap", in: spoken)
+        let headline = field("headline", in: written)
         // `happened` is the store's non-optional column and the hub's turn
         // body. It is the recap now: what the agent did this turn. A flat,
         // older response may carry its own.
-        guard let happened = recap ?? field("happened", in: obj) else {
+        //
+        // A turn that concludes nothing ("what is OpenCode?" answered with an
+        // explanation) comes back with a null recap and something else filled
+        // in, exactly as the prompt permits: "if a field has nothing new to
+        // add, it is null". The store still needs one line, so it is the next
+        // best thing the model said, and failing that the agent's own first
+        // sentence. Refusing here sent real turns to the floor, read out
+        // verbatim with no ladder (issue #509, 15 Sep). The Gateway's
+        // brief.ts applies the same order; change both or neither.
+        // Moved, not copied: the field that stands in stops being itself, or
+        // the spoken line says it twice ("Pick one. Go? Pick one. Go?").
+        var proposal = field("proposal", in: spoken)
+        var deck = field("deck", in: written)
+        var standIn: String?
+        if recap == nil && field("happened", in: obj) == nil {
+            if let p = proposal { standIn = p; proposal = nil }
+            else if let h = headline { standIn = h }
+            else if let d = deck { standIn = d; deck = nil }
+            else { standIn = Self.firstSentence(request.lastAssistantMessage) }
+        }
+        guard let happened = recap ?? field("happened", in: obj) ?? standIn else {
             throw SummaryError.unparseable("no recap")
         }
-        let headline = field("headline", in: written)
         return SessionBrief(
             // The hub lists a turn by its headline and falls back to `topic`;
             // there is no topic field any more, so the fallback is the recap.
@@ -518,10 +591,13 @@ public struct AnthropicSummaryProvider: SummaryProvider {
             findings: field("findings", in: spoken),
             solution: field("solution", in: spoken),
             branch: request.gitBranch,
-            recap: recap,
-            proposal: field("proposal", in: spoken),
+            // The stand-in IS the recap. Without one, spokenText() falls to
+            // "topic. happened." and, with topic falling back to the same
+            // line, said it twice (16 Sep). The Gateway's brief.ts agrees.
+            recap: recap ?? standIn,
+            proposal: proposal,
             headline: headline,
-            deck: field("deck", in: written))
+            deck: deck)
     }
 }
 
@@ -555,6 +631,7 @@ public struct SummarizerChain: Sendable {
         var produced: (SessionBrief, String)?
         var managedReceipt: GatewayReceipt?
         var managedFailure: ManagedSummaryFailure?
+        var cancelled = false
 
         // An empty final message never reaches a model. The model correctly refuses
         // to summarize nothing, which burns a call to learn what we already know —
@@ -580,8 +657,28 @@ public struct SummarizerChain: Sendable {
                     managedReceipt = delivery.receipt
                     break
                 } catch {
+                    if error is CancellationError {
+                        cancelled = true
+                        break
+                    }
                     if provider.usesManagedCredits {
                         managedFailure = (error as? ManagedSummaryFailure) ?? .refused(code: "service_unavailable", operationId: nil)
+                        // A Mac that is NOT ON CREDITS is not a credits failure.
+                        // Paired before key binding, or not connected at all:
+                        // no grant exists to protect, so the person's own key,
+                        // if they pasted one, is the right next thing. Every
+                        // other managed failure lands on the floor and never
+                        // on their bill, which is what `break` is for.
+                        //
+                        // And out of credits is not a credits failure either: the
+                        // grant is spent, there is nothing left to protect, and the
+                        // person's own key (if pasted) is what they would choose.
+                        // The standing says so in amber; see CreditStanding.
+                        if case let .refused(code, _) = managedFailure!,
+                           code == "rebinding_required" || code == "not_connected"
+                           || code == "insufficient_credit" {
+                            continue
+                        }
                         break
                     }
                 }
@@ -594,7 +691,7 @@ public struct SummarizerChain: Sendable {
         // real (app.log 20 Aug 14:13:49). Leave `produced` nil instead; the
         // "none" summary is never persisted, and the speak path gates on the
         // same cancellation.
-        if produced == nil, !Task.isCancelled,
+        if produced == nil, !cancelled, !Task.isCancelled,
            let fallback = try? await DeterministicSummarizer().brief(for: request) {
             produced = (fallback, "deterministic-fallback")
         }
@@ -605,7 +702,11 @@ public struct SummarizerChain: Sendable {
 
         // Names the source itself used are speakable ("say Klaviyo, not 'an email
         // platform'"); everything identifier-shaped is still stripped.
-        let speakable = SpokenTextSanitizer.speakableTerms(in: request.lastAssistantMessage)
+        // Names the agent used anywhere in the turn are speakable: the earlier
+        // messages are in the model's context, so a name from there can land
+        // in the brief and must not be genericised on the way to speech.
+        let speakable = SpokenTextSanitizer.speakableTerms(
+                in: request.lastAssistantMessage + " " + (request.earlierThisTurn ?? ""))
             .union(lexicon)
 
         // Each section is clamped against its own budget before composing, so a long
@@ -625,6 +726,8 @@ public struct SummarizerChain: Sendable {
                 proposal, maxWords: SpokenTextSanitizer.proposalWords)
         }
 
+        // Standing belongs to ManagedCreditSession. This chain preserves an
+        // operation's receipt for history but cannot promote it to balance.
         return Summary(
             spoken: sanitizer.sanitize(brief.spokenText(), allowing: speakable),
             brief: brief,

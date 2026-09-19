@@ -147,15 +147,10 @@ public enum SessionDiscovery {
 
     // MARK: - Scope
 
-    /// A week rather than a day, decided by counting rather than by argument:
-    /// on this machine the window holds 31 interactive sessions at 24h and 44
-    /// at 7d. Thirteen more rows buys "what I have been doing" over "what I was
-    /// doing", which is what makes the case work after a weekend.
-    public static let defaultWindow: TimeInterval = 7 * 24 * 60 * 60
-
-    /// Above what any list can be read at. The grid caps far lower; this only
-    /// stops the classifier reading the whole archive.
-    public static let defaultLimit = 60
+    /// Past Agents covers the last thirty days. Do not discard candidates
+    /// before keyword ranking; the grid applies its own display limit.
+    public static let defaultWindow: TimeInterval = 30 * 24 * 60 * 60
+    public static let defaultLimit = Int.max
 
     /// Enough to reach the first entry carrying `entrypoint` and `cwd`. The
     /// first lines of a transcript can be bookkeeping (`queue-operation`,
@@ -907,7 +902,7 @@ public enum SessionDiscovery {
 
             guard let text = try? String(contentsOfFile: url.path, encoding: .utf8)
             else { continue }
-            let parsed = CodexRollout.parse(text)
+            let parsed = autoreleasepool { CodexRollout.parse(text) }
             guard let sessionId = parsed.meta?.sessionId else {
                 result.unclassifiable += 1
                 continue

@@ -65,6 +65,35 @@ public struct AgentSession: Sendable, Equatable, Identifiable {
     public var pullRequest: URL?
     /// Where a person looks at this agent in the provider's own interface.
     public var url: URL?
+    /// The directory the agent works in on THIS Mac, when it has one. An ACP
+    /// agent always does (it is the child's cwd); a cloud agent never does.
+    /// The spool line carries it as the event's cwd, which is what a summary
+    /// request and a git-branch lookup read.
+    public var directory: String?
+    /// The provider's own interface on THIS Mac, when it is a program rather
+    /// than a page: OpenCode's TUI opens a session with `opencode --session`.
+    /// Go to Agent for a row with no pane and no page (#470).
+    public var shell: ShellDoor?
+    /// The tmux session (on this app's socket) holding the agent's screen,
+    /// when the provider keeps one. Outranks `shell` as the door.
+    public var pane: String?
+
+    /// Where Go to Agent goes, decided once for the grid and the card: a web
+    /// page, else our pane with its screen, else a command that opens one.
+    public var door: SessionRow.Door {
+        url.map { .page($0) }
+            ?? pane.map { .pane($0) }
+            ?? shell.map { .shell($0.command, directory: $0.directory) }
+            ?? SessionRow.Door.none
+    }
+
+    public struct ShellDoor: Sendable, Equatable {
+        public var command: String
+        public var directory: String
+        public init(command: String, directory: String) {
+            self.command = command; self.directory = directory
+        }
+    }
 
     public init(id: ID, provider: String, title: String = "",
                 state: AgentSessionState = .unknown, updatedAt: Date = Date(),
@@ -212,9 +241,20 @@ public enum AgentPresentation: Sendable, Equatable {
     public static func bucket(state: AgentSessionState,
                               hasPendingRequest: Bool) -> AgentPresentation {
         // Amber first: a broken agent that also has something unread is broken.
+        //
+        // **A pending permission is AMBER** (revised 15 Sep, 7:47 PM). The
+        // 14 Sep ruling made a question green, and it still is for a turn
+        // that ends with one. A structured permission request is different:
+        // the agent is BLOCKED on it, exactly as a local agent is blocked on
+        // a dialog, and local dialogs have always been amber with the reason
+        // in the column. Robert, on a remote agent that had waited 27 minutes
+        // on a permission nobody had heard: "it seems hung, and the lamp is
+        // not amber, and there is no decision or anything." Same colour for
+        // the same situation, whichever side of the pipe the agent is on.
+        if hasPendingRequest { return .problem }
         switch state {
         case .authRequired, .failed, .rejected, .unknown: return .problem
-        case .submitted, .working: return hasPendingRequest ? .yours : .working
+        case .submitted, .working: return .working
         case .inputRequired, .completed, .canceled: return .yours
         }
     }
@@ -375,6 +415,63 @@ public struct PendingRequest: Sendable, Equatable, Identifiable {
     /// The first question's words, for a lamp caption or a spoken line that has
     /// room for one clause. Never the whole request: answering needs all of it.
     public var asked: String { questions.first?.asked ?? "" }
+
+    /// A permission, as opposed to the agent's own question: every option
+    /// is one of the allow/reject kinds.
+    public var isPermission: Bool {
+        guard let options = questions.first?.options, !options.isEmpty else { return false }
+        return options.allSatisfy { $0.kind != .other }
+    }
+
+    /// The option the person meant, from what they said. An id or a label
+    /// verbatim wins; otherwise the words are read for consent: "always"
+    /// before "yes", because "yes, always" is an always. Nil when the words
+    /// do not choose, so the caller can refuse rather than guess. The
+    /// vocabulary is the ACP permission kinds this type was built from (#367).
+    public func option(chosenBy words: String) -> Option? {
+        let options = questions.first?.options ?? []
+        let said = words.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let exact = options.first(where: {
+            $0.id.caseInsensitiveCompare(said) == .orderedSame
+                || $0.label.caseInsensitiveCompare(said) == .orderedSame }) {
+            return exact
+        }
+        let lower = said.lowercased()
+        // A label said in part: "thorough" for "Thorough (Recommended)",
+        // "standard" for "Standard". The agent's own questions carry labels
+        // like these, and nobody says the parenthesis. One label whose first
+        // word is in what was said wins; two is no choice.
+        let byLabel = options.filter { option in
+            let head = option.label.lowercased()
+                .split(whereSeparator: { !$0.isLetter && !$0.isNumber }).first.map(String.init) ?? ""
+            return head.count >= 3
+                && lower.range(of: "\\b\(NSRegularExpression.escapedPattern(for: head))\\b",
+                               options: .regularExpression) != nil
+        }
+        if byLabel.count == 1 { return byLabel[0] }
+        if byLabel.count > 1 { return nil }
+        func has(_ terms: [String]) -> Bool {
+            terms.contains { term in
+                lower.range(of: "\\b\(term)\\b", options: .regularExpression) != nil
+            }
+        }
+        let kind: Option.Kind?
+        if has(["always", "every time", "from now on", "don't ask again", "do not ask again"]) {
+            kind = has(["no", "never", "reject", "deny", "don't", "do not"]) && !has(["yes", "allow", "ok", "okay", "go", "sure"]) ? .rejectAlways : .allowAlways
+        } else if has(["never"]) {
+            kind = .rejectAlways
+        } else if has(["no", "reject", "deny", "don't", "do not", "stop", "cancel"]) {
+            kind = .rejectOnce
+        } else if has(["yes", "yeah", "yep", "allow", "ok", "okay", "go", "go ahead", "sure", "approve", "proceed", "do it", "fine"]) {
+            kind = .allowOnce
+        } else {
+            kind = nil
+        }
+        guard let kind else { return nil }
+        return options.first { $0.kind == kind }
+            ?? (kind == .allowAlways ? options.first { $0.kind == .allowOnce } : nil)
+            ?? (kind == .rejectAlways ? options.first { $0.kind == .rejectOnce } : nil)
+    }
 }
 
 /// An answer to a `PendingRequest`.
@@ -403,11 +500,15 @@ public struct Turn: Sendable, Equatable, Identifiable {
     public var at: Date
     public var role: Role
     public var text: String
+    /// What the agent said before this, in the same turn, when the poller
+    /// had the whole transcript in hand. Only ever set on the agent turn that
+    /// ends a turn; see `EarlierThisTurn`. Not part of identity.
+    public var earlier: String?
 
     public enum Role: String, Sendable, Equatable, Codable { case agent, user, system }
 
-    public init(id: String, at: Date, role: Role, text: String) {
-        self.id = id; self.at = at; self.role = role; self.text = text
+    public init(id: String, at: Date, role: Role, text: String, earlier: String? = nil) {
+        self.id = id; self.at = at; self.role = role; self.text = text; self.earlier = earlier
     }
 }
 
@@ -436,6 +537,15 @@ public struct AgentEvent: Sendable, Equatable {
     public var session: AgentSession.ID
     public var at: Date
     public var kind: Kind
+    /// What the poller knew this agent's state to be BEFORE this event, or
+    /// nil when it knew nothing. Stamped by the poller on the way out, never
+    /// by a provider: a provider reports what is, the poller is the one that
+    /// remembers what was. It exists so a spool writer can tell a turn ENDING
+    /// from any later change while the agent sits finished (a title arriving,
+    /// a list re-read): the first is a turn, the second is not, and writing
+    /// the second as a bare stop line put "finished a turn" over the words
+    /// the agent had just said (15 Sep, Robert's first OpenCode turn).
+    public var previously: AgentSessionState?
 
     public enum Kind: Sendable, Equatable {
         /// First sight of an agent, carrying everything known about it.

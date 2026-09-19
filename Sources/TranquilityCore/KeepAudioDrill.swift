@@ -90,8 +90,14 @@ public enum KeepAudioDrill {
         _ = try spokenOrphan.close()
         try? fm.setAttributes([.modificationDate: old], ofItemAtPath: spokenOrphan.url.path)
 
+        // A file the dead process was writing seconds before this boot — the
+        // 14 Sep 21:53 case. Not back-dated; adopted because the boot is the
+        // sole owner, not because time passed.
+        let fresh = try LiveAudioCapture(utteranceId: "keep-fresh", sampleRate: 16000, directory: audio)
+        try fresh.append(pcm16: pcm(seconds: 3, amplitude: 3000))
+
         let store = try QueueStore(url: root.appendingPathComponent("queue.sqlite"))
-        let report = try store.reconcileOnBoot(audioDirectory: audio)
+        let report = try store.reconcileOnBoot(audioDirectory: audio, soleOwner: true)
         let adopted = Set(report.adoptedAudio)
         let longRow = try store.utterance(id: "keep-long")
         let spokenOrphanRow = try store.utterance(id: "keep-spoken-orphan")
@@ -106,6 +112,7 @@ public enum KeepAudioDrill {
             Check("silentOrphanStaysForReap", fm.fileExists(atPath: orphan.url.path)),
             Check("spokenShortOrphanAdopted", adopted.contains("keep-spoken-orphan")
                   && spokenOrphanRow?.status == .recorded),
+            Check("freshFileAdoptedBySoleOwner", adopted.contains("keep-fresh")),
         ])
 
         // F — a kept file is a Recents row the moment it is kept, not at the
@@ -152,7 +159,7 @@ public enum KeepAudioDrill {
         let dismissedQuiet = try awaitDismiss(store: store, audioStore: audioStore,
                                               pcm16: pcm(seconds: 2), peak: 0.001, preWritten: quiet.url,
                                               utteranceId: "keep-dismissed-quiet")
-        let boot2 = try store.reconcileOnBoot(audioDirectory: audio)
+        let boot2 = try store.reconcileOnBoot(audioDirectory: audio, soleOwner: true)
         let afterBoot = try store.utterance(id: "keep-dismissed")
         let slipRow = try store.utterance(id: "keep-dismissed-slip")
         let dismiss = Group(name: "dismissKeeps", checks: [
@@ -172,7 +179,43 @@ public enum KeepAudioDrill {
                   && (dismissedQuiet?.audioPath.map { fm.fileExists(atPath: $0) } ?? false)),
         ])
 
-        return [keep, boot, now, dismiss]
+        // H — the words a dead process had already heard survive with the
+        // audio (15 Sep 2026). A live capture with partials noted and no
+        // close is what a crash mid-hold leaves; a sole-owner boot adopts it
+        // with the partial on the row. Finish and discard remove the sidecar.
+        let heard = try LiveAudioCapture(utteranceId: "keep-heard", sampleRate: 16000, directory: audio)
+        try heard.append(pcm16: pcm(seconds: 3, amplitude: 3000))
+        heard.notePartial("the first half of")
+        heard.notePartial("the first half of what was said")
+        let sidecarWritten = fm.fileExists(atPath: heard.partialURL.path)
+        let boot3 = try store.reconcileOnBoot(audioDirectory: audio, soleOwner: true)
+        let heardRow = try store.utterance(id: "keep-heard")
+
+        let finishing = try LiveAudioCapture(utteranceId: "keep-finishing", sampleRate: 16000, directory: audio)
+        try finishing.append(pcm16: pcm(seconds: 1))
+        finishing.notePartial("about to finish")
+        _ = try finishing.finish()
+        let slipping = try LiveAudioCapture(utteranceId: "keep-slipping", sampleRate: 16000, directory: audio)
+        try slipping.append(pcm16: pcm(seconds: 0.2))
+        slipping.notePartial("a slip")
+        _ = slipping.abandon(hadSpeech: false)
+        let closedLate = try LiveAudioCapture(utteranceId: "keep-late", sampleRate: 16000, directory: audio)
+        _ = try closedLate.finish()
+        closedLate.notePartial("arrived after close")
+
+        let partials = Group(name: "partialsSurvive", checks: [
+            Check("partialWrittenBesideAudio", sidecarWritten),
+            Check("deathAdoptsThePartial", boot3.adoptedAudio.contains("keep-heard")
+                  && heardRow?.transcriptText == "the first half of what was said"
+                  && heardRow?.transcriptProvider == "streamed-partial"),
+            Check("adoptedRowStaysRecorded", heardRow?.status == .recorded),
+            Check("sidecarConsumedOnAdoption", !fm.fileExists(atPath: heard.partialURL.path)),
+            Check("finishRemovesTheSidecar", !fm.fileExists(atPath: finishing.partialURL.path)),
+            Check("discardRemovesTheSidecar", !fm.fileExists(atPath: slipping.partialURL.path)),
+            Check("latePartialWritesNothing", !fm.fileExists(atPath: closedLate.partialURL.path)),
+        ])
+
+        return [keep, boot, now, dismiss, partials]
     }
 
     /// A fixture chain that answers at once, so the drill spends nothing.

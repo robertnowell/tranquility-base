@@ -10,12 +10,18 @@ on:
         required: true
         type: string
 
-# GitHub's queue:max preserves up to 100 pending runs instead of replacing the
-# previous pending run. Serializing avoids parallel notarizations and Latest
-# races without sacrificing the one-release-per-merge contract.
+# Serialized, and the newest main goes next. One group means no parallel
+# notarizations and no two builds racing for Latest. GitHub's default for a
+# group keeps the running build and ONE pending run, replaced by each newer
+# push, which is the whole point: main is cumulative, so releasing its head
+# releases every commit before it. This used `queue: max` (keep every pending
+# run, release each commit in order) and on 15 Sep fourteen merges in ninety
+# minutes put Prod an hour behind main, one twelve-minute build at a time.
+# A skipped commit is still buildable on demand through workflow_dispatch.
+# Not cancel-in-progress: that would also kill the running build, and on a
+# busy day nothing would ever finish.
 concurrency:
   group: release-main
-  queue: max
 
 permissions:
   contents: read
@@ -51,8 +57,15 @@ jobs:
             exit 1
           }
           test "$(git rev-parse HEAD)" = "$TARGET_COMMIT"
-          git checkout -B ci-release "$TARGET_COMMIT"
-          TB_SKIP_LIVE_HARNESS_DRILLS=1 scripts/preflight.sh "$TARGET_COMMIT^"
+          if [ -x scripts/audit-source.sh ]; then
+            scripts/audit-source.sh "$TARGET_COMMIT"
+          else
+            # Historical recovery uses the gate versioned with that source.
+            # Commits predating audit-source.sh require a named local branch.
+            git checkout -B ci-release "$TARGET_COMMIT"
+            TB_SKIP_LIVE_HARNESS_DRILLS=1 scripts/preflight.sh "$TARGET_COMMIT^"
+          fi
+          test "$(git rev-parse HEAD)" = "$TARGET_COMMIT"
           scripts/prepare-release-app.sh
           tar -czf .build/unsigned-tranquility-base.tgz \
             -C .build/bundle/release "Tranquility Base.app" "Tranquility Base.dSYM"
@@ -64,6 +77,16 @@ jobs:
           path: .build/unsigned-tranquility-base.tgz
           if-no-files-found: error
           retention-days: 1
+
+
+      - name: Retain test progress and stall diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: test-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .build/ci-diagnostics/
+          if-no-files-found: ignore
+          retention-days: 7
 
   release:
     name: Sign, notarize, audit, and publish

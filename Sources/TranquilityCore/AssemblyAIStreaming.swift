@@ -618,9 +618,23 @@ public final class StreamedUtterance: @unchecked Sendable {
         }
     }
 
+    /// Where each partial is also written to disk (`LiveAudioCapture
+    /// .notePartial`). Attached by the recorder after the factory builds the
+    /// stream, because the factory does not know the capture. Distinct from
+    /// `onPartial`, which is the panel's live caption and may be nil.
+    public var partialSink: (@Sendable (String) -> Void)? {
+        get { lock.lock(); defer { lock.unlock() }; return storedPartialSink }
+        set { lock.lock(); storedPartialSink = newValue; lock.unlock() }
+    }
+    private var storedPartialSink: (@Sendable (String) -> Void)?
+
     private func observePartial(_ text: String) {
-        lock.lock(); partialChars = max(partialChars, text.count); lock.unlock()
+        lock.lock()
+        partialChars = max(partialChars, text.count)
+        let sink = storedPartialSink
+        lock.unlock()
         onPartial?(text)
+        sink?(text)
     }
 
     private func recordFinish(_ outcome: String, code: String? = nil, chars: Int = 0, began: Date) {

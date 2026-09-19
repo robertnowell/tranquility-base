@@ -32,20 +32,45 @@ extension AppDelegate {
     /// the user asked for disarmed remain-on-exit first and left no corpse, so
     /// it is silently skipped here (see `onTerminateSession` and `postMortem`).
     func observeExits() {
-        let liveSessions = (ClaudeAgentsCLI().sessions() ?? [])
-            + FileSessionOwnershipStore.shared.liveNonRegistrySessions()
-        // Resolve and cache each agent's tmux session name the first time it
-        // is seen alive: once it is gone from the registry it can no longer be
-        // looked up, so the name has to be captured while it is still here.
-        for session in liveSessions where paneNameById[session.sessionId] == nil {
-            if let name = TmuxOwnership.pane(
-                forSessionId: session.sessionId, pid: session.pid)?.sessionName {
-                paneNameById[session.sessionId] = name
+        // The cold lookup runs a server inventory and process probes for each
+        // agent. Doing it in the UI tick stalled the collapse drill past its
+        // two-second frame deadline on 18 Sep (#541). One background snapshot
+        // at a time also prevents an older result arriving after a newer one.
+        guard !exitObservationInFlight else { return }
+        exitObservationInFlight = true
+        exitProbesStarted += 1
+        let cachedNames = paneNameById
+        Task.detached { [weak self] in
+            // The probe below is synchronous, with no suspension until its
+            // result returns to the main actor. Check this execution segment.
+            let ranOffMain = { !Thread.isMainThread }()
+            let liveSessions = (ClaudeAgentsCLI().sessions() ?? [])
+                + FileSessionOwnershipStore.shared.liveNonRegistrySessions()
+            var names = cachedNames
+            // Retain the verified name while the agent is alive, for the
+            // later post-mortem. Ownership verification is unchanged.
+            for session in liveSessions where names[session.sessionId] == nil {
+                if let name = TmuxOwnership.pane(
+                    forSessionId: session.sessionId, pid: session.pid)?.sessionName {
+                    names[session.sessionId] = name
+                }
+            }
+            let live = liveSessions.map {
+                (id: $0.sessionId, harness: $0.harness, sessionName: names[$0.sessionId])
+            }
+            let resolvedNames = names
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                self.paneNameById = resolvedNames
+                self.exitProbesCompleted += 1
+                self.exitProbeRanOffMain = ranOffMain
+                self.exitObservationInFlight = false
+                self.recordObservedExits(live)
             }
         }
-        let live = liveSessions.map {
-            (id: $0.sessionId, harness: $0.harness, sessionName: paneNameById[$0.sessionId])
-        }
+    }
+
+    private func recordObservedExits(_ live: [(id: String, harness: String, sessionName: String?)]) {
         for vanished in exitWatch.observe(live) {
             paneNameById[vanished.id] = nil
             guard let name = vanished.sessionName else { continue }
@@ -160,7 +185,7 @@ extension AppDelegate {
             supersedesWaiting: { delivering.supersedesWaiting($0, latestId: $1) },
             isInFlight: { delivering.isInFlight($0) },
             closedCallsigns: closedCallsigns,
-            remote: remoteAgents(known: known)))
+            remote: remoteAgents(waiting: (try? coordinator.waiting()) ?? [])))
 
         // Recorded before anything is drawn so the card can ask the same
         // question the rows answered, and get the same answer.
@@ -180,7 +205,15 @@ extension AppDelegate {
     /// name for the same call, kept so the many call sites elsewhere in the
     /// app don't all need to say `GridAssembler.` themselves.
     func tabDisplayName(for event: WaitingSession, live: LiveSession?) -> String {
-        GridAssembler.tabDisplayName(for: event, live: live)
+        // A remote agent's name is the provider's title for it, the same
+        // name its row wears. The local rule reads a transcript title and
+        // falls back to the directory, and a remote agent has no transcript
+        // here, so its card said "tranquility-base" over an answer about
+        // software markets (Robert, 16 Sep 2:15 PM: "name on card incorrect").
+        if let agent = agents?.snapshot.agent(event.sessionId), !agent.title.isEmpty {
+            return agent.title
+        }
+        return GridAssembler.tabDisplayName(for: event, live: live)
     }
 
     /// The one route to the idle face: assemble the grid and show it.
@@ -194,17 +227,35 @@ extension AppDelegate {
     /// rows and costs nothing. Read from the snapshot rather than fetched:
     /// a repaint must never wait on a network call, which is the same rule
     /// `lastSeenLive` follows for the local bands.
-    func remoteAgents(known: [WaitingSession]) -> GridAssembler.RowInputs.RemoteAgents {
+    func remoteAgents(waiting: [WaitingSession]) -> GridAssembler.RowInputs.RemoteAgents {
         guard let snapshot = agents?.snapshot else { return .init() }
+        return Self.remoteAgents(snapshot: snapshot, waiting: waiting)
+    }
+
+    /// The pure half, so the panel's own drill can drive it with a posed
+    /// snapshot and a temporary store's waiting list, exactly as the grid
+    /// does with the real ones.
+    static func remoteAgents(snapshot: AgentPoller.Snapshot,
+                             waiting: [WaitingSession]) -> GridAssembler.RowInputs.RemoteAgents {
         // UNREAD COMES FROM THE STORED EVENT LOG, exactly like every local
         // row's green lamp, rather than from the provider's own opinion. The
         // spool line a remote turn wrote is what puts it here, so a remote
         // agent goes green by the same route a local one does.
-        let unread = Set(known.filter { !$0.heard }.map(\.sessionId))
+        //
+        // From the WAITING list, which joins the heard cursor. This read
+        // `allKnownSessions()`, which does not, so `heard` was nil for every
+        // row and every remote row stayed unread for ever, however many times
+        // it was heard (Robert, 15 Sep: "read state isn't updating"). A
+        // dismissed session is not in the waiting list at all, which is also
+        // right: dismissed is read.
+        let unread = Set(waiting.filter { !$0.heard }.map(\.sessionId))
+        let heard = Set(waiting.filter { $0.heard }.map(\.sessionId))
+        let ids = Set(snapshot.agents.map(\.id))
         return .init(agents: snapshot.agents,
                      requests: snapshot.requests,
-                     unread: unread.intersection(snapshot.agents.map(\.id)),
-                     unreachable: snapshot.unreachable)
+                     unread: unread.intersection(ids),
+                     unreachable: snapshot.unreachable,
+                     heard: heard.intersection(ids))
     }
 
     func showIdleGrid(note: String? = nil,

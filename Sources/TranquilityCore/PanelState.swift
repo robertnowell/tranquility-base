@@ -173,6 +173,24 @@ public enum PanelState: Equatable {
         }
     }
 
+    /// Does a dismiss from this face leave the agent's turn still owed?
+    ///
+    /// Ruled 14 Sep 2026. At 15:55 a dismiss during a 3m31s dictation did two
+    /// things in one instant: it ended the capture (#440 keeps the words now)
+    /// and it marked the turn behind it dismissed. The lamp went from green to
+    /// quiet, twenty lit rows filled the twenty grid slots, and the session
+    /// left the grid for Past Agents without anybody choosing that. Robert:
+    /// *"just hitting the Escape key once, I don't think should dismiss the
+    /// [summary]... I'm not actually even aware of what that Escape key does.
+    /// So I'd say just turn that off."*
+    ///
+    /// So a dismiss from a reply face (mic open, transcribing, countdown) ends
+    /// the reply and nothing else: the turn stays green until it is dismissed
+    /// from its own card. A dismiss from a card face is still the turn's
+    /// dismissal, which is what the Dismiss button has meant since it stopped
+    /// being "hide the window and leave it in the queue".
+    public var dismissKeepsTheTurn: Bool { ownsStage }
+
     /// Which arrivals may replace this state.
     ///
     /// Capture states (listening, transcribing, pendingSend) own the stage: only

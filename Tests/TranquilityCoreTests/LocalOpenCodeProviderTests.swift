@@ -23,7 +23,7 @@ final class LocalOpenCodeProviderTests: XCTestCase {
         [{"id":"q1","sessionID":"ses_abc","questions":[
           {"question":"Which branch?","options":[{"label":"main"},{"label":"dev"}]}]}]
         """)
-        fake.routes["GET /api/session/ses_abc/permission"] = (200, "[]")
+        fake.routes["GET /permission"] = (200, "[]")
         fake.routes["POST /session/ses_abc/message"] = (200, "{}")
         fake.routes["POST /question/q1/reply"] = (200, "{}")
         fake.routes["POST /session"] = (200, #"{"id":"ses_new"}"#)
@@ -131,10 +131,14 @@ final class LocalOpenCodeProviderTests: XCTestCase {
     func testAPermissionIsAnsweredOnThePermissionRoute() async throws {
         let fake = populated()
         fake.routes["GET /question"] = (200, "[]")
-        fake.routes["GET /api/session/ses_abc/permission"] = (200, """
-        [{"id":"p1","sessionID":"ses_abc","action":"run rm -rf","resources":["build/"]}]
+        // The shape a live 1.18.30 returns from the UNSCOPED list, another
+        // session's request included so the filter is exercised.
+        fake.routes["GET /permission"] = (200, """
+        [{"id":"p0","sessionID":"ses_other","permission":"bash","patterns":["rm -rf build"]},
+         {"id":"p1","sessionID":"ses_abc","permission":"edit","patterns":["greet.py"],
+          "metadata":{"filepath":"/toy/greet.py"}}]
         """)
-        fake.routes["POST /api/session/ses_abc/permission/p1/reply"] = (200, "{}")
+        fake.routes["POST /permission/p1/reply"] = (200, "true")
         let p = provider(fake)
         let session = try await p.mine()[0]
         guard let request = try await p.request(session.id) else {
@@ -148,10 +152,21 @@ final class LocalOpenCodeProviderTests: XCTestCase {
         let outcome = try await p.respond(to: request, with: Response("once"))
         XCTAssertEqual(outcome, .accepted)
         XCTAssertTrue(
-            fake.calls.contains { $0.path == "/api/session/ses_abc/permission/p1/reply" },
+            fake.calls.contains { $0.path == "/permission/p1/reply" },
             "called: \(fake.calls.map(\.path))")
         let body = fake.calls.first { $0.path.contains("/permission/") }?.body ?? ""
         XCTAssertTrue(body.contains("once"), body)
+        XCTAssertEqual(request.id, "p1", "the other session's permission must be filtered out")
+        XCTAssertTrue(request.questions[0].asked.contains("edit") && request.questions[0].asked.contains("greet.py"),
+                      request.questions[0].asked)
+    }
+
+    /// The event a live server emits when an agent blocks on `edit: ask`.
+    func testAPermissionAskedEventMarksTheSessionInputRequired() {
+        let frame = #"{"type":"permission.asked","properties":{"id":"per_1","sessionID":"ses_abc","permission":"edit","patterns":["README.md"],"metadata":{"filepath":"/toy/README.md"}}}"#
+        let ev = Wire.event(Data(frame.utf8), provider: "opencode")
+        guard case .changed(let s)? = ev?.kind else { return XCTFail("\(String(describing: ev))") }
+        XCTAssertEqual(s.state, .inputRequired)
     }
 
     // MARK: - Starting

@@ -21,6 +21,10 @@ enum DroppedItem {
 /// only the receipt line and the analytics event say which door they used.
 enum StagingSource: String {
     case drop, paste
+    /// The Attach door on the tray row (ruled 15 Sep): a file picker.
+    case picker
+    /// A line typed on the card and entered with Return (ruled 15 Sep).
+    case typed
 }
 
 /// One pasteboard, read into items, with the reason when it could not be.
@@ -174,33 +178,131 @@ final class DropSurfaceView: NSView {
 /// list: fragments can be long and a wrapped row reflows unpredictably as the
 /// set changes, while rows only ever grow downward — the geometry the panel
 /// already handles by anchoring its top edge.
-final class TrayRowView: NSStackView {
+final class TrayRowView: NSStackView, NSTextFieldDelegate {
+    func controlTextDidChange(_ note: Notification) { onComposeChanged?(compose.stringValue) }
+    /// No blinking caret (ruled 15 Sep: "it feels distracting"). The line is
+    /// a quiet place words appear, not a text editor; the field editor is
+    /// asked to hide its insertion point the moment it arrives.
+    func controlTextDidBeginEditing(_ note: Notification) { hideCaret() }
+    func hideCaret() {
+        (compose.currentEditor() as? NSTextView)?.insertionPointColor = .clear
+    }
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+        if selector == #selector(NSResponder.insertNewline(_:)) { onComposeReturn?(compose.stringValue); return true }
+        if selector == #selector(NSResponder.cancelOperation(_:)) { onComposeEscape?(); return true }
+        return false
+    }
+
     /// Per-fragment, never clear-all (a cross that took entries you did not
     /// point at is the surprise this whole feature exists to avoid).
     var onRemove: ((String) -> Void)?
+    /// The paperclip was clicked (ruled 15 Sep, second pass): a file picker.
+    var onAttach: (() -> Void)?
 
     /// What is drawn right now, so `apply` can skip identical repaints —
     /// render() runs on every tick and rebuilding subviews under the pointer
     /// would kill the hover state on the ✕ you are reaching for.
     private(set) var fragments: [String] = []
 
+    /// ONE row to type or attach (ruled 15 Sep, on seeing the first cut):
+    /// the typed line at the left, "type a message or paste", and a
+    /// paperclip at the right. It appears when the card is selected (a
+    /// press arms it and it takes the keys) and stays while it has words;
+    /// the chips, when there are any, stack above it. No "no attachments":
+    /// an empty row says nothing.
+    let composeRow = NSView()
+    let compose = NSTextField()
+    let attach: ConsoleButton
+    var onComposeChanged: ((String) -> Void)?
+    var onComposeReturn: ((String) -> Void)?
+    var onComposeEscape: (() -> Void)?
+
     init() {
+        attach = ConsoleButton(image: NSImage(systemSymbolName: "paperclip",
+                                              accessibilityDescription: StateLegend.attachTitle)!
+                                 .withSymbolConfiguration(.init(pointSize: 12, weight: .medium))!,
+                               target: nil, action: nil)
         super.init(frame: .zero)
         orientation = .vertical
         alignment = .leading
         spacing = 3
         translatesAutoresizingMaskIntoConstraints = false
+
+        compose.isBordered = false
+        compose.isBezeled = false
+        compose.drawsBackground = false
+        compose.focusRingType = .none
+        compose.font = ChromeType.mono(ofSize: 11, weight: .regular)
+        compose.textColor = StateLegend.Lens.content.color
+        // A plain attributed string, NOT through the mark composer: the
+        // composer sets a baseline offset, and a placeholder on one baseline
+        // with the typed words on another is "the text moves up a little
+        // when you start typing" (15 Sep).
+        compose.placeholderAttributedString = NSAttributedString(
+            string: StateLegend.composePlaceholder,
+            attributes: [.font: ChromeType.mono(ofSize: 11, weight: .regular),
+                         .foregroundColor: StateLegend.Palette.faint])
+        // NOT single-line mode: it trims the cell to the cap height and cut
+        // the placeholder's ascenders and descenders ("text is cut off from
+        // the hint", 15 Sep). One line by maximumNumberOfLines and no wrap,
+        // scrollable so a long line moves under the field instead of
+        // growing it, and a fixed height with room for the whole glyph.
+        compose.lineBreakMode = .byClipping
+        compose.maximumNumberOfLines = 1
+        compose.cell?.wraps = false
+        compose.cell?.isScrollable = true
+        compose.delegate = self
+        compose.translatesAutoresizingMaskIntoConstraints = false
+
+        attach.isBordered = false
+        attach.restingInk = StateLegend.Lens.chrome.color
+        attach.toolTip = StateLegend.attachTip
+        attach.target = self
+        attach.action = #selector(attachTapped)
+        attach.translatesAutoresizingMaskIntoConstraints = false
+
+        composeRow.translatesAutoresizingMaskIntoConstraints = false
+        composeRow.addSubview(compose); composeRow.addSubview(attach)
+        NSLayoutConstraint.activate([
+            composeRow.widthAnchor.constraint(equalToConstant: 348),
+            composeRow.heightAnchor.constraint(equalToConstant: 22),
+            compose.leadingAnchor.constraint(equalTo: composeRow.leadingAnchor),
+            compose.centerYAnchor.constraint(equalTo: composeRow.centerYAnchor),
+            compose.heightAnchor.constraint(equalToConstant: 18),
+            compose.trailingAnchor.constraint(equalTo: attach.leadingAnchor, constant: -8),
+            attach.trailingAnchor.constraint(equalTo: composeRow.trailingAnchor),
+            attach.centerYAnchor.constraint(equalTo: composeRow.centerYAnchor),
+            attach.widthAnchor.constraint(equalToConstant: 20),
+            attach.heightAnchor.constraint(equalToConstant: 20),
+        ])
+        composeRow.isHidden = true
+        addArrangedSubview(composeRow)
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    @objc private func attachTapped() { onAttach?() }
+
+    /// Show the row and hand it the keys, or hide it when it is empty.
+    func setComposing(_ on: Bool) {
+        composeRow.isHidden = !(on || !compose.stringValue.isEmpty)
+    }
+    /// Whether the row is on screen: the panel shows the tray for it.
+    var isComposeRowShown: Bool { !composeRow.isHidden }
+    var composedText: String { compose.stringValue }
+    func clearComposed() { compose.stringValue = ""; composeRow.isHidden = true }
 
     func apply(_ next: [String]) {
         guard next != fragments else { return }
         fragments = next
-        removeAllArrangedSubviews()
+        for view in arrangedSubviews where view !== composeRow {
+            removeArrangedSubview(view); view.removeFromSuperview()
+        }
         for fragment in next {
             let row = ChipRow(fragment: fragment)
             row.onRemove = { [weak self] in self?.onRemove?(fragment) }
-            addArrangedSubview(row)
+            // Chips above the row you type on: what is already in, then
+            // what you are writing now.
+            insertArrangedSubview(row, at: arrangedSubviews.count - 1)
             row.widthAnchor.constraint(equalToConstant: 348).isActive = true
         }
     }
@@ -210,10 +312,13 @@ final class TrayRowView: NSStackView {
         arrangedSubviews.compactMap { ($0 as? ChipRow)?.displayName }
     }
 
-    /// The stack's own count, not the rows'. A view removed from the tree but
-    /// left in the arrangement is invisible to `displayedNamesForTesting` and
-    /// visible here, which is the difference the teardown fix is about.
-    var arrangedSubviewCountForTesting: Int { arrangedSubviews.count }
+    /// The stack's own count of CHIP rows, not counting the header. A view
+    /// removed from the tree but left in the arrangement is invisible to
+    /// `displayedNamesForTesting` and visible here, which is the difference
+    /// the teardown fix is about.
+    var arrangedSubviewCountForTesting: Int {
+        arrangedSubviews.filter { $0 !== composeRow }.count
+    }
 
     var removeButtonsForTesting: [ConsoleButton] {
         arrangedSubviews.compactMap { ($0 as? ChipRow)?.removeButton }
@@ -299,10 +404,8 @@ final class TrayRowView: NSStackView {
             FragmentPreview.preview(fragment)
         }
 
-        override func resetCursorRects() {
-            super.resetCursorRects()
-            addCursorRect(removeButton.frame, cursor: .pointingHand)
-        }
+        // The ✕ is a ConsoleButton and carries its own pointer tracking now
+        // (PointerCursor); a cursor rect here never worked on this panel.
     }
 }
 

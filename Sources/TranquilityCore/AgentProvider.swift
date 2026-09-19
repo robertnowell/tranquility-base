@@ -83,6 +83,24 @@ public protocol AgentProvider: Sendable {
     /// because there is no id to hand back when it did not happen.
     func start(_ brief: Brief) async throws -> AgentSession.ID
 
+    /// **Where you go to begin a new agent — the same door you would go to to
+    /// answer any of its questions.**
+    ///
+    /// Ruled 15 Sep 2026. There is one verb, "go to the agent", and one place
+    /// it goes: the agent's own surface. For a local harness that is a
+    /// terminal; for crobot it is a web page. Starting is not special — the
+    /// first thing crobot asks (which repository?) is answered exactly where
+    /// its tenth question would be, in its own UI. Robert: *"click button, go
+    /// to place where I answer questions. That's cleaner ... just a rule, a
+    /// standard."*
+    ///
+    /// A provider that returns a URL here is saying "begin me over there";
+    /// New Agent opens it and does not call `start`. A provider that returns
+    /// nil is begun in the app the ordinary way. This replaced a short-lived
+    /// idea where the app rendered a provider's start-questions itself, which
+    /// was the special case this rule exists to avoid.
+    func composeURL(for brief: Brief) -> URL?
+
     /// Stop an agent. Gated by `can.canCancel`.
     ///
     /// Added 13 Sep, because `canCancel` shipped in the first draft with no
@@ -91,6 +109,13 @@ public protocol AgentProvider: Sendable {
     /// on day one of a seam written to prevent exactly that would have been a
     /// poor start.
     func cancel(_ id: AgentSession.ID) async throws -> SendOutcome
+
+    /// End the agent as far as this app is concerned: after this it is not
+    /// listed, not adopted at the next launch, and its row is gone. What the
+    /// vendor does with the session is the vendor's business (OpenCode keeps
+    /// it in its own store; `opencode --session` still opens it). Default is
+    /// nothing, for a provider whose list this app cannot edit.
+    func forget(_ id: AgentSession.ID) async
 
     /// Where a person looks at this agent in the provider's own interface, or
     /// nil for a provider with no such place (a local server has none).
@@ -103,11 +128,22 @@ public protocol AgentProvider: Sendable {
 /// once the adapter exists. Deliberately an instance rather than a global
 /// singleton so a test and the app can hold different sets, which is the same
 /// reasoning `Coordinator` gives for injecting everything it uses.
+public extension AgentProvider {
+    /// Most agents are begun in the app, not at a URL of their own.
+    func composeURL(for brief: Brief) -> URL? { nil }
+}
+
 public struct AgentProviderRegistry: Sendable {
     public let providers: [any AgentProvider]
+    /// Providers this app spawns itself, which need no address: an installed
+    /// binary is their address. Named here rather than as a capability on the
+    /// provider, because a capability nothing reads is rule 5's failure and
+    /// this set is read in exactly one place, `configured()`.
+    public let spawnable: Set<String>
 
-    public init(_ providers: [any AgentProvider]) {
+    public init(_ providers: [any AgentProvider], spawnable: Set<String> = []) {
         self.providers = providers
+        self.spawnable = spawnable
     }
 
     public func provider(_ id: String) -> (any AgentProvider)? {
@@ -119,7 +155,12 @@ public struct AgentProviderRegistry: Sendable {
     /// does, and conflating them puts a row on the panel for a service nobody
     /// here has heard of.
     public func configured(config: URL = HubApp.configPath) -> [any AgentProvider] {
-        let addressed = Set(ProviderConfig.configured(config: config))
+        let addressed = Set(ProviderConfig.configured(config: config)).union(spawnable)
         return providers.filter { addressed.contains($0.id) }
     }
+}
+
+
+extension AgentProvider {
+    public func forget(_ id: AgentSession.ID) async {}
 }

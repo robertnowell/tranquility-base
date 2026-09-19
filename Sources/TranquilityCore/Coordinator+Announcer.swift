@@ -169,8 +169,17 @@ extension Coordinator {
         let live = Set(sessions.map(\.sessionId))
             .union(ownership.liveNonRegistrySessions().map(\.sessionId))
         let all = yours(try store.waitingSessions())
-        sweep.sweep(all, live: live, trace: Coordinator.trace)
-        return all.filter { live.contains($0.sessionId) }
+        // A REMOTE AGENT IS LIVE BY ITS PROVIDER'S WORD, not by a pid on this
+        // Mac. The two probes above are local facts and a remote agent has
+        // neither, so it read as gone: never announced on its own, swept and
+        // retired 120 s after it was started, and its card offered no door
+        // (15 Sep, Robert's first OpenCode agent: "skipping tranquility-base:
+        // session is gone" one second after "replies now go to" it). The
+        // poller's snapshot is the liveness fact for those, and it is the
+        // same one the grid drew the row from.
+        let local = all.filter { !isRemote($0.sessionId) }
+        sweep.sweep(local, live: live, trace: Coordinator.trace)
+        return all.filter { live.contains($0.sessionId) || isRemote($0.sessionId) }
     }
 
     /// Sessions a person started, which is the only kind worth announcing.
@@ -361,6 +370,23 @@ extension Coordinator {
     }
 
     private func summarize(_ event: WaitingSession) async -> Summary {
+        // A PERMISSION IS A DECISION, NOT A SUMMARY. The question and its
+        // options are the brief, verbatim: a model's recap of "the agent is
+        // asking permission to read a file" is worse than the file's name,
+        // and the options are what the person answers with. Robert, 15 Sep
+        // 7:47 PM: "there is no decision or anything."
+        if let matcher = event.notificationMatcher,
+           matcher == "agent_question" || matcher == "agent_question_expired",
+           let words = event.lastAssistantMessage, !words.isEmpty {
+            let brief = matcher == "agent_question"
+                ? RemoteSpool.decision(from: words, projectLabel: event.projectLabel)
+                : SessionBrief(topic: "Interrupted", happened: words, recap: words,
+                               proposal: "What should it do next?")
+            let composed = Summary(spoken: SpokenTextSanitizer().sanitize(brief.spokenText()),
+                                   brief: brief, provider: "agent-question", latencyMs: 0)
+            persistBrief(composed, for: event)
+            return composed
+        }
         let context = event.transcriptPath.map {
             TranscriptArchive.sessionContext(in: URL(fileURLWithPath: $0))
         }
@@ -368,6 +394,19 @@ extension Coordinator {
             ? event.lastAssistantMessage!
             : (event.transcriptPath
                 .flatMap { TranscriptArchive.lastAssistantMessage(in: URL(fileURLWithPath: $0)) } ?? "")
+
+        // THE TURN, NOT THE LAST LINE. What the agent said before its final
+        // message, from whichever source has it: a polled provider put it on
+        // the event when it saw the turn end; a file-based harness (Claude
+        // Code, Codex) has it in the transcript `TurnText` already reads for
+        // the hub. Only for a finished turn: a permission question is its own
+        // text and must not be diluted with what came before it. Nil when the
+        // turn was one message or nobody can say, and then the summary is
+        // exactly what it was before 17 Sep.
+        let earlier: String? = event.hookEvent == .stop
+            ? (event.earlierThisTurn
+               ?? EarlierThisTurn.earlier(blocks: TurnText.forSession(event.sessionId, limit: 1).last?.blocks ?? []))
+            : nil
 
         // One agents probe serves both the lexicon's live names and the label
         // stripping (dropped 14 Sep with the label instruction); summarizing must not double the
@@ -383,10 +422,23 @@ extension Coordinator {
         let lexicon = Lexicon.harvest(
             store: store, liveSessionNames: liveSessions?.compactMap(\.name) ?? [])
 
+        // A REMOTE TURN NEEDS ITS OPENING TOO. With no first user message the
+        // model was asked to recap an answer to a question it could not see,
+        // said `recap: null`, and the gateway called that a provider failure:
+        // every OpenCode turn fell to the deterministic floor and was read
+        // out verbatim with no ladder (reproduced against the model, 15 Sep;
+        // with the opening supplied the same message got a recap and a
+        // goal). The utterance this app dispatched is the opening, from the
+        // other side; the panel's framing is stripped the way the row's title
+        // strips it.
+        let opening = context?.firstUserMessage
+            ?? (isRemote(event.sessionId)
+                ? (try? store.firstUtteranceText(to: event.sessionId))?.flatMap(HeardContext.spokenPart)
+                : nil)
         let summary = await summarizer.summarize(SummaryRequest(
             lastAssistantMessage: lastMessage,
             projectLabel: event.projectLabel,
-            firstUserMessage: context?.firstUserMessage,
+            firstUserMessage: opening,
             // The transcript first, then the working directory. A session
             // whose own cwd is not a repository records "HEAD" for every
             // entry while doing all of its work inside worktrees that are each
@@ -401,7 +453,8 @@ extension Coordinator {
             cwd: event.cwd,
             hookEvent: event.hookEvent,
             notificationMatcher: event.notificationMatcher,
-            managedSource: try? store.summarySource(eventRowid: event.latestId)),
+            managedSource: try? store.summarySource(eventRowid: event.latestId),
+            earlierThisTurn: earlier),
             lexicon: lexicon.allowlistTerms)
 
         if summary.provider == "empty-source" {

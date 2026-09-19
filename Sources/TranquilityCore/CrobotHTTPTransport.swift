@@ -146,6 +146,17 @@ public struct CrobotHTTPTransport: CrobotTransport {
         base.appendingPathComponent("tasks").appendingPathComponent(id)
     }
 
+    /// crobot's own New Task page — its repo picker, its prompt box. The place
+    /// you go to begin a crobot task and answer its first question, which is
+    /// where the tenth would be answered too. `?repo=` pre-selects when the
+    /// caller already knows one; otherwise crobot picks the org's default.
+    public func composeURL(repo: String?) -> URL? {
+        var c = URLComponents(url: base.appendingPathComponent("new"),
+                              resolvingAgainstBaseURL: false)
+        if let repo, !repo.isEmpty { c?.queryItems = [URLQueryItem(name: "repo", value: repo)] }
+        return c?.url
+    }
+
     /// The proxy IS an OpenCode server, so the shared client talks to it with
     /// the same bearer token and a base URL one level deeper.
     public func opencode(_ id: String) -> any OpenCodeClient.Transport {

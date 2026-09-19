@@ -20,15 +20,66 @@ final class RemoteWiringTests: XCTestCase {
 
     /// Absent means not connected. A machine with no provider draws no remote
     /// rows and starts no poller, which is most machines.
+    override func setUp() {
+        super.setUp()
+        // Not this Mac's binaries. The registry now spawns every installed
+        // catalog entry, and a test that read the real search paths would pass
+        // or fail by what happens to be installed here (recorded three times
+        // on 14 Sep). Each test says what is installed.
+        AgentProviders.installedACP = { [] }
+    }
+    override func tearDown() { AgentProviders.installedACP = { ACPCatalog.installed() }; super.tearDown() }
+
+    /// Not this Mac's ledger either: the real one says OpenCode has been used
+    /// here, and a registry test reading it would spawn a fake binary.
+    private let ledger = ProviderLedger(url: FileManager.default.temporaryDirectory
+        .appendingPathComponent("tb-ledger-\(UUID().uuidString).json"))
+
+    private func opencodeInstalled() -> [(entry: ACPCatalog.Entry, command: [String])] {
+        [(ACPCatalog.published.first { $0.id == "opencode" }!, ["/fake/bin/opencode", "acp"])]
+    }
+
+    /// **One vendor, one route.** With the binary installed, OpenCode is the
+    /// protocol provider this app spawns, and it counts as configured with no
+    /// base URL at all: the binary is its address.
+    func testAnInstalledAgentIsRegisteredAndConfiguredWithNoAddress() throws {
+        AgentProviders.installedACP = opencodeInstalled
+        let url = try config(#"{"app":{"base_url":"https://hq.example.test"}}"#)
+        let registry = AgentProviders.registry(config: url, secret: { _ in nil }, ledger: ledger)
+        XCTAssertEqual(registry.providers.map(\.id), ["opencode"])
+        XCTAssertTrue(registry.providers[0] is ServedOpenCodeProvider, "OpenCode is served, not piped (15 Sep 9:11 PM)")
+        XCTAssertEqual(registry.configured(config: url).map(\.id), ["opencode"],
+                       "a spawnable provider needs no base URL to be polled")
+    }
+
+    /// And with the binary installed, a base URL for the same vendor does NOT
+    /// add a second provider under the same id: `RemoteDispatchTransport`
+    /// resolves by id and would answer through whichever it found first.
+    func testTheHTTPRouteYieldsToTheSpawnableOneUnderOneId() throws {
+        AgentProviders.installedACP = opencodeInstalled
+        let url = try config(#"{"providers":{"opencode":{"base_url":"http://127.0.0.1:4096"}}}"#)
+        let built = AgentProviders.registry(config: url, secret: { _ in nil }, ledger: ledger).providers
+        XCTAssertEqual(built.map(\.id), ["opencode"])
+        XCTAssertTrue(built[0] is ServedOpenCodeProvider, "the app serves it; the address is for machines that cannot")
+    }
+
+    /// Registering costs nothing: no process runs until a session is started.
+    func testARegisteredProtocolProviderRunsNoProcessUntilStarted() throws {
+        AgentProviders.installedACP = { [(ACPCatalog.published[0], ["/definitely/not/a/binary", "acp"])] }
+        let url = try config(#"{"app":{"base_url":"https://hq.example.test"}}"#)
+        // A missing binary would throw on spawn; building the registry must not spawn.
+        XCTAssertNoThrow(AgentProviders.registry(config: url, secret: { _ in nil }, ledger: ledger))
+    }
+
     func testAMachineWithNothingConfiguredGetsAnEmptyRegistry() throws {
         let url = try config(#"{"app":{"base_url":"https://hq.example.test"}}"#)
-        XCTAssertTrue(AgentProviders.registry(config: url, secret: { _ in nil })
+        XCTAssertTrue(AgentProviders.registry(config: url, secret: { _ in nil }, ledger: ledger)
             .configured(config: url).isEmpty)
     }
 
     func testALocalServerNeedsOnlyAnAddress() throws {
         let url = try config(#"{"providers":{"opencode":{"base_url":"http://127.0.0.1:4096"}}}"#)
-        let ids = AgentProviders.registry(config: url, secret: { _ in nil })
+        let ids = AgentProviders.registry(config: url, secret: { _ in nil }, ledger: ledger)
             .configured(config: url).map(\.id)
         XCTAssertEqual(ids, ["opencode"])
     }
@@ -42,14 +93,14 @@ final class RemoteWiringTests: XCTestCase {
         // first version of this test asked the real keychain, passed on a
         // machine with no crobot key and failed on one that had it: the same
         // disk-dependency defect this file's own registry was just fixed for.
-        let built = AgentProviders.registry(config: url, secret: { _ in nil })
+        let built = AgentProviders.registry(config: url, secret: { _ in nil }, ledger: ledger)
             .providers.map(\.id)
         XCTAssertFalse(built.contains("crobot"),
                        "a provider with no key would 401 on every poll")
 
         // And WITH a key it is built, which is the other half: a guard that
         // always refuses is indistinguishable from one that works.
-        let withKey = AgentProviders.registry(config: url, secret: { _ in "jrv_probe" })
+        let withKey = AgentProviders.registry(config: url, secret: { _ in "jrv_probe" }, ledger: ledger)
             .providers.map(\.id)
         XCTAssertTrue(withKey.contains("crobot"))
     }
@@ -146,7 +197,8 @@ final class RemoteWiringTests: XCTestCase {
                           unread: [], unreachable: snapshot.unreachable))).rows
 
         XCTAssertEqual(rows.count, 1)
-        XCTAssertEqual(rows[0].lamp, .ready, "an agent asking you something shows green")
+        XCTAssertEqual(rows[0].lamp, .fault, "an agent blocked on a permission shows amber, like a local dialog")
+        XCTAssertEqual(rows[0].read, .unread, "a pending request stays unread until answered")
         XCTAssertEqual(rows[0].aux, "Merge?")
     }
 }

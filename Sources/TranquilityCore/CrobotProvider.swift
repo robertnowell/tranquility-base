@@ -72,7 +72,22 @@ public struct CrobotProvider: AgentProvider {
             // 115 were archived, and listing them would bury three live agents
             // under a hundred tombstones.
             .filter { $0.status != "archived" }
-            .map { $0.agentSession(provider: id) }
+            .map { withURL($0.agentSession(provider: id)) }
+    }
+
+    /// **The task's own web page, set here because only the provider has the
+    /// base URL.** `CrobotTask.agentSession` builds the session from wire
+    /// fields alone and cannot know where crobot lives; the transport does.
+    ///
+    /// Without this every real crobot row had `url == nil`, so its door was
+    /// `.none` and a tap reported "nowhere to land" — which is exactly what
+    /// Robert saw. The bug survived #459's test because that test set `url`
+    /// on the fixture by hand: a fixture describing itself, not the provider.
+    /// The test now goes through `mine()` so it cannot lie again.
+    private func withURL(_ session: AgentSession) -> AgentSession {
+        var s = session
+        s.url = transport.taskURL(session.providerID)
+        return s
     }
 
     /// The caller's identity, asked once and remembered.
@@ -92,7 +107,7 @@ public struct CrobotProvider: AgentProvider {
     /// the poller exists at all.
     public func refine(_ id: AgentSession.ID) async throws -> AgentSession {
         guard let raw = try await rawID(for: id) else { throw CrobotError.noSuchTask }
-        return try await transport.task(raw).agentSession(provider: self.id)
+        return withURL(try await transport.task(raw).agentSession(provider: self.id))
     }
 
     public func request(_ id: AgentSession.ID) async throws -> PendingRequest? {
@@ -170,6 +185,14 @@ public struct CrobotProvider: AgentProvider {
 
     public func url(for id: AgentSession.ID) -> URL? { transport.taskURL(id) }
 
+    /// crobot begins in its own web UI, not in the app. New Agent opens this
+    /// and never calls `start` for crobot: the repo question, and the prompt,
+    /// are answered on crobot's page — the same door a running crobot task
+    /// opens to. One verb, one place.
+    public nonisolated func composeURL(for brief: Brief) -> URL? {
+        transport.composeURL(repo: brief.repository)
+    }
+
     // MARK: -
 
     /// The gateway's own task id for an app-side id.
@@ -244,6 +267,7 @@ public protocol CrobotTransport: Sendable {
     func prompt(_ id: String, text: String) async throws -> SendOutcome
     func create(repo: String, prompt: String, baseBranch: String?) async throws -> String
     func taskURL(_ id: String) -> URL?
+    func composeURL(repo: String?) -> URL?
     /// An `OpenCodeClient` transport pointed at this task's proxy.
     func opencode(_ id: String) -> any OpenCodeClient.Transport
 }
@@ -308,8 +332,14 @@ public struct CrobotTask: Decodable, Sendable, Equatable {
     }
 
     static func date(_ raw: String?) -> Date {
-        guard let raw else { return Date(timeIntervalSince1970: 0) }
-        return ISO8601DateFormatter().date(from: raw) ?? Date(timeIntervalSince1970: 0)
+        // Through `RolloutClock`, which parses BOTH the fractional-second stamp
+        // and the plain one. A bare `ISO8601DateFormatter` reads no fractional
+        // seconds, and crobot stamps them ("...:31.315Z"), so every crobot
+        // agent's `updatedAt` was epoch 0 — which read as harmless until lit
+        // rows began ordering by recency (#454) and a 1970 timestamp sorted
+        // every crobot task to the very bottom, off the panel. Same defect as
+        // the ACP `session/list` stamp, same fix (15 Sep 2026).
+        RolloutClock.date(raw) ?? Date(timeIntervalSince1970: 0)
     }
 }
 

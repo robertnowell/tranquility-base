@@ -24,6 +24,12 @@ extension StatusHUD {
         /// Card paste (ruled 7 Sep): the keyboard was borrowed for exactly one
         /// key. True only between a press on the card and whatever ends it.
         var pasteArmed = false
+        /// Whether the typed line is taking keys right now. Asked, not
+        /// inferred from the responder chain: the first cut inferred it and
+        /// was wrong on every keystroke ("you lose the focus on every
+        /// keystroke", 15 Sep), because the field editor's identity is not
+        /// the panel's to know.
+        var typedLineIsEditing: (() -> Bool)?
         var onPasteRequested: (() -> Void)?
         /// The keyboard left while armed: another window took key, or a key
         /// that was not Command-V arrived. The panel releases through this.
@@ -35,7 +41,10 @@ extension StatusHUD {
         /// lands here: no event tap, no timer, no "did they click away" guess.
         override func resignKey() {
             super.resignKey()
-            if pasteArmed { onPasteReleased?() }
+            if pasteArmed {
+                Permissions.log("paste: window resigned key (first responder \(String(describing: type(of: firstResponder))))")
+                onPasteReleased?()
+            }
         }
 
         /// The Edit menu's Paste, when the responder chain reaches the window
@@ -53,9 +62,19 @@ extension StatusHUD {
                 let held = event.modifierFlags.intersection([.command, .shift, .option, .control])
                 if held == .command, event.charactersIgnoringModifiers?.lowercased() == "v" {
                     onPasteRequested?()
-                } else {
-                    onPasteReleased?()
+                    return
                 }
+                // The typed line (ruled 15 Sep): while it is editing, keys
+                // are words for it, and Return and Escape are its own. Only
+                // a key with no editor to land in releases the card, as
+                // every stray key did before.
+                if typedLineIsEditing?() == true {
+                    super.sendEvent(event)
+                    return
+                }
+                Permissions.log("paste: key \(event.keyCode) with no typed line editing (first responder "
+                    + "\(String(describing: type(of: firstResponder)))); releasing")
+                onPasteReleased?()
                 return
             }
             super.sendEvent(event)
@@ -166,11 +185,9 @@ extension StatusHUD {
         titleLabel.textColor = StateLegend.Lens.content.color
         titleLabel.lineBreakMode = .byTruncatingTail
         titleLabel.maximumNumberOfLines = 1
-        // The second door to the session. GO TO AGENT stays — it is the
-        // discoverable one, and you said you use it. This is the shortcut for
-        // when your eye is already on the name, which is where it already goes.
-        titleLabel.addGestureRecognizer(
-            NSClickGestureRecognizer(target: self, action: #selector(goToSession)))
+        // Not a door (ruled 15 Sep, reversing the 15 Aug shortcut): "the title
+        // doesn't need to be clickable." GO TO AGENT is the one way to the
+        // session, and it now carries the cursor that says so.
 
         bodyLabel = CardBodyLabel(wrappingLabelWithString: "")
         // A press on the words selects AND arms: the selection takes the
@@ -222,6 +239,32 @@ extension StatusHUD {
         openPageButton.restingInk = StateLegend.Palette.accent
         openPageButton.wordmark = "\(StateLegend.openHubTitle) \(StateLegend.Glyph.forward)"
         dontSendButton = quietAction("Don't send", #selector(cancelPendingSendTapped))
+        // The microphone's two buttons (ruled 15 Sep). A small mic, a symbol
+        // like the gear, in the waveform's slot; and Send, a quiet word in the
+        // bottom line's centre, where Controls sits while the mic is closed.
+        // Neither is at an edge: the edges point outward (a browser, a
+        // terminal) and these act on the card itself.
+        recordButton = ConsoleButton(image: NSImage(systemSymbolName: "mic",
+                                                    accessibilityDescription: StateLegend.recordTitle)!
+                                       .withSymbolConfiguration(.init(pointSize: 13, weight: .medium))!,
+                                     target: self, action: #selector(recordTapped))
+        recordButton.isBordered = false
+        recordButton.restingInk = StateLegend.Lens.chrome.color
+        recordButton.toolTip = StateLegend.recordTip
+        recordButton.translatesAutoresizingMaskIntoConstraints = false
+        recordButton.widthAnchor.constraint(equalToConstant: 26).isActive = true
+        recordButton.heightAnchor.constraint(equalToConstant: 26).isActive = true
+        // The slot: the meter's exact box, so the panel does not move when one
+        // replaces the other.
+        micRow = NSView()
+        micRow.translatesAutoresizingMaskIntoConstraints = false
+        micRow.addSubview(recordButton)
+        NSLayoutConstraint.activate([
+            recordButton.centerXAnchor.constraint(equalTo: micRow.centerXAnchor),
+            recordButton.centerYAnchor.constraint(equalTo: micRow.centerYAnchor),
+        ])
+        sendButton = quietAction(StateLegend.sendTitle, #selector(sendTapped))
+        sendButton.toolTip = StateLegend.sendTip
         // The device-fault card's way out. Quiet like its row-mates: it is a
         // door, not an alarm — the placard and the body have already said how
         // bad this is, and a loud button would say it a third time.
@@ -308,6 +351,7 @@ extension StatusHUD {
         // The middle, which is the only space a card's bottom line has left and
         // the same place the grid puts it.
         cardControls = ControlsWordView()
+        buttons.addView(sendButton, in: .center)
         buttons.addView(cardControls, in: .center)
         // And the row is exactly as tall as its contents: BOTH directions.
         //
@@ -361,6 +405,26 @@ extension StatusHUD {
         stripRule.heightAnchor.constraint(equalToConstant: 1).isActive = true
 
         trayRow = TrayRowView()
+        trayRow.onAttach = { [weak self] in
+            Track.record("door_opened", ["door": "attach"])
+            self?.onAttach?()
+        }
+        panel.typedLineIsEditing = { [weak self] in self?.trayRow.compose.currentEditor() != nil }
+        // A keystroke changes exactly one thing on the panel, whether Send
+        // stands in for Controls, so a keystroke repaints exactly that. The
+        // first cut ran the whole render() per key, and render() rebuilds
+        // the card: "the typing is super slow, it kills perf" (15 Sep).
+        trayRow.onComposeChanged = { [weak self] _ in
+            self?.refreshSendDoor()
+            self?.scheduleDraftSave()
+        }
+        // Return sends (re-ruled 15 Sep: "return enters it, that's not
+        // needed, just do type a message"): the line is a message box, and
+        // a message box sends on Return. Same door as the Send button.
+        trayRow.onComposeReturn = { [weak self] _ in self?.sendTapped() }
+        trayRow.onComposeEscape = { [weak self] in
+            self?.releasePaste(because: "escape", repaint: true)
+        }
         trayRow.onRemove = { [weak self] path in
             guard let self, let session = currentTarget?.sessionId else { return }
             onUnstage?(session, path)
@@ -371,14 +435,35 @@ extension StatusHUD {
         gridFooter = GridFooterView(width: Self.gridWidth)
         controlsSticky = ControlsNoteView()
         controlsSticky.isHidden = true
+        // The note opens on hover of the word and, since 14 Sep, STAYS open
+        // while the pointer crosses to it and rests on it: its rows are doors
+        // now, and a door that closes as you reach for it is no door. The
+        // close is deferred a beat and cancelled by the note's own hover.
         gridFooter.onControlsHover = { [weak self] hovering in
             guard let self else { return }
-            setControlsNote(open: hovering, above: gridFooter)
+            if hovering { setControlsNote(open: true, above: gridFooter) } else { closeControlsNoteSoon() }
         }
         gridFooter.onWordmark = { [weak self] in self?.onOpenRepository?() }
         cardControls.onHover = { [weak self] hovering in
             guard let self else { return }
-            setControlsNote(open: hovering, above: actionRow)
+            if hovering { setControlsNote(open: true, above: actionRow) } else { closeControlsNoteSoon() }
+        }
+        controlsSticky.onHover = { [weak self] hovering in
+            guard let self else { return }
+            if hovering { controlsNoteClose?.cancel(); controlsNoteClose = nil } else { closeControlsNoteSoon() }
+        }
+        // A row of the note is the chord it names, as a click. Indices follow
+        // StateLegend.controlsNote: next, speak, hear more.
+        controlsSticky.onRow = { [weak self] index in
+            guard let self else { return }
+            let door = ["next", "speak", "hear_more"][min(index, 2)]
+            Track.record("door_opened", ["door": .token(door), "via": "controls_note"])
+            switch index {
+            case 0: onNextDoor?()
+            case 1: onSpeakDoor?()
+            default: onHearMoreDoor?()
+            }
+            setControlsNote(open: false)
         }
 
         countdownBar = CountdownBarView()
@@ -546,11 +631,30 @@ extension StatusHUD {
         //
         // Order matters. The switch is written BEFORE the card is asked for,
         // so the repaint the card triggers already knows this row is on.
-        pastList.onPick = { [weak self] id, revivable in
+        //
+        // AMBER GOES TO THE TERMINAL (ruled 15 Sep 2026). Measured at 13:20
+        // that day: a session sat amber since 13:17, the grid's twenty slots
+        // were full of green, so it was listed here; the tap opened its card,
+        // and there was nothing the card could do about an amber. The grid's
+        // own tap has sent amber to the terminal since 18 Aug, and Discuss
+        // has since 9 Sep; this list was the one door that still read a lamp
+        // that says "needs you" as "read me". Robert: *"Any amber session
+        // should go to terminal on click. It shouldn't open the card. This
+        // means it needs you."* The 19 Aug ruling above is untouched for the
+        // rows it was about: green and quiet still pick up and open the card.
+        pastList.onPick = { [weak self] id, revivable, lamp in
             guard let self else { return }
             let name = pastListName(id)
             onBreadcrumbHome?()
             guard !revivable else { onRevive?(id, name); return }
+            if lamp == .fault {
+                Track.record("row_clicked", ["action": "gotoagent", "agent_id": Track.hash(id),
+                                             "lamp": .token(lamp.trackName), "face": "past_agents"])
+                onGoToSession?(id)
+                return
+            }
+            Track.record("row_clicked", ["action": "announce", "agent_id": Track.hash(id),
+                                         "lamp": .token(lamp.trackName), "face": "past_agents"])
             onRestoreLamp?(id)
             onPickWaiting?(id)
         }
@@ -601,7 +705,7 @@ extension StatusHUD {
         let stack = NSStackView(views: [backButton, stateLabel, titleLabel,
                                         waitingRows, pastList, bodyLabel,
                                         stripRule, stripLabel, trayRow, gridFooter,
-                                        countdownBar, meter,
+                                        countdownBar, micRow, meter,
                                         settingsTabs, agentGrid, launchRow, directoryRow,
                                         voiceList, setupScroll, hintLabel, buttons])
         stack.orientation = .vertical
@@ -773,6 +877,8 @@ extension StatusHUD {
             gearButton.centerYAnchor.constraint(equalTo: stateLabel.centerYAnchor),
             meter.widthAnchor.constraint(equalToConstant: 348),
             meter.heightAnchor.constraint(equalToConstant: 28),
+            micRow.widthAnchor.constraint(equalToConstant: 348),
+            micRow.heightAnchor.constraint(equalToConstant: 28),
             countdownBar.widthAnchor.constraint(equalToConstant: 348),
             countdownBar.heightAnchor.constraint(equalToConstant: 4),
             // The action row spans the content column so GO TO AGENT's

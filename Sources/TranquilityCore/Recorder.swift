@@ -71,6 +71,18 @@ public final class Recorder: @unchecked Sendable {
     /// thread out of the hardware's way entirely.
     private let audioQueue = DispatchQueue(label: "base.tranquility.capture-unit")
     private var unit: CaptureUnit?
+    /// One rate converter per unit, kept across every buffer of a capture —
+    /// see `StreamingPCM16Converter` for why a fresh one per buffer cut 3.4%
+    /// of every recording. Built with the unit (it is tied to the tap
+    /// format), reset at capture start, used only on the render thread.
+    private var pcmConverter: StreamingPCM16Converter?
+    /// Set under `lock` at capture start, consumed on the render thread
+    /// before the next conversion, so the reset is serial with the converts
+    /// it separates and never races a trailing callback.
+    private var converterResetPending = false
+    /// Logged once: the converter could not be built and every buffer is
+    /// going through the per-buffer path this class exists to replace.
+    private var converterFallbackLogged = false
     /// Listeners registered on the bound device, so a rebuild can remove
     /// exactly what it added.
     private var listeners: [(AudioObjectID, AudioObjectPropertyAddress)] = []
@@ -311,6 +323,12 @@ public final class Recorder: @unchecked Sendable {
                 }
             }
             unit = built
+            pcmConverter = StreamingPCM16Converter(
+                from: built.clientFormat, targetSampleRate: sampleRate)
+            if pcmConverter == nil {
+                Recorder.trace?("mic: streaming converter unavailable for "
+                    + "\(built.clientFormat); falling back to per-buffer conversion")
+            }
             installListeners(on: deviceID)
             let name = AudioInputDevice.allInputs().first { $0.id == deviceID }?.name
                 ?? "device \(deviceID)"
@@ -347,6 +365,7 @@ public final class Recorder: @unchecked Sendable {
         removeListeners()
         unit?.dispose()
         unit = nil
+        pcmConverter = nil
     }
 
     // MARK: - Config-change listeners (the settle machinery)
@@ -456,6 +475,7 @@ public final class Recorder: @unchecked Sendable {
         diagnosticCaptureID = reservedCaptureID ?? UUID().uuidString
         reservedCaptureID = nil
         buffer.removeAll(keepingCapacity: true)
+        converterResetPending = true
         peakLevel = 0
         tapBuffersDelivered = 0
         tapBuffersKept = 0
@@ -473,6 +493,11 @@ public final class Recorder: @unchecked Sendable {
         if openingStream {
             stream = streamFactory?()
             stream?.diagnosticCaptureID = diagnosticCaptureID
+            // Every partial lands beside the audio as it arrives, so a death
+            // mid-hold loses no word the stream had already heard.
+            if let capture = liveCapture {
+                stream?.partialSink = { text in capture.notePartial(text) }
+            }
             if let s = stream { Task { await s.start() } }
         }
         lock.unlock()
@@ -655,9 +680,22 @@ public final class Recorder: @unchecked Sendable {
 
     private func deliver(_ pcmBuffer: AVAudioPCMBuffer) {
         // Convert first, outside the lock — it is the expensive part and
-        // nothing else needs serialising for it. Unchanged from the tap era.
-        let converted = BuddyPCM16Converter.pcm16Data(
-            from: pcmBuffer, targetSampleRate: sampleRate)
+        // nothing else needs serialising for it. The converter itself is
+        // used only here, on AUHAL's one render thread, so it is serial by
+        // construction; the lock is taken just to read the reset flag.
+        lock.lock()
+        let resetNow = converterResetPending
+        converterResetPending = false
+        let converter = pcmConverter
+        lock.unlock()
+        let converted: Data?
+        if let converter {
+            if resetNow { converter.reset() }
+            converted = converter.convert(pcmBuffer)
+        } else {
+            converted = BuddyPCM16Converter.pcm16Data(
+                from: pcmBuffer, targetSampleRate: sampleRate)
+        }
         lock.lock()
         // A heal probe is not a capture: count and bail.
         if case .wedged = machine.state {
@@ -938,11 +976,15 @@ public final class Recorder: @unchecked Sendable {
         }
     }
 
+    /// Stops the heartbeat; leaves the file. Key-up is not the end of the
+    /// promise — transcription and delivery follow — so the app's in-flight
+    /// guard (`CaptureMarker.settle`) owns removal. Where no guard runs
+    /// (tests, tools) the file goes stale in `staleAfter` seconds and the
+    /// scripts ignore it.
     private func endMarkerHeartbeat() {
         markerQueue.sync {
             markerTimer?.cancel()
             markerTimer = nil
-            CaptureMarker.end()
         }
     }
 
