@@ -220,6 +220,70 @@ final class CoordinatorTests: XCTestCase {
             lastAssistantMessage: "a turn finished", tty: "ttys001"))
     }
 
+    // MARK: - A remote agent is live by its provider's word
+
+    /// It has no pid on this Mac and is in no registry, so both liveness
+    /// probes say gone: never announced on its own, and swept 120 s after it
+    /// was started (15 Sep, Robert's first OpenCode agent). The poller's
+    /// snapshot is its liveness, and `isRemote` is how the coordinator asks.
+    func testARemoteAgentIsWaitingWithoutALocalProcess() throws {
+        let remote = AgentSession.id("ses_live", provider: "opencode")
+        try appendWithTranscript(session: remote, entrypoint: "cli", at: 3_000)
+        let coordinator = Coordinator(
+            store: store,
+            summarizer: SummarizerChain(providers: [FixedSummary()]),
+            speech: SpeechChain(preferred: SilentSpeech(), fallback: SilentSpeech()),
+            gate: InterruptGate(minimumIdleSeconds: 0, signals: .quiescent),
+            tmuxTransport: RecordingTransport(),
+            isRemote: { $0 == remote },
+            enrolment: EnrolmentRegistry(url: tmpDir.appendingPathComponent("e3.json")),
+            agents: FakeAgents(live: []),
+            sweep: SessionSweep(),
+            recovery: RecoveryChain(providers: [FixedTranscript(text: "x")],
+                                    maxAttemptsPerProvider: 1, backoff: [0]),
+            readinessGrace: 0)
+        let waiting = try coordinator.waiting().map { $0.sessionId }
+        XCTAssertEqual(waiting, [remote])
+    }
+
+    /// And its brief is asked for with the opening the app itself dispatched,
+    /// since there is no transcript on this Mac to read one from. Without it
+    /// the model recapped an answer to a question it could not see as
+    /// `null`, and every remote turn fell to the floor: read out verbatim,
+    /// no ladder (15 Sep, reproduced against the model).
+    func testARemoteTurnIsSummarizedWithTheOpeningTheAppDispatched() async throws {
+        final class Capturing: SummaryProvider, @unchecked Sendable {
+            let name = "capturing"; let isConfigured = true
+            var opening: String??
+            func brief(for request: SummaryRequest) async throws -> SessionBrief {
+                opening = .some(request.firstUserMessage)
+                return SessionBrief(topic: "t", happened: "h", recap: "r", proposal: "p")
+            }
+        }
+        let remote = AgentSession.id("ses_live", provider: "opencode")
+        let capturing = Capturing()
+        let coordinator = Coordinator(
+            store: store,
+            summarizer: SummarizerChain(providers: [capturing]),
+            speech: SpeechChain(preferred: SilentSpeech(), fallback: SilentSpeech()),
+            gate: InterruptGate(minimumIdleSeconds: 0, signals: .quiescent),
+            tmuxTransport: RecordingTransport(),
+            isRemote: { $0 == remote },
+            enrolment: EnrolmentRegistry(url: tmpDir.appendingPathComponent("e4.json")),
+            agents: FakeAgents(live: []),
+            sweep: SessionSweep(),
+            recovery: RecoveryChain(providers: [FixedTranscript(text: "x")],
+                                    maxAttemptsPerProvider: 1, backoff: [0]),
+            readinessGrace: 0)
+        try store.update(utterance: Utterance(
+            status: .confirmed,
+            transcriptText: "[assistant]: How should we get started?\n\n[user]: What is OpenCode?",
+            targetSessionId: remote))
+        try appendWithTranscript(session: remote, entrypoint: "cli", at: 4_000)
+        _ = try await coordinator.announceNext(only: remote)
+        XCTAssertEqual(capturing.opening, .some("What is OpenCode?"))
+    }
+
     // MARK: - Only sessions a person started are announced
 
     /// Liveness used to do this job by accident, and the accident held only
@@ -302,6 +366,155 @@ final class CoordinatorTests: XCTestCase {
             records: [SessionOwnershipRecord(sessionId: "human", harness: "claude-code", pid: -1)]))
         try appendWithTranscript(session: "human", entrypoint: "cli", at: 1_000)
         XCTAssertTrue(try coordinator.waiting().map(\.sessionId).contains("human"))
+    }
+
+    // MARK: - A typed reply (15 Sep)
+
+    /// Typed on the card instead of spoken: the same door as a dictation,
+    /// with what was heard in front of it, and it dispatches the same way.
+    func testATypedReplyRidesTheSameDoorAsADictation() async throws {
+        let transport = RecordingTransport()
+        let coordinator = try makeCoordinator(tmuxTransport: transport)
+        try append()
+        _ = try await coordinator.announceNext()
+
+        guard case .readyToSend(let utteranceId, let shown, _, let session) =
+            try await coordinator.submitTypedReply(text: "  ship it  ", to: "sess-1")
+        else { return XCTFail("expected a pending send") }
+        XCTAssertEqual(session, "sess-1")
+        XCTAssertEqual(shown,
+            "[assistant]: Fixing the export pipeline. Tests pass. Run the migration next. Proceed?"
+            + "\n\n[user]: ship it")
+        guard case .dispatched = try await coordinator.confirmAndSend(utteranceId: utteranceId)
+        else { return XCTFail("expected a dispatch") }
+        XCTAssertEqual(transport.sent, [shown])
+    }
+
+    /// Attachments alone are a reply: the chips ride with no words, and the
+    /// tray is emptied by the send. An empty press is nothing.
+    func testAttachmentsAloneCanBeSentAndNothingCannot() async throws {
+        let transport = RecordingTransport()
+        let coordinator = try makeCoordinator(tmuxTransport: transport)
+        try append()
+        _ = try await coordinator.announceNext()
+
+        guard case .noTarget = try await coordinator.submitTypedReply(text: "   ", to: "sess-1")
+        else { return XCTFail("nothing typed and nothing staged is not a reply") }
+
+        XCTAssertTrue(coordinator.attachments.stage("'/tmp/one.png'", session: "sess-1"))
+        guard case .readyToSend(let utteranceId, let shown, _, _) =
+            try await coordinator.submitTypedReply(text: "", to: "sess-1")
+        else { return XCTFail("expected a pending send") }
+        XCTAssertTrue(shown.hasSuffix("'/tmp/one.png'"), shown)
+        XCTAssertTrue(coordinator.attachments.staged(for: "sess-1").isEmpty, "the chips left with the send")
+        guard case .dispatched = try await coordinator.confirmAndSend(utteranceId: utteranceId)
+        else { return XCTFail("expected a dispatch") }
+        XCTAssertEqual(transport.sent, [shown])
+    }
+
+    // MARK: - What was heard rides the reply (HeardContext, 11 Sep)
+
+    /// The user answers what Tranquility Base SPOKE, not what the agent
+    /// wrote; the agent used to get the answer with the question stripped
+    /// off. The reply now opens with the spoken recap and proposal, then the
+    /// user's own words, and the undo window's text is the text typed.
+    func testAReplyCarriesWhatWasSpoken() async throws {
+        let transport = RecordingTransport()
+        let coordinator = try makeCoordinator(tmuxTransport: transport)
+        try append()
+        _ = try await coordinator.announceNext()
+
+        guard case .readyToSend(let utteranceId, let shown, _, _) =
+            try await coordinator.submitReply(pcm16: silence())
+        else { return XCTFail("expected a pending send") }
+        XCTAssertEqual(shown,
+            "[assistant]: Fixing the export pipeline. Tests pass. Run the migration next. Proceed?"
+            + "\n\n[user]: yes go ahead",
+            "what was heard, then what they said, two labels and nothing else")
+
+        guard case .dispatched = try await coordinator.confirmAndSend(utteranceId: utteranceId)
+        else { return XCTFail("expected a dispatch") }
+        XCTAssertEqual(transport.sent, [shown], "the disclosure IS the message")
+        // The record of what was heard is untouched: the note is composed,
+        // never written into the transcript.
+        XCTAssertEqual(try store.utterance(id: utteranceId)?.transcriptText, "yes go ahead")
+    }
+
+    /// The ⌃⌃ rungs the user pulled are part of what they heard, so they are
+    /// part of the quote: in ladder order whatever order they were pulled,
+    /// once each however many times the walk wrapped, never the MESSAGE
+    /// rung (the announcement re-heard), and never another event's rungs.
+    func testPulledRungsRideTheReplyInLadderOrder() async throws {
+        let transport = RecordingTransport()
+        let coordinator = try makeCoordinator(tmuxTransport: transport)
+        try append(at: 1_000, message: "first turn")
+        try append(at: 2_000, message: "second turn")
+        _ = try await coordinator.announceNext()
+        let event = try XCTUnwrap(try store.latestStop(for: "sess-1")).latestId
+
+        // Pulled out of ladder order, WHY twice, plus MESSAGE and a stray
+        // rung on the OLDER event.
+        coordinator.recordRungHeard(sessionId: "sess-1", eventRowid: event,
+                                    kind: .why, spoken: "We propose the migration because the schema moved.")
+        coordinator.recordRungHeard(sessionId: "sess-1", eventRowid: event,
+                                    kind: .findings, spoken: "Tests pass; two warnings remain.")
+        coordinator.recordRungHeard(sessionId: "sess-1", eventRowid: event,
+                                    kind: .why, spoken: "We propose the migration because the schema moved.")
+        coordinator.recordRungHeard(sessionId: "sess-1", eventRowid: event,
+                                    kind: .message, spoken: "the announcement again")
+        coordinator.recordRungHeard(sessionId: "sess-1", eventRowid: event - 1,
+                                    kind: .goal, spoken: "an older turn's goal")
+
+        guard case .readyToSend(let utteranceId, let shown, _, _) =
+            try await coordinator.submitReply(pcm16: silence())
+        else { return XCTFail("expected a pending send") }
+        XCTAssertEqual(shown,
+            "[assistant]: Fixing the export pipeline. Tests pass. Run the migration next. Proceed? "
+            + "Tests pass; two warnings remain. We propose the migration because the schema moved."
+            + "\n\n[user]: yes go ahead")
+        guard case .dispatched = try await coordinator.confirmAndSend(utteranceId: utteranceId)
+        else { return XCTFail("expected a dispatch") }
+        XCTAssertEqual(transport.sent, [shown])
+    }
+
+    /// A turn nothing was spoken for has nothing to quote. A deep-linked reply
+    /// to a session whose latest turn was never announced dispatches the
+    /// transcript byte-identical to before the note existed.
+    func testAReplyToAnUnspokenTurnGoesBare() async throws {
+        let transport = RecordingTransport()
+        let coordinator = try makeCoordinator(tmuxTransport: transport)
+        try append()
+
+        guard case .readyToSend(let utteranceId, let shown, _, _) =
+            try await coordinator.submitReply(pcm16: silence(), to: "sess-1")
+        else { return XCTFail("expected a pending send") }
+        XCTAssertEqual(shown, "yes go ahead")
+        guard case .dispatched = try await coordinator.confirmAndSend(utteranceId: utteranceId)
+        else { return XCTFail("expected a dispatch") }
+        XCTAssertEqual(transport.sent, ["yes go ahead"])
+    }
+
+    /// The quote is of the turn the user HEARD. A newer turn landing during
+    /// the undo window moves the session's latest event; it must not move the
+    /// note, which is bound to the utterance's own event at capture.
+    func testANewerTurnDuringTheUndoWindowDoesNotSwapTheQuote() async throws {
+        let transport = RecordingTransport()
+        let coordinator = try makeCoordinator(tmuxTransport: transport)
+        try append(at: 1_000, message: "first turn")
+        _ = try await coordinator.announceNext()
+
+        guard case .readyToSend(let utteranceId, let shown, _, _) =
+            try await coordinator.submitReply(pcm16: silence())
+        else { return XCTFail("expected a pending send") }
+        // The next turn lands, unannounced and with no brief, before the send.
+        try append(at: 2_000, message: "second turn")
+
+        let refreshed = try coordinator.refreshPendingSend(utteranceId: utteranceId, sessionId: "sess-1")
+        XCTAssertEqual(refreshed, shown, "the readback does not change under a newer turn")
+        guard case .dispatched = try await coordinator.confirmAndSend(utteranceId: utteranceId)
+        else { return XCTFail("expected a dispatch") }
+        XCTAssertEqual(transport.sent, [shown])
+        XCTAssertTrue(shown.contains("Run the migration next. Proceed?"))
     }
 
     /// The fuller proof: being counted as "waiting" (above) is necessary but

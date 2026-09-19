@@ -19,6 +19,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 . "$(dirname "$0")/lib/paths.sh"
 . "$(dirname "$0")/lib/app-process.sh"
+. "$(dirname "$0")/lib/deployment.sh"
 
 REF="${1:-origin/main}"
 CLEAN_WORKTREE="/private/tmp/tb-clean"
@@ -35,6 +36,7 @@ APP="$VD_APP_NAME.app"
 APP_PATH="$(tb_bundle_dir debug "$CLEAN_WORKTREE")/$APP"
 PROD_APP="/Applications/Tranquility Base.app"
 PROD_WAS_RUNNING=0
+APP_MUTATED=0
 app_at_path_running "$PROD_APP" && PROD_WAS_RUNNING=1
 
 # Never exit leaving the app down.
@@ -48,39 +50,57 @@ app_at_path_running "$PROD_APP" && PROD_WAS_RUNNING=1
 # Being one build behind is recoverable. Being gone is the failure this whole
 # script exists to prevent, so put back whatever is on disk before leaving.
 restore_if_down() {
-  if ! app_running && [ -d "$APP_PATH" ]; then
+  if [ "$APP_MUTATED" -eq 1 ] && ! app_running && [ -d "$APP_PATH" ]; then
     echo "→ interrupted mid-relaunch; bringing the app back up" >&2
     open "$APP_PATH" 2>/dev/null || true
   fi
 }
 
-# One deployer at a time (ruled 13 Aug, after the 05:06 race).
-#
-# Two concurrent relaunches interleave worse than they collide: one script's
-# app_stop killed the other's freshly-drilled instance, and the other's
-# restore_if_down then resurrected the app WITHOUT --selftest-hud — so the
-# correct build ran unverified behind a log full of true lines from an
-# instance that was already dead. The hotkey race is loud; this one is
-# silent, which is why the second deployer is refused outright rather than
-# queued. mkdir is the atomic primitive (macOS ships no flock); the pid
-# inside lets a crashed deployer's lock be stolen instead of wedging
-# deploys forever.
-LOCKDIR="/tmp/tb-relaunch.lock"
-if ! mkdir "$LOCKDIR" 2>/dev/null; then
-  HOLDER=$(cat "$LOCKDIR/pid" 2>/dev/null || echo "")
-  if [ -n "$HOLDER" ] && kill -0 "$HOLDER" 2>/dev/null; then
-    echo "✗ another relaunch (pid $HOLDER) is mid-flight — refusing to stack a second." >&2
-    echo "  Wait for its deploy note, then rerun if your ref still is not live." >&2
-    exit 1
+automatic_activation_guard() {
+  [ "${TB_DEPLOY_AUTOMATIC:-0}" = 1 ] || return 0
+  if [ -n "${TARGET:-}" ] && [ "$(git rev-parse origin/main)" != "$TARGET" ]; then
+    echo "deployment deferred: main advanced while preparing; build the newer target" >&2
+    exit 75
   fi
-  echo "→ clearing a stale relaunch lock (holder ${HOLDER:-unknown} is gone)"
-  rm -rf "$LOCKDIR"
-  if ! mkdir "$LOCKDIR" 2>/dev/null; then
-    echo "✗ lost the lock race to another relaunch that started this instant." >&2
-    exit 1
+  if app_at_path_running "$PROD_APP"; then
+    APP_MUTATED=0
+    echo "deployment deferred: Prod is selected; choose Dev explicitly before retrying" >&2
+    exit 75
   fi
+  if ! app_running; then
+    APP_MUTATED=0
+    echo "deployment deferred: app is stopped; automatic delivery does not undo Quit" >&2
+    exit 75
+  fi
+}
+tb_before_app_stop() {
+  automatic_activation_guard
+  tb_deployment_authorize relaunch "$TARGET" dev "$UNMERGED"
+  APP_MUTATED=1
+}
+automatic_activation_guard
+# Preparation owns only the build workspace. The child activation receives a
+# leased, source-stamped app and matching checks, never the mutable build tree.
+if [ "${1:-}" != --activate-prepared ]; then
+  exec python3 scripts/prepare-dev.py relaunch "$REF"
 fi
-echo $$ > "$LOCKDIR/pid"
+[ "$#" -eq 3 ] || { echo "invalid prepared activation" >&2; exit 1; }
+TARGET="$2"
+REF="$TARGET"
+CLEAN_WORKTREE="$3"
+APP_PATH="$CLEAN_WORKTREE/$APP"
+python3 scripts/prepare-dev.py verify "$TARGET" "$CLEAN_WORKTREE"
+# Refresh before owning the app lock. A stale automatic candidate is deferred.
+git fetch -q origin
+automatic_activation_guard
+wait_for_microphone "before activation"
+tb_deployment_lock
+# If speech begins after the courtesy wait, defer immediately under the lock.
+TB_MIC_GIVE_UP_AFTER=0
+trap tb_deployment_unlock EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 141' PIPE
 
 # The deploy ledger: every run records WHO invoked it, before it does anything.
 # Rule 6's announcement is a promise a session makes; this line is a fact the
@@ -120,16 +140,20 @@ printf '%s pid=%s ppid=%s invoker=%q session=%s\n' \
 # The lock releases on ANY exit, and restore_if_down still runs: holding the
 # lock must never become a way to leave the app down.
 cleanup_and_restore() {
-  rm -rf "$LOCKDIR"
   restore_if_down
+  tb_deployment_unlock
 }
-trap cleanup_and_restore EXIT INT TERM PIPE
 
 # Resolve against the remote, not the local branch: a session that has merged but
 # not pulled would otherwise relaunch the commit it already had.
-git fetch -q origin
-TARGET=$(git rev-parse --short "$REF")
-echo "→ target: $TARGET  $(git log -1 --format=%s "$REF")"
+# TARGET was pinned during preparation and refreshed before taking the lock.
+
+UNMERGED=1
+git merge-base --is-ancestor "$TARGET" origin/main && UNMERGED=0
+tb_deployment_authorize relaunch "$TARGET" dev "$UNMERGED"
+# Denial exits through unlock only; it must never launch a refused preview.
+trap cleanup_and_restore EXIT
+echo "→ target: $TARGET  $(git log -1 --format=%s "$TARGET")"
 # Second ledger line, same pid: what the run above actually resolved to.
 printf '%s pid=%s ref=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$$" "$TARGET" >> "$LEDGER"
 
@@ -154,7 +178,7 @@ printf '%s pid=%s ref=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$$" "$TARGET" >> "
 # came from happens to match.
 SELF_PATH="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 SELF_HASH=$(git hash-object "$SELF_PATH" 2>/dev/null || echo "")
-REF_HASH=$(git rev-parse "$REF:scripts/relaunch.sh" 2>/dev/null || echo "")
+REF_HASH=$(git rev-parse "$TARGET:scripts/relaunch.sh" 2>/dev/null || echo "")
 if [ -n "$SELF_HASH" ] && [ -n "$REF_HASH" ] && [ "$SELF_HASH" != "$REF_HASH" ]; then
   if [ "${TB_ALLOW_STALE_SCRIPT:-0}" = "1" ]; then
     echo "⚠ this relaunch.sh differs from $REF; continuing because TB_ALLOW_STALE_SCRIPT=1" >&2
@@ -170,70 +194,10 @@ if [ -n "$SELF_HASH" ] && [ -n "$REF_HASH" ] && [ "$SELF_HASH" != "$REF_HASH" ];
   fi
 fi
 
-# Creating and validating the clean worktree now lives in scripts/build-clean.sh,
-# so install.sh can do it too — it could not before, which is why a fresh clone
-# hit an installer that refused and pointed back here. One copy, one behaviour.
-# The dirty-tree refusal therefore lands after the capture-marker wait below
-# rather than before it: on a dirty tree you now wait for the microphone before
-# being told no. Refusing later is the acceptable half of not maintaining this
-# block in two scripts.
-
-# Never kill a live microphone.
-#
-# The recorder holds the whole utterance in memory and flushes once at key-up, so
-# killing mid-sentence does not lose a file — it loses the words. That was
-# survivable while a person chose the moment to relaunch. It stopped being
-# survivable when a merge started firing this automatically, possibly from a
-# session the speaker is not watching.
-#
-# The marker is written by Recorder.start and cleared by stop/abandon; it carries
-# its start time so a crash cannot wedge relaunches forever (see CaptureMarker).
-MARKER="$HOME/Library/Application Support/VoiceDispatch/capturing"
-# Mirrors CaptureMarker.staleAfter, which this script cannot read because it is
-# bash. The marker is re-stamped every CaptureMarker.heartbeat seconds for as
-# long as the microphone is open, so age means "silence from the writer", not
-# "length of the utterance". It was the second reading, at 180s, that let this
-# script destroy a live four-minute capture on 10 Aug. Change both or neither.
-STALE_AFTER=20
-GIVE_UP_AFTER=120
-waited=0
-while [ -f "$MARKER" ]; do
-  started=$(cat "$MARKER" 2>/dev/null || echo 0)
-  case "$started" in ''|*[!0-9]*) started=0 ;; esac
-  age=$(( $(date +%s) - started ))
-  if [ "$started" -eq 0 ] || [ "$age" -ge "$STALE_AFTER" ]; then
-    echo "→ ignoring a stale capture marker (${age}s old)"
-    break
-  fi
-  if [ "$waited" -ge "$GIVE_UP_AFTER" ]; then
-    # Refusing is the safe failure: the app keeps running its current build,
-    # which is exactly what it was doing a second ago. Losing the utterance is
-    # not recoverable; being one commit behind for another minute is.
-    echo "✗ microphone still open after ${waited}s — not relaunching." >&2
-    echo "  The app stays on its current build. Run this again when you're done." >&2
-    exit 1
-  fi
-  [ "$waited" -eq 0 ] && echo "→ microphone is open; waiting for the utterance to finish"
-  sleep 2
-  waited=$(( waited + 2 ))
-done
-
-# BUILD FIRST, then stop, then launch.
-#
-# The old order stopped the app and then built, which left it down for the whole
-# build — around forty seconds — and anything that killed this script in there
-# left it down for good. The EXIT trap could not save it either, because
-# bundle.sh `rm -rf`s the .app it is about to recreate, so for most of that
-# window there was nothing on disk to reopen. Measured the hard way: a `| head`
-# closed the pipe mid-build and the menu bar item simply went away.
-#
-# Building first inverts that. The app keeps running while the slow part happens
-# and the window where it is down shrinks from the length of a build to the
-# length of a launch. The cost is that bundle.sh replaces the bundle underneath a
-# running process; that is safe here because this app loads nothing from its
-# bundle after launch — it draws its whole interface programmatically — and the
-# process is replaced seconds later anyway.
-APP_PATH=$(scripts/build-clean.sh "$REF")
+# The build finished before this process acquired app ownership. Validate its
+# pinned artifact again; a later build cannot change this app or its checks.
+BUILT_SHA=$(/usr/libexec/PlistBuddy -c "Print :TBSourceCommit" "$APP_PATH/Contents/Info.plist")
+[ "$BUILT_SHA" = "$TARGET" ] || { echo "✗ built source differs from reserved target" >&2; exit 1; }
 "$CLEAN_WORKTREE/scripts/audit-dev.sh" "$APP_PATH"
 
 # Deploy INTO the installed copy when there is one.
@@ -282,7 +246,9 @@ if [ -d "$INSTALLED" ]; then
   # binary out from under the old one.
   # A merge should never evict somebody who deliberately selected the exact
   # production release for testing. Only stop the Dev path being replaced.
+  automatic_activation_guard
   app_stop_path "$INSTALLED"
+  APP_MUTATED=1
   echo "→ updating the installed copy"
   rm -rf "$INSTALLED"
   cp -R "$APP_PATH" "$INSTALLED"
@@ -310,7 +276,9 @@ fi
 # real stop on a machine with no installed copy (the worktree-build path).
 # Two instances racing for one global hotkey is its own bug, so the old one
 # goes down immediately before the new one comes up, not before the build.
+if [ "$APP_MUTATED" -eq 0 ]; then automatic_activation_guard; fi
 app_stop
+APP_MUTATED=1
 
 echo "→ launching (with panel self-tests)"
 LAUNCHED_AT=$(date +%s)
@@ -323,6 +291,9 @@ LAUNCHED_AT=$(date +%s)
 # --selftest-arm is deliberately NOT included: it needs the microphone and drives
 # the real recorder and store. Opt in by hand when changing the arm path.
 open "$APP_PATH" --args --selftest-hud
+# Once automatic delivery has requested launch, a later user Quit must stay
+# stopped. Failure is recorded for the supervisor instead of resurrecting it.
+if [ "${TB_DEPLOY_AUTOMATIC:-0}" = 1 ]; then APP_MUTATED=0; fi
 sleep 4
 
 if app_at_path_running "$APP_PATH"; then
@@ -336,7 +307,7 @@ if app_at_path_running "$APP_PATH"; then
   # The bundle names its own commit now, so ask it.
   INSTALLED_VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" \
     "$APP_PATH/Contents/Info.plist" 2>/dev/null || echo "")
-  SHORT_TARGET=$(git -C "$CLEAN_WORKTREE" rev-parse --short "$TARGET" 2>/dev/null || echo "")
+  SHORT_TARGET=$(git rev-parse --short "$TARGET" 2>/dev/null || echo "")
   if [ -n "$SHORT_TARGET" ] && [ -n "$INSTALLED_VERSION" ] \
      && [ "${INSTALLED_VERSION#*+}" != "$SHORT_TARGET" ]; then
     echo "✗ the app that is running is not the build this script made:" >&2
@@ -409,26 +380,10 @@ if [ "${TB_SKIP_CANARY:-0}" != "1" ]; then
   fi
 fi
 
-# ---------------------------------------------------------------------------
-# The seam check. Unit tests cover each piece of the artifact→hub chain and
-# every failure this month still slipped through, because each bug lived
-# BETWEEN a hook, a log, a file and a rendered page. This asks the archive
-# whether the pieces still add up: a page a session made is on that session's
-# hub, a hub names its session, a page carries exactly one agent footer.
-#
-# Reporting, not refusing — same posture as the self-tests and the canary. It
-# runs against real data that other sessions are writing while this runs, so a
-# transient miss must not fail a good build; a persistent one shows up on
-# every deploy until someone looks.
-#
-# The deploy builds ONLY the app product (bundle.sh: `--product TranquilityApp`),
-# so `tbase` in the clean worktree is whatever a previous build happened to
-# leave there — or absent. This gate shipped reading that stale binary, which
-# printed the usage text and exited non-zero, so every deploy reported "the
-# archive and the hubs disagree" while the archive was fine. Build the tool
-# the gate runs, next to the gate that runs it.
-( cd "$CLEAN_WORKTREE" && swift build --configuration debug --product tbase >/dev/null 2>&1 ) || true
-if ! "$CLEAN_WORKTREE/.build/debug/tbase" doctor; then
-  echo "✗ the build is fine, but the archive and the hubs disagree — see above." >&2
-  echo "  \`tbase homebase <session-id>\` rewrites one hub; \`tbase doctor\` re-checks." >&2
-fi
+# Informational archive health runs after this receipt in prepare-dev.py, with
+# its own 30-second deadline and log. It cannot keep app ownership occupied.
+
+# A receipt is written under the same mutation lock only after a fresh process,
+# full source stamp and passing launch drills have been established.
+python3 scripts/delivery.py record-running --pid "$$" --lock-token "$TB_DEPLOY_LOCK_TOKEN" \
+  --sha "$TARGET" --bundle "$APP_PATH" --launched-at "$LAUNCHED_AT"

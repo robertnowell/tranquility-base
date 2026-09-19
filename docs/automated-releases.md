@@ -1,7 +1,9 @@
 # Automated releases
 
-Every commit pushed to `main` is one release. In the normal path each commit is
-a merged pull request, so there is no separate version-bump or release PR.
+A push to `main` requests a release. The running release finishes; newer pushes
+replace the pending release so its combined changes go next. There is no
+separate version-bump PR, and not every intermediate commit gets a published
+artifact. Any skipped main commit remains buildable through manual recovery.
 
 ## Contract
 
@@ -27,11 +29,13 @@ A failed release remains an unpublished draft. Rerunning the workflow can
 replace that draft. Once public, the release path treats the asset as immutable:
 a rerun downloads and audits it but never overwrites it.
 
-Runs share `concurrency: release-main` with `queue: max`. GitHub serializes the
-signing jobs while retaining up to 100 waiting runs. Ordering is not guaranteed,
-so only the job whose SHA is the current `origin/main` receives Latest. A
-manually dispatched run with a full main-branch SHA is the recovery path for a
-lost event, queue overflow, or repaired operational failure.
+Runs share `concurrency: release-main` with the default single pending slot.
+A new arrival replaces the pending run without canceling the running release.
+This prevents the obsolete-release backlog measured on 15 September (#506).
+Arrival ordering is not guaranteed, so only the job whose SHA is the current
+`origin/main` receives Latest. A manually dispatched run with a full main-branch
+SHA is the recovery path for a skipped commit, lost event or repaired failure;
+it shares that pending slot, so coordinate recovery with normal publishing.
 
 Release identity is mechanical. For ancestry count `1024` at source commit
 `abcdef123...`, the default is:
@@ -80,8 +84,9 @@ After the `Source audit` job has appeared on one pull request, protect `main`:
 - block force pushes and deletion.
 
 Keep squash merge as the only merge method. One merged pull request then maps to
-one first-parent commit and therefore one release. If merge queue is enabled,
-the existing `merge_group` trigger keeps `Source audit` available to the queue.
+one first-parent commit and a distinct potential release identity. If merge
+queue is enabled, the existing `merge_group` trigger keeps `Source audit`
+available to the queue.
 
 GitHub currently gives workflow tokens read-only access by default in this
 repository. The release workflow asks narrowly for `contents: write`, which is
@@ -111,8 +116,8 @@ into a flaky product verdict.
   job checks out and audits that source SHA; the signing job keeps the current
   default-branch tooling and accepts only the source-stamped prebuilt app. The
   script independently requires both commits to be contained in `origin/main`.
-- `queue: max` retains 100 pending releases. More than 100 is an explicit
-  reconciliation event, not a silently supported backlog.
+- Pending releases can be superseded intentionally. Reconcile against the
+  latest successful published source SHA, not a count of one artifact per PR.
 
 Each release carries four immutable evidence assets: the DMG, its SHA-256 file,
 the clean app notarization log, and the clean DMG notarization log.

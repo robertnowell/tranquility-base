@@ -35,6 +35,9 @@ func usage() -> Never {
                                 end a live session, same path as the grid's
                                 right-click: SIGTERM to its process group, and
                                 SIGKILL only if it has to. Never touches the tab
+      tbase locate <id|prefix>  where the ledger says an agent is, verified now:
+                                here (pane, pid), elsewhere, unhosted, gone, or
+                                unknown. The answer every send and end reads
       tbase cursors             how far you have got with each session
       tbase calls [n]           full input and output of the last n model calls
       tbase dogfood [days]      WS-E counters summary (default 7 days)
@@ -43,7 +46,7 @@ func usage() -> Never {
       tbase transcribe <wav> [--apple-only|--openai-only|--assemblyai-only]
                                 run the file-based recovery chain, optionally
                                 pinned to one rung so it can be probed alone
-      tbase transcribe-stream <wav> [--chunk-ms N]
+      tbase transcribe-stream <wav> [--chunk-ms N] [--model NAME]
                                 replay a saved recording through the AssemblyAI
                                 streaming provider in pseudo-realtime; --chunk-ms
                                 replays a capture stack's real feed cadence
@@ -62,6 +65,37 @@ func usage() -> Never {
       tbase send <sessionId> <text...>    dispatch into a real session (enrolled only)
     """)
     exit(1)
+}
+
+/// SplitMix64: a seeded generator so `replay-log --seed` picks the same
+/// turns twice, which is what makes two replays comparable.
+struct SeededGenerator: RandomNumberGenerator {
+    var state: UInt64
+    init(seed: UInt64) { state = seed &+ 0x9E37_79B9_7F4A_7C15 }
+    mutating func next() -> UInt64 {
+        state &+= 0x9E37_79B9_7F4A_7C15
+        var z = state
+        z = (z ^ (z >> 30)) &* 0xBF58_476D_1CE4_E5B9
+        z = (z ^ (z >> 27)) &* 0x94D0_49BB_1331_11EB
+        return z ^ (z >> 31)
+    }
+}
+
+/// One historical summariser call, read back from the model-call log.
+struct LoggedCall {
+    let at: String
+    let user: String
+    let system: String
+    let response: String
+    /// The Anthropic response body's text content, joined, as `brief(for:)`
+    /// itself extracts it.
+    var responseText: String {
+        guard let json = try? JSONSerialization.jsonObject(with: Data(response.utf8)) as? [String: Any],
+              let content = json["content"] as? [[String: Any]] else { return "" }
+        return content.filter { ($0["type"] as? String) == "text" }
+            .compactMap { $0["text"] as? String }.joined()
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
 }
 
 let args = Array(CommandLine.arguments.dropFirst())
@@ -478,6 +512,30 @@ do {
             print(when + "  " + kind + "  " + project + "  " + message)
         }
 
+    case "locate":
+        // The one resolver, on the command line, so a misroute can be
+        // reproduced against a real second tmux server without a build of
+        // the panel (15 Sep: two servers, both with a pane %1).
+        guard args.count > 1 else {
+            print("usage: tbase locate <sessionId | id-prefix>")
+            break
+        }
+        let needle = args[1]
+        AgentLedger.trace = { print("  " + $0) }
+        let ids = Set(
+            (ClaudeAgentsCLI().sessions() ?? []).map(\.sessionId)
+            + FileSessionOwnershipStore.shared.all().map(\.sessionId)
+            + SessionRegistry.all().map(\.sessionId))
+        let matches = ids.filter { $0 == needle || $0.hasPrefix(needle) }.sorted()
+        guard let sessionId = matches.first, matches.count == 1 else {
+            print(matches.isEmpty ? "no session matching \(needle)"
+                                  : "ambiguous: \(matches.map { String($0.prefix(8)) }.joined(separator: ", "))")
+            break
+        }
+        let pid = (ClaudeAgentsCLI().sessions() ?? []).first { $0.sessionId == sessionId }?.pid
+        let location = AgentLedger.locate(sessionId: sessionId, pid: pid)
+        print("\(sessionId.prefix(8)): \(location.summary)")
+
     case "cursors":
         // The only mutable state left, so it gets its own command.
         for w in try store.allKnownSessions(limit: 100) {
@@ -516,6 +574,21 @@ do {
             print("\(problems.count) problem(s) — `tbase homebase <id>` rewrites a hub; "
                   + "a missing page means the record never happened")
             failures += problems.count
+        }
+
+        // Pages on disk that no record names — the other direction from the
+        // check above, and advisory for the same reason the fork survey below
+        // is: the repair is a hub rewrite, not a code change, and a deploy
+        // must not be held over one.
+        let unrecorded = HubIntegrity.unrecordedPages()
+        if unrecorded.isEmpty {
+            print("page records: every page on disk is recorded")
+        } else {
+            for problem in unrecorded.prefix(10) {
+                print("\(problem.session): \(problem.detail)")
+            }
+            print("\(unrecorded.count) unrecorded page(s) — "
+                  + "`tbase homebase <id>` reconciles that agent's directory")
         }
 
         // Transcript forks. Read-only, and DELIBERATELY NOT A GATE.
@@ -559,7 +632,8 @@ do {
         let minor = all.filter { $0.unreachable < TranscriptForks.significantUnreachable }
         for s in significant {
             print("\(s.sessionId.prefix(8))  \(s.leaves) branches  "
-                  + "\(s.unreachable) of \(s.linked) records unreachable")
+                  + "\(s.unreachable) of \(s.linked) records unreachable"
+                  + (s.retryOnly ? "  (an API retry won every branch point, not a second writer)" : ""))
         }
         if !minor.isEmpty {
             let n = minor.reduce(0) { $0 + $1.unreachable }
@@ -570,8 +644,15 @@ do {
         }
         if !significant.isEmpty {
             print("")
-            print("\(significant.count) transcript(s) lost conversation to a second writer. "
-                  + "Nothing is deleted and every branch is still on disk; a resume follows "
+            // Two claims, and the old sentence made only the first while
+            // asserting the second. Six of eleven on this Mac are retries.
+            let retries = significant.filter(\.retryOnly).count
+            print("\(significant.count) transcript(s) cannot resume their whole history"
+                  + (retries > 0
+                     ? " — \(retries) of them because a failed API request's retry record was "
+                       + "written last and won the branch point, which is one process, not two"
+                     : "")
+                  + ". Nothing is deleted and every branch is still on disk; a resume follows "
                   + "the branch written LAST, so export before resuming.")
             exit(1)
         }
@@ -772,9 +853,21 @@ case "reconcile":
         let r = try store.reconcileOnBoot()
         print("requeued for transcription  \(r.requeuedForTranscription.count)")
         print("needs delivery check        \(r.needsDeliveryCheck.count)   <- never auto-resent")
+        print("kept captures adopted       \(r.adoptedAudio.count)")
         print("orphaned audio files        \(r.orphanedAudio.count)")
         print("rows whose audio vanished   \(r.missingAudio.count)")
         for id in r.needsDeliveryCheck { print("  ambiguous: \(id)") }
+
+    case "keepdrill":
+        // The keep-audio data path on a throwaway store (no mic, no real store).
+        var anyFailed = false
+        for group in try KeepAudioDrill.run() {
+            let failed = group.checks.filter { !$0.passed }.map(\.name)
+            anyFailed = anyFailed || !failed.isEmpty
+            print("\(group.name): \(failed.isEmpty ? "PASS" : "FAIL(\(failed.joined(separator: ",")))")")
+            for c in group.checks { print("  \(c.passed ? "\u{2713}" : "\u{2717}") \(c.name)") }
+        }
+        if anyFailed { exit(1) }
 
     case "reap":
         let hours = args.count > 1 ? Double(args[1]) ?? 72 : 72
@@ -943,6 +1036,41 @@ case "reconcile":
         print(top.path)
         if !args.contains("--print") {
             _ = try? Process.run(URL(fileURLWithPath: "/usr/bin/open"), arguments: [top.path])
+        }
+
+    // Read one page back out of the hub, as this Mac.
+    //
+    // A fresh agent started from a hub page is handed an https address and
+    // nothing else, and that address answers 401 to anyone without a session.
+    // This is how the agent gets the page: the mirror's own token, pointed at
+    // the read path, never through a prompt and never through an argument.
+    case "read":
+        guard args.count > 1 else {
+            print("usage: tbase read <hub url | document id> [--text]")
+            print("  prints the page as this Mac. The token only ever goes to "
+                  + (HubApp.baseURL?.host ?? "the configured hub") + ".")
+            break
+        }
+        switch await HubRead.fetch(args[1]) {
+        case .success(let html):
+            print(args.contains("--text") ? HubRead.text(html) : html)
+        case .failure(.notConnected):
+            print("this Mac is not connected to a hub — Setup ▸ Connect your Mac")
+            exit(1)
+        case .failure(.notTheHub(let arg)):
+            // Said as a refusal, not as a failure to fetch. The difference
+            // matters: one is a network problem, the other is a page asking
+            // for this Mac's credential to be sent somewhere it does not belong.
+            print("refused: \(arg) is not an address on "
+                  + (HubApp.baseURL?.host ?? "this Mac's hub"))
+            exit(1)
+        case .failure(.http(let code)):
+            print("hub answered HTTP \(code)"
+                  + (code == 404 ? " — no such page, or it belongs to another account" : ""))
+            exit(1)
+        case .failure(.transport(let why)):
+            print("could not reach the hub: \(why)")
+            exit(1)
         }
 
     case "turns":
@@ -1166,7 +1294,10 @@ case "reconcile":
                 // dispatch is refused — floorHeld, permanently, on an
                 // otherwise-idle composer. See classifyPromptLine's doc
                 // comment.
-                idlePlaceholder: CodexAdapter().trustPrompt?.settledBannerNeedle)
+                idlePlaceholder: CodexAdapter().trustPrompt?.settledBannerNeedle,
+                // Same refusal the app's own dispatch makes (11 Sep): a pane
+                // on Codex's update chooser is never typed into.
+                blockingPrompts: CodexAdapter().trustPrompt?.neverAutoAcceptNeedles ?? [])
             report(await TmuxTransport().send(text: text, to: target))
             break
         }
@@ -1277,6 +1408,104 @@ case "reconcile":
         }
         try Secrets.write(key, value: value)
         print("stored \(key.rawValue) in the login keychain (service: \(Secrets.service))")
+
+    case "replay-log":
+        // tbase replay-log [N] [--seed S] [--since YYYY-MM-DD]
+        //
+        // Replay N random REAL summariser calls under THIS build's system
+        // prompt. The user prompt is the context production actually
+        // compiled for that turn, read back verbatim from the model-call
+        // log; the system prompt is compiled here from Summarizer.swift; the
+        // call is the production call (`complete`), not logged. Output is
+        // JSON on stdout: per turn, the exact input, the historical response
+        // (what the prompt of that day produced) and the fresh one.
+        let n = args.count > 1 ? Int(args[1]) ?? 10 : 10
+        var seed: UInt64 = 7
+        if let i = args.firstIndex(of: "--seed"), i + 1 < args.count { seed = UInt64(args[i + 1]) ?? 7 }
+        var since = "2026-09-07"
+        if let i = args.firstIndex(of: "--since"), i + 1 < args.count { since = args[i + 1] }
+        // --dry: compile the prompts for the picked turns and print them, no
+        // model call. The point of the command is to READ what the model
+        // receives; that should not cost ten calls.
+        let dry = args.contains("--dry")
+        guard let raw = try? String(contentsOf: ModelCallLog.url, encoding: .utf8) else {
+            print("no model-call log at \(ModelCallLog.url.path)"); break
+        }
+        var pool: [LoggedCall] = []
+        for line in raw.split(separator: "\n") {
+            guard let d = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
+                  let at = d["at"] as? String, at >= since,
+                  (d["status"] as? Int) == 200,
+                  let user = d["user"] as? String, let system = d["system"] as? String,
+                  let response = d["response"] as? String,
+                  user.hasPrefix("Project: "),
+                  // A digit-grounding retry carries a corrective note; the
+                  // first attempt is the turn, the retry is a repair of it.
+                  !user.contains("Your previous reply spoke the number")
+            else { continue }
+            pool.append(LoggedCall(at: at, user: user, system: system, response: response))
+        }
+        // --at T1,T2,...: exactly these calls, by their log timestamp, in
+        // that order. A seeded shuffle over a pool that keeps growing picks
+        // different turns tomorrow; a list of timestamps picks the same ones.
+        var picked: [LoggedCall]
+        if let i = args.firstIndex(of: "--at"), i + 1 < args.count {
+            let wanted = args[i + 1].split(separator: ",").map(String.init)
+            picked = wanted.compactMap { at in pool.first { $0.at == at } }
+        } else {
+            var rng = SeededGenerator(seed: seed)
+            picked = Array(pool.shuffled(using: &rng).prefix(n))
+        }
+        FileHandle.standardError.write(Data("pool \(pool.count) calls since \(since); replaying \(picked.count), seed \(seed)\n".utf8))
+        let provider = AnthropicSummaryProvider()
+        let encoder = JSONEncoder()
+        func dict(_ brief: SessionBrief?) -> Any {
+            guard let brief, let data = try? encoder.encode(brief),
+                  let obj = try? JSONSerialization.jsonObject(with: data) else { return NSNull() }
+            return obj
+        }
+        var out: [[String: Any]] = []
+        for (i, call) in picked.enumerated() {
+            let label = call.user.split(separator: "\n", maxSplits: 1).first
+                .map { String($0.dropFirst("Project: ".count)) } ?? "?"
+            let marker = "The agent's final message this turn:\n"
+            let source = call.user.range(of: marker).map { String(call.user[$0.upperBound...]) } ?? call.user
+            let request = SummaryRequest(lastAssistantMessage: source, projectLabel: label)
+            let system = AnthropicSummaryProvider.systemPrompt(projectLabel: label)
+            let historicalText = call.responseText
+            let historical = try? AnthropicSummaryProvider.parse(historicalText, request: request)
+            var fresh: [String: Any] = [:]
+            if dry {
+                fresh = ["skipped": true]
+            } else {
+                do {
+                let completion = try await provider.complete(system: system, user: call.user, log: false)
+                let brief = try? AnthropicSummaryProvider.parse(completion.text, request: request)
+                fresh = ["text": completion.text, "brief": dict(brief), "elapsedMs": completion.elapsedMs]
+                FileHandle.standardError.write(Data("\(i + 1)/\(picked.count) \(label) \(completion.elapsedMs)ms\n".utf8))
+            } catch {
+                fresh = ["error": "\(error)"]
+                FileHandle.standardError.write(Data("\(i + 1)/\(picked.count) \(label) FAILED \(error)\n".utf8))
+            }
+            }
+            out.append([
+                "index": i + 1, "at": call.at, "projectLabel": label,
+                "user": call.user,
+                "system": system,
+                "historicalSystem": call.system,
+                "historicalSystemChanged": call.system != system,
+                "historical": ["text": historicalText, "brief": dict(historical)],
+                "fresh": fresh,
+            ])
+        }
+        let result: [String: Any] = [
+            "seed": seed, "since": since, "poolSize": pool.count,
+            "systemPrompt": AnthropicSummaryProvider.systemPrompt(projectLabel: "{project_label}"),
+            "model": provider.model,
+            "turns": out,
+        ]
+        let data = try JSONSerialization.data(withJSONObject: result, options: [.prettyPrinted, .sortedKeys])
+        print(String(data: data, encoding: .utf8) ?? "{}")
 
     case "summarize":
         guard args.count > 1 else { usage() }
@@ -1584,7 +1813,13 @@ case "reconcile":
         guard args.count > 1 else { usage() }
         AssemblyAIStreaming.trace = { print("  assemblyai: \($0)") }
         StreamedUtterance.trace = { print("  stream: \($0)") }
-        let provider = AssemblyAIStreaming()
+        var provider = AssemblyAIStreaming()
+        // `--model X` drives another model through the real client path: the
+        // A/B control for "is the promoted default still safe", and the only
+        // way to exercise the coverage guard against a live server.
+        if let i = args.firstIndex(of: "--model"), args.indices.contains(i + 1) {
+            provider.speechModel = args[i + 1]
+        }
         guard provider.isConfigured else {
             print("assemblyai key is not configured — run: tbase set-key assemblyai")
             exit(2)

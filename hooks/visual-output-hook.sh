@@ -101,13 +101,84 @@ else
   WHOSE="Never write a page into another agent's directory."
 fi
 
-python3 - "$DIR" "$WHOSE" "${AGENT:-<your session id>}" <<'PYCTX' 2>/dev/null || true
+# WHAT THE OTHER AGENTS ARE DOING, in the session that is starting.
+#
+# The hub has been readable since 14 Sep: four endpoints and a command, `hq`.
+# Robert, the day after: "No one's typing hq ask into the terminal. Maybe
+# agents will, but how is it going to be discoverable for your future agents?"
+#
+# This is the answer, and it follows the rule this file learned the hard way
+# about directories: NAME IT, DO NOT DESCRIBE HOW TO DERIVE IT. A session is
+# not told that a searchable archive exists and left to find the verb. It is
+# handed the three most recent agents and what they last said, and then the
+# exact commands. The instruction arrives already useful, which is the only
+# form of instruction that gets used.
+#
+# Silent unless this Mac is connected: no key, no hub address, no network, or
+# a slow one, and this prints nothing. The hook's contract is never block,
+# never fail, always exit 0, and a shared archive is not worth a hung session.
+HUBLINES=""
+HQ_BIN=$(command -v hq 2>/dev/null || true)
+[ -n "$HQ_BIN" ] || HQ_BIN="$HOME/.local/bin/hq"
+if [ -x "$HQ_BIN" ]; then
+  HUBLINES=$(HQ_TIMEOUT=2 "$HQ_BIN" ask 2d 3 2>/dev/null | python3 -c '
+import json, sys
+try:
+    rows = json.load(sys.stdin).get("agents", [])
+except Exception:
+    raise SystemExit
+out = []
+for a in rows[:3]:
+    who = (a.get("agent") or a.get("session", "")[:8] or "an agent")[:52]
+    said = (a.get("headline") or "no headline yet")[:78]
+    out.append("  - " + who + ": " + said)
+print("\n".join(out))
+' 2>/dev/null || true)
+fi
+
+python3 - "$DIR" "$WHOSE" "${AGENT:-<your session id>}" "$HUBLINES" <<'PYCTX' 2>/dev/null || true
 import json, sys
 directory, whose, agent = sys.argv[1], sys.argv[2], sys.argv[3]
+hublines = sys.argv[4] if len(sys.argv) > 4 else ""
+# Where the page is read decides what the session is told to do after
+# writing it. With a hub app configured (hq.json app.base_url), the app
+# mirrors the page and announces it, so the session leaves a pointer at the
+# app's address. Without one -- every machine that is not Robert's, today --
+# the panel itself is the announcement: it hears the turn end and offers
+# Open Report on the card. Either way the session never runs `open`: a tab
+# opened from a session steals the reader's place (ruled 10 Sep 2026), and a
+# machine with no hub must not be told that a hub will announce anything.
+_base = ""
+try:
+    import os as _os
+    with open(_os.path.expanduser("~/.claude/hq.json")) as _f:
+        _base = ((json.load(_f).get("app") or {}).get("base_url") or "").rstrip("/ ")
+except Exception:
+    _base = ""
+if _base.startswith("http"):
+    after_writing = (
+        "(2) do NOT run `open` on it: the hub app mirrors the file within a minute and "
+        "announces it in its own window, and a browser tab opened from a session steals "
+        "the reader's place (ruled 10 Sep 2026); (3) leave the terminal a one-line pointer "
+        "at the page's hub address, " + _base + "/open?session=" + agent + "&slug=<slug>, "
+        "nothing more.")
+else:
+    after_writing = (
+        "(2) do NOT run `open` on it: Tranquility Base hears your turn end and offers "
+        "Open Report on its card, and a browser tab opened from a session steals the "
+        "reader's place (ruled 10 Sep 2026); (3) leave the terminal a one-line pointer "
+        "at the file's path, nothing more.")
 text = (
     "The user runs Tranquility Base: they hear sessions by voice and are usually "
     "NOT looking at this terminal. TREAT THE TERMINAL AS INVISIBLE. Anything you "
     "leave there, they will probably never see.\n\n"
+    "HOW THEIR REPLIES REACH YOU: they never hear your turn verbatim. Tranquility "
+    "Base speaks a one-sentence recap and ONE proposal ending in one question, "
+    "even when you asked several or none. Their spoken answer arrives as one "
+    "message: \"[assistant]:\" followed by exactly what they heard, then "
+    "\"[user]:\" followed by what they said. The [assistant] line is Tranquility "
+    "Base's paraphrase of you, not your words. Read \"go ahead\" against its "
+    "proposal.\n\n"
     "Whenever you PRESENT A RESULT to them -- a finding, evidence, a comparison, a "
     "recommendation, numbers they are meant to weigh, anything they need in order "
     "to make a decision -- it goes on a page, not in the terminal. The test is NOT "
@@ -127,9 +198,7 @@ text = (
     "back to assuming whoever owns the directory wrote it, which is how reports "
     "have ended up on the wrong agent's hub with the wrong Discuss button.\n\n"
     "ALWAYS ALL THREE STEPS: (1) write " + directory + "/<slug>.html, self-contained "
-    "-- inline CSS/SVG, no external assets, and a favicon; (2) run `open` on it; (3) "
-    "leave the terminal a one-line pointer at what opened, nothing more. Writing "
-    "without opening is a failure -- they will never find it.\n\n"
+    "-- inline CSS/SVG, no external assets, and a favicon; " + after_writing + "\n\n"
     "If the page is also going OUTSIDE -- to a customer or a prospect -- build it "
     "with the share-as-page skill instead, which deploys it, and still write or link "
     "it under your agent directory so it is on your hub.\n\n"
@@ -137,6 +206,19 @@ text = (
     "one-line answer, and your own intermediate reasoning. When in doubt, ask "
     "whether you would be happy for them to miss it entirely -- if not, it is a page."
 )
+if hublines.strip():
+    text += (
+        "\n\nTHE OTHER AGENTS ON THIS MAC SHARE ONE ARCHIVE, AND YOU CAN READ IT. "
+        "Every page and every finished turn, searchable from here, with `hq`:\n"
+        "  hq ask                     who is working on what, and what they last said\n"
+        "  hq find \"<words>\"          search every page and turn, ranked\n"
+        "  hq page <session> <slug>   read one page as text\n"
+        "Right now:\n" + hublines + "\n"
+        "Search it BEFORE starting research or a design somebody may already have "
+        "done: the record names what they concluded and what they rejected, which is "
+        "usually cheaper than repeating it. If it holds no answer, say so rather than "
+        "inventing one."
+    )
 print(json.dumps({"hookSpecificOutput": {
     "hookEventName": "SessionStart", "additionalContext": text}}))
 PYCTX

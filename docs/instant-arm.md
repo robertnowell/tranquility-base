@@ -113,9 +113,12 @@ precedes `optionTapped` from the same key-up.
 timelines against `ReplyGestureMachine` — ⌥-down +40ms keyDown → no arm
 event ever, even when the grace/hold timers still fire; ⌥-down +200ms
 release → arm fired then abort; chord growth after arm → immediate abort and
-the later hold fire is dead; disqualification mid-reply → abortReply at
-release; non-reply chords → nothing; machine resets between gestures; timer
-firings after release are inert. 10 tests. **PASS.**
+the later hold fire is dead; non-reply chords → nothing; machine resets
+between gestures; timer firings after release are inert. **Amended 10 Sep
+2026:** disqualification mid-reply → `endReply` at release, never an abort —
+the original "abortReply at release" row deleted a five-minute dictation
+(docs/rulings/ruling-an-open-microphone-is-a-promise.md), and the machine no
+longer has an abort-reply effect at all. 12 tests. **PASS.**
 
 **E2 — discard completeness** (live, `--selftest-arm`, 2026-08-06T05:44Z):
 arm→tap-abort driven through the real handler with the real recorder and

@@ -73,6 +73,9 @@ public enum TranscriptForks {
         /// compaction and nothing has diverged. Kept because "14 branches" is
         /// still the most legible way to say how chopped-up a file is.
         public let leaves: Int
+        /// Every branch point that abandoned something was won by an API-retry
+        /// record. One process and a failed request, not two writers.
+        public let retryOnly: Bool
 
         public var unreachable: Int { max(0, linked - reachable) }
 
@@ -88,11 +91,13 @@ public enum TranscriptForks {
         /// worth.
         public var isForked: Bool { unreachable > 0 }
 
-        public init(sessionId: String, linked: Int, reachable: Int, leaves: Int) {
+        public init(sessionId: String, linked: Int, reachable: Int, leaves: Int,
+                    retryOnly: Bool = false) {
             self.sessionId = sessionId
             self.linked = linked
             self.reachable = reachable
             self.leaves = leaves
+            self.retryOnly = retryOnly
         }
     }
 
@@ -174,18 +179,23 @@ public enum TranscriptForks {
     /// be mid-append, and half a record is not a record. Unparseable lines are
     /// skipped for the same reason rather than failing the whole survey.
     public static func survey(text: String, sessionId: String) -> Survey? {
-        var records: [(uuid: String, parent: String?, sidechain: Bool)] = []
+        var records: [(uuid: String, parent: String?, sidechain: Bool, type: String, retry: Bool)] = []
         var byUuid: Set<String> = []
         // `omittingEmptySubsequences` keeps a trailing newline from producing a
         // phantom record; a final line with no newline is still parsed, and is
         // simply skipped below if it does not decode.
-        for line in text.split(separator: "\n", omittingEmptySubsequences: true) {
-            guard let data = line.data(using: .utf8),
-                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+        // JSONL uses byte 0x0A as its delimiter. Walking grapheme clusters
+        // dominated the real archive profile; CRLF is also one Character and
+        // was never split by the old Character-based separator. A trailing CR
+        // is valid JSON whitespace, and UTF-8 payload bytes remain unchanged.
+        for line in text.utf8.split(separator: 0x0A, omittingEmptySubsequences: true) {
+            guard let obj = try? JSONSerialization.jsonObject(with: Data(line)) as? [String: Any],
                   let uuid = obj["uuid"] as? String
             else { continue }
             records.append((uuid, obj["parentUuid"] as? String,
-                            (obj["isSidechain"] as? Bool) ?? false))
+                            (obj["isSidechain"] as? Bool) ?? false,
+                            (obj["type"] as? String) ?? "",
+                            obj["retryAttempt"] != nil || obj["retryInMs"] != nil))
             byUuid.insert(uuid)
         }
         guard !records.isEmpty else { return nil }
@@ -334,7 +344,13 @@ public enum TranscriptForks {
         // child is whichever child's subtree reaches furthest down the file, and
         // its siblings are what was left behind.
         var orderOf: [String: Int] = [:]
-        for (i, r) in records.enumerated() { orderOf[r.uuid] = i }
+        var firstTypeOf: [String: String] = [:]
+        for (i, r) in records.enumerated() {
+            orderOf[r.uuid] = i
+            // Preserve first(where:) semantics even for duplicate UUIDs.
+            // Repeated linear lookups dominated large attachment-fork scans.
+            if firstTypeOf[r.uuid] == nil { firstTypeOf[r.uuid] = r.type }
+        }
         func subtree(_ root: String) -> Set<String> {
             var out: Set<String> = []
             var stack = [root]
@@ -345,22 +361,72 @@ public enum TranscriptForks {
             }
             return out
         }
+        // WHAT WON also says what happened, and for six of the eleven
+        // transcripts left on this Mac the answer is not "a second writer".
+        //
+        // When an API call fails, Claude Code writes a `system` record carrying
+        // `retryAttempt` and `retryInMs`. It is parented on whatever record was
+        // current when the REQUEST started and back-dated to then, but it is
+        // flushed to the file at the END of the run. Written last, so by the
+        // measured resume rule it wins the branch point, and the real
+        // conversation that happened while the request was in flight becomes
+        // the abandoned side: dd02c0f0 loses 119 of 172 records to one 5xx.
+        //
+        // The loss is real -- a resume would follow the retry branch -- so this
+        // is not silenced. But the count and the cause are different claims and
+        // the report made only one of them, out loud, wrongly.
         var abandonedUuids: Set<String> = []
+        var retryWon = 0, conversationWon = 0
+        let retryUuids = Set(records.filter(\.retry).map(\.uuid))
         for r in linked where (childrenOf[r.uuid]?.count ?? 0) > 1 {
             let subtrees = (childrenOf[r.uuid] ?? []).map { ($0, subtree($0)) }
             guard let survivor = subtrees.max(by: { a, b in
                 (a.1.compactMap { orderOf[$0] }.max() ?? -1)
                     < (b.1.compactMap { orderOf[$0] }.max() ?? -1)
             })?.0 else { continue }
+            var abandonedHere = false
             for (child, nodes) in subtrees where child != survivor {
+                if nodes.contains(where: { node in
+                    firstTypeOf[node] != "attachment"
+                }) { abandonedHere = true }
                 abandonedUuids.formUnion(nodes)
             }
+            guard abandonedHere else { continue }
+            if retryUuids.contains(survivor) { retryWon += 1 } else { conversationWon += 1 }
         }
-        let abandoned = linked.filter { abandonedUuids.contains($0.uuid) }.count
+        // AN ATTACHMENT IS NOT CONVERSATION, and counting one as loss is the
+        // third time this number has been wrong in the same direction.
+        //
+        // Since early September Claude Code writes `attachment` records: a
+        // sibling of the real tool_result, parented on the same assistant
+        // record and written about 100 ms before it. Every one of them is, by
+        // this measurement, an abandoned branch. They are not. Nothing was
+        // said and nothing was lost; a file read got its own row.
+        //
+        // Measured across the whole archive on 13 Sep 2026: 12,025 of roughly
+        // 19,500 abandoned records are attachments, 62% of the headline. Of the
+        // 29 transcripts over the threshold, 16 are attachments and nothing
+        // else -- d419c9f3 reports 931 abandoned and has 26; 547f77bc reports
+        // 1,217 and has 12. Excluding them leaves 8 sessions, which is the real
+        // population and small enough to read one by one.
+        //
+        // They stay in the GRAPH. Real conversation hangs off them (400 user
+        // and 466 assistant records across a 400-file sample), so deleting the
+        // node would strand its descendants and invent the loss it is trying
+        // to stop reporting. Only the tally changes.
+        //
+        // Same lesson as compaction on 28 Aug and as the leaves>1 test before
+        // it: a detector whose headline is dominated by a benign class is one
+        // people learn to scroll past, and this one is wired into the deploy
+        // gate's output.
+        let abandoned = linked.filter {
+            abandonedUuids.contains($0.uuid) && $0.type != "attachment"
+        }.count
 
         return Survey(sessionId: sessionId,
                       linked: linked.count,
                       reachable: linked.count - abandoned,
-                      leaves: leaves.count)
+                      leaves: leaves.count,
+                      retryOnly: retryWon > 0 && conversationWon == 0)
     }
 }

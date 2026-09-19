@@ -10,9 +10,11 @@ import GRDB
 public struct SpoolDrainer: Sendable {
     public let store: QueueStore
     public let spoolURL: URL
+    public let summaryOriginId: UUID?
 
-    public init(store: QueueStore, spoolURL: URL? = nil) {
+    public init(store: QueueStore, spoolURL: URL? = nil, summaryOriginId: UUID? = nil) {
         self.store = store
+        self.summaryOriginId = summaryOriginId
         self.spoolURL = spoolURL ?? QueueStore.supportDirectory.appendingPathComponent("spool.jsonl")
     }
 
@@ -73,7 +75,8 @@ public struct SpoolDrainer: Sendable {
             // existing label" — so a new arrival is unread again with no logic and
             // no write. Same here: a later event simply wins.
 
-            if try store.insert(event: event) != nil {
+            let source = summaryOriginId.map { GatewaySource.localHook(event, originId: $0) }
+            if try store.insert(event: event, summarySource: source) != nil {
                 result.inserted += 1
             } else {
                 result.duplicates += 1
@@ -95,6 +98,7 @@ public struct SpoolDrainer: Sendable {
         var cwd: String?
         var transcriptPath: String?
         var lastAssistantMessage: String?
+        var earlierThisTurn: String?
         var notificationMatcher: String?
         var tty: String?
 
@@ -108,6 +112,7 @@ public struct SpoolDrainer: Sendable {
                 cwd: cwd,
                 transcriptPath: transcriptPath,
                 lastAssistantMessage: lastAssistantMessage,
+                earlierThisTurn: earlierThisTurn,
                 notificationMatcher: notificationMatcher,
                 tty: tty
             )

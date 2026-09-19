@@ -88,9 +88,19 @@ final class KeyCheckTests: XCTestCase {
 
     // MARK: - the requests
 
+    /// Every provider-backed key is checked against a CONFIGURED provider.
+    /// Without this the two keys added on 13 Sep would produce nil on any
+    /// machine with no address for them, and this loop would report full
+    /// coverage while asserting nothing about either.
+    private let configured: (String) -> URL? = { _ in URL(string: "https://provider.example.test") }
+
     func testEveryProviderHasAReadOnlyRequest() {
-        for key in Secrets.Key.allCases {
-            let request = KeyCheck.request(for: key, value: "probe")
+        for key in Secrets.Key.allCases where key.isPasted {
+            // Only pasted keys have a provider to ask. This Mac's own device
+            // key has nobody to verify it with: the only thing that can say it
+            // works is a signature the Gateway accepts, and a "checked,
+            // working" row here would be a claim nobody made.
+            let request = KeyCheck.request(for: key, value: "probe", providerBase: configured)
             XCTAssertNotNil(request, "\(key) has no verification request")
             // Verifying a key must never create, spend, or transcribe anything.
             XCTAssertEqual(request?.httpMethod, "GET", "\(key) is not read-only")
@@ -102,7 +112,7 @@ final class KeyCheckTests: XCTestCase {
     /// reports every valid key as rejected.
     func testEachProviderGetsItsOwnHeaderShape() {
         func header(_ key: Secrets.Key, _ field: String) -> String? {
-            KeyCheck.request(for: key, value: "probe")?
+            KeyCheck.request(for: key, value: "probe", providerBase: configured)?
                 .value(forHTTPHeaderField: field)
         }
         XCTAssertEqual(header(.anthropicAPIKey, "x-api-key"), "probe")
@@ -111,20 +121,63 @@ final class KeyCheckTests: XCTestCase {
         // Raw, no "Bearer" -- AssemblyAIFileRecovery says so in its own comment.
         XCTAssertEqual(header(.assemblyAIAPIKey, "Authorization"), "probe")
         XCTAssertEqual(header(.openAIAPIKey, "Authorization"), "Bearer probe")
+        XCTAssertEqual(header(.crobotAPIKey, "Authorization"), "Bearer probe")
+        // BASIC, with the literal username `opencode`. The gateway's own proxy
+        // sets exactly this when it forwards to a sandbox, and sending Bearer
+        // would report a correct password as rejected.
+        XCTAssertEqual(header(.openCodePassword, "Authorization"),
+                       "Basic " + Data("opencode:probe".utf8).base64EncodedString())
+    }
+
+    /// An unconfigured provider yields NO request, which `verify` turns into
+    /// `.unreachable`. That is the honest verdict: an address nobody has set
+    /// says nothing about the credential, and reporting it as `.rejected`
+    /// would send somebody to rotate a key that was fine.
+    func testAnUnconfiguredProviderIsUnreachableRatherThanRejected() {
+        let none: (String) -> URL? = { _ in nil }
+        XCTAssertNil(KeyCheck.request(for: .crobotAPIKey, value: "probe", providerBase: none))
+        XCTAssertNil(KeyCheck.request(for: .openCodePassword, value: "probe", providerBase: none))
+    }
+
+    /// The GATEWAY's identity route, not Jarvis's.
+    ///
+    /// Measured live 13 Sep 2026: `/api/auth/me` on the gateway sits behind
+    /// the same auth middleware, so it refuses a bad key correctly and then
+    /// serves a GOOD one the single page app, 200 with HTML. A check reading
+    /// "working" off that has proved the credential authenticates and nothing
+    /// about whether an identity resolves behind it. `/api/v1/me` passes the
+    /// same auth and org-scope chain as `/api/v1/tasks`, which is what the
+    /// provider actually calls.
+    func testCrobotVerifiesAgainstTheGatewaysOwnIdentityRoute() {
+        let url = KeyCheck.request(for: .crobotAPIKey, value: "probe",
+                                   providerBase: configured)?.url?.path
+        XCTAssertEqual(url, "/api/v1/me")
+        XCTAssertNotEqual(url, "/api/auth/me", "that is Jarvis's route, not the gateway's")
     }
 
     func testTheKeyNeverAppearsInTheURL() {
         for key in Secrets.Key.allCases {
-            let url = KeyCheck.request(for: key, value: "SECRETVALUE")?.url?.absoluteString ?? ""
+            let url = KeyCheck.request(for: key, value: "SECRETVALUE",
+                                       providerBase: configured)?.url?.absoluteString ?? ""
             XCTAssertFalse(url.contains("SECRETVALUE"), "\(key) puts the key in the URL")
         }
     }
 
     func testTheCheckIsBounded() {
         for key in Secrets.Key.allCases {
-            let timeout = KeyCheck.request(for: key, value: "probe")?.timeoutInterval ?? .infinity
-            // Somebody is watching a row while this runs.
-            XCTAssertLessThanOrEqual(timeout, 15, "\(key) check can hang too long")
+            let request = KeyCheck.request(for: key, value: "probe", providerBase: configured)
+            // A key a person pastes MUST be checkable, or a wrong one sits
+            // under a green lamp until it fails in the away-channel. Absence
+            // used to read as an unbounded timeout here, which conflated "no
+            // check" with "a check that can hang" and would have let a real
+            // credential lose its probe silently.
+            if key.isPasted {
+                XCTAssertNotNil(request, "\(key) can be pasted but never verified")
+            }
+            // Whatever exists is bounded: somebody is watching a row while it runs.
+            if let timeout = request?.timeoutInterval {
+                XCTAssertLessThanOrEqual(timeout, 15, "\(key) check can hang too long")
+            }
         }
     }
 }

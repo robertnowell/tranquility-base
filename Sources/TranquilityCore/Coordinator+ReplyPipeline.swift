@@ -73,6 +73,70 @@ extension Coordinator {
     /// addressing — a deep link from an HTML review page names the session it is
     /// about, and that beats "whatever you heard last". The session must still
     /// exist in the log; an unknown id refuses rather than guessing.
+    /// The remote half, which is the same five steps with none of the process
+    /// archaeology: claim the utterance, ask the provider, record what it said.
+    private func dispatchRemote(
+        utterance: inout Utterance, text: String, target: WaitingSession,
+        transport: any DispatchTransport
+    ) async throws -> ReplyOutcome {
+        let dispatchTarget = DispatchTarget(
+            kind: .remote,
+            sessionId: target.sessionId,
+            label: target.callsign ?? target.projectLabel,
+            readinessSource: .provider)
+
+        utterance.targetKind = .remote
+        utterance.targetSessionId = target.sessionId
+        try store.update(utterance: utterance)
+
+        // Readiness FIRST, so a refusal costs nothing and says why. The local
+        // path does the same; the difference is only where the answer comes
+        // from.
+        let readiness = await transport.readiness(for: dispatchTarget)
+        switch readiness {
+        case .ready, .busy, .waiting:
+            break
+        default:
+            // The provider says not now. `deferred` carries the reason to the
+            // card, which is the whole point of surfacing it rather than
+            // retrying into silence.
+            attachments.resolve(utteranceId: utterance.id, landed: false)
+            try store.update(utterance: utterance)
+            return .sessionNotReady(readiness)
+        }
+
+        switch await transport.send(text: text, to: dispatchTarget) {
+        case .confirmed(let latencyMs):
+            attachments.resolve(utteranceId: utterance.id, landed: true)
+            utterance.status = .confirmed
+            utterance.confirmedAtMs = Int64(Date().timeIntervalSince1970 * 1000)
+            try store.update(utterance: utterance)
+            return .dispatched(text: text, latencyMs: latencyMs,
+                               sessionId: target.sessionId, pid: nil)
+        case .queued:
+            attachments.resolve(utteranceId: utterance.id, landed: true)
+            utterance.status = .confirmed
+            try store.update(utterance: utterance)
+            return .queued(text: text, sessionId: target.sessionId, pid: nil)
+        case .deferred(let why):
+            // BUSY REACHES THE USER. A provider that refused a follow-up while
+            // its agent works must say so; silence reads as the words having
+            // landed. `sessionNotReady` is the case the card already knows how
+            // to speak, so this needs no new surface.
+            attachments.resolve(utteranceId: utterance.id, landed: false)
+            try store.update(utterance: utterance)
+            return .sessionNotReady(why)
+        case .failed(let failure):
+            attachments.resolve(utteranceId: utterance.id, landed: false)
+            utterance.status = .dispatchFailed
+            utterance.lastError = "\(failure)"
+            try store.update(utterance: utterance)
+            // Carries its reason, both streams (ruling, 11 Sep).
+            Failures.report(.deliveryFailed, reason: "remote dispatch: \(failure)")
+            return .dispatchFailed(failure, utteranceId: utterance.id)
+        }
+    }
+
     /// `streamed:` is an optional live-transcription final captured while the
     /// user was speaking (`StreamedUtterance.finish`). Nil — the only value the
     /// app passes until streaming is wired — keeps this path byte-identical to
@@ -95,8 +159,16 @@ extension Coordinator {
         }
         guard let target else { return .noTarget }
 
+        // The turn this reply answers, bound NOW. The target is the session's
+        // latest event at the moment the user spoke; a newer turn can land
+        // during the undo window and move `latestId`, and the quote the agent
+        // receives (`HeardContext`) must be of the turn the user heard, not of
+        // one they have not. Text key, not rowid: `eventId` is a foreign key
+        // onto `events.id`. Nil when the rowid has no row, which only a
+        // fixture can arrange; the note is then simply absent.
+        let heardEventId = try store.eventId(forRowid: target.latestId)
         var utterance = try await store.captureAndTranscribe(
-            pcm16: pcm16, sampleRate: sampleRate, chain: recovery, eventId: nil,
+            pcm16: pcm16, sampleRate: sampleRate, chain: recovery, eventId: heardEventId,
             streamed: streamed, streamHadRecognizedText: streamHadRecognizedText,
             streamNoSpeechProvider: streamNoSpeechProvider, preWritten: preWritten, utteranceId: utteranceId)
 
@@ -129,7 +201,7 @@ extension Coordinator {
         }
         return .readyToSend(
             utteranceId: utterance.id,
-            text: AttachmentTray.compose(transcript: text, fragments: carrying),
+            text: outgoingText(for: utterance, transcript: text, fragments: carrying),
             // The name the grid shows, not the folder the session happens to
             // sit in. `projectLabel` is the raw last path component of the
             // cwd, so a session in `.claude/worktrees/arc-work` was announced
@@ -142,6 +214,41 @@ extension Coordinator {
             // already use, and its own doc comment claims to be the one every
             // displayed identity goes through — which was true everywhere
             // except the reply path.
+            label: GridAssembler.tabDisplayName(
+                for: target,
+                live: (agents.sessions() ?? []).first { $0.sessionId == target.sessionId }),
+            sessionId: target.sessionId)
+    }
+
+    /// A reply with no audio: what was typed on the card, and whatever the
+    /// tray is holding (ruled 15 Sep: "if I start typing, I would just love
+    /// for that to be received"; "when there's an attachment, that should
+    /// bring up the Send button"). Same shape as `submitReply`'s ready
+    /// outcome, so the app sends it through the same door: the row is
+    /// `.ready`, bound to the turn the user heard, and the staged fragments
+    /// ride it. `text` may be empty when only attachments are going; the
+    /// composition then IS the fragments. Nothing when both are empty: a
+    /// Send with nothing in it is a press with no meaning.
+    public func submitTypedReply(text: String, to sessionId: String) async throws -> ReplyOutcome {
+        let typed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let target = try store.allKnownSessions().first(where: { $0.sessionId == sessionId })
+        else { return .noTarget }
+        let carrying = attachments.staged(for: target.sessionId)
+        guard !typed.isEmpty || !carrying.isEmpty else { return .noTarget }
+        var utterance = Utterance(id: UUID().uuidString,
+                                  eventId: try store.eventId(forRowid: target.latestId),
+                                  status: .ready)
+        utterance.transcriptText = typed
+        utterance.transcriptProvider = "typed"
+        utterance.transcriptFinality = .explicitEndOfTurn
+        utterance.transcriptionOutcome = TranscriptionDisposition.completed.rawValue
+        utterance.targetSessionId = target.sessionId
+        try store.update(utterance: utterance)
+        let riding = attachments.snapshot(session: target.sessionId, utteranceId: utterance.id)
+        Track.record("typed_reply", ["chars": .int(typed.count), "fragments": .int(riding.count)])
+        return .readyToSend(
+            utteranceId: utterance.id,
+            text: outgoingText(for: utterance, transcript: typed, fragments: riding),
             label: GridAssembler.tabDisplayName(
                 for: target,
                 live: (agents.sessions() ?? []).first { $0.sessionId == target.sessionId }),
@@ -177,8 +284,9 @@ extension Coordinator {
         try enrolment.enrol(sessionId: target.sessionId)
         // Same composition as readyToSend showed, from the same riding set —
         // the user confirms exactly the text that dispatches.
-        let outgoing = AttachmentTray.compose(
-            transcript: text, fragments: attachments.riding(utteranceId: utteranceId))
+        let outgoing = outgoingText(
+            for: utterance, transcript: text,
+            fragments: attachments.riding(utteranceId: utteranceId))
 
         // Own the utterance before dispatch does any process probing or session
         // adoption. Those are preflight from the transport's perspective, but
@@ -226,7 +334,66 @@ extension Coordinator {
         else { return nil }
         let fragments = attachments.absorbStaged(
             session: sessionId, utteranceId: utteranceId)
-        return AttachmentTray.compose(transcript: transcript, fragments: fragments)
+        return outgoingText(for: utterance, transcript: transcript, fragments: fragments)
+    }
+
+    // MARK: - What was heard
+
+    /// The note quoting what Tranquility Base spoke for the turn this reply
+    /// answers (`HeardContext`), or nil when that turn has no brief. Read from
+    /// the utterance's OWN event, bound in `submitReply`, never from the
+    /// session's current latest event. Best-effort by design: a store read
+    /// failing here degrades the agent's context, never the send.
+    func heardNote(for utterance: Utterance) -> String? {
+        guard let eventId = utterance.eventId,
+              let sessionId = utterance.targetSessionId
+        else { return nil }
+        guard let brief = try? store.storedBrief(sessionId: sessionId, eventId: eventId)
+        else {
+            Coordinator.trace?("heard-context: no brief for event \(eventId.prefix(8)); "
+                + "reply goes bare")
+            return nil
+        }
+        return HeardContext.note(
+            recap: brief.recap, proposal: brief.proposal,
+            rungs: rungsHeard(sessionId: sessionId, eventRowid: brief.eventRowid))
+    }
+
+    /// A ⌃⌃ rung was spoken. The app calls this as it speaks each rung, so
+    /// the reply that follows can quote it (`heardNote`). MESSAGE is the
+    /// announcement re-heard and is dropped here rather than at every caller.
+    public func recordRungHeard(
+        sessionId: String, eventRowid: Int64,
+        kind: SpokenComposition.RungKind, spoken: String
+    ) {
+        guard kind != .message else { return }
+        do {
+            try store.recordRungHeard(
+                sessionId: sessionId, eventRowid: eventRowid,
+                kind: kind.rawValue, spoken: spoken)
+        } catch {
+            Coordinator.trace?("heard-context: could not record \(kind.rawValue) "
+                + "for event \(eventRowid): \(error)")
+        }
+    }
+
+    /// The pulled rungs' spoken text in LADDER order (goal, findings,
+    /// solution, why), whatever order they were pulled in. Best-effort: a
+    /// read failing here shortens the quote, never the send.
+    func rungsHeard(sessionId: String, eventRowid: Int64) -> [String] {
+        let order: [SpokenComposition.RungKind] = [.goal, .findings, .solution, .why]
+        let heard = (try? store.rungsHeard(sessionId: sessionId, eventRowid: eventRowid)) ?? []
+        return order.compactMap { kind in heard.first { $0.kind == kind.rawValue }?.spoken }
+    }
+
+    /// The one composition every send and every readback goes through: the
+    /// heard note, then the tray's fragments and the transcript. Three callers
+    /// (`submitReply`'s readback, `refreshPendingSend`, `confirmAndSend`) and
+    /// one function, so the text the undo window shows is the text typed.
+    func outgoingText(for utterance: Utterance, transcript: String, fragments: [String]) -> String {
+        HeardContext.compose(
+            note: heardNote(for: utterance),
+            message: AttachmentTray.compose(transcript: transcript, fragments: fragments))
     }
 
     /// `dispatch`'s Codex twin for `preferringTmuxOwned` — same question
@@ -246,6 +413,17 @@ extension Coordinator {
     private func dispatch(
         utterance: inout Utterance, text: String, target: WaitingSession
     ) async throws -> ReplyOutcome {
+        // REMOTE FIRST, and before anything below reads a process.
+        //
+        // Everything after this point resolves a live session, a tmux pane and
+        // a transcript path. A remote agent has none of the three, and the
+        // resolution would not merely fail, it would fail with the local
+        // vocabulary: "can't take this yet", about an agent that is perfectly
+        // able to take it. One branch here, where the question is asked once.
+        if isRemote(target.sessionId), let remote = remoteTransport {
+            return try await dispatchRemote(utterance: &utterance, text: text,
+                                            target: target, transport: remote)
+        }
         // Typing fails CLOSED: probe failure and genuine absence refuse alike,
         // because injecting into a session we cannot verify could answer a dialog.
         // A session that has JUST registered can drop back out of
@@ -424,8 +602,14 @@ extension Coordinator {
             attachments.resolve(utteranceId: utterance.id, landed: false)
             utterance.status = .ready
             try store.update(utterance: utterance)
+            // The reason, not the category (rule of 11 Sep). The ledger has
+            // just been asked by the transfer; asking it again here is what
+            // puts "elsewhere: in tmux session tb-68cf6fcf" on the failure
+            // instead of a sentence that blames tmux.
+            let location = AgentLedger.locate(sessionId: target.sessionId, pid: live.pid,
+                                              harness: live.harness)
             return .dispatchFailed(
-                .injectionFailed("tmux is unavailable for this session"),
+                .injectionFailed("no pane this app can type into: \(location.summary)"),
                 utteranceId: utterance.id)
         }
         // Every field below `pane` used to default to Claude Code's own
@@ -459,7 +643,13 @@ extension Coordinator {
             readinessSource: isCodex ? .rolloutTail : .claudeAgents,
             promptGlyph: isCodex ? CodexAdapter().capabilities.promptGlyph : "❯",
             idlePlaceholder: isCodex ? CodexAdapter().trustPrompt?.settledBannerNeedle : nil,
-            pasteChip: isCodex ? CodexAdapter().capabilities.pasteChipPrefix : "[Pasted text #")
+            pasteChip: isCodex ? CodexAdapter().capabilities.pasteChipPrefix : "[Pasted text #",
+            // The screens this harness's launcher refuses to press through
+            // are the screens this dispatch refuses to type into. Same list,
+            // one owner (11 Sep: a reply typed into Codex's update chooser
+            // chose "Update now").
+            blockingPrompts: (isCodex ? CodexAdapter().trustPrompt : ClaudeCodeAdapter().trustPrompt)?
+                .neverAutoAcceptNeedles ?? [])
 
         utterance.targetKind = dispatchTarget.kind
         utterance.targetSessionId = target.sessionId

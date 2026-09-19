@@ -368,6 +368,14 @@ extension AppDelegate {
                 // that is exactly the moment a machine-wide default voice would
                 // make it a stranger.
                 let rungVoices = coordinator.voices(for: announcement.event.sessionId)
+                // The pull is on record before the audio starts: a reply
+                // quotes everything the user heard of this turn, and a rung
+                // stopped part-way was still heard (the same rule the
+                // announcement's own cursor uses, 13 Aug).
+                coordinator.recordRungHeard(
+                    sessionId: announcement.event.sessionId,
+                    eventRowid: announcement.event.latestId,
+                    kind: rung.kind, spoken: rung.spoken.text)
                 let spoken = await coordinator.speech.speak(
                     rung.spoken,
                     voice: rungVoices.cloud,
@@ -595,8 +603,13 @@ extension AppDelegate {
 
         case .replyAborted:
             Analytics.gesture("option", phase: "hold_aborted", decision: "reply_aborted", face: hud.state)
-            // The hold turned out to be part of a real shortcut. Drop the audio
-            // rather than transcribing whatever happened to be in the room.
+            // No gesture reaches here any more. A committed hold used to be
+            // condemned by any keystroke during it and abandoned at release —
+            // which on 10 Sep 2026 unlinked a five-minute dictation under a
+            // pill that said Listening. `ReplyGestureMachine` now ends every
+            // committed hold as `.replyEnded`; this leg survives for the
+            // self-test's E4 abort drill, and `recorder.abandon()` itself now
+            // keeps any capture that held speech.
             isBusy = false
             hud.recordingEnded()
             recorder.abandon()
@@ -824,15 +837,23 @@ extension AppDelegate {
                             }
                         } catch {
                             Permissions.log("homebase FAILED: \(error)")
-                            Track.record("hub_written", ["agent_id": Track.hash(spokenSession), "ok": false])
+                            Track.record("hub_written", ["agent_id": Track.hash(spokenSession),
+                                                         "ok": false, "detail": .prose("\(error)")])
                         }
                     }
                     // Ruling 14 reversed (12 Aug): fully spoken dwells. The card
                     // stays until a gesture moves it — the grid is one tap away,
                     // not four seconds away.
                 case .interrupted(let failure):
-                    Track.record("announcement", ["outcome": failure == nil ? "interrupted" : "playback_failed",
-                                                  "via": announceVia, "seconds": .int(seconds)])
+                    // `failure` is the playback error (a dropped connection, a
+                    // TTS provider error), never the spoken text, so it is safe
+                    // to log and is what turns a bare `playback_failed` count
+                    // into a debuggable one.
+                    var announceProps: [String: TrackValue] = [
+                        "outcome": failure == nil ? "interrupted" : "playback_failed",
+                        "via": announceVia, "seconds": .int(seconds)]
+                    if let failure { announceProps["detail"] = .prose("\(failure)") }
+                    Track.record("announcement", announceProps)
                     if let failure {
                         // Nobody asked for this one. Say so, rather than letting a
                         // dropped connection masquerade as something you chose.
@@ -862,7 +883,12 @@ extension AppDelegate {
                 }
             } catch {
                 Permissions.log("announce: threw \(error)")
-                Track.record("announcement", ["outcome": "threw", "via": announceVia])
+                // The exception is the announce pipeline's own error, never the
+                // spoken text. Carry it, and file a Failure so it is not
+                // invisible remotely.
+                Track.record("announcement", ["outcome": "threw", "via": announceVia,
+                                              "detail": .prose("\(error)")])
+                Failures.report(.deliveryFailed, reason: "announce threw: \(error)")
                 lastStatusLine = "announce failed: \(error)"
             }
             rebuildMenu()

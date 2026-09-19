@@ -389,7 +389,7 @@ final class Phase1bTests: XCTestCase {
 
     // MARK: - End to end: the spoken line opens with the RECAP
 
-    func testTheRecapOpensWithTheRecapAndTheModelsLabelIsStripped() async throws {
+    func testTheRecapIsSpokenAsWrittenAndNothingIsMinted() async throws {
         let tmpDir = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("vd-p1b-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
@@ -399,10 +399,11 @@ final class Phase1bTests: XCTestCase {
         struct PrefixWritingSummary: SummaryProvider {
             let name = "fixed"; let isConfigured = true
             func brief(for request: SummaryRequest) async throws -> SessionBrief {
-                // The model obeys the prompt and writes the label itself — the
-                // mechanical pass must not double it.
+                // The prompt no longer asks for a label (14 Sep), so the model
+                // writes the recap plain, and nothing downstream prepends or
+                // strips one.
                 SessionBrief(topic: "export refactor", happened: "tests pass",
-                             recap: "promotions: export pipeline fixed, tests pass.",
+                             recap: "Export pipeline fixed, tests pass.",
                              proposal: "Run the migration next. Proceed?")
             }
         }
@@ -434,16 +435,13 @@ final class Phase1bTests: XCTestCase {
         guard case .spoke(let announcement) = try await coordinator.announceNext() else {
             return XCTFail("expected an announcement")
         }
-        // The summariser writes "promotions: export pipeline fixed…" — the
-        // tuned prompt asks it to, and it complies most of the time. Nothing is
-        // prepended any more (ruled 18 Aug), but the label it wrote is still
-        // stripped: otherwise the recap opens with a prefix the MODEL chose,
-        // which is wrong on the miss (brand-substitution) and inconsistent on
-        // the hit.
-        XCTAssertTrue(announcement.spoken.text.hasPrefix("export pipeline fixed"),
+        // Nothing is prepended (ruled 18 Aug) and, since 14 Sep, nothing is
+        // stripped either: the prompt stopped asking for a label, so the
+        // fresh-summary strip went with it. The recap is spoken as written.
+        XCTAssertTrue(announcement.spoken.text.hasPrefix("Export pipeline fixed"),
                       "got: \(announcement.spoken.text)")
         XCTAssertFalse(announcement.spoken.text.lowercased().contains("promotions"),
-                       "no label, the model's or ours")
+                       "no label, ours or anyone's")
 
         // And nothing is minted. The name is not merely unspoken — the mechanism
         // that chose the second word (longest word in the topic, as a proxy for
@@ -458,7 +456,7 @@ final class Phase1bTests: XCTestCase {
         guard case .spoke(let second) = try await coordinator.announceNext() else {
             return XCTFail("expected a second announcement")
         }
-        XCTAssertTrue(second.spoken.text.hasPrefix("export pipeline fixed"),
+        XCTAssertTrue(second.spoken.text.hasPrefix("Export pipeline fixed"),
                       "got: \(second.spoken.text)")
         XCTAssertNil(second.event.callsign)
     }

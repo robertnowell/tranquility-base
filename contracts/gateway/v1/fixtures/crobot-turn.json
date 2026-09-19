@@ -1,0 +1,16 @@
+{
+  "version": "1",
+  "source": {
+    "namespace": "crobot:team-fixture",
+    "taskId": "task-42",
+    "turnId": "assistant-message-7",
+    "intentId": "summary.v1"
+  },
+  "input": {
+    "lastAssistantMessage": "The export is ready. All tests passed.",
+    "projectLabel": "Export",
+    "hookEvent": "Stop",
+    "previousGoal": "Ship the export",
+    "gitBranch": "feature/export"
+  }
+}

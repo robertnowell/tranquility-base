@@ -44,12 +44,34 @@ public enum Prerequisites {
         /// payload is `HarnessAdapter.id`, so this never becomes a second
         /// vocabulary for the same thing.
         case hooks(harness: String)
+        /// The cloud hub. Sign in once in the browser; the app keeps the token.
+        case hub
+        /// Summaries on us. The same sign-in; the row is where the standing
+        /// lives and what the amber line opens. Ruled 15 Sep; the name is
+        /// provisional.
+        case credits
         /// Spoken summaries. The product.
         case anthropicKey
         /// The voice. Falls back to the system voice, audibly.
         case elevenLabsKey
         /// The live transcript while you speak.
         case assemblyAIKey
+        /// Whisper, the durable transcript when streaming fails.
+        ///
+        /// MISSING UNTIL 13 SEP, and that omission is #326. `openAIAPIKey` had
+        /// been in `Secrets.Key` for weeks, so every part of the app that USES
+        /// it worked, and the only thing that did not exist was anywhere to
+        /// type it. The root cause is worth stating because it is about to be
+        /// repeated: this enum is hand-written and does NOT derive from
+        /// `Secrets.Key.allCases`, so adding a credential is two edits and the
+        /// second one has no compiler forcing it. `KeyCheck.request(for:)` is
+        /// an exhaustive switch and therefore does force its half, which is
+        /// exactly why that half was never missed.
+        case openAIKey
+        /// A cloud agent provider: one row per provider, carrying
+        /// `AgentProvider.id`, the same way `hooks` carries `HarnessAdapter.id`
+        /// rather than inventing a second vocabulary.
+        case provider(id: String)
 
         /// Stable, and stable across harnesses: "hooks.codex" is not
         /// "hooks.claude-code". Used for button identifiers and log lines.
@@ -57,19 +79,30 @@ public enum Prerequisites {
             switch self {
             case .tmux: return "tmux"
             case .hooks(let harness): return "hooks." + harness
+            case .hub: return "hub"
+            case .credits: return "credits"
             case .anthropicKey: return "anthropicKey"
             case .elevenLabsKey: return "elevenLabsKey"
             case .assemblyAIKey: return "assemblyAIKey"
+            case .openAIKey: return "openAIKey"
+            case .provider(let id): return "provider." + id
             }
         }
 
         public init?(id: String) {
             switch id {
             case "tmux": self = .tmux
+            case "hub": self = .hub
+            case "credits": self = .credits
             case "anthropicKey": self = .anthropicKey
             case "elevenLabsKey": self = .elevenLabsKey
             case "assemblyAIKey": self = .assemblyAIKey
+            case "openAIKey": self = .openAIKey
             default:
+                if id.hasPrefix("provider.") {
+                    self = .provider(id: String(id.dropFirst("provider.".count)))
+                    return
+                }
                 guard id.hasPrefix("hooks.") else { return nil }
                 self = .hooks(harness: String(id.dropFirst("hooks.".count)))
             }
@@ -88,9 +121,13 @@ public enum Prerequisites {
             // "Claude Code hooks", "Codex hooks". Naming the harness in the
             // row is the whole point of there being two of them.
             case .hooks: return (harness?.label ?? "Agent") + " hooks"
+            case .hub: return "Your hub"
+            case .credits: return "Credits"
             case .anthropicKey: return "Anthropic"
             case .elevenLabsKey: return "ElevenLabs"
             case .assemblyAIKey: return "AssemblyAI"
+            case .openAIKey: return "OpenAI"
+            case .provider(let id): return Secrets.credential(forProvider: id)?.provider ?? id
             }
         }
 
@@ -100,6 +137,8 @@ public enum Prerequisites {
             switch self {
             case .tmux: return "the only way a reply reaches a session"
             case .hooks: return "finished turns, and results as pages you can open"
+            case .hub: return "everything your agents write, in one place, on every device"
+            case .credits: return "spoken summaries on us, ten dollars to start, with the same sign-in"
             // "a tenth of a cent", not "$0.001". Same number, and it is the
             // phrasing the onboarding body already uses. The currency sign is
             // also a MARK by `ChromeType.isMark`, and this row renders inside
@@ -110,6 +149,8 @@ public enum Prerequisites {
             case .anthropicKey: return "spoken summaries, about a tenth of a cent each"
             case .elevenLabsKey: return "the voice; without it, the system one"
             case .assemblyAIKey: return "the live transcript while you speak"
+            case .openAIKey: return "the transcript that survives a streaming failure"
+            case .provider: return "that provider's agents, as rows you can answer"
             }
         }
 
@@ -134,8 +175,21 @@ public enum Prerequisites {
         /// there for why.
         public var isRequired: Bool {
             switch self {
-            case .tmux, .hooks, .anthropicKey: return true
-            case .elevenLabsKey, .assemblyAIKey: return false
+            // The hub joined the required rows on 13 Sep, when the connect
+            // flow landed and a new machine could finally satisfy it by
+            // pressing the button on the row. Before that it was optional for
+            // an honest reason: nothing on this screen could make it green.
+            case .tmux, .hooks, .anthropicKey, .hub: return true
+            // OpenAI and the providers are optional for the same honest reason
+            // ElevenLabs is: without OpenAI a streaming failure costs the
+            // transcript rather than the app, and a machine that drives no
+            // cloud provider is a machine using the product as it has always
+            // worked. Neither one is the Anthropic case, where the fallback is
+            // "a floor, not a product".
+            // Credits are optional for the same reason: a Mac on its own key
+            // is a Mac using the product as it always has. The row's amber
+            // is about a Mac that WAS on credits and fell off them.
+            case .elevenLabsKey, .assemblyAIKey, .openAIKey, .provider, .credits: return false
             }
         }
 
@@ -143,10 +197,12 @@ public enum Prerequisites {
         /// not credentials at all.
         public var secret: Secrets.Key? {
             switch self {
-            case .tmux, .hooks: return nil
+            case .tmux, .hooks, .hub, .credits: return nil
             case .anthropicKey: return .anthropicAPIKey
             case .elevenLabsKey: return .elevenLabsAPIKey
             case .assemblyAIKey: return .assemblyAIAPIKey
+            case .openAIKey: return .openAIAPIKey
+            case .provider(let id): return Secrets.credential(forProvider: id)
             }
         }
 
@@ -166,7 +222,9 @@ public enum Prerequisites {
             // 1 Sep); only the reporting splits. Pressing it on either row
             // repairs every harness this machine has.
             case .hooks: return "Wire them"
-            case .anthropicKey, .elevenLabsKey, .assemblyAIKey: return "Paste key"
+            case .hub, .credits: return "Sign in"
+            case .anthropicKey, .elevenLabsKey, .assemblyAIKey, .openAIKey,
+                 .provider: return "Paste key"
             }
         }
     }
@@ -187,12 +245,51 @@ public enum Prerequisites {
     /// harness exists and the row the test asked for was simply not there. A
     /// test that only passes on the developer's Mac is the same defect as the
     /// path that only breaks off it, which is what this whole branch is about.
+    /// **`providers` defaults to NONE CONFIGURED, not to reading the disk**, and
+    /// that asymmetry with `harnesses` is deliberate. It was the other way on
+    /// 13 Sep and it broke the suite the moment a provider was configured on a
+    /// real machine: `snapshot` builds rows from `Probes.providers`, which
+    /// correctly defaults to empty, while this defaulted to the live
+    /// `hq.json`, so the two disagreed about how many rows exist and every
+    /// test that looked a row up in the snapshot crashed on a nil.
+    ///
+    /// CI could never have caught it. CI has no `~/.claude/hq.json` with a
+    /// provider in it, so the two defaults agreed there and disagreed only on
+    /// the one machine that had finished the setup this code exists to
+    /// support. Use `live()` where the real answer is wanted.
     public static func items(
-        harnesses: [String] = HookManifest.detected().map(\.id)
+        harnesses: [String] = HookManifest.detected().map(\.id),
+        providers: [String] = []
     ) -> [Item] {
         [.tmux]
             + harnesses.map { Item.hooks(harness: $0) }
-            + [.anthropicKey, .elevenLabsKey, .assemblyAIKey]
+            + [.hub, .credits, .anthropicKey, .elevenLabsKey, .assemblyAIKey, .openAIKey]
+            // A provider gets a row once this machine has an ADDRESS for it,
+            // the same way a harness gets a hooks row once it is detected.
+            // Listing every provider the app can drive would tell someone
+            // their crobot credential is missing on a machine that has never
+            // heard of crobot, which is what `Harness.isPresent` has always
+            // existed to prevent.
+            // A provider with no KNOWN CREDENTIAL gets no row. Its `secret` is
+            // nil, so `promptForKey` would return silently and the row would
+            // render a "Paste key" button that does nothing at all: the one
+            // outcome worse than no row, because it looks like a thing you can
+            // fix. `Secrets.credential(forProvider:)` is the single place that
+            // mapping lives, so this cannot drift from what the sheet can open.
+            + providers.filter { Secrets.credential(forProvider: $0) != nil }
+                .map { Item.provider(id: $0) }
+    }
+
+    /// The rows THIS machine has, asking the machine.
+    ///
+    /// One accessor rather than a parameter every call site has to remember,
+    /// for the reason `GridAssembler.tabDisplayName` records at length: a
+    /// parameter is a thing a call site can forget, and the forgetting is
+    /// invisible. Three places render or count these rows, and a provider row
+    /// missing from one of them is a checklist that disagrees with itself.
+    public static func live() -> [Item] {
+        items(harnesses: HookManifest.detected().map(\.id),
+              providers: ProviderConfig.configured())
     }
 
     public struct State: Sendable, Equatable {
@@ -217,6 +314,19 @@ public enum Prerequisites {
 
     /// Injected so the detectors are testable without a keychain, a real
     /// settings.json, or tmux on the machine running the tests.
+    /// What this Mac's hub connection amounts to: whether it is connected,
+    /// and the one line the row prints. Two fields rather than one string,
+    /// because "connected as mini, synced 2m ago" and "mini, not connected:
+    /// this Mac's key was revoked" are both details and only one of them is a
+    /// green lamp.
+    public struct HubState: Sendable, Equatable {
+        public var connected: Bool
+        public var detail: String
+        public init(connected: Bool, detail: String) {
+            self.connected = connected; self.detail = detail
+        }
+    }
+
     public struct Probes: Sendable {
         public var tmuxPath: @Sendable () -> String?
         /// nil when every hook is wired and reachable, matching `HookManifest`.
@@ -229,11 +339,30 @@ public enum Prerequisites {
         /// "what is installed" is exactly the kind of question a test needs to
         /// answer for itself.
         public var harnesses: @Sendable () -> [String]
+        /// Which cloud providers this machine has an ADDRESS for, by
+        /// `AgentProvider.id`. A probe for the same reason `harnesses` is one.
+        ///
+        /// Added 13 Sep because it was missing, and missing here does not fail
+        /// loudly: `items(harnesses:providers:)` defaults `providers` to
+        /// `ProviderConfig.configured()`, and `snapshot` passed `harnesses:`
+        /// and not `providers:`, so half the rows read the real `~/.claude/hq.json`
+        /// straight through the seam built to stop exactly that. The demo
+        /// mode's own comment says it "reads nothing, writes nothing"; it read.
+        public var providers: @Sendable () -> [String]
         public var hasSecret: @Sendable (Secrets.Key) -> Bool
         /// What the provider last said about a stored key, or nil if it was
         /// never asked. A row that reports a refusal in its text and a green
         /// lamp beside it is the state this closes.
         public var keyVerdict: @Sendable (Secrets.Key) -> KeyCheck.Outcome?
+        /// The hub's state for this Mac, or nil when it has never been
+        /// connected. `connected` is separate from the text because a Mac
+        /// whose key was revoked has plenty to say and is not connected: one
+        /// string cannot carry both, and when it tried, a revoked token kept
+        /// a green lamp.
+        public var hubStatus: @Sendable () -> HubState? = { nil }
+        /// Where this Mac stands with credits. The live value is the one
+        /// standing the summariser keeps; tests hand in whichever they mean.
+        public var creditStanding: @Sendable () -> CreditStanding = { .notOnCredits(connectAgain: false) }
 
         public init(
             tmuxPath: @escaping @Sendable () -> String?,
@@ -241,13 +370,23 @@ public enum Prerequisites {
             hasSecret: @escaping @Sendable (Secrets.Key) -> Bool,
             keyVerdict: @escaping @Sendable (Secrets.Key) -> KeyCheck.Outcome? = { _ in nil },
             harnesses: @escaping @Sendable () -> [String]
-                = { HookManifest.detected().map(\.id) }
+                = { HookManifest.detected().map(\.id) },
+            // Defaults to NOTHING CONFIGURED, not to reading the disk. A test
+            // that forgets this gets a machine with no providers, which is a
+            // deterministic answer; defaulting it to `ProviderConfig.configured()`
+            // would reintroduce exactly the bypass this field exists to close.
+            providers: @escaping @Sendable () -> [String] = { [] },
+            hubStatus: @escaping @Sendable () -> HubState? = { nil },
+            creditStanding: @escaping @Sendable () -> CreditStanding = { .notOnCredits(connectAgain: false) }
         ) {
             self.tmuxPath = tmuxPath
+            self.providers = providers
             self.hooksProblem = hooksProblem
             self.harnesses = harnesses
             self.hasSecret = hasSecret
             self.keyVerdict = keyVerdict
+            self.hubStatus = hubStatus
+            self.creditStanding = creditStanding
         }
 
         public static let live = Probes(
@@ -274,7 +413,28 @@ public enum Prerequisites {
                     .flatMap { HookManifest.problem(for: $0) }
             },
             hasSecret: { Secrets.read($0) != nil },
-            keyVerdict: { KeyVerdict.last(for: $0) })
+            keyVerdict: { KeyVerdict.last(for: $0) },
+            // The live value reads the config; every other Probes does not,
+            // because the parameter defaults to none configured.
+            providers: { ProviderConfig.configured() },
+            hubStatus: {
+                guard HubApp.baseURL != nil, Secrets.read(.hubToken) != nil else { return nil }
+                let device = HubMirror.deviceName()
+                guard let beat = HubMirror.shared?.lastHeartbeat else {
+                    return HubState(connected: true, detail: "connected as \(device)")
+                }
+                let ago = Int(Date().timeIntervalSince(beat.at) / 60)
+                let when = ago < 1 ? "just now" : "\(ago)m ago"
+                if beat.note.hasPrefix("ok") {
+                    return HubState(connected: true, detail: "connected as \(device) · synced \(when)")
+                }
+                // The mirror's own words. "not connected" in the note is the
+                // hub having refused this Mac's key, which is a red row with
+                // the button back, not a green one with bad news in the text.
+                return HubState(connected: !beat.note.hasPrefix("not connected"),
+                                detail: "\(device) · \(beat.note)")
+            },
+            creditStanding: { CreditStanding.current })
     }
 
     /// The canonical install locations, checked WITHOUT `Tmux.resolveBinary`'s memo.
@@ -297,7 +457,12 @@ public enum Prerequisites {
     /// hooks audit parses a file, a keychain read is a round trip, and the tmux
     /// fallback spawns a login shell. None of that belongs on a 1 Hz UI timer.
     public static func snapshot(_ probes: Probes = .live) -> [State] {
-        items(harnesses: probes.harnesses()).map { item in
+        let credits = probes.creditStanding()
+        return items(harnesses: probes.harnesses(), providers: probes.providers()).map { item in
+            if item == .anthropicKey, credits.isOnCredits, !probes.hasSecret(.anthropicAPIKey) {
+                return State(item: item, satisfied: true,
+                             detail: "not required for credits · optional for direct use")
+            }
             if let secret = item.secret {
                 guard probes.hasSecret(secret) else {
                     return State(item: item, satisfied: false, detail: missingDetail(item))
@@ -338,6 +503,20 @@ public enum Prerequisites {
                     return State(item: item, satisfied: false, detail: problem)
                 }
                 return State(item: item, satisfied: true, detail: "wired")
+            case .hub:
+                if let hub = probes.hubStatus() {
+                    return State(item: item, satisfied: hub.connected, detail: hub.detail,
+                                 attention: !hub.connected)
+                }
+                return State(item: item, satisfied: false,
+                             detail: "not connected. Sign in and your agents' pages and turns appear in the hub")
+            case .credits:
+                let standing = credits
+                if standing.isOnCredits {
+                    return State(item: item, satisfied: true, detail: standing.detail)
+                }
+                return State(item: item, satisfied: false, detail: standing.detail,
+                             attention: standing.needsAttention)
             default:
                 return State(item: item, satisfied: true, detail: "")
             }
@@ -351,13 +530,20 @@ public enum Prerequisites {
         case .anthropicKey: return "without it, a plain first-sentence readout"
         case .elevenLabsKey: return "without it, the macOS system voice"
         case .assemblyAIKey: return "without it, transcription after you stop"
+        case .openAIKey: return "without it, a streaming failure loses the transcript"
+        case .provider: return "without it, that provider's agents do not appear"
+        // `missing` is the last resort and it is deliberately NOT reachable for
+        // a credential row: `testEveryMissingKeyNamesWhatIsLost` walks every
+        // row with a secret and refuses a bare word, which is how the two rows
+        // added on 13 Sep were caught before they shipped.
         default: return "missing"
         }
     }
 
     /// The gate the Start door uses.
     ///
-    /// tmux and the Anthropic key are each required outright. The hooks are
+    /// tmux is required; summaries need either verified managed readiness or
+    /// the direct key. A stored Hub token alone is not readiness. The hooks are
     /// required COLLECTIVELY: at least one harness has to be wired, and a
     /// second broken one does not hold the door.
     ///
@@ -376,8 +562,10 @@ public enum Prerequisites {
     /// run Codex.
     public static func allRequiredSatisfied(_ states: [State]) -> Bool {
         var hooks: [State] = [], others: [State] = []
+        let managedReady = states.contains { $0.item == .credits && $0.satisfied }
         for state in states {
             if case .hooks = state.item { hooks.append(state) }
+            else if state.item == .anthropicKey && managedReady { continue }
             else if state.item.isRequired { others.append(state) }
         }
         guard others.allSatisfy(\.satisfied) else { return false }

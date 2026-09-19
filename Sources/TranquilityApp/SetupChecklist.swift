@@ -35,6 +35,8 @@ final class SetupChecklistView: NSStackView {
     enum Mode { case onboarding, reference }
 
     private let mode: Mode
+    private let probes: Prerequisites.Probes?
+    private var creditObserver: UUID?
 
     /// Fired on every render with whether every REQUIRED row is satisfied.
     /// Onboarding enables its start button from this; Settings ignores it.
@@ -47,13 +49,22 @@ final class SetupChecklistView: NSStackView {
     private var prereqRows: [Prerequisites.Item: NSView] = [:]
     private var prereqStates: [Prerequisites.State] = []
     private var prereqScanInFlight = false
+    /// A scan asked for while one is running. Single-flighting protects the
+    /// timer; it must not drop the one scan that follows a verdict.
+    private var prereqScanQueued = false
     private var prereqNote: [Prerequisites.Item: String] = [:]
 
-    init(frame: NSRect, mode: Mode = .onboarding) {
+    init(frame: NSRect, mode: Mode = .onboarding, probes: Prerequisites.Probes? = nil) {
         self.mode = mode
+        self.probes = probes
         super.init(frame: frame)
         setUpRows()
+        creditObserver = CreditStanding.observe { [weak self] _ in
+            Task { @MainActor in self?.scanPrerequisites() }
+        }
     }
+
+    deinit { if let creditObserver { CreditStanding.removeObserver(creditObserver) } }
 
     /// IS the stack rather than containing one.
     ///
@@ -71,7 +82,9 @@ final class SetupChecklistView: NSStackView {
         // has not landed yet on the frame this runs in.
         // `items()`, not a constant list: the hooks rows depend on which
         // harnesses this machine has, one row each.
-        for (index, item) in Prerequisites.items().enumerated() {
+        let items = probes.map { Prerequisites.items(harnesses: $0.harnesses(), providers: $0.providers()) }
+            ?? Prerequisites.live()
+        for (index, item) in items.enumerated() {
             addArrangedSubview(prerequisiteRow(item, step: index + 1))
         }
         // The SETUP tab gets a restart door and onboarding does not.
@@ -94,19 +107,11 @@ final class SetupChecklistView: NSStackView {
                                         ink: StateLegend.Palette.working,
                                         target: self, action: #selector(restartTapped))
         button.identifier = NSUserInterfaceItemIdentifier("prereq.restart")
-        let note = NSTextField(wrappingLabelWithString:
-            "a permission granted while the app is running only reaches it after this")
-        note.font = ChromeType.mono(ofSize: 11, weight: .regular)
-        note.textColor = StateLegend.Palette.secondary
-        note.drawsBackground = false
-        note.translatesAutoresizingMaskIntoConstraints = false
-        note.widthAnchor.constraint(equalToConstant: 300).isActive = true
-
-        let stacked = NSStackView(views: [button, note])
-        stacked.orientation = .vertical
-        stacked.alignment = .leading
-        stacked.spacing = 2
-        return stacked
+        // The door alone. It carried a line explaining when a restart is
+        // needed ("a permission granted while the app is running only reaches
+        // it after this"); ruled 14 Sep 21:37, the line goes. The door's own
+        // words are the whole instruction.
+        return button
     }
 
     @objc private func restartTapped() {
@@ -276,7 +281,7 @@ final class SetupChecklistView: NSStackView {
             // averaging them.
             //
             // Off-main: this parses and rewrites a file (rule 9).
-            for row in Prerequisites.items() where row.harness != nil {
+            for row in Prerequisites.live() where row.harness != nil {
                 prereqNote[row] = "wiring..."
             }
             renderPrerequisites()
@@ -322,8 +327,35 @@ final class SetupChecklistView: NSStackView {
                 }
             }
 
-        case .anthropicKey, .elevenLabsKey, .assemblyAIKey:
+        // Every credential row, and they all behave identically: a sheet, a
+        // sanitized paste, a verification call. Listed rather than defaulted so
+        // a future row that is NOT a paste-a-key row has to say so here.
+        case .anthropicKey, .elevenLabsKey, .assemblyAIKey, .openAIKey, .provider:
             promptForKey(item)
+
+        case .hub, .credits:
+            // One door for both rows. Credits ride the same sign-in: pairing
+            // again is also what enrols this Mac's key, which is what a Mac
+            // connected before credits existed needs. The note lands on
+            // whichever row was pressed.
+            // The browser is where signing in happens; the app never asks for
+            // a password or a code and never receives a token through a link.
+            // This Mac invents a secret, shows the phrase derived from it on
+            // this row, and collects the key itself once somebody who is
+            // signed in confirms that the phrase in the browser matches the
+            // one here. See HubConnect and Core's HubPairing.
+            HubConnect.shared.onChange = { [weak self] in
+                guard let self else { return }
+                self.prereqNote[item] = HubConnect.shared.note
+                self.renderPrerequisites()
+                // Same repair as the keys (14 Sep): the note said "connected
+                // as garys-macbook-pro" under a lamp that still read the
+                // pre-connect scan. Connected is stored state; scan it.
+                self.scanPrerequisites()
+            }
+            HubConnect.shared.begin()
+            prereqNote[item] = HubConnect.shared.note
+            renderPrerequisites()
         }
     }
 
@@ -358,10 +390,18 @@ final class SetupChecklistView: NSStackView {
     /// a key you can only set during first run is a key you cannot rotate.
     private func promptForKey(_ item: Prerequisites.Item) {
         guard let secret = item.secret else { return }
-        KeySheet.prompt(for: secret) { [weak self] status in
+        KeySheet.prompt(for: secret) { [weak self] status, settled in
             guard let self else { return }
             self.prereqNote[item] = status
             self.renderPrerequisites()
+            // The note reads the paste; the lamp reads the scan. Until 14 Sep
+            // nothing re-scanned after a paste, so three rows on a new Mac
+            // said "checked, working" under an amber lamp until the tab was
+            // reopened (Gary Marx's first run: "checked and working but not
+            // green"). A settled verdict is stored state now, so the scan
+            // can read it, and the row it changes drops the note for the
+            // same words in the lamp's own colour.
+            if settled { self.scanPrerequisites() }
         }
     }
 
@@ -372,9 +412,10 @@ final class SetupChecklistView: NSStackView {
     /// seconds. None of that may sit on a 1 Hz timer. Single-flighted, because a
     /// slow scan on a repeating timer must not stack.
     func scanPrerequisites() {
-        guard !prereqScanInFlight else { return }
+        guard !prereqScanInFlight else { prereqScanQueued = true; return }
         prereqScanInFlight = true
         let demo = ProcessInfo.processInfo.environment["TB_PREREQ_DEMO"] != nil
+        let probes = probes
         Task.detached {
             // The state a NEW user sees is the one worth looking at, and it is
             // the one a developer machine can never show: tmux is installed and
@@ -382,7 +423,7 @@ final class SetupChecklistView: NSStackView {
             // rightly does not touch (they are the real ones). Rather than
             // delete somebody's credentials to photograph a screen, inject a
             // snapshot where nothing is present. Reads nothing, writes nothing.
-            let states = demo
+            let states = probes.map { Prerequisites.snapshot($0) } ?? (demo
                 ? Prerequisites.snapshot(Prerequisites.Probes(
                     tmuxPath: { nil },
                     // The LONGEST true detail this row can carry, not the
@@ -405,9 +446,15 @@ final class SetupChecklistView: NSStackView {
                             : nil
                     },
                     hasSecret: { _ in false }))
-                : Prerequisites.snapshot()
+                : Prerequisites.snapshot())
             await MainActor.run {
                 self.prereqScanInFlight = false
+                defer {
+                    if self.prereqScanQueued {
+                        self.prereqScanQueued = false
+                        self.scanPrerequisites()
+                    }
+                }
                 guard states != self.prereqStates else { return }
                 // A row that changed has superseded whatever its own button last
                 // said, so the transient note goes.
@@ -456,8 +503,14 @@ final class SetupChecklistView: NSStackView {
                 "\(position[item] ?? 1). " + item.title
             // A satisfied tmux or hooks row has nothing left to do; a key row
             // keeps its door, because a key is a thing you rotate.
-            prereqButtons[item]?.isHidden =
-                mode != .reference && state.satisfied && item.secret == nil
+            // A satisfied tmux has nothing to copy, in either host. Keys keep
+            // their door (a key is a thing you rotate) and hooks keep theirs
+            // (a harness is a thing you reinstall), in the quiet ink: an amber
+            // door beside a green lamp read as a problem on 14 Sep.
+            prereqButtons[item]?.isHidden = state.satisfied
+                && (item == .tmux || (mode != .reference && item.secret == nil))
+            prereqButtons[item]?.restingInk = state.satisfied
+                ? StateLegend.Palette.hint : StateLegend.Palette.fault
 
             // The panel's lamp vocabulary, same meanings as stage one. Amber is
             // "needs action", so an unmet REQUIRED row is amber. An unmet key is
@@ -479,7 +532,11 @@ final class SetupChecklistView: NSStackView {
             }
             prereqDetails[item]?.textColor = state.satisfied
                 ? StateLegend.Palette.hint : StateLegend.Palette.secondary
-            prereqDetails[item]?.stringValue = prereqNote[item] ?? state.detail
+            // A note is what the row's own door last said. Over an installed
+            // tmux it is furniture ("copied. Paste it in a terminal", 14 Sep),
+            // so the state speaks instead.
+            let note = (state.satisfied && item == .tmux) ? nil : prereqNote[item]
+            prereqDetails[item]?.stringValue = note ?? state.detail
         }
         onReadiness?(!prereqStates.isEmpty
             && Prerequisites.allRequiredSatisfied(prereqStates))

@@ -34,6 +34,24 @@ final class OfflineRecoveryTests: XCTestCase {
         }
     }
 
+    /// The failure detail we now log (`attempts_detail` on the transcription
+    /// event) names the provider and the classified error, and can never carry
+    /// the transcript, because a failed outcome has no transcript at all. This
+    /// is the privacy property behind logging the reason: the why, never the
+    /// words.
+    func testTheLoggedFailureDetailNamesProviderAndErrorNeverATranscript() async {
+        let rung = CountingOffline()
+        let chain = RecoveryChain(providers: [rung], maxAttemptsPerProvider: 2,
+                                  backoff: [30, 60, 120])
+        let outcome = await chain.transcribe(
+            fileAt: URL(fileURLWithPath: "/tmp/does-not-matter.wav"))
+        XCTAssertFalse(outcome.succeeded)
+        XCTAssertNil(outcome.result, "a failed outcome carries no transcript to leak")
+        let detail = outcome.attempts.joined(separator: "; ")   // exactly what is logged
+        XCTAssertTrue(detail.contains("counting-offline"), detail)
+        XCTAssertTrue(detail.lowercased().contains("offline"), detail)
+    }
+
     func testOfflineFailsARungOnceWithNoBackoff() async {
         let rung = CountingOffline()
         let chain = RecoveryChain(providers: [rung], maxAttemptsPerProvider: 2,

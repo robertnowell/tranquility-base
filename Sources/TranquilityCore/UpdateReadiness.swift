@@ -90,6 +90,62 @@ public enum UpdateReadiness {
     /// app five releases behind. One hour is Sparkle's floor.
     public static let checkInterval: TimeInterval = 3600
 
+    /// Whether an update-check error means the feed was never reached: no
+    /// network, DNS, a timeout, a lost connection. These fire on every asleep
+    /// or offline install each time the scheduled timer ticks, so the updater
+    /// records them as data and NEVER alerts on them; routing the offline case
+    /// to the failure stream would storm the alert channel fleet-wide, on
+    /// Apple Silicon too (ruled 12 Sep). A check that reached the feed and
+    /// still failed (a bad signature, a malformed appcast, an HTTP status) is a
+    /// real failure and is not offline.
+    ///
+    /// Sparkle wraps the transport error TWICE for an appcast fetch, not
+    /// once: SPUDownloader wraps the URL error as SUDownloadError "Failed to
+    /// download temporary data", and SUAppcastDriver wraps that again as
+    /// SUDownloadError "An error occurred in retrieving update information"
+    /// (both 2001, one under the other). Until 15 Sep 2026 this looked one
+    /// level down, so every appcast fetch from a Mac that had just dark-woken
+    /// with no network yet read as a real failure: a Dallas install filed
+    /// 17 alerts in a day on 0.3.1139 and 8 more overnight on 0.3.1193, each
+    /// at the top of an hour, each clearing the moment its owner sat down.
+    /// The whole chain is walked now, and `chain(_:)` records it so the next
+    /// "failed" says what it was.
+    public static func isOffline(_ error: NSError) -> Bool {
+        func transportOffline(_ e: NSError) -> Bool {
+            guard e.domain == NSURLErrorDomain else { return false }
+            switch e.code {
+            case NSURLErrorNotConnectedToInternet, NSURLErrorNetworkConnectionLost,
+                 NSURLErrorCannotConnectToHost, NSURLErrorCannotFindHost,
+                 NSURLErrorDNSLookupFailed, NSURLErrorTimedOut,
+                 NSURLErrorInternationalRoamingOff, NSURLErrorDataNotAllowed:
+                return true
+            default:
+                return false
+            }
+        }
+        return unwrapped(error).contains(where: transportOffline)
+    }
+
+    /// The error and everything under it, outermost first. Bounded, because
+    /// an error can in principle name itself as its own cause.
+    static func unwrapped(_ error: NSError) -> [NSError] {
+        var out: [NSError] = []
+        var cursor: NSError? = error
+        while let e = cursor, out.count < 8 {
+            out.append(e)
+            cursor = e.userInfo[NSUnderlyingErrorKey] as? NSError
+        }
+        return out
+    }
+
+    /// "SUSparkleErrorDomain 2001 > SUSparkleErrorDomain 2001 > NSURLErrorDomain -1009":
+    /// the chain as one token-safe line for the event and the failure reason.
+    /// A failure that does not carry this is a count nobody can act on, which
+    /// is what the update alerts were until today.
+    public static func chain(_ error: NSError) -> String {
+        unwrapped(error).map { "\($0.domain) \($0.code)" }.joined(separator: " > ")
+    }
+
     /// How many consecutive idle polls an install waits for. One idle poll is
     /// an instant; the grid is idle for a moment between a read-back ending
     /// and the next press. Two polls, twenty seconds apart, is a person who

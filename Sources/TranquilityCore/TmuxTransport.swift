@@ -203,49 +203,31 @@ public enum TmuxOwnership {
         return pane(forTty: tty)
     }
 
-    /// The pane a session is in, asked of the session's own registry entry
-    /// before anything is inferred.
+    /// The pane a session is in, as the ledger verifies it now.
     ///
-    /// The tty join below is three hops — pid to tty via `ps`, tty to pane via
-    /// the server's inventory — and each hop can be stale or recycled while
-    /// the session sits there perfectly alive. That is where "the session is
-    /// right here and it couldn't open it" came from on 25 Aug: a pid twelve
-    /// seconds out of date, and a button that answered "couldn't find a
-    /// terminal for process 49931" about a pane one keystroke away.
-    ///
-    /// Claude Code writes the pane down itself. When it has, that is the
-    /// answer; when it hasn't — a Codex session, a session too old to
-    /// register — the join still runs, unchanged. A better source where one
-    /// exists, never a second mechanism.
-    ///
-    /// The registry's pane id is still checked against the live server before
-    /// it is returned: a registry file outlives the pane it names, and this
-    /// type's whole contract (19 Aug) is that a pane address is resolved from
-    /// LIVE inventory and never from a stored string.
+    /// Until 15 Sep this read Claude Code's registry for a pane id and
+    /// matched that id alone against live inventory, then fell back to a
+    /// pid-to-tty join. A pane id is unique only per server: a TEST build's
+    /// `%1` matched the real app's `%1` and a reply was typed into a
+    /// stranger. `AgentLedger.locate` is the one resolver now (its doc
+    /// comment carries the ruling); this is the nil-collapsing view of it
+    /// for callers that only need an address. Anything that DECIDES on a
+    /// miss must ask `locate` itself and read the whole answer.
     public static func pane(forSessionId sessionId: String, pid: Int?) -> TmuxPaneAddress? {
-        if let entry = SessionRegistry.entry(forSessionId: sessionId),
-           let paneId = entry.paneId,
-           let address = paneById(paneId) {
-            return address
-        }
-        guard let pid else { return nil }
-        return pane(forPid: pid)
+        AgentLedger.locate(sessionId: sessionId, pid: pid).pane
     }
 
-    /// Confirm a pane id against live inventory, and fill in the rest of its
-    /// address from what the server says rather than from the file.
-    static func paneById(_ paneId: String) -> TmuxPaneAddress? {
+    /// Confirm a session-and-pane pair against live inventory, and fill in
+    /// the rest of its address from what the server says rather than from
+    /// the file. Both halves are required: the session name is what the
+    /// launcher minted and is unique for a server's life; the pane id is
+    /// what every tmux command addresses; and neither alone names one pane
+    /// across two servers.
+    static func pane(sessionName: String, paneId: String) -> TmuxPaneAddress? {
         for socket in sockets {
-            guard case .success(let out) = Tmux.run(
-                ["list-panes", "-a", "-F", "#{pane_id}\t#{session_name}\t#{pane_tty}"],
-                socket: socket, timeout: 3)
-            else { continue }
-            for line in out.split(separator: "\n") {
-                let parts = line.split(separator: "\t", maxSplits: 2,
-                                       omittingEmptySubsequences: false).map(String.init)
-                guard parts.count == 3, parts[0] == paneId else { continue }
-                return TmuxPaneAddress(socketName: socket, paneId: parts[0],
-                                       sessionName: parts[1], paneTty: parts[2])
+            guard case .listed(let rows) = AgentLedger.inventory(socket: socket) else { continue }
+            if let row = rows.first(where: { $0.sessionName == sessionName && $0.paneId == paneId }) {
+                return row.address
             }
         }
         return nil
@@ -572,6 +554,14 @@ public struct TmuxTransport: DispatchTransport {
         guard let pane = target.pane, paneExists(pane) else { return .targetGone }
 
         switch target.readinessSource {
+        case .provider:
+            // A remote agent has no pane, so it never reaches this transport:
+            // `Coordinator` selects a transport by `DispatchTarget.kind`, and
+            // the two guards above have already refused anything without a
+            // live pid and pane. Listed rather than defaulted so that adding
+            // a fourth source is a compile error here, which is how this
+            // switch has stayed honest.
+            return .targetGone
         case .processAlive:
             return .ready
         case .claudeAgents:
@@ -651,6 +641,22 @@ public struct TmuxTransport: DispatchTransport {
 
         let payload = DispatchText.flatten(text)
         guard !payload.isEmpty else { return .failed(.injectionFailed("empty text")) }
+
+        // A pane on a screen we will never press through is not a pane to
+        // type into, whatever the readiness probe said: the probe reads the
+        // harness's own record of its turns, and a menu that appeared before
+        // the first turn leaves no record. Read the screen once, here, before
+        // anything is pasted, and refuse in the words the harness gave us.
+        // Deferred rather than failed, because it is exactly the "can't take
+        // this yet, your words are kept" case, and the words ARE kept.
+        if !target.blockingPrompts.isEmpty, let text = screen(pane),
+           let blocking = Self.blockingPrompt(on: text, prompts: target.blockingPrompts,
+                                             glyph: target.promptGlyph,
+                                             placeholder: target.idlePlaceholder) {
+            Self.trace?("dispatch: \(target.sessionId.prefix(8)) refused — its screen is on "
+                + "\"\(blocking.needle)\", which only a person answers")
+            return .deferred(.waiting(Self.blockedOnPromptWording(blocking)))
+        }
 
         // Serialised per pane from here to the end, across processes. Taken
         // AFTER the cheap refusals so a malformed send never queues behind a
@@ -1130,6 +1136,40 @@ public struct TmuxTransport: DispatchTransport {
         return Self.classifyPromptLine(screen: text, payload: payload, glyph: glyph,
                                        placeholder: placeholder, chip: chip,
                                        ourChips: ourChips)
+    }
+
+    /// The screen this transport must never type into, if the pane is on
+    /// one. Pure, pinned against the 11 Sep chooser verbatim.
+    ///
+    /// A needle on the screen is not enough. Measured the same afternoon,
+    /// two hours after the guard shipped: the pane of the session that
+    /// wrote it showed "1. Update now" in a tool call's echo, with a bare
+    /// idle `❯` composer under it, and the guard would have refused every
+    /// reply to that session as "waiting on a question in its tab". Any
+    /// agent that greps this repository, or talks about Codex updates, puts
+    /// the needle in its own scrollback. What tells a menu from a transcript
+    /// is the composer: a modal REPLACES it (the chooser's selected row sits
+    /// on the glyph row itself, so the box reads "1. Update now (runs …)"),
+    /// while output scrolls above an idle one. So a needle blocks only when
+    /// the box is not visibly idle: no glyph row at all, or a glyph row
+    /// holding something other than nothing or the harness's placeholder.
+    static func blockingPrompt(on screen: String,
+                               prompts: [TrustPromptSpec.RecognizedPrompt],
+                               glyph: String, placeholder: String?)
+        -> TrustPromptSpec.RecognizedPrompt? {
+        guard let hit = prompts.first(where: { screen.contains($0.needle) }) else { return nil }
+        if let rows = boxRows(screen: screen, glyph: glyph) {
+            let content = collapsed(rows.joined(separator: " "))
+            if content.isEmpty || content == placeholder { return nil }
+        }
+        return hit
+    }
+
+    /// What `Readiness.waiting` carries for a refused screen. The card reads
+    /// "can't take this yet, it's waiting on …", so this is the object of
+    /// that sentence: the question, in the harness's written words.
+    static func blockedOnPromptWording(_ prompt: TrustPromptSpec.RecognizedPrompt) -> String {
+        "a question in its tab. " + prompt.says
     }
 
     /// Pure half, testable against captured screens. `glyph` defaults to

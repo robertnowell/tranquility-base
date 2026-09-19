@@ -1,0 +1,9 @@
+{
+  "accountId":"11111111-1111-4111-8111-111111111111",
+  "vectors": {
+    "local-turn.json":"10daa83f-2d4a-87e6-8007-5e84ba47b6b7",
+    "crobot-turn.json":"6605528b-0a6e-88f2-9e17-929e4845406d",
+    "opencode-turn.json":"da0294fe-8536-8e8e-8687-f7c4ecc4f00e",
+    "unicode-turn.json":"ebc65722-073d-8b8d-8cfc-42cffecc8409"
+  }
+}

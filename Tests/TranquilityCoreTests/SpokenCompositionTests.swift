@@ -37,40 +37,39 @@ final class SpokenCompositionTests: XCTestCase {
         XCTAssertEqual(announcement(callsign: nil, brief: brief).hailText, "promotions")
     }
 
-    // MARK: - A4: depth-1 composition
+    // MARK: - The WHY rung (ruled 14 Sep: the rationale, or nothing)
 
-    func testDepthOnePrefersTheModelWrittenRationale() {
+    func testWhyRungIsTheModelWrittenRationale() throws {
         let brief = SessionBrief(
             topic: "export", goal: "ship the promotions poller", happened: "done",
             question: "Proceed?",
             risk: "the filter may drop real alerts",
             rationale: "We propose the filter because two thirds of alert volume is "
                 + "noise the team ignores. We need to be careful about over-filtering.")
-        let out = SpokenComposition.depthOneSpokenText(
-            for: announcement(callsign: "promotions copy", brief: brief))
-        XCTAssertTrue(out.text.hasPrefix("We propose the filter"),
-                      "the written briefing wins over the card fields: \(out.text)")
+        let out = try XCTUnwrap(SpokenComposition.whyRung(
+            for: announcement(callsign: "promotions copy", brief: brief)))
+        XCTAssertTrue(out.text.hasPrefix("We propose the filter"), out.text)
         XCTAssertFalse(out.text.contains("promotions copy"),
-                       "no callsign on depth-1: the same agent just spoke (ruled 05 Aug)")
+                       "no callsign on a pull: the same agent just spoke (ruled 05 Aug)")
         XCTAssertFalse(out.text.contains("Proceed?"),
-                       "card fields stay on the card when a rationale exists")
+                       "the old card fields are not spoken; the rationale is the rung")
     }
 
-    func testDepthOneFallbackSpeaksPlainClausesWithoutLabelGlue() {
-        // Pre-rationale briefs (old rows) still speak — but as content, not as
-        // "The goal is …" scaffolding, which read aloud was the original bug.
+    /// No rationale means no WHY rung. Until 14 Sep this recited goal, risk
+    /// and question instead, which spoke the goal twice on thirty-eight
+    /// percent of ladders once GOAL became rung one. If there is no rationale
+    /// there is no rationale; the ladder is never padded.
+    func testNoRationaleMeansNoWhyRung() {
         let brief = SessionBrief(
             topic: "export", goal: "ship the promotions poller", happened: "done",
-            question: "Proceed?",
-            risk: "the filter may drop real alerts")
-        let out = SpokenComposition.depthOneSpokenText(
-            for: announcement(callsign: "promotions copy", brief: brief))
-        XCTAssertEqual(
-            out.text,
-            "ship the promotions poller. the filter may drop real alerts. Proceed?")
+            question: "Proceed?", risk: "the filter may drop real alerts")
+        XCTAssertNil(SpokenComposition.whyRung(
+            for: announcement(callsign: "promotions copy", brief: brief)))
+        XCTAssertNil(SpokenComposition.whyRung(
+            for: announcement(callsign: nil, brief: SessionBrief(topic: "export", happened: "done"))))
     }
 
-    func testDepthOneSpeaksTheWholeRationale() {
+    func testWhyRungSpeaksTheWholeRationale() throws {
         let long = "We propose running the full migration now because staging "
             + "verified every row count and the legacy table blocks the new queue "
             + "schema from serving reads. We need to be careful because the drop is "
@@ -78,52 +77,35 @@ final class SpokenCompositionTests: XCTestCase {
             + "The session also refreshed twelve fixtures and updated the runbook "
             + "documentation pages afterward."
         let brief = SessionBrief(topic: "export", happened: "done", rationale: long)
-        let out = SpokenComposition.depthOneSpokenText(
-            for: announcement(callsign: "promotions copy", brief: brief))
+        let out = try XCTUnwrap(SpokenComposition.whyRung(
+            for: announcement(callsign: "promotions copy", brief: brief)))
         XCTAssertTrue(out.text.contains("We propose"))
-        // The trailing sentence used to be dropped by a 40-word clamp while the
-        // card kept showing it. ⌃⌃ means "tell me more"; answering it with a
-        // tighter budget than the announcement was backwards (ruled 08 Aug).
-        XCTAssertTrue(out.text.contains("runbook"),
-                      "the rationale is spoken in full, however long it runs")
+        // ⌃⌃ means "tell me more"; answering it with a tighter budget than the
+        // announcement was backwards (ruled 08 Aug). Spoken in full.
+        XCTAssertTrue(out.text.contains("runbook"))
         XCTAssertEqual(out.displayIndex(forSpoken: out.text.count), out.displayText.count)
     }
 
-    func testDepthOneSanitizesIdentifiersAndPaths() {
+    func testWhyRungSanitizesIdentifiersAndPaths() throws {
         let brief = SessionBrief(
-            topic: "export", goal: "harden the export step", happened: "done",
-            risk: "buildLockedLayoutAssets may regress under /Users/x/app/lib")
-        let out = SpokenComposition.depthOneSpokenText(
-            for: announcement(callsign: "promotions copy", brief: brief))
+            topic: "export", happened: "done",
+            rationale: "We propose hardening because buildLockedLayoutAssets may regress "
+                + "under /Users/x/app/lib.")
+        let out = try XCTUnwrap(SpokenComposition.whyRung(
+            for: announcement(callsign: "promotions copy", brief: brief)))
         XCTAssertFalse(out.text.contains("buildLockedLayoutAssets"))
         XCTAssertFalse(out.text.contains("/Users"))
         XCTAssertTrue(out.redactions.contains("symbol"))
     }
 
-    func testDepthOneWithNoCardFieldsSaysSoInsteadOfGoingSilent() {
-        let brief = SessionBrief(topic: "export", happened: "done")
-        let out = SpokenComposition.depthOneSpokenText(
-            for: announcement(callsign: "promotions copy", brief: brief))
-        XCTAssertEqual(out.text, "No further rationale recorded.")
-    }
-
-    func testDepthOneNeverPrependsAndStripsTheModelsCallsignEcho() {
-        // The nastiest case: a field that itself opens with the callsign. The
-        // mechanical pass strips it before the single prepend.
+    func testWhyRungStripsTheModelsCallsignEcho() throws {
         let brief = SessionBrief(
-            topic: "export", happened: "done", question: "promotions copy: proceed?")
-        let out = SpokenComposition.depthOneSpokenText(
-            for: announcement(callsign: "promotions copy", brief: brief))
-        XCTAssertEqual(out.text, "proceed?")
+            topic: "export", happened: "done",
+            rationale: "promotions copy: we propose shipping because staging is clean.")
+        let out = try XCTUnwrap(SpokenComposition.whyRung(
+            for: announcement(callsign: "promotions copy", brief: brief)))
         XCTAssertEqual(out.text.components(separatedBy: "promotions copy").count - 1, 0,
-                       "the echo is stripped and nothing is prepended")
-    }
-
-    func testDepthOneUnmintedSessionAlsoGetsNoPrefix() {
-        let brief = SessionBrief(topic: "export", happened: "done", risk: "tests are flaky")
-        let out = SpokenComposition.depthOneSpokenText(
-            for: announcement(callsign: nil, brief: brief))
-        XCTAssertEqual(out.text, "tests are flaky.")
+                       "the echo is stripped and nothing is prepended: \(out.text)")
     }
 
     // MARK: - The ⌃⌃ ladder (ruled order: findings → solution → why → message)
@@ -156,15 +138,26 @@ final class SpokenCompositionTests: XCTestCase {
         XCTAssertEqual(rungs.last?.spoken.text, ann.spoken.text)
     }
 
-    func testLadderSkipsEmptyRungsAndAlwaysHasTheWhy() {
-        // A trivial turn: no findings, nothing proposed, no rationale — the
-        // ladder is the why (which says so instead of going silent) plus the
-        // original message.
+    func testLadderSkipsEveryEmptyRungIncludingTheWhy() {
+        // A trivial turn: no findings, nothing proposed, no rationale. The
+        // ladder is the original message and nothing else (ruled 14 Sep; it
+        // used to pad a WHY rung with "No further rationale recorded").
         let brief = SessionBrief(topic: "export", happened: "done")
         let rungs = SpokenComposition.ladderRungs(
             for: announcement(callsign: "promotions copy", brief: brief))
-        XCTAssertEqual(rungs.map(\.kind), [.why, .message])
-        XCTAssertEqual(rungs[0].spoken.text, "No further rationale recorded.")
+        XCTAssertEqual(rungs.map(\.kind), [.message])
+    }
+
+    /// The goal is heard once. A brief with a goal and no rationale used to
+    /// speak it on GOAL and again inside the padded WHY.
+    func testTheGoalIsSpokenOnceOnALadderWithNoRationale() {
+        let brief = SessionBrief(
+            topic: "export", goal: "We are shipping the poller in promotions", happened: "done",
+            question: "Go?", risk: "the filter may drop real alerts")
+        let rungs = SpokenComposition.ladderRungs(
+            for: announcement(callsign: "promotions copy", brief: brief))
+        XCTAssertEqual(rungs.map(\.kind), [.goal, .message])
+        XCTAssertEqual(rungs.filter { $0.spoken.text.contains("shipping the poller") }.count, 1)
     }
 
     func testLadderRungsAreSanitizedAndSpokenInFull() {
@@ -208,7 +201,7 @@ final class SpokenCompositionTests: XCTestCase {
                                  findings: "Three misfiled pieces recovered.")
         let rungs = SpokenComposition.ladderRungs(
             for: announcement(callsign: "promotions copy", brief: brief))
-        XCTAssertEqual(rungs.map(\.kind), [.findings, .why, .message])
+        XCTAssertEqual(rungs.map(\.kind), [.findings, .message])
     }
 
     /// The panel names a rung from the raw value, so the pill reads GOAL with

@@ -16,15 +16,28 @@ extension StatusHUD {
     /// in-line, 465 of 477 spindump samples deep in waitUntilExit while the
     /// event-tap watchdog took the hotkeys down with it. pid 1 never has a
     /// controlling terminal, so the background half must come home empty and
-    /// drop the guard; that round trip reports three seconds later, on the
-    /// mic drill's pattern. The label is NOT asserted at +3s — the ambient
+    /// drop the guard. The label is NOT asserted afterwards — the ambient
     /// refresh may repaint it at any time, and the guard is the one piece of
     /// state this drill owns outright.
+    ///
+    /// The round trip is reported when the answer ARRIVES, not on a timer.
+    /// The walk that decides "nothing on disk" is a function of the archive's
+    /// size: 5 s on 58 sessions (11 Sep), 13.7 to 18.8 s on 243 (17 Sep, ten
+    /// of ten launches). Two sweeps at 3 s and 9 s were written against the
+    /// first number and missed every launch at the second, leaving the
+    /// refusal card on the live grid until Robert pressed ⌃⌥ home. A guess at
+    /// a duration expires; waiting on the event does not.
     func goToSessionDrill() {
         _ = showAnnouncement(
             spoken: SpokenTextSanitizer().sanitize("Go to session drill."),
             sessionId: "goto-drill", pid: 1, project: "promotions copy", cwd: "/tmp")
         let t0 = Date()
+        // Armed BEFORE the press, so an answer that arrives fast (0.3 s on a
+        // small archive, measured on the TEST install) cannot slip past it.
+        // Bounded, because a wait with no ceiling is a drill that can never
+        // report FAIL. Sixty seconds is three times the worst walk measured;
+        // a walk that long is its own finding.
+        let answer = Task { @MainActor in await self.awaitGoToSessionAnswer(within: 60) }
         goToSession()
         let returned = Date().timeIntervalSince(t0)
         let painted = bodyLabel.stringValue
@@ -39,18 +52,49 @@ extension StatusHUD {
         ])
         Permissions.log("selftest goToSession: returned in \(Int(returned * 1000))ms")
         Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            let said = await answer.value
+            let answeredAt = Date()
+            let guardReleasedAt = self.goToSessionGuardReleasedAt
+            let walk = Int(answeredAt.timeIntervalSince(t0) * 1000)
+            // The fixture session does not exist anywhere, not even on disk,
+            // so the answer is always the refusal. (A dead session that IS on
+            // disk gets revived instead, since 11 Sep; the fixture is chosen
+            // so this drill never launches anything.)
+            let refused: Bool
+            if case .said(let message)? = said {
+                refused = message.contains("can't find its history")
+            } else {
+                refused = false
+            }
             SelfTest.report("goToSession.roundTrip", [
+                ("answered", said != nil),
                 ("guardDropped", !self.goToSessionInFlight),
-            ])
-            // The background half paints its outcome over whatever the
-            // cleanup left up; a deploy's selftest must not strand that on
-            // the live panel. The wording follows the one implementation now
-            // — the drill's fixture session does not exist, so the answer is
-            // "isn't running any more".
-            if self.bodyLabel.stringValue.contains("isn't running any more")
-                || self.bodyLabel.stringValue.contains("Couldn't find a terminal") {
-                self.showIdle(rows: [])
+                // #359's contract: the button is pressable again while the
+                // walk runs, so the guard comes down first and the answer
+                // comes later. Both stamps are the HUD's own.
+                ("guardDroppedBeforeTheAnswer",
+                 guardReleasedAt.map { $0 <= answeredAt } ?? false),
+                ("refusedNotRevived", refused),
+            ], skippedBecauseOfAGesture: self.slateInterruptedByAGesture)
+            Permissions.log("selftest goToSession.roundTrip: answered in \(walk)ms")
+            // The answer paints its refusal over whatever is up. When the walk
+            // outlives the slate, which on this archive it always does, that
+            // is the live grid, and nothing else will take the card down.
+            //
+            // `.result` cannot be anything but this drill's own fixture while
+            // the slate is running, because `Failures.suppressed` is true for
+            // the whole window; after it, the card names `goto-drill` (the
+            // refusal carries its subject since 17 Sep), so a stranger's
+            // failure is left alone.
+            //
+            // `returnToTheGrid`, never `showIdle(rows: [])`. This is the one
+            // piece of the slate that can run AFTER the slate is over, on a
+            // panel that has gone back to work, and on 13 Sep at 20:59 it
+            // painted an empty grid over twenty live agents. Ten seconds later
+            // the panel was teaching Robert his first keypress.
+            if case .result = self.state,
+               self.currentTarget == nil || self.currentTarget?.sessionId == "goto-drill" {
+                self.returnToTheGrid(because: "goToSession drill, its answer arrived")
             }
         }
     }
@@ -268,11 +312,15 @@ extension StatusHUD {
     /// on the list's filter), and a keyboard the pane forgets to give back.
     func launchSettingsDrill() {
         showSettings(voices: [], roster: [], note: "drill")
-        let shown = launchRow?.isHidden == false && directoryRow?.isHidden == false
+        // A terminal harness has a launch command and a directory; a provider
+        // (OpenCode over the protocol) has only the directory. The drill asks
+        // for what the default agent actually has, whichever kind it is.
+        let isHarness = KnownHarnesses.all.contains { $0.id == AgentDefaults.defaultHarness }
+        let shown = launchRow?.isHidden == !isHarness && directoryRow?.isHidden == false
         let tookKeyboard = panel?.acceptsKey == true
         // What the fields SHOW is the stored value, not the resolved one — a
         // directory that has gone missing must be visible as itself.
-        let showsStored = launchRow?.input.stringValue == AgentDefaults.load()
+        let showsStored = (!isHarness || launchRow?.input.stringValue == AgentDefaults.load())
             && directoryRow?.input.stringValue == AgentDefaults.directoryAsTyped()
         // The tabs, which is what this pane was supposed to have all along.
         let tabsShown = settingsTabs?.isHidden == false
@@ -281,7 +329,7 @@ extension StatusHUD {
             && launchRow?.isHidden == true && directoryRow?.isHidden == true
         let keyboardHandedBack = panel?.acceptsKey == false
         showSettingsTab(.agents)
-        let backOnAgents = launchRow?.isHidden == false
+        let backOnAgents = directoryRow?.isHidden == false
 
         // THE REGRESSION, pinned: RECENT then VOICES used to draw the title
         // "Recent audio" over an empty roster with the voices hint beneath it,
@@ -341,8 +389,8 @@ extension StatusHUD {
     ///
     /// Two properties carry it. The verb has to match the row — offering
     /// REVIVE on a session that is still running is how the app crashed twice
-    /// — and the filter has to be a plain predictable substring, because a
-    /// filter you cannot predict is one you stop trusting.
+    /// — and searching must preserve those actions. Ranked filtering and
+    /// asynchronous completion are exercised by PastAgentsSearchDrill.
     func pastAgentsDrill() {
         func item(_ id: String, _ name: String, live: Bool, cwd: String)
             -> PastAgentsList.Item {
@@ -657,10 +705,21 @@ extension StatusHUD {
         let armAddsNoHint = pasteHintForTesting.isEmpty
         let armedActionFrame = actionRow.convert(actionRow.bounds, to: panel.contentView)
         let armedGoFrame = goButton.convert(goButton.bounds, to: panel.contentView)
-        let armKeepsGeometry = restingHeight == intendedHeight
-            && restingFit == contentStack?.fittingSize.height
-            && restingActionFrame == armedActionFrame
-            && restingGoFrame == armedGoFrame
+        // Reversed 15 Sep: arming now ADDS exactly one line, the typed one
+        // ("if I start typing, I would just love for that to be received"),
+        // and takes the keys for it. The actions move down by that line and
+        // nothing else: same x, same width, one line taller.
+        let lineHeight = trayRow.composeRow.fittingSize.height + 3
+        let armShowsTheLine = trayRow.isComposeRowShown
+            && (panel.firstResponder as? NSTextView)?.delegate === trayRow.compose
+        let armKeepsGeometry = armShowsTheLine
+            // Within the outer stack's own 6pt spacing: at rest the tray is
+            // not there at all, so its arrival brings the row and one gap.
+            && abs(((intendedHeight ?? 0) - (restingHeight ?? 0)) - lineHeight) <= 6
+            && abs(((contentStack?.fittingSize.height ?? 0) - (restingFit ?? 0)) - lineHeight) <= 6
+            && restingActionFrame.minX == armedActionFrame.minX
+            && restingActionFrame.width == armedActionFrame.width
+            && restingGoFrame.minX == armedGoFrame.minX
 
         func key(_ chars: String, code: UInt16, command: Bool = false) -> NSEvent? {
             NSEvent.keyEvent(
@@ -673,38 +732,70 @@ extension StatusHUD {
         let letterA = key("a", code: 0)
         let escape = key("\u{1B}", code: 53)
 
-        // Command-V while armed: one paste, through the handler, as a paste,
-        // and the card stays armed for a second one. The chip shows the cut
-        // first line and says how much it is not showing.
+        // Command-V while armed (re-ruled 15 Sep, second pass): a paste is an
+        // attachment, words included, and the typed line is for typing only.
+        // The card stays armed and the line stays empty. A file is a chip
+        // the same way.
         let paragraph = String(repeating: "the quick brown fox jumps over the lazy dog ", count: 6)
             .trimmingCharacters(in: .whitespaces)
         board.clearContents()
         board.setString(paragraph, forType: .string)
         if let commandV { panel.sendEvent(commandV) }
-        let pasteStagedOnce = received.count == 1 && received.first?.via == .paste
+        let wordsPasteIntoTheLine = received.count == 1 && received.first?.via == .paste
+            && trayRow.compose.stringValue.isEmpty
+            && trayRow.displayedNamesForTesting.first == FragmentPreview.preview(paragraph)
         let staysArmedAfterPaste = pasteArmed
-        let chip = trayRow.displayedNamesForTesting.first ?? ""
-        let chipIsCutAndCounted = chip == FragmentPreview.preview(paragraph)
-            && chip.hasSuffix("+\(paragraph.count - 48) chars")
-            && chip.count < paragraph.count
+        board.clearContents()
+        board.writeObjects([URL(fileURLWithPath: "/tmp/pasted-one.png") as NSURL])
+        if let commandV { panel.sendEvent(commandV) }
+        let pasteStagedOnce = received.count == 2 && received.last?.via == .paste
+        // The drill's own stager keeps text only, so the proof a file became
+        // a chip is the item the handler received, not a rendered row.
+        let chipIsCutAndCounted: Bool = {
+            if case .file(let path)? = received.last?.items.first { return path == "/tmp/pasted-one.png" }
+            return false
+        }()
 
         // A refused paste says why, on the card, and stages nothing.
         board.clearContents()
         board.setString(String(repeating: "x", count: DropSurfaceView.itemCap + 1), forType: .string)
         if let commandV { panel.sendEvent(commandV) }
-        let refusalOnTheCard = received.count == 1
+        let refusalOnTheCard = received.count == 2
             && pasteHintForTesting.contains("too large")
 
-        // Every way out. A stray key releases and is dropped; Escape releases;
-        // another window taking key releases (AppKit's own resignKey); a face
-        // change releases; and released, Command-V stages nothing.
+        // A typed key is WORDS now (ruled 15 Sep): it lands on the typed line
+        // and the card stays armed, where it used to release and drop the
+        // key. Escape releases; another window taking key releases (AppKit's
+        // own resignKey); a face change releases; and released, Command-V
+        // stages nothing.
         if let letterA { panel.sendEvent(letterA) }
-        let strayKeyReleases = !pasteArmed && !panel.acceptsKey
-        pasteIntoTray()
-        let releasedPastesNothing = received.count == 1
+        let strayKeyReleases = pasteArmed && panel.acceptsKey
+            && trayRow.compose.stringValue == "a"
+        // The draft (17 Sep): what was typed is kept per session as you
+        // type, comes back when the card is selected again, and goes when
+        // sent. An in-memory store stands in for the queue store so the
+        // drill leaves nothing behind.
+        var kept: [String: String] = [:]
+        let savedOnDraft = onDraftChanged, savedDraftFor = draftFor
+        onDraftChanged = { session, text in kept[session] = text.isEmpty ? nil : text }
+        draftFor = { kept[$0] }
+        flushDraftSaveForTesting()
+        scheduleDraftSave(); flushDraftSaveForTesting()
+        let draftIsKept = kept["A"] == "a"
+        trayRow.compose.stringValue = ""
+        releasePaste(because: "drill", repaint: true)
         armPaste(via: "drill")
+        let draftComesBack = trayRow.compose.stringValue == "a" && trayRow.isComposeRowShown
+        trayRow.clearComposed(); noteDraftCleared()
+        let sentClearsTheDraft = kept["A"] == nil
+        onDraftChanged = savedOnDraft; draftFor = savedDraftFor
         if let escape { panel.sendEvent(escape) }
         let escapeReleases = !pasteArmed
+        pasteIntoTray()
+        let releasedPastesNothing = received.count == 2
+        armPaste(via: "drill")
+        if let escape { panel.sendEvent(escape) }
+        let escapeReleasesAgain = !pasteArmed
         armPaste(via: "drill")
         panel.resignKey()
         let clickAwayReleases = !pasteArmed && !panel.acceptsKey
@@ -732,14 +823,18 @@ extension StatusHUD {
             ("ringShows", ringShows),
             ("ringIsWorkingBlue", ringIsWorkingBlue),
             ("armAddsNoHint", armAddsNoHint),
-            ("armKeepsGeometry", armKeepsGeometry),
+            ("armAddsTheTypedLineOnly", armKeepsGeometry),
+            ("pastedWordsAreAChip", wordsPasteIntoTheLine),
             ("pasteStagedOnce", pasteStagedOnce),
             ("staysArmedAfterPaste", staysArmedAfterPaste),
-            ("chipIsCutAndCounted", chipIsCutAndCounted),
+            ("fileIsAChip", chipIsCutAndCounted),
             ("refusalOnTheCard", refusalOnTheCard),
-            ("strayKeyReleases", strayKeyReleases),
+            ("typedKeyLandsOnTheLine", strayKeyReleases),
+            ("draftIsKept", draftIsKept),
+            ("draftComesBack", draftComesBack),
+            ("sentClearsTheDraft", sentClearsTheDraft),
             ("releasedPastesNothing", releasedPastesNothing),
-            ("escapeReleases", escapeReleases),
+            ("escapeReleases", escapeReleases && escapeReleasesAgain),
             ("clickAwayReleases", clickAwayReleases),
             ("faceChangeReleases", faceChangeReleases),
             ("noTargetNoArm", noTargetNoArm),
@@ -879,7 +974,28 @@ extension StatusHUD {
             ("closedLast", sorted.suffix(2) == ["d1", "d2"]),
             ("quietAboveClosed", Array(sorted[4...5]) == ["i1", "i2"]),
             ("filedOutranksTheDead", withFiled == ["w1", "i1", "filed", "d1"]),
-            ("activeKeepsArrivalOrder", Array(sorted.prefix(4)) == ["w1", "r1", "f1", "w2"]),
+            // RE-RULED TWICE on 14 Sep. #428 split the lit band by read-state
+            // (amber, then unread, then the rest) so a remote agent enumerated
+            // last could win a slot; #438 re-ruled this drill to match. Robert
+            // reversed it the same day: "if you read something it moves in the
+            // order and it's hard to find again ... just order green by
+            // recency, whether or not they're read or unread." Hearing a row
+            // must not move it. Then RULED AGAIN on 15 Sep, on the screenshot
+            // #458 produced: "the green lamps should always be above the blue
+            // lamps." Lit rows are two tiers, the lamps that ask for you and
+            // then blue, each in the recency order the bands established.
+            // Mirrored in SessionRowTests so `swift test` catches the next
+            // drift before the panel does.
+            ("asksForYouAboveBlue", Array(sorted.prefix(4)) == ["r1", "f1", "w1", "w2"]),
+            ("hearingARowDoesNotMoveIt",
+             SessionRow.quietRowsLast([
+                SessionRow(id: "read", name: "read", aux: "", lamp: .ready, read: .opened),
+                SessionRow(id: "unread", name: "unread", aux: "", lamp: .ready,
+                           read: .unread),
+             ]).map(\.id) == ["read", "unread"]),
+            ("blueSinksBelowEveryGreen",
+             SessionRow.quietRowsLast([row("a", .ready), row("b", .working),
+                                       row("c", .ready)]).map(\.id) == ["a", "c", "b"]),
             ("nothingLost", sorted.count == mixed.count),
             ("allQuietIsStillAllQuiet",
              SessionRow.quietRowsLast([row("i1", .running), row("i2", .running)])
@@ -1058,12 +1174,305 @@ extension StatusHUD {
     /// app twice (06 Aug 14:35, 07 Aug 17:39). An unlit row whose liveness
     /// could not be proven must therefore do NOTHING on tap rather than fall
     /// through to the announce path it used to share.
+    /// **The agent grid draws what it says it draws.**
+    ///
+    /// `Sources/TranquilityApp` has no unit tests and cannot easily have them,
+    /// so a drill against a real view is this surface's only evidence (rule 7).
+    /// What it asserts is the promise the grid makes: every tile is an agent
+    /// this app can actually drive, each wears its vendor's own mark, and a
+    /// tile that needs setting up does NOT become the selection when tapped.
+    func agentGridDrill() {
+        let tiles = StatusHUD.agentTiles()
+        let offerable = Set(AgentRoster.validated.filter { $0.reach.isOfferable }.map(\.id))
+
+        // Built for real, at the real width, so a layout that cannot satisfy
+        // its constraints fails here rather than on screen.
+        let grid = AgentGridRow(width: 320, agents: tiles, selected: tiles.first?.id ?? "")
+        grid.layoutSubtreeIfNeeded()
+
+        let everyTileIsDrivable = tiles.allSatisfy { offerable.contains($0.id) }
+        let everyTileHasAMark = tiles.allSatisfy { AgentMarks.png($0.id) != nil }
+        let itIsAGridNotARow = AgentGridRow.columns == 3 && tiles.count > AgentGridRow.columns
+            ? grid.frame.height > AgentGridRow.tileHeight
+            : grid.frame.height >= AgentGridRow.tileHeight
+        let fourAgents = tiles.count == 4
+
+        // A greyed tile hands its step out and must not change the selection:
+        // picking an agent you cannot use leaves the panel pointing at
+        // something that cannot answer.
+        var handedOut: AgentRoster.Step?
+        var selectedInstead: String?
+        let notSetUp = AgentRoster.Agent(id: "opencode", name: "OpenCode", glyph: "○",
+                                         standing: .needsSetup(.signIn("Sign in")))
+        let greyed = AgentGridRow(width: 320, agents: [notSetUp], selected: "claude-code")
+        greyed.onSetUp = { _, step in handedOut = step }
+        greyed.onSelect = { selectedInstead = $0 }
+        if let button = greyed.subviews.compactMap({ $0 as? NSButton }).first {
+            button.performClick(nil)
+        }
+
+        // **Is it actually ON SCREEN?**
+        //
+        // Everything above this line builds a view and asks it questions,
+        // which is a fixture describing itself. The first version of this
+        // drill stopped there and passed while the Agents tab showed no grid
+        // at all: the row was in the stack and permanently hidden, because the
+        // code that un-hides it still named the view it replaced. A drill that
+        // cannot see the panel cannot catch that, and a screenshot did.
+        _ = pose("settings")
+        // On the tab it is asserting about. `pose("settings")` opens the pane
+        // at whatever tab it defaults to, and a grid that is correctly hidden
+        // on VOICES proves nothing about AGENTS.
+        showSettingsTab(.agents)
+        panel?.contentView?.layoutSubtreeIfNeeded()
+        // The real path resizes on every render; this drill switches tabs
+        // directly and so has to do the same, or it measures a state the app
+        // never actually shows. Not a concession: the assertion below is about
+        // whether the panel CAN hold the agents tab, and that question is only
+        // meaningful once the panel has been asked to.
+        if let panel { resizeToFit(panel) }
+        panel?.contentView?.layoutSubtreeIfNeeded()
+        func findGrid(_ view: NSView) -> AgentGridRow? {
+            if let grid = view as? AgentGridRow { return grid }
+            for sub in view.subviews { if let found = findGrid(sub) { return found } }
+            return nil
+        }
+        let onScreen = panel?.contentView.flatMap(findGrid)
+        let gridIsInThePanel = onScreen != nil
+        let gridIsVisible = onScreen.map { !$0.isHidden && $0.frame.height > 0 } ?? false
+        let tilesAreVisible = onScreen.map { grid in
+            grid.subviews.contains { !$0.isHidden && $0.frame.width > 0 }
+        } ?? false
+
+        // **Does the pane FIT?**
+        //
+        // The grid shipped visible and too tall: each tile laid out around
+        // 145pt against a declared 64, so the view reported one height and
+        // drew another, the panel sized itself to the report, and LAUNCH and
+        // DIRECTORY fell off the bottom. Every other assertion in this drill
+        // passed while that was true, because none of them asked whether the
+        // content fit the window it was in.
+        // Measured against the height the layout DECIDED on, not against the
+        // live frame: `resizeToFit` animates, so `panel.frame.height` a moment
+        // after it runs is the old size mid-flight. The first version of this
+        // compared the two and read 317 of content against a 158pt frame that
+        // was already on its way to 317.
+        //
+        // Both halves matter. The panel must be sized to hold the content, AND
+        // that size must fit the screen — a pane taller than the display is
+        // the one case where being correctly sized still clips.
+        let stackHeight = contentStack?.fittingSize.height ?? 0
+        let decided = intendedHeight ?? panel?.frame.height ?? 0
+        let screenHeight = NSScreen.main?.visibleFrame.height ?? 0
+        let paneFits = stackHeight > 0 && decided > 0
+            && stackHeight <= decided + 1
+            && decided <= screenHeight
+        // And the grid must not be taller than the rows it says it has.
+        let claimed = onScreen.map {
+            CGFloat(($0.subviews.count + AgentGridRow.columns - 1) / AgentGridRow.columns)
+                * AgentGridRow.tileHeight
+        } ?? 0
+        let gridIsTheHeightItClaims = onScreen.map {
+            abs($0.frame.height - claimed) <= 2
+        } ?? false
+
+        Permissions.log("agentGrid geometry: stack=\(stackHeight) "
+            + "decided=\(decided) "
+            + "grid=\(onScreen?.frame.height ?? -1) claimed=\(claimed) "
+            + "screen=\(NSScreen.main?.visibleFrame.height ?? -1)")
+
+        SelfTest.report("agentGrid", [
+            ("theSettingsPaneFitsItsPanel", paneFits),
+            ("gridIsTheHeightItClaims", gridIsTheHeightItClaims),
+            ("gridIsInThePanel", gridIsInThePanel),
+            ("gridIsVisibleOnTheAgentsTab", gridIsVisible),
+            ("itsTilesAreDrawn", tilesAreVisible),
+            ("everyTileIsAnAgentWeCanDrive", everyTileIsDrivable),
+            ("everyTileWearsItsOwnMark", everyTileHasAMark),
+            ("fourAgentsOffered", fourAgents),
+            ("itIsAGridNotARow", itIsAGridNotARow),
+            ("aGreyedTileOffersItsStep", handedOut != nil),
+            ("aGreyedTileDoesNotBecomeTheSelection", selectedInstead == nil),
+        ])
+    }
+
+/// **A crobot task, driven through the real grid.** Robert, after too many
+    /// "it works" claims backed by tests that described themselves: *"have you
+    /// really driven this end-to-end through the grid?"* No test can answer
+    /// that; only this can. It poses crobot rows on the live panel, taps each
+    /// through the actual `sessionRowTapped`, and reports where the tap went.
+    ///
+    /// The verbs are captured by swapping the panel's own callbacks, so the
+    /// drill sees exactly what a click sees — `.announce` raises the card,
+    /// `.goToAgent` opens the door — without a browser window or a spoken card
+    /// escaping the drill.
+    func crobotFinishDrill() {
+        let page = SessionRow.Door.page(URL(string: "https://crobot.coframe.com/tasks/api-x")!)
+        func row(_ id: String, _ lamp: Lamp, read: ReadState) -> SessionRow {
+            SessionRow(id: id, name: "crobot: \(id)", aux: "recap", lamp: lamp,
+                       read: read, detail: "It opened the PR and left the tests green.",
+                       harness: "crobot", door: page)
+        }
+        // green: a finished task whose recap is recorded (read = .unread).
+        // blue: still working, but with a prior recap to show.
+        // amber: a problem — straight to the agent.
+        let rows = [row("crobot-green", .ready, read: .unread),
+                    row("crobot-blue", .working, read: .unread),
+                    row("crobot-amber", .fault, read: .none)]
+        showIdle(rows: rows)
+
+        // Green and blue take the card path (announce) — driven for real, the
+        // callback captured so no card actually escapes the drill. Amber's
+        // path for a crobot row is `.openPage` (its web UI), which a tap would
+        // send to `NSWorkspace` and open a browser; so amber is asserted from
+        // the panel's own row, not tapped. Either way the fact under test is
+        // where `sessionRowTapped` WOULD send it, read off the live grid.
+        var went: [String: String] = [:]
+        let savedAnnounce = onPickWaiting
+        onPickWaiting = { went[$0] = "card" }
+        for id in ["crobot-green", "crobot-blue"] {
+            let control = NSButton()
+            control.identifier = NSUserInterfaceItemIdentifier(id)
+            sessionRowTapped(control)
+        }
+        onPickWaiting = savedAnnounce
+        // Amber, straight to the agent, which for crobot is the web page.
+        let amberAction = face.sessionRows.first { $0.id == "crobot-amber" }
+            .map { SessionRow.action(for: $0) }
+        let amberOpensTheWeb: Bool = {
+            if case .openPage(let url)? = amberAction { return url.host == "crobot.coframe.com" }
+            return false
+        }()
+
+        // The card's Go to Agent, for the crobot row now on the stage, resolves
+        // to the web page — not a terminal this Mac does not own.
+        currentTarget = ("crobot-green", nil, "crobot")
+        let goDoor = remoteDoorForCurrentTarget
+        let goesToTheWeb: Bool = {
+            if case .page(let url)? = goDoor { return url.host == "crobot.coframe.com" }
+            return false
+        }()
+        currentTarget = nil
+        showIdle(rows: [])
+
+        SelfTest.report("crobotFinish", [
+            // A finished crobot task with a recap opens the card, not the web.
+            ("greenRecapOpensTheCard", went["crobot-green"] == "card"),
+            // The blue fix: a working crobot row with a recap opens the card too.
+            ("blueWorkingOpensTheCard", went["crobot-blue"] == "card"),
+            // Amber goes straight to the agent, which for a crobot row is
+            // opening its web UI directly (not a card, not a local terminal).
+            ("amberOpensTheAgentDirectly", amberOpensTheWeb),
+            // And Go to Agent, from the card, is the web page.
+            ("goToAgentOpensTheWebUI", goesToTheWeb),
+        ])
+    }
+
+        /// **An OpenCode agent, driven through the real grid from real facts.**
+    /// Robert, 16 Sep, on a green row he had just heard opening the terminal:
+    /// "does it work now? have you driven it end to end through the UI?"
+    /// The crobot drill poses rows with their read state already decided;
+    /// the defect was in DERIVING that state, so this one starts one step
+    /// earlier: a temporary store with a turn and a heard cursor, the app's
+    /// own `remoteAgents(snapshot:waiting:)`, the app's own `GridAssembler`,
+    /// the live panel, and the actual `sessionRowTapped`. Three rows, three
+    /// facts: unread, heard-and-undismissed, nothing at all.
+    func openCodeRowDrill() {
+        var checks: [(String, Bool)] = []
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("tb-opencode-row-drill-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        guard (try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)) != nil,
+              let store = try? QueueStore(url: dir.appendingPathComponent("q.sqlite")) else {
+            SelfTest.report("openCodeRow", [("storeBuilt", false)]); return
+        }
+        // Three served OpenCode sessions, the way the poller would hold them.
+        func agent(_ raw: String, _ title: String) -> AgentSession {
+            var a = AgentSession.of(raw, provider: "opencode", title: title, state: .completed)
+            a.repository = "tranquility-base"
+            a.shell = AgentSession.ShellDoor(command: "opencode attach http://127.0.0.1:1 --session \(raw)",
+                                             directory: "/tmp")
+            a.pane = "tb-oc-\(raw)"
+            return a
+        }
+        let unread = agent("ses_drill_unread", "Unread turn")
+        let heard = agent("ses_drill_heard", "Heard turn")
+        let silent = agent("ses_drill_silent", "Never spoke")
+        var snapshot = AgentPoller.Snapshot()
+        snapshot.agents = [unread, heard, silent]
+        // Turns in the store for two of them, as the spool would have written.
+        func turn(_ id: String, at ms: Int64) -> Int64? {
+            guard (try? store.insert(event: QueuedEvent(
+                createdAtMs: ms, hookEvent: .stop, sessionId: id, promptId: "drill-\(id)",
+                cwd: "/tmp", transcriptPath: nil, lastAssistantMessage: "Done.", tty: nil))) != nil
+            else { return nil }
+            return (try? store.latestStop(for: id))??.latestId
+        }
+        _ = turn(unread.id, at: 1_000)
+        if let heardLatest = turn(heard.id, at: 2_000) {
+            try? store.advanceCursor(sessionId: heard.id, heardThrough: heardLatest)
+        }
+        let waiting = (try? store.waitingSessions()) ?? []
+        let remote = AppDelegate.remoteAgents(snapshot: snapshot, waiting: waiting)
+        let rows = GridAssembler.rows(GridAssembler.RowInputs(
+            waiting: waiting, known: (try? store.allKnownSessions()) ?? [],
+            discovered: [], liveById: [:], boundaries: [:], switchedOff: [], switchedOn: [],
+            evidence: { _, _ in nil }, isHeadless: { _ in false }, family: { [$0] },
+            supersedesWaiting: { _, _ in false }, isInFlight: { _ in false },
+            remote: remote)).rows
+        func read(_ a: AgentSession) -> ReadState? { rows.first { $0.id == a.id }?.read }
+        checks.append(("unreadIsDerivedUnread", read(unread) == .unread))
+        checks.append(("heardIsDerivedOpened", read(heard) == .opened))
+        checks.append(("silentIsDerivedNone", read(silent) == ReadState.none))
+
+        // On the live panel, tapped through the real handler; the verbs
+        // captured so nothing escapes the drill.
+        showIdle(rows: rows)
+        var went: [String: String] = [:]
+        let savedAnnounce = onPickWaiting, savedShell = onOpenShell, savedPane = onAttachPane
+        onPickWaiting = { went[$0] = "card" }
+        onOpenShell = { command, _ in
+            if let a = [unread, heard, silent].first(where: { command.contains($0.providerID) }) { went[a.id] = "shell" }
+        }
+        onAttachPane = { name in
+            if let a = [unread, heard, silent].first(where: { name == "tb-oc-\($0.providerID)" }) { went[a.id] = "door" }
+        }
+        for a in [unread, heard, silent] {
+            let control = NSButton()
+            control.identifier = NSUserInterfaceItemIdentifier(a.id)
+            sessionRowTapped(control)
+        }
+        onPickWaiting = savedAnnounce; onOpenShell = savedShell; onAttachPane = savedPane
+        showIdle(rows: [])
+        checks.append(("unreadTapOpensTheCard", went[unread.id] == "card"))
+        checks.append(("heardTapOpensTheCard", went[heard.id] == "card"))
+        checks.append(("nothingToSayTapOpensTheAgent", went[silent.id] == "door"))
+        SelfTest.report("openCodeRow", checks)
+    }
+
     func closedRowsDrill() {
         func row(_ id: String, _ lamp: Lamp,
                  revivable: Bool = false) -> SessionRow {
-            SessionRow(id: id, name: id, aux: id,
-                                   lamp: lamp, revivable: revivable)
+            // A green row carries an unread turn, because that is what a green
+            // LOCAL row always is: band 1 stamps `.unread` or `.opened` and
+            // nothing else builds one. #458 made announce require that turn (a
+            // green remote row that never spoke does nothing instead of reading
+            // an empty store), and updated the unit fixtures but not this
+            // drill — so `liveRowAnnounces` went red on the live panel while
+            // `swift test` stayed green. Rule 7, again.
+            SessionRow(id: id, name: id, aux: id, lamp: lamp,
+                       revivable: revivable,
+                       read: lamp == .ready ? .unread : .none)
         }
+        // A green LOCAL row always carries its turn: band 1 stamps `.unread`
+        // or `.opened` and nothing else builds one. Since #458 a green row
+        // with no read state gets its door rather than an announce (there is
+        // nothing in the store to read out), so a fixture asserting "green
+        // announces" has to be the row production actually makes. This drill
+        // was red on every launch from 14:02 to 14:53 on 15 Sep for saying
+        // otherwise, alongside `terminate` (#483).
+        let liveGreen = SessionRow(id: "live", name: "live", aux: "live",
+                                   lamp: .ready, read: .unread)
         let unlit = Lamp.unlit
 
         // The row is drawn by presence, not by a fifth colour: nothing in the
@@ -1075,7 +1484,7 @@ extension StatusHUD {
         // Every drill row goes through showIdle so the grid actually builds
         // one — a row that sorts correctly and then fails to render is the
         // failure this layer exists to catch.
-        showIdle(rows: [row("live", .ready), row("dead", unlit, revivable: true),
+        showIdle(rows: [liveGreen, row("dead", unlit, revivable: true),
                         row("unproven", unlit)])
         let built = waitingRows.arrangedSubviews.compactMap { $0 as? GridRowView }
 
@@ -1083,7 +1492,7 @@ extension StatusHUD {
             ("unlitHasNoFill", noFill),
             ("unlitRingIsFainterThanQuiet", fainterRing),
             ("unlitDimsTheRow", unlit.rowAlpha < 1 && Lamp.running.rowAlpha == 1),
-            ("liveRowAnnounces", SessionRow.action(for: row("live", .ready)) == .announce),
+            ("liveRowAnnounces", SessionRow.action(for: liveGreen) == .announce),
             // Amber does not speak, it points (18 Aug). A blocked session is
             // not in the waiting set, so the announcement it used to trigger
             // had nothing to say and left the panel sitting on Preparing.
@@ -1093,23 +1502,24 @@ extension StatusHUD {
             // questions are asked through one function precisely so this
             // cannot come apart.
             ("amberRowIsStillLive", SessionRow.isLive(row("amber", .fault))),
-            // Blue joined amber on 24 Aug, same reason and not a second
-            // one: work in hand is not an unread turn, so the tap is the
-            // door rather than the voice.
-            ("workingRowGoesToAgent",
+            // Ruled 15 Sep: only amber goes straight to the agent. Blue and
+            // quiet open the card when they have a turn to read, and take
+            // the door only when nothing is recorded, exactly as green does.
+            ("workingRowWithATurnOpensTheCard",
+             SessionRow.action(for: SessionRow(id: "working", name: "working", aux: "working",
+                                               lamp: .working, read: .opened)) == .announce),
+            ("workingRowWithNothingRecordedTakesTheDoor",
              SessionRow.action(for: row("working", .working)) == .goToAgent),
             ("workingRowIsStillLive", SessionRow.isLive(row("working", .working))),
-            // ...and the dark lamp closed the rule the same day. Announce
-            // on a quiet row read nothing and returned to the grid, so the
-            // tap was a silent no-op — amber's 18 Aug complaint, surviving
-            // where it was hardest to see.
-            ("quietRowGoesToAgent",
-             SessionRow.action(for: row("quiet", .running)) == .goToAgent),
+            ("quietRowWithATurnOpensTheCard",
+             SessionRow.action(for: SessionRow(id: "quiet", name: "quiet", aux: "quiet",
+                                               lamp: .running, read: .opened)) == .announce),
             ("quietRowIsStillLive", SessionRow.isLive(row("quiet", .running))),
-            // Green is the only lamp left that speaks.
-            ("greenIsTheOnlyLampThatAnnounces",
-             SessionRow.action(for: row("live", .ready)) == .announce
-             && SessionRow.action(for: row("quiet", .running)) != .announce),
+            // Amber is the only lamp that never speaks.
+            ("onlyAmberGoesStraightToTheAgent",
+             SessionRow.action(for: liveGreen) == .announce
+             && SessionRow.action(for: SessionRow(id: "amber2", name: "amber2", aux: "amber2",
+                                                  lamp: .fault, read: .opened)) == .goToAgent),
             ("revivableRowRevives",
              SessionRow.action(for: row("dead", unlit, revivable: true)) == .revive),
             ("unprovenRowDoesNothing",
@@ -1208,14 +1618,19 @@ extension StatusHUD {
                                           lamp: .running)
         let dead = SessionRow(id: "gone", name: "gone", aux: "gone",
                                           lamp: .unlit, revivable: true)
+        // The 15 Sep row: amber, listed here because the grid was full.
+        let amber = SessionRow(id: "amber", name: "amber", aux: "usage limit",
+                                           lamp: .fault)
         showPastAgents(items: [
             PastAgentsList.Item(row: live, revivable: false, haystack: live.name),
             PastAgentsList.Item(row: dead, revivable: true, haystack: dead.name),
+            PastAgentsList.Item(row: amber, revivable: false, haystack: amber.name),
         ])
         // The row says which verb it has.
         let verbs = pastList.verbsForTesting
         let liveSaysOpen = verbs["alive"] == "OPEN \u{203A}"
         let deadStillRevives = verbs["gone"] == "REVIVE \u{203A}"
+        let amberSaysGoTo = verbs["amber"] == "GO TO \u{203A}"
         // Go to agent lives on the right-click now, on the live row only.
         let menus = pastList.menuTitlesForTesting
         let goToIsInTheMenu = menus["alive"]?.contains { $0.hasPrefix("Go to ") } == true
@@ -1230,8 +1645,14 @@ extension StatusHUD {
         onPickWaiting = { cardOpened = $0 }
         onGoToSession = { wentToTerminal = $0 }
         onBreadcrumbHome = {}
-        pastList.onPick?("alive", false)
+        pastList.onPick?("alive", false, .running)
         let tapStayedOnThePanel = wentToTerminal == nil
+        // The amber row's tap: the terminal, and neither the switch nor the card.
+        let switchedOnBefore = switchedOn, cardBefore = cardOpened
+        pastList.onPick?("amber", false, .fault)
+        let amberWentToTerminal = wentToTerminal == "amber"
+        let amberLeftTheRestAlone = switchedOn == switchedOnBefore && cardOpened == cardBefore
+        wentToTerminal = nil
         // …and the menu's verb, which must still reach the terminal.
         pastList.onGoTo?("alive")
         let menuWentToTerminal = wentToTerminal == "alive"
@@ -1248,7 +1669,10 @@ extension StatusHUD {
             ("goToAgentIsOnTheRightClick", goToIsInTheMenu),
             ("endSessionKeptItsPlace", terminateIsStillThere),
             ("aDeadRowHasNeitherVerb", deadHasNoMenu),
-            ("theRowNamesItsVerb", liveSaysOpen && deadStillRevives),
+            ("theRowNamesItsVerb", liveSaysOpen && deadStillRevives && amberSaysGoTo),
+            // Ruled 15 Sep: amber means needs you, and the terminal is where.
+            ("anAmberTapGoesToTheTerminal", amberWentToTerminal),
+            ("anAmberTapNeitherSwitchesNorReads", amberLeftTheRestAlone),
             // And what the switch it flips is worth: an idle session the user
             // picked up is lit, so the grid draws it.
             ("aPickedUpSessionIsDrawnOnTheGrid",
@@ -1420,7 +1844,10 @@ extension StatusHUD {
         _ = showAnnouncement(
             spoken: SpokenTextSanitizer().sanitize("Finished the poller. Go?"),
             sessionId: "drill", pid: 1, project: "promotions copy", cwd: "/tmp")
-        checks.append(("sessionTitleIsADoor", titleLabel.isADoor))
+        // Reversed 15 Sep: the title is not a door; GO TO AGENT is the one
+        // way to the session. The drill keeps the line so the reversal is
+        // asserted rather than remembered.
+        checks.append(("sessionTitleIsNotADoor", !titleLabel.isADoor))
         checks.append(("titleIsOneLine", titleLabel.maximumNumberOfLines == 1))
         // The identity, alone. A second line here is the topic coming back.
         checks.append(("noSecondLine", !titleLabel.stringValue.contains("\n")))
@@ -1477,7 +1904,85 @@ extension StatusHUD {
         attachLivePid(77633, sessionId: "01a05338")
         checks.append(("aStrangersPidIsIgnored", goButton.isHidden))
 
+        // A REMOTE agent has no pid and never will; its door is a program or
+        // a page the poller knows about. The card asks the app for it, and
+        // the answer opens the door on a card the grid is not drawing (a
+        // greeting, a reply). Robert, 15 Sep, three times: "it never shows Go
+        // to Agent when I've opened a new agent."
+        let realDoor = agentDoorForSession
+        agentDoorForSession = { id in
+            id == "remote-1" ? .shell("opencode --session ses_1", directory: "/tmp") : nil
+        }
+        currentTarget = nil
+        _ = showAnnouncement(
+            spoken: SpokenTextSanitizer().sanitize("How should we get started?"),
+            sessionId: "remote-1", pid: nil, project: "tranquility-base", cwd: "/tmp")
+        checks.append(("aRemoteAgentsDoorOpensWithNoPid", !goButton.isHidden))
+        checks.append(("andItIsTheProvidersDoor",
+                       remoteDoorForCurrentTarget == .shell("opencode --session ses_1", directory: "/tmp")))
+        currentTarget = nil
+        _ = showAnnouncement(
+            spoken: SpokenTextSanitizer().sanitize("Nobody knows this one."),
+            sessionId: "remote-2", pid: nil, project: "elsewhere", cwd: "/tmp")
+        checks.append(("anUnknownRemoteAgentStillHasNoDoor", goButton.isHidden))
+
+        agentDoorForSession = realDoor
+
         SelfTest.report("revivedDoor", checks)
+    }
+
+    /// A pane id from another server never resolves to one of ours.
+    ///
+    /// The 15 Sep misroute, replayed against the REAL server this launch is
+    /// running on: take whatever pane ids it holds right now, claim one of
+    /// them under a tmux session name nobody has, and ask the ledger. The
+    /// old join answered with our pane and typed into it. The ledger must
+    /// say `elsewhere`, and must never hand back a pane. Then the same claim
+    /// with no live pid must read `gone`, and an unaskable server must read
+    /// `unknown`, because both of those are the answers that stop a kill.
+    func ledgerDrill() {
+        var checks: [(String, Bool)] = []
+        let inventory = AgentLedger.inventory(socket: Tmux.socketName)
+        guard case .listed(let rows) = inventory, let ours = rows.first else {
+            // No server or no panes: the drill has nothing real to collide
+            // with. Skip with the reason rather than pass vacuously.
+            SelfTest.skipped("ledger", because: "no pane on this launch's own tmux server to collide with")
+            return
+        }
+        let me = Int(ProcessInfo.processInfo.processIdentifier)
+        let claim = SessionRegistry.Entry(
+            pid: me, sessionId: "drill-elsewhere", cwd: nil, status: "idle",
+            tmux: "tb-drill-elsewhere:@1.\(ours.paneId)", messagingSocketPath: nil,
+            name: nil, updatedAt: 1)
+        let facts = AgentLedger.Facts(
+            record: nil, registry: claim, pidHint: me,
+            inventories: [(Tmux.socketName, inventory), (nil, .listed([]))],
+            isAlive: { $0 == me }, ttyOf: { _ in nil })
+        let decided = AgentLedger.decide(sessionId: "drill-elsewhere", harness: nil, facts: facts)
+        checks.append(("aStrangersPaneIdIsElsewhere", {
+            if case .elsewhere = decided.location { return true }; return false
+        }()))
+        checks.append(("andNeverOurPane", decided.location.pane == nil))
+        checks.append(("andNothingIsAdopted", decided.adopt == nil))
+
+        let dead = AgentLedger.Facts(
+            record: nil, registry: claim, pidHint: me,
+            inventories: [(Tmux.socketName, inventory), (nil, .listed([]))],
+            isAlive: { _ in false }, ttyOf: { _ in nil })
+        checks.append(("aDeadStrangerIsGone",
+                       AgentLedger.decide(sessionId: "drill-elsewhere", harness: nil, facts: dead).location == .gone))
+
+        let unaskable = AgentLedger.Facts(
+            record: nil, registry: claim, pidHint: me,
+            inventories: [(Tmux.socketName, .unaskable("drill")), (nil, .listed([]))],
+            isAlive: { $0 == me }, ttyOf: { _ in nil })
+        checks.append(("anUnaskableServerIsUnknown", {
+            if case .unknown = AgentLedger.decide(sessionId: "drill-elsewhere", harness: nil,
+                                                  facts: unaskable).location { return true }
+            return false
+        }()))
+
+        SelfTest.report("ledger", checks)
     }
 
     /// The harness marks land on the same optical line as the text beside them.
@@ -1933,7 +2438,21 @@ extension AppDelegate {
         // state whose entire meaning is "you restarted and it did not take",
         // which was a false accusation here.
         let unmeasurableIsNotStale = Permissions.stale.isEmpty
+        // ...and must not be REPORTED as missing either. The app's own gate was
+        // right all along on 13 Sep; the launch event was the thing that
+        // disagreed with it, so an install with every permission in order sent
+        // three "a permission is missing" alerts in one afternoon. An alert
+        // that contradicts the app it watches trains you to ignore it.
+        let unmeasurableIsNotAlertedOn = Permissions.failingTheGate.isEmpty
         Permissions.previewStates = realStates
+        // ...and the report has to EXIST. Every assertion above interrogates
+        // what the launch event would say, and all of them passed at
+        // `e770131` while the event itself was being dropped: it had been
+        // deferred into a `Task` to await a sharper automation reading, and
+        // landed inside the `Track.suppressed` window this very slate holds.
+        // Drills that only check an event's CONTENT cannot see an event that
+        // was never sent.
+        let launchEventWasRecorded = AppDelegate.launchEventRecorded
 
         // The Automation pane is a generated list of app-to-app pairs. It has
         // no + and no −, so an instruction naming them is an instruction that
@@ -1956,10 +2475,272 @@ extension AppDelegate {
             ("unmeasurableDoesNotBlock", unmeasurableDoesNotBlock),
             ("unmeasurableCountsAsDone", unmeasurableCountsAsDone),
             ("unmeasurableIsNotStale", unmeasurableIsNotStale),
+            ("unmeasurableIsNotAlertedOn", unmeasurableIsNotAlertedOn),
+            ("launchEventWasRecorded", launchEventWasRecorded),
             ("automationRemedyIsPossible", automationRemedyIsPossible),
             ("automationRouteIsAnchored", automationRouteIsAnchored),
             ("nothingIsOptional", nothingIsOptional),
             ("everyMissingRowCanBeActedOn", everyMissingRowCanBeActedOn),
         ])
+    }
+}
+
+extension StatusHUD {
+
+    /// The slate's backstop: whatever a drill leaves on the panel, the slate
+    /// hands it back on the grid (`handBackTheStage`, #396).
+    ///
+    /// Written because the repair had no drill of its own, and the deploy that
+    /// shipped it could not have run one. The race it covers is won or lost by
+    /// milliseconds: on #396's own launch the go-to refusal landed 117 ms after
+    /// the cleanup it used to collide with, so the backstop never fired and the
+    /// slate proved nothing about it. A drill that waits for a cold discovery
+    /// cache would assert nothing on most nights. This drives the repair
+    /// directly instead, so it is checked on every launch rather than on the
+    /// launches that happen to lose the race.
+    ///
+    /// The PARTITION is the assertion, not the restore. Two faces must be
+    /// handed back, and for two different reasons: one that OWNS the stage,
+    /// because it refuses whatever arrives next (the 08 Aug incident, where a
+    /// drill fixture answered `announce: refused, reply flow on stage` to every
+    /// press with ten drills reporting PASS above it), and a `.result`, because
+    /// `Failures.suppressed` holds for the whole window so a failure card here
+    /// cannot be a real one. One face must NOT be touched: a spoken card, since
+    /// a real announcement can take the stage mid-slate and the slate running
+    /// out is not a reason to pull it off. A backstop that cleared everything
+    /// would pass the first two checks and be a worse bug than the one it fixed.
+    func slateHandsBackDrill() {
+        let realRows = gridRows
+        let realTarget = currentTarget
+        defer { gridRows = realRows; currentTarget = realTarget }
+        // A roster with something in it, because the failure this drill exists
+        // to catch is a teardown that hands back an EMPTY grid: a claim that
+        // the machine is running nothing, which the panel then escalates into
+        // the first-run teaching card. "It went back to idle" is not the
+        // assertion. "It went back to the truth" is.
+        var asked = 0
+        let roster = [SessionRow(id: "hands-back-1", name: "one", aux: "", lamp: .running),
+                      SessionRow(id: "hands-back-2", name: "two", aux: "", lamp: .ready)]
+        gridRows = { asked += 1; return roster }
+
+        // 1. A capture face. It owns the stage, so it refuses the next arrival.
+        endCapture(because: "slateHandsBack setup")
+        showIdle(rows: [])
+        currentTarget = ("slate-hands-back", 1, "drill")
+        showPendingSend(utteranceId: "slate-hands-back",
+                        text: "words that should never be sent", label: "drill",
+                        seconds: 4, send: {}, cancel: { _ in })
+        let stageWasOwned = state.ownsStage
+        handBackTheStage()
+        let ownedFaceHandedBack = asked == 1 && !state.ownsStage
+        let handedBackTheRealRoster = face.sessionRows.count == roster.count
+
+        // 2. A result card. It admits what follows, so it strands nothing, but
+        //    it is a red failure about a session that never existed and it sat
+        //    on the panel for 61 minutes on 13 Sep.
+        showResult("Drill failure that nobody should be left looking at.")
+        var resultWasUp = false
+        if case .result = state { resultWasUp = true }
+        handBackTheStage()
+        var stillResult = false
+        if case .result = state { stillResult = true }
+        let resultHandedBack = asked == 2 && !stillResult
+
+        // 3. And the face the backstop must keep its hands off.
+        _ = showAnnouncement(spoken: SpokenTextSanitizer().sanitize("Slate drill card."),
+                             sessionId: "slate-hands-back", pid: nil,
+                             project: "slate-hands-back", cwd: nil,
+                             eventId: "slate-hands-back")
+        let spokenWasUp = state.isSpeaking
+        handBackTheStage()
+        let spokenCardSurvives = asked == 2 && state.isSpeaking
+
+        // And with no source wired, it paints NOTHING rather than reaching for
+        // `[]`. A fallback to the empty list is the whole bug, written as a
+        // default argument instead of as a paint.
+        gridRows = nil
+        endCapture(because: "slateHandsBack no-source setup")
+        showIdle(rows: roster)
+        showResult("Drill failure with no rows source wired.")
+        handBackTheStage()
+        var refusedToPaintALie = false
+        if case .result = state { refusedToPaintALie = true }
+        gridRows = { asked += 1; return roster }
+
+        SelfTest.report("slateHandsBack", [
+            ("aCaptureFaceOwnsTheStage", stageWasOwned),
+            ("anOwnedFaceIsHandedBack", ownedFaceHandedBack),
+            ("aResultCardIsUp", resultWasUp),
+            ("aResultCardIsHandedBack", resultHandedBack),
+            ("aSpokenCardIsUp", spokenWasUp),
+            ("aSpokenCardIsLeftAlone", spokenCardSurvives),
+            ("theRealRosterComesBackNotAnEmptyOne", handedBackTheRealRoster),
+            ("withNoRowsSourceItPaintsNothing", refusedToPaintALie),
+        ])
+
+        endCapture(because: "slateHandsBack cleanup")
+        returnToTheGrid(because: "slateHandsBack cleanup")
+    }
+}
+
+extension StatusHUD {
+
+    /// A real key beats a drill (`yieldTheSlateToAGesture`).
+    ///
+    /// The incident, measured 13 Sep: at 23:36:31 and again at 23:36:32 two ⌃⌥
+    /// presses played the green recognised chime and were dropped with
+    /// `announce: refused, reply flow on stage`. The panel was holding a
+    /// `pendingSend` fixture whose countdown the drill had already cancelled,
+    /// so the state claimed a live reply flow that did not exist, and it
+    /// refused every arrival for the rest of the slate. Robert pressed twice,
+    /// heard the app say it had heard him twice, and nothing happened either
+    /// time. First seen 08 Aug, under ten drills reporting PASS.
+    ///
+    /// The fixture is rebuilt here exactly as the slate leaves it, zombie and
+    /// all, because a live `pendingSend` would be cleared by the gesture's own
+    /// commit path and would prove nothing about the case that bit.
+    ///
+    /// Asserted on both sides of the yield. "The press works afterwards" is
+    /// half a drill: without the refusal first, this passes just as happily on
+    /// a build where the fixture never blocked anything, and would go on
+    /// passing after somebody deletes the repair.
+    func slateYieldsDrill() {
+        let held = drillsHoldThePanel
+        let realRows = gridRows
+        let realTarget = currentTarget
+        defer { gridRows = realRows; currentTarget = realTarget }
+        gridRows = { [SessionRow(id: "yields-1", name: "one", aux: "", lamp: .running)] }
+
+        // The zombie, as the slate really leaves it: a pendingSend face whose
+        // countdown and closures are already gone.
+        endCapture(because: "slateYields setup")
+        showIdle(rows: [])
+        currentTarget = ("slate-yields", 1, "drill")
+        showPendingSend(utteranceId: "slate-yields", text: "words that should never be sent",
+                        label: "drill", seconds: 4, send: {}, cancel: { _ in })
+        _ = cancelPendingSend(restartListening: false)
+        var zombieIsOnStage = false
+        if case .pendingSend = state { zombieIsOnStage = true }
+
+        // Before: the panel refuses the announcement the gesture asks for.
+        // This is the exact call `announceNext` makes, and its exact refusal.
+        let refusedBefore = !showPreparing()
+
+        // The gesture arrives.
+        yieldTheSlateToAGesture()
+        let slateStoodDown = !drillsHoldThePanel && slateInterruptedByAGesture
+        let stageIsClear = !state.ownsStage
+
+        // After: the same call, now admitted.
+        let acceptedAfter = showPreparing()
+
+        SelfTest.report("slateYields", [
+            ("aZombieFixtureIsOnStage", zombieIsOnStage),
+            ("itRefusesTheGestureFirst", refusedBefore),
+            ("theSlateStandsDown", slateStoodDown),
+            ("theStageIsHandedBack", stageIsClear),
+            ("andThenThePressLands", acceptedAfter),
+        ])
+
+        endCapture(because: "slateYields cleanup")
+        returnToTheGrid(because: "slateYields cleanup")
+        // The slate is NOT over: this drill stood it down on purpose and the
+        // drills after it still need the hold, and still need the 60 s ceiling
+        // that comes with it. Re-armed through the real door rather than by
+        // setting the flag back, so the ceiling is re-armed too.
+        if held { beginDrills() }
+        // The gesture was ours, so the deferred verdicts are still about their
+        // own panel and must not be skipped.
+        slateInterruptedByAGesture = false
+    }
+}
+
+extension StatusHUD {
+
+    /// A paint from any path is the paint the tick compares against (14 Sep).
+    ///
+    /// The shape of the bug: something other than the tick paints the grid
+    /// under a transient state, the state passes, and the tick, comparing
+    /// fresh rows with its own last paint rather than with the screen, sees
+    /// no change and never redraws. A blue lamp sat on an idle agent for 26
+    /// minutes that way, painted by the no-speech return to the grid while the
+    /// reply-in-flight overlay was open for a 0.68 s ⌥ press.
+    ///
+    /// Asked of the truth, per the empty-grid ruling (#422): the drill paints a
+    /// variant of the real rows through the bypass path, checks the tick would
+    /// now repaint the truth, and puts the truth back.
+    func paintGuardDrill() {
+        guard let truth = gridRows?() else {
+            SelfTest.report("paintGuard", [("realRowsAvailable", false)])
+            return
+        }
+        // A variant that differs in row DATA, which is what the guard compares.
+        // With no real rows at all, one fixture row is the variant, and the
+        // restore paints the truthful empty grid.
+        let variant: [SessionRow]
+        if let first = truth.first {
+            variant = [SessionRow(id: first.id, name: first.name,
+                                  aux: "paint guard drill", lamp: .working)]
+                + truth.dropFirst()
+        } else {
+            variant = [SessionRow(id: "paint-guard-drill", name: "paint guard drill",
+                                  aux: "drill", lamp: .working)]
+        }
+        // The bypass path: a direct paint, not the tick.
+        showIdle(rows: variant, because: "paint guard drill: bypass paint")
+        let recorded = shownRows == variant
+        let tickWouldRepaint = gridNeedsRepaint(truth)
+        let unchangedStaysQuiet = !gridNeedsRepaint(variant)
+        // The truth, back on the panel, the way the tick would put it.
+        showIdle(rows: truth, because: "paint guard drill: truth restored")
+        let restored = !gridNeedsRepaint(truth)
+        SelfTest.report("paintGuard", [
+            ("bypassPaintIsRecorded", recorded),
+            ("tickSeesTheBypassPaint", tickWouldRepaint),
+            ("unchangedRowsStayQuiet", unchangedStaysQuiet),
+            ("truthRestored", restored),
+        ])
+    }
+}
+
+extension StatusHUD {
+    /// A dismiss that ends a reply leaves the turn owed (ruled 14 Sep, #449).
+    ///
+    /// The Core rule (`PanelState.dismissKeepsTheTurn`) is unit-tested; this
+    /// drives the panel's side of it, the one line that makes the rule reach
+    /// the app: `dismissTapped` reads the face BEFORE `endCapture` moves it,
+    /// and hands the answer to `onDismiss`. Read it after and every dismiss
+    /// says "idle, the turn is done with", which is exactly how a 3m31s
+    /// dictation sent a live session to Past Agents on 14 Sep.
+    ///
+    /// Wraps `onDismiss` for the two dismisses and restores it in the same
+    /// synchronous frame; the real handler still runs behind the wrapper, so
+    /// nothing the app does on dismiss is skipped by being measured.
+    func dismissKeepsTheTurnDrill() {
+        let real = onDismiss
+        defer { onDismiss = real }
+        var seen: [Bool] = []
+        onDismiss = { owed in seen.append(owed); real?(owed) }
+
+        // A reply on stage: the dismiss ends the capture and keeps the turn.
+        currentTarget = ("selftest", 1, "promotions")
+        showListening(level: { 0 })
+        let replyTookTheStage = state.isCapturingAudio
+        dismiss()
+        let replyEnded = !state.isCapturingAudio
+
+        // A card on stage: its own Dismiss is the turn's dismissal.
+        showResult("selftest dismissKeepsTheTurn card")
+        let cardTookTheStage = state.isCardOnStage
+        dismiss()
+
+        SelfTest.report("dismissKeepsTheTurn", [
+            ("replyTookTheStage", replyTookTheStage),
+            ("replyEnded", replyEnded),
+            ("replyDismissKeepsTheTurn", seen.first == true),
+            ("cardTookTheStage", cardTookTheStage),
+            ("cardDismissEndsTheTurn", seen.count == 2 && seen[1] == false),
+        ])
+        returnToTheGrid(because: "selftest dismissKeepsTheTurn")
     }
 }

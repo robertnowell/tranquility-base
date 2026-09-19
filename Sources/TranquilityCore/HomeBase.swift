@@ -897,8 +897,16 @@ public enum HomeBase {
         """
     }
 
-    public static func render(_ model: Model, now: Date = Date()) -> String {
+    /// `hubApp` is where the cloud hub lives (hq.json app.base_url), injected
+    /// so a test never reads the machine's config. With one, the plate and
+    /// the footer carry "Open in HQ", the agent's own page there: a local
+    /// hub had no path to the cloud hub at all (11 Sep), while every card
+    /// door and page footer already did.
+    public static func render(_ model: Model, now: Date = Date(),
+                              hubApp: URL? = HubApp.baseURL) -> String {
         let e = escape
+        let hq = HubApp.openURL(session: model.sessionId, base: hubApp)
+            .map { "<a class=\"hq\" href=\"\(e($0.absoluteString))\">Open in HQ</a>" } ?? ""
         // READ THE CATALOG ONCE PER RENDER, NOT ONCE PER CALL.
         //
         // `publishedURLs()` was a DEFAULT ARGUMENT on both pageItems and
@@ -989,7 +997,7 @@ public enum HomeBase {
             let plate = nameplate(brand: theme.nameplate, project: project)
             let dateline = model.lastActive.map { dayStamp.string(from: $0) } ?? ""
             head = """
-                <header class="plate"><span>\(e(plate))</span><span>\(e(dateline))</span></header>
+                <header class="plate"><span>\(e(plate))</span>\(hq)<span>\(e(dateline))</span></header>
                 <p class="kicker">Agent</p>
                 <h1>\(e(name))</h1>
                 <p class="latest">\(e(n.headline ?? n.topic))</p>
@@ -1279,6 +1287,11 @@ public enum HomeBase {
                  font-family:var(--sans);font-size:12px;font-weight:600;
                  letter-spacing:.12em;text-transform:uppercase;color:var(--brand)}
           .plate span:last-child{color:var(--faint);font-weight:500;white-space:nowrap}
+          .plate a.hq{margin-left:auto;margin-right:16px;text-decoration:none;color:var(--accent);
+                      letter-spacing:.12em;white-space:nowrap}
+          footer .hq{margin-left:auto;text-decoration:none;color:var(--accent);font-weight:600;
+                     border:1px solid var(--rule);padding:7px 13px;border-radius:7px}
+          footer .hq + .discuss{margin-left:0}
           .kicker{font-family:var(--sans);font-size:12px;font-weight:700;letter-spacing:.12em;
                   text-transform:uppercase;color:var(--accent);margin:34px 0 10px}
           h1{font-size:44px;line-height:1.06;letter-spacing:-.022em;font-weight:600;
@@ -1447,6 +1460,7 @@ public enum HomeBase {
         \(pages)
         <footer>Created by <b>\(e(model.title ?? "—"))</b> &middot;
         session \(e(String(model.sessionId.prefix(8))))
+        \(hq)
         <a class="discuss" href="tranquilitybase://discuss?session=\(e(model.sessionId))">Discuss with agent</a>
         </footer></div>
         <div id="card" role="tooltip"></div>
@@ -1755,6 +1769,20 @@ public extension HomeBase {
         let title = Self.title(
             sessionId: origin, transcriptPath: latest?.transcriptPath, live: here,
             firstPrompt: transcript.first?.prompt, topic: briefs.first?.topic)
+        // BEFORE the pages are gathered, not after the page is rendered.
+        //
+        // Reconciliation is what records a continuation's pages, and `pages:`
+        // below is read from the records — so running it after the render
+        // listed a forked agent's page one hub write LATE, and never at all
+        // for a conversation that had stopped writing hubs. Measured 13 Sep
+        // repairing `credits-launch-plan.html`: the first `tbase homebase`
+        // recorded it and rendered without it; the second listed it.
+        //
+        // The origin's own directory is still reconciled after the render,
+        // where it has always been: its pages are recorded by the hook as
+        // they are written, so it has nothing to catch up on, and the
+        // directory it scans does not exist yet at this point on a first write.
+        reconcileMembers(family, origin: origin, title: title)
         let model = Model(
             sessionId: origin,
             title: title,
@@ -1808,6 +1836,24 @@ public extension HomeBase {
         // wrote and sometimes guesses wrong.
         HubReconcile.run(sessionId: model.sessionId, title: model.title,
                          dir: dir, turns: model.turns)
+        // AND EVERY OTHER MEMBER'S OWN DIRECTORY.
+        //
+        // A continuation writes its pages into ITS directory, under its own
+        // id. While it had a hub of its own, its own hub write reconciled
+        // them. Folding the family into one hub (10 Sep for Claude Code, 13
+        // Sep for Codex forks) moved the reconciliation to the ORIGIN's
+        // directory and left nothing scanning the member's — so a page
+        // written after the fork was never recorded, and the hub that lists
+        // `family.flatMap(history)` could not list what nobody had recorded.
+        //
+        // Found the day the Codex fork landed: `credits-launch-plan.html`,
+        // written 11 minutes after the fork, sat in the child's directory
+        // while the child's index became a pointer to the origin. The page
+        // existed, was linked from a turn, and appeared on no hub at all.
+        //
+        // A member whose directory is already a symlink to this one is
+        // skipped: reconciling that is reconciling THIS directory a second
+        // time under a second id, which would record every page here twice.
         // Every continuation's directory points at this one, so a page a
         // continuation writes lands in the conversation's hub and a link that
         // names the continuation opens the same page.
@@ -1815,6 +1861,30 @@ public extension HomeBase {
             aliasContinuation(member, toOrigin: origin)
         }
         return file
+    }
+
+    /// Reconcile each family member's OWN directory. Returns how many were
+    /// scanned, so a caller can log it and a test can assert it.
+    ///
+    /// The origin is skipped (its caller has already reconciled it), and so is
+    /// any member whose directory is already a symlink to the origin's:
+    /// scanning that is scanning the origin's directory a second time under a
+    /// second id, which would record every page there twice.
+    @discardableResult
+    static func reconcileMembers(_ family: [String], origin: String, title: String?,
+                                 turns: [Turn] = [], root: URL = HomeBase.root,
+                                 support: String = QueueStore.supportDirectory.path) -> Int {
+        var scanned = 0
+        for member in family where member != origin {
+            let dir = root.appendingPathComponent(slug(forSessionId: member),
+                                                  isDirectory: true)
+            guard !isSymlink(dir),
+                  FileManager.default.fileExists(atPath: dir.path) else { continue }
+            HubReconcile.run(sessionId: member, title: title, dir: dir,
+                             turns: turns, root: support)
+            scanned += 1
+        }
+        return scanned
     }
 
     /// Make a continuation's hub directory a link to its origin's.

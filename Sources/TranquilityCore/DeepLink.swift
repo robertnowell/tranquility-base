@@ -60,16 +60,42 @@ public enum DeepLink {
     public enum DiscussDestination: Equatable {
         case conversationCard
         case agentTerminal
+        /// The agent's own page, for one that has no pane of ours.
+        case agentPage(URL)
+        /// The agent's own program on this Mac, for one that has no pane of ours.
+        case agentShell(String, directory: String)
+        /// The agent's own pane on this app's tmux socket.
+        case agentPane(String)
         case revive
         case refused
         case invitation
     }
 
+    /// Amended 14 Sep: a QUIET live row with a completed turn opens the card.
+    /// The 9 Sep amendment was measured on a dead agent and its sentence
+    /// ("every other live lamp opens the terminal") rewrote the quiet-alive
+    /// case with it. Measured 14 Sep 16:15 on `gary-first-run.html`: the
+    /// agent was alive and idle, its turn had been dismissed, and three
+    /// clicks on Discuss each focused a tmux pane instead of reading the
+    /// turn. The card has GO TO AGENT, so nothing is lost by landing there;
+    /// working and fault still open the terminal, because there is no
+    /// finished turn to read (working) or the terminal is where the fault
+    /// is (amber). `lamp` is the row's own; nil when there is no row.
     public static func discussDestination(rowAction: SessionRow.RowAction?,
+                                          lamp: Lamp?,
                                           hasCompletedTurn: Bool) -> DiscussDestination {
         switch rowAction {
         case .announce:  return .conversationCard
-        case .goToAgent: return .agentTerminal
+        // Ruled 15 Sep: only amber goes straight to the agent. Any other
+        // live row with a completed turn reads the card, which carries GO TO
+        // AGENT; with nothing recorded, the terminal is all there is.
+        case .goToAgent: return lamp != .fault && hasCompletedTurn ? .conversationCard : .agentTerminal
+        // Discuss on a remote agent opens where the agent lives. Same
+        // destination in meaning as a terminal, different door, and the enum
+        // says which so no caller has to ask what kind of agent it was.
+        case .openPage(let url): return .agentPage(url)
+        case .openShell(let command, let directory): return .agentShell(command, directory: directory)
+        case .attachPane(let name): return .agentPane(name)
         case .revive:    return .revive
         case .none?:     return .refused
         case nil:        return hasCompletedTurn ? .conversationCard : .invitation
@@ -87,6 +113,29 @@ public enum DeepLink {
         case hear(session: String?)
         case reply(session: String?)
         case show
+        /// "Start a session", the same verb as the panel's button and the
+        /// status menu's item, with the agent Settings has selected. Carries
+        /// no parameters for the reason `connect` gives: a link that could
+        /// name an agent or a directory would be the app taking a launch
+        /// target from whatever page opened it. It exists because the button
+        /// and the menu are the only two doors to a launch, and neither is
+        /// reachable from a script, a drill or the hub without synthetic input,
+        /// which collides with a live dictation (ruled 11 Sep).
+        case new
+        /// "Start connecting this Mac to the hub."
+        ///
+        /// It carries NO parameters, and that is the design rather than an
+        /// omission. The obvious shape for this verb was a token and a hub
+        /// address in the link, which would have been the app taking both its
+        /// credential and the address of its archive from whatever page
+        /// happened to fire the URL. A scheme is open to the entire web and
+        /// cannot be owned (LaunchServices picks among every app that claims
+        /// it), so that link is a pointer somebody else gets to aim.
+        ///
+        /// This one means only "begin". The app supplies its own code and its
+        /// own host, and the hand-back happens over HTTPS between the app and
+        /// the hub, where no page can reach it. See `HubPairing`.
+        case connect
         case unknown(String)
     }
 
@@ -106,6 +155,8 @@ public enum DeepLink {
         case "hear":    return .hear(session: value("session"))
         case "reply":   return .reply(session: value("session"))
         case "show":    return .show
+        case "connect": return .connect
+        case "new":     return .new
         case let other: return .unknown(other)
         }
     }
@@ -144,12 +195,14 @@ public enum DeepLink {
         }
 
         /// Where a session about it should start. A hosted page belongs to no
-        /// directory here, so it opens at home rather than wherever the app
-        /// happened to be launched from.
+        /// directory here, so it opens where a new agent opens: the app's folder
+        /// (`AgentDefaults.fallbackDirectory`). It was home until 14 Sep 2026,
+        /// the same home that met a new Mac with a cascade of permission
+        /// dialogs; the same ruling covers both doors.
         public var directory: String {
             switch self {
             case .file(let path): return (path as NSString).deletingLastPathComponent
-            case .page: return NSHomeDirectory()
+            case .page: return AgentDefaults.fallbackDirectory
             }
         }
 
@@ -203,9 +256,31 @@ public enum DeepLink {
     /// What the new session opens holding. Built from a path that has already
     /// passed `artifact(from:exists:)`; passing anything else is a programming
     /// error, so this asserts rather than sanitizing twice.
-    public static func openingPrompt(for subject: Subject) -> String {
-        "Read \(subject.reference) — I want to talk about it. "
-        + "Start by telling me what it is and where it stands."
+    public static func openingPrompt(for subject: Subject,
+                                     hubHost: String? = HubApp.baseURL?.host) -> String {
+        // A hub page is behind a sign-in, so "read this URL" on its own sends
+        // the agent to a 401 and the session opens by reporting that it could
+        // not read the thing it was started for. The Mac holds the credential
+        // already; `tbase read` is how it reaches it without the token
+        // passing through this prompt. Named only for the hub's own host,
+        // because for any other page a plain fetch is the right instruction
+        // and naming a local command would be noise.
+        let how: String
+        if case .page(let url) = subject, let hubHost, !hubHost.isEmpty,
+           URL(string: url)?.host?.lowercased() == hubHost.lowercased() {
+            // No backticks, and nothing else from `forbidden`. This string is
+            // single-quoted into a shell inside a double-quoted AppleScript
+            // literal, and openingCommand refuses the whole prompt if one
+            // appears: the session would still open, silently blank, with the
+            // prompt only on the clipboard. A quoting slip here does not fail
+            // loudly, it degrades.
+            how = "Run: tbase read \(url)  (the page is behind a sign-in, and "
+                + "that is how this Mac reads it.) Then: "
+        } else {
+            how = "Read \(subject.reference) — "
+        }
+        return how + "I want to talk about it. "
+            + "Start by telling me what it is and where it stands."
     }
 
     /// The launch command, single-quoted for the shell. Nil is not a failure:

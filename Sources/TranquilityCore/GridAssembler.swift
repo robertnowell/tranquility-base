@@ -87,8 +87,13 @@ public enum GridAssembler {
     public static func lampAndReason(
         for evidence: SessionActivity.Evidence?, sessionId: String,
         live: LiveSession?, boundary: SessionActivity.TurnBoundary? = nil,
-        pickedUp: Bool = false, isInFlight: Bool = false, harness: String? = nil
+        pickedUp: Bool = false, isInFlight: Bool, harness: String? = nil
     ) -> (lamp: Lamp, reason: String?, detail: String?) {
+        // `isInFlight` HAS NO DEFAULT, since 13 Sep. It used to, and the
+        // extraction in #381 forgot to pass it on two of the four bands, which
+        // compiled, ran, and silently changed what colour a row was. A default
+        // on an argument whose omission is invisible is a trap left armed; the
+        // caller always knows the answer, so it can always be asked for.
         // The rules moved to `SessionVerdict.resolve` on 01 Sep and did not
         // change: `VerdictAgreesWithTheOldLampTests` drives both this and a copy
         // of the previous body across 540 combinations of every witness, every

@@ -173,6 +173,7 @@ final class CollapsedStrip: NSView {
 
     /// What the drill reads to prove the glow decays rather than lingering.
     var currentGlowStrength: CGFloat { glowColor == nil ? 0 : glowStrength }
+    var glowTimerIsActive: Bool { glowTimer?.isValid == true }
 
     /// The ink actually PAINTED at the centre of lamp `index`.
     ///
@@ -320,7 +321,9 @@ final class CollapsedStrip: NSView {
             rect: bounds,
             options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
             owner: self))
+        PointerCursor.track(self)
     }
+    override func cursorUpdate(with event: NSEvent) { PointerCursor.show() }
 
     override func mouseEntered(with event: NSEvent) {
         hovering = true

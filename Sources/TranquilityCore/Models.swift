@@ -66,6 +66,10 @@ public struct QueuedEvent: Codable, FetchableRecord, PersistableRecord, Identifi
     public var cwd: String?
     public var transcriptPath: String?
     public var lastAssistantMessage: String?
+    /// What the agent said this turn before `lastAssistantMessage`, when the
+    /// source knew it at ingest. Nil for file-based harnesses, whose
+    /// transcript is read at announce time instead. See `EarlierThisTurn`.
+    public var earlierThisTurn: String?
     /// For `Notification` events: `permission_prompt`, `idle_prompt`, etc.
     public var notificationMatcher: String?
     /// The hook's controlling terminal. "??" means headless. Nil means the row
@@ -84,6 +88,7 @@ public struct QueuedEvent: Codable, FetchableRecord, PersistableRecord, Identifi
         cwd: String? = nil,
         transcriptPath: String? = nil,
         lastAssistantMessage: String? = nil,
+        earlierThisTurn: String? = nil,
         notificationMatcher: String? = nil,
         tty: String? = nil,
         summaryText: String? = nil,
@@ -98,6 +103,7 @@ public struct QueuedEvent: Codable, FetchableRecord, PersistableRecord, Identifi
         self.cwd = cwd
         self.transcriptPath = transcriptPath
         self.lastAssistantMessage = lastAssistantMessage
+        self.earlierThisTurn = earlierThisTurn
         self.notificationMatcher = notificationMatcher
         self.tty = tty
         self.summaryText = summaryText
@@ -196,6 +202,14 @@ public enum TranscriptFinality: String, Codable, DatabaseValueConvertible, Senda
 public enum TransportKind: String, Codable, DatabaseValueConvertible, Sendable {
     case terminalApp = "terminal_app"
     case tmux
+    /// An agent somewhere else, answered through its provider's API rather
+    /// than by typing into a pane.
+    ///
+    /// A THIRD TRANSPORT, not a third kind of agent. The distinction is the
+    /// 14 Sep ruling: the user picks an agent, and how the words get there is
+    /// ours to carry. This enum is where "how" legitimately lives, because it
+    /// is the transport's own name for itself.
+    case remote
 }
 
 public struct Utterance: Codable, FetchableRecord, PersistableRecord, Identifiable, Sendable {
@@ -383,6 +397,7 @@ public struct WaitingSession: Codable, FetchableRecord, Sendable {
     public var promptId: String?
     public var transcriptPath: String?
     public var lastAssistantMessage: String?
+    public var earlierThisTurn: String?
     public var notificationMatcher: String?
     public var summaryText: String?
     /// The kind of the latest event. `stop` is the only one that waits, but the

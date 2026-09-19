@@ -7,6 +7,40 @@ final class QueueStoreTests: XCTestCase {
     /// against two real rows when it counted every non-terminal status, and later
     /// "2 waiting" when it added stuck replies. Both were possible because the badge
     /// had its own predicate; it now shares one with the announcer.
+    // MARK: - Typed drafts (17 Sep 2026)
+
+    /// A half-written message is in the file within one write and is still
+    /// there after the store is reopened, which is what a crash looks like.
+    func testATypedDraftSurvivesAReopen() throws {
+        try store.saveDraft("also check the Loom before", session: "A")
+        XCTAssertEqual(try store.draft(session: "A"), "also check the Loom before")
+        let reopened = try QueueStore(url: tmpDir.appendingPathComponent("queue.sqlite"))
+        XCTAssertEqual(try reopened.draft(session: "A"), "also check the Loom before")
+    }
+
+    /// One row per session, overwritten as you type; another session's
+    /// draft is its own.
+    func testADraftIsPerSessionAndOverwritten() throws {
+        try store.saveDraft("first", session: "A")
+        try store.saveDraft("first, then more", session: "A")
+        try store.saveDraft("other", session: "B")
+        XCTAssertEqual(try store.draft(session: "A"), "first, then more")
+        XCTAssertEqual(try store.draft(session: "B"), "other")
+        XCTAssertEqual(try store.drafts().count, 2)
+    }
+
+    /// Sent, or emptied by hand, and the draft is gone: an empty line is
+    /// the absence of a draft, not a draft of nothing.
+    func testAnEmptyOrClearedDraftIsAbsent() throws {
+        try store.saveDraft("words", session: "A")
+        try store.saveDraft("   ", session: "A")
+        XCTAssertNil(try store.draft(session: "A"))
+        try store.saveDraft("words again", session: "A")
+        try store.clearDraft(session: "A")
+        XCTAssertNil(try store.draft(session: "A"))
+        XCTAssertTrue(try store.drafts().isEmpty)
+    }
+
     func testPendingCountIsExactlyWhatCanBeAnnounced() throws {
         _ = try store.insert(event: QueuedEvent(
             createdAtMs: 1_000, hookEvent: .stop, sessionId: "waiting-one",
@@ -26,6 +60,23 @@ final class QueueStoreTests: XCTestCase {
         // which is exactly the mistake that hid live conversations.
         XCTAssertEqual(try store.pendingCount(), 1)
         XCTAssertEqual(try store.waitingSessions().first?.sessionId, "waiting-one")
+    }
+
+    /// What a polled provider knew at ingest survives to announce time: the
+    /// column, the view and every waiting-session query carry it, and a row
+    /// without it (every file-based harness) reads back nil, not empty.
+    func testEarlierThisTurnRoundTripsThroughTheWaitingQueries() throws {
+        _ = try store.insert(event: QueuedEvent(
+            createdAtMs: 1_000, hookEvent: .stop, sessionId: "remote-one",
+            promptId: "a", cwd: "/tmp", lastAssistantMessage: "Done; PR opened.",
+            earlierThisTurn: "Reading the repo.\n\nFound the bug.", tty: "??"))
+        _ = try store.insert(event: QueuedEvent(
+            createdAtMs: 1_000, hookEvent: .stop, sessionId: "local-one",
+            promptId: "b", cwd: "/tmp", lastAssistantMessage: "Watching quietly.", tty: "ttys1"))
+        let waiting = try store.waitingSessions()
+        XCTAssertEqual(waiting.first { $0.sessionId == "remote-one" }?.earlierThisTurn, "Reading the repo.\n\nFound the bug.")
+        XCTAssertNil(waiting.first { $0.sessionId == "local-one" }?.earlierThisTurn)
+        XCTAssertEqual(try store.latestStop(for: "remote-one")?.earlierThisTurn, "Reading the repo.\n\nFound the bug.")
     }
 
     /// A cursor only ever moves forward. An out-of-order advance must not rewind it,
@@ -214,6 +265,119 @@ final class QueueStoreTests: XCTestCase {
         let row = try store.utterances().first
         XCTAssertEqual(row?.status, .discarded)
         XCTAssertNotNil(row?.discardedReason, "loss must be auditable, never silent")
+    }
+
+    // MARK: - Kept captures reach Recents (ruled 10 Sep 2026)
+
+    /// A `.wav.live` file with no row is what `Recorder.abandon` leaves when
+    /// the capture held speech, and what a process death leaves. Before this,
+    /// both sat invisible until the 72h reap deleted them.
+    func testAKeptLiveCaptureIsAdoptedIntoARowAtBoot() throws {
+        let audio = tmpDir.appendingPathComponent("audio", isDirectory: true)
+        let capture = try LiveAudioCapture(utteranceId: "capture-kept", sampleRate: 16000, directory: audio)
+        try capture.append(pcm16: Data(count: Int(LiveAudioCapture.keepAfterSeconds * 16000) * 2 + 3200))
+        XCTAssertNotEqual(capture.abandon(), .removed)
+        let spoken = Date().addingTimeInterval(-120)
+        try FileManager.default.setAttributes([.modificationDate: spoken], ofItemAtPath: capture.url.path)
+
+        let report = try store.reconcileOnBoot(audioDirectory: audio)
+
+        XCTAssertEqual(report.adoptedAudio, ["capture-kept"])
+        XCTAssertTrue(report.orphanedAudio.isEmpty, "adopted means claimed")
+        let row = try XCTUnwrap(try store.utterance(id: "capture-kept"))
+        XCTAssertEqual(row.status, .recorded, "recorded, never transcribed unasked")
+        XCTAssertNil(row.transcriptText)
+        XCTAssertEqual(row.audioDurationMs, 10_100)
+        XCTAssertEqual(row.audioPath.map { URL(fileURLWithPath: $0).pathExtension }, "wav",
+                       "promoted to a plain recording the retry path can read")
+        XCTAssertEqual(Double(row.createdAtMs) / 1000, spoken.timeIntervalSince1970, accuracy: 1,
+                       "dated by when it was spoken, not by this boot")
+        XCTAssertTrue(LiveAudioCapture.interrupted(in: audio).isEmpty)
+
+        // Idempotent: the next boot finds a claimed file and does nothing.
+        XCTAssertTrue(try store.reconcileOnBoot(audioDirectory: audio).adoptedAudio.isEmpty)
+    }
+
+    /// A press that died mid-word: one second, and it has a signal in it.
+    /// Ruled 14 Sep 2026: salvageable audio is salvaged; the boot sweep's
+    /// ten-second floor was the gap between "kept" and "reachable".
+    func testAShortOrphanWithSpeechIsAdoptedAtBoot() throws {
+        let audio = tmpDir.appendingPathComponent("audio", isDirectory: true)
+        let capture = try LiveAudioCapture(utteranceId: "capture-word", sampleRate: 16000, directory: audio)
+        var spoken = Data(capacity: 16000 * 2)
+        for _ in 0..<16000 { withUnsafeBytes(of: Int16(2000).littleEndian) { spoken.append(contentsOf: $0) } }
+        try capture.append(pcm16: spoken)
+        try capture.close()
+        try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-120)],
+                                              ofItemAtPath: capture.url.path)
+
+        let report = try store.reconcileOnBoot(audioDirectory: audio)
+
+        XCTAssertEqual(report.adoptedAudio, ["capture-word"])
+        let row = try XCTUnwrap(try store.utterance(id: "capture-word"))
+        XCTAssertEqual(row.status, .recorded)
+        XCTAssertEqual(row.audioDurationMs, 1_000)
+    }
+
+    /// A crash mid-hold keeps the audio (10 Sep) and, since 15 Sep 2026, the
+    /// words the stream had already recognised: they ride beside the live
+    /// file as a sidecar and land on the adopted row as its floor.
+    func testADeadCapturesPartialTranscriptIsAdoptedWithItsAudio() throws {
+        let audio = tmpDir.appendingPathComponent("audio", isDirectory: true)
+        let capture = try LiveAudioCapture(utteranceId: "capture-heard", sampleRate: 16000, directory: audio)
+        var spoken = Data(capacity: 16000 * 4)
+        for _ in 0..<32000 { withUnsafeBytes(of: Int16(2000).littleEndian) { spoken.append(contentsOf: $0) } }
+        try capture.append(pcm16: spoken)
+        capture.notePartial("what if the computer shut down")
+        capture.notePartial("what if the computer shut down and I'm halfway talking")
+        // No close: the process is gone.
+
+        let report = try store.reconcileOnBoot(audioDirectory: audio, soleOwner: true)
+
+        XCTAssertEqual(report.adoptedAudio, ["capture-heard"])
+        let row = try XCTUnwrap(try store.utterance(id: "capture-heard"))
+        XCTAssertEqual(row.transcriptText, "what if the computer shut down and I'm halfway talking")
+        XCTAssertEqual(row.transcriptProvider, "streamed-partial")
+        XCTAssertEqual(row.status, .recorded, "still a floor: the unasked pass may replace it")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: capture.partialURL.path),
+                       "consumed on adoption, never an orphan")
+        XCTAssertTrue(report.orphanedAudio.isEmpty)
+    }
+
+    func testAShortOrphanLiveCaptureIsLeftForTheReap() throws {
+        // A press that died in the arm window: one second of digital
+        // silence, no speech. Offering it back would be worse than silence.
+        let audio = tmpDir.appendingPathComponent("audio", isDirectory: true)
+        let capture = try LiveAudioCapture(utteranceId: "capture-slip", sampleRate: 16000, directory: audio)
+        try capture.append(pcm16: Data(count: 16000 * 2))   // one second
+        try capture.close()
+        try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-120)],
+                                              ofItemAtPath: capture.url.path)
+
+        let report = try store.reconcileOnBoot(audioDirectory: audio)
+
+        XCTAssertTrue(report.adoptedAudio.isEmpty)
+        XCTAssertEqual(report.orphanedAudio, ["capture-slip"], "still reported, still reapable")
+        XCTAssertNil(try store.utterance(id: "capture-slip"))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: capture.url.path))
+    }
+
+    func testAFileStillBeingWrittenIsNotAdoptedUnlessTheCallerIsSoleOwner() throws {
+        let audio = tmpDir.appendingPathComponent("audio", isDirectory: true)
+        let capture = try LiveAudioCapture(utteranceId: "capture-live", sampleRate: 16000, directory: audio)
+        try capture.append(pcm16: Data(count: Int(LiveAudioCapture.keepAfterSeconds * 16000) * 2))
+        // No close, no abandon, modified just now: a writer may still own it —
+        // unless the caller holds the app's ownership lock, in which case the
+        // only writer there could have been is the process it replaced. On
+        // 14 Sep 2026 the age guard skipped a 2m04s file four seconds after
+        // a deploy killed its writer, and it stayed invisible until the next
+        // deploy.
+        XCTAssertTrue(try store.reconcileOnBoot(audioDirectory: audio).adoptedAudio.isEmpty)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: capture.url.path))
+
+        XCTAssertEqual(try store.reconcileOnBoot(audioDirectory: audio, soleOwner: true).adoptedAudio,
+                       ["capture-live"])
+        XCTAssertEqual(try store.utterance(id: "capture-live")?.status, .recorded)
     }
 
     // MARK: - Spool

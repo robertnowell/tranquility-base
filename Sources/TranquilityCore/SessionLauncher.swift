@@ -170,7 +170,17 @@ public enum SessionLauncher {
     static func launchTmux(
         directory: String,
         launch: HarnessLaunch,
-        acceptTrustPrompt: Bool
+        acceptTrustPrompt: Bool,
+        // True when this launch is a REVIVE (called through `resumeTmux`).
+        // The only difference it makes: the trust watcher also answers the
+        // resume-depth prompt, which a fresh launch never shows.
+        resuming: Bool = false,
+        // The session this pane is for, when the caller knows it (a resume
+        // does; a fresh launch learns it when the harness registers). Known
+        // here, the ledger is written at creation, which is the whole point
+        // of a ledger.
+        sessionId: String? = nil,
+        ledger: any SessionOwnershipStore = FileSessionOwnershipStore.shared
     ) -> Result<TmuxPaneAddress, ScriptError> {
         let command = launch.command
         let adapter = launch.adapter
@@ -285,20 +295,60 @@ public enum SessionLauncher {
         // always was.
         //
         // `remain-on-exit` was armed by the `new-session` request itself so
-        // a failure leaves its own reason behind rather than vanishing — the
+        // a failure leaves its own reason behind rather than vanishing: the
         // 24 Aug diagnosis needed the dead pane's exit status and its one
-        // line of stderr, and neither exists without it. Disarmed on the
-        // success path so live panes never linger as corpses.
+        // line of stderr, and neither exists without it. It now stays armed
+        // for the pane's whole life (see below the check).
         if let failure = Self.survivalFailure(session: pane.sessionName, tty: pane.paneTty) {
             Tmux.run(["kill-session", "-t", name], socket: Tmux.socketName)
             Self.trace?("newSession: \(name) died on launch — \(failure.reason)")
             return .failure(ScriptError(message: failure.reason,
                                         worthRetrying: failure.worthRetrying))
         }
-        Tmux.run(["set", "-t", name, "remain-on-exit", "off"], socket: Tmux.socketName)
+        // Left ARMED for the pane's whole life (it was disarmed here until 10
+        // Sep). A live pane is never a corpse, but a pane that dies LATER, from
+        // a crash, `/exit`, an OTA update, or a mid-turn restart, now leaves
+        // its screen and exit status behind for `ExitWatch` to read and
+        // report: the same evidence a launch death already leaves, which until
+        // now was thrown away the instant the launch succeeded. The cost is
+        // that a corpse must be reaped, which `ExitWatch` does after reading
+        // it, and that a DELIBERATE end must not look like a death nobody
+        // asked for, which `disarmRemainOnExit` (called by the row-menu
+        // Terminate before it signals) prevents by turning this back off so
+        // the pane self-closes and leaves nothing to find.
 
-        if acceptTrustPrompt { watchForTrustPrompt(pane: pane, adapter: adapter) }
+        if acceptTrustPrompt {
+            watchForTrustPrompt(pane: pane, adapter: adapter, answerResumePrompt: resuming)
+        }
+        if let sessionId {
+            Self.recordLaunch(sessionId: sessionId, pane: pane, adapter: adapter,
+                              directory: directory, ledger: ledger)
+        }
         return .success(pane)
+    }
+
+    /// Write the pane down the moment it exists, for every harness.
+    ///
+    /// Until 15 Sep only Codex launches were recorded (`if isCodex`, in the
+    /// app), because Claude Code's own registry was taken as good enough.
+    /// It is not an address: it names a pane without its server. The pid is
+    /// found by the session id in its argv; when the harness has not exec'd
+    /// yet the record waits for `AgentLedger.locate`, which adopts from the
+    /// registry against this same pane once the harness has written it.
+    static func recordLaunch(sessionId: String, pane: TmuxPaneAddress, adapter: any HarnessAdapter,
+                             directory: String, ledger: any SessionOwnershipStore) {
+        guard let pid = ProcessProbe.pid(onTty: pane.paneTty, containing: sessionId) else {
+            Self.trace?("newSession: \(sessionId.prefix(8)) is in \(pane.sessionName) "
+                + "\(pane.paneId) but its pid is not on \(pane.paneTty) yet; the ledger "
+                + "adopts it at first use")
+            return
+        }
+        ledger.record(SessionOwnershipRecord(
+            sessionId: sessionId, harness: adapter.id, pid: pid,
+            paneId: pane.paneId, socketName: pane.socketName,
+            sessionName: pane.sessionName, paneTty: pane.paneTty, cwd: directory))
+        Self.trace?("newSession: ledger \(sessionId.prefix(8)) = \(pane.sessionName) "
+            + "\(pane.paneId) pid \(pid)")
     }
 
     /// Resume any adaptable session in a fresh detached tmux pane — the one
@@ -377,7 +427,9 @@ public enum SessionLauncher {
         let fullCommand = ([command] + quotedArgs).joined(separator: " ")
         return launchTmux(directory: directory,
                           launch: HarnessLaunch(adapter: adapter, command: fullCommand),
-                          acceptTrustPrompt: acceptTrustPrompt)
+                          acceptTrustPrompt: acceptTrustPrompt,
+                          resuming: true,
+                          sessionId: sessionId)
     }
 
     /// Single-quote wrapping, the shell's own escape for "trust nothing
@@ -585,6 +637,41 @@ public enum SessionLauncher {
             .last(where: { !$0.isEmpty && !$0.hasPrefix("Pane is dead") }) ?? ""
     }
 
+    /// A dead pane's exit status and last line, or `nil` when the session is
+    /// gone or its pane is still alive. The corpse only exists because
+    /// `remain-on-exit` stays armed for the pane's whole life; a session torn
+    /// down deliberately disarms it first (`disarmRemainOnExit`) and so returns
+    /// `nil` here, which is exactly how `ExitWatch` tells a spontaneous death
+    /// from a Terminate the user asked for. Blocks on tmux; call it off-main.
+    public static func postMortem(session name: String)
+        -> (status: String, tail: String)? {
+        guard case .success(let out) = Tmux.run(
+            ["list-panes", "-t", name, "-F", "#{pane_dead}\t#{pane_dead_status}"],
+            socket: Tmux.socketName, timeout: 3),
+            let line = out.split(separator: "\n").first
+        else { return nil }   // session gone: reaped, or was never a tmux pane.
+        let parts = line.split(separator: "\t", maxSplits: 1,
+                               omittingEmptySubsequences: false).map(String.init)
+        // Same flag discipline as `survivalFailure`: alive is read off a
+        // rendered `pane_dead`, and only "1" is dead. A mangled row ("0_%1")
+        // is neither and reads as still-alive, which is the safe default (no
+        // report, no reap) for a line we cannot trust.
+        guard let flag = parts.first, flag == "1" else { return nil }
+        let status = (parts.count > 1 && !parts[1].isEmpty) ? parts[1] : "unknown"
+        return (status: status, tail: Self.lastLine(ofPane: name))
+    }
+
+    /// Turn `remain-on-exit` OFF for a session about to be ended on purpose,
+    /// so its pane closes with the process and the session vanishes instead of
+    /// lingering as a corpse. Idempotent, and a harmless no-op if the session
+    /// is already gone. This is the whole of the double-report guard: a
+    /// deliberately ended agent leaves nothing for `ExitWatch` to find, so it
+    /// is never reported as a death nobody asked for. Blocks on tmux; call it
+    /// off-main.
+    public static func disarmRemainOnExit(session name: String) {
+        Tmux.run(["set", "-t", name, "remain-on-exit", "off"], socket: Tmux.socketName)
+    }
+
     static func shellQuoted(_ s: String) -> String {
         "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
@@ -670,12 +757,33 @@ public enum SessionLauncher {
             // inference; this line is where that inference stops being
             // cheap, so this is where it gets checked against the stronger
             // answer.
-            if let live, let tty = ProcessProbe.tty(of: live.pid),
-               case .unknown = TmuxOwnership.ownership(forTty: tty) {
-                let why = "tmux could not be asked whether \(tty) is a pane — refusing to end a "
-                    + "session on an unanswered question"
+            //
+            // 15 Sep: the check is the ledger's whole answer, not the tty's.
+            // A transfer is for a session in NO tmux. One that is in a pane
+            // this app cannot see (a TEST build's server, a second install)
+            // is `.elsewhere`, and ending it moves a live agent behind a
+            // wall its owner cannot reach, which is exactly what happened
+            // that morning. Only `.unhosted` may proceed.
+            switch AgentLedger.locate(sessionId: sessionId, pid: live?.pid, harness: launch.adapter.id) {
+            case .unhosted:
+                break
+            case .here(let pane, let pid):
+                let why = "already in \(pane.sessionName) \(pane.paneId) (pid \(pid)); nothing to transfer"
                 SessionLauncher.trace?("transfer: \(sessionId.prefix(8)) \(why)")
                 return .refused(why)
+            case .elsewhere(let where_):
+                let why = "\(where_): refusing to end a session another instance owns"
+                SessionLauncher.trace?("transfer: \(sessionId.prefix(8)) \(why)")
+                return .refused(why)
+            case .unknown(let why):
+                let refusal = "tmux could not answer where this session is (\(why)): refusing to end a "
+                    + "session on an unanswered question"
+                SessionLauncher.trace?("transfer: \(sessionId.prefix(8)) \(refusal)")
+                return .refused(refusal)
+            case .gone:
+                // No live process: a plain first resume. `live` is nil or
+                // stale, and the resume below handles both.
+                break
             }
             // Ask the guard BEFORE ending anything.
             //
@@ -830,6 +938,24 @@ public enum SessionLauncher {
         /// resume that merely died fast is `.exitedWithoutResuming` — see
         /// its doc comment for what that distinction cost.
         case alreadyLive
+        /// The resume came up and STOPPED on a screen TB will never press
+        /// through (`CodexAdapter.neverAutoAcceptNeedles`: the hooks-review
+        /// consent, the update chooser). The process is alive, the pane is
+        /// TB's, and the session is not resumed: it is waiting for a human.
+        ///
+        /// A first-class answer since 11 Sep, when it was a `.failure` and
+        /// the caller could not tell it from a launch that never started.
+        /// Measured that morning: `revive()` treated any non-attached answer
+        /// as "already running somewhere, adopt it", adopted the process
+        /// sitting on the update chooser, said "✓ RESUMED", and the next
+        /// dictation was typed into the menu. Its Return chose "1. Update
+        /// now", the installer ran, and the session died with the words in
+        /// it. A pane waiting on a question is not a session to adopt, and
+        /// this case is how the caller knows.
+        ///
+        /// `says` is the written sentence for the human (never lifted from
+        /// the screen); `screen` is the pane's meaningful tail, the evidence.
+        case stoppedOnPrompt(says: String, screen: String, pane: TmuxPaneAddress)
         /// The resume process ended on its own and nothing said the session
         /// was live elsewhere. `lastScreen` is the last non-empty capture of
         /// its pane, which is normally Codex's own error, verbatim.
@@ -898,6 +1024,14 @@ public enum SessionLauncher {
             .joined(separator: " ")
         guard joined.count > limit else { return joined }
         return joined.prefix(limit).trimmingCharacters(in: .whitespaces) + "…"
+    }
+
+    /// The screen this launcher must never press through, if the pane is on
+    /// one. Pure, so the verdict can be pinned against a captured screen:
+    /// the 11 Sep chooser is in the tests verbatim.
+    public static func blockingPrompt(on screen: String, spec: TrustPromptSpec)
+        -> TrustPromptSpec.RecognizedPrompt? {
+        spec.neverAutoAcceptNeedles.first { screen.contains($0.needle) }
     }
 
     static func classifyCodexResumeScreen(_ text: String, settledNeedle: String?) -> CodexResumePoll {
@@ -1108,19 +1242,24 @@ public enum SessionLauncher {
                 // difference is an hour of diagnosis. The 29 Aug hang reported
                 // only that it never settled, which sent the first reading of it
                 // to a load hypothesis that was wrong twice over.
-                if let spec, let blocking = spec.neverAutoAcceptNeedles
-                    .first(where: { text.contains($0.needle) }) {
+                if let spec, let blocking = Self.blockingPrompt(on: text, spec: spec) {
                     // The needle names the screen for the log; the written
                     // sentence is what a person gets. Same split as the launch
                     // watcher, and this is the fourth call site that had it
                     // backwards: a resume that stops on Codex's hooks-review
                     // dialog is the SAME dialog a launch stops on, so it must
                     // not be described in a different, worse way.
+                    //
+                    // A SUCCESS with a name, not a failure. The pane is up and
+                    // it is ours; what it is not is resumed. Returned as
+                    // `.failure` until 11 Sep, which read to the caller as
+                    // "not attached, so adopt whatever is running", and what
+                    // was running was the update chooser.
+                    let tail = TrustPromptWatcher.meaningfulTail(text)
                     Self.trace?("attemptCodexResume: \(sessionId.prefix(8)) stopped on "
                         + "\"\(blocking.needle)\" and only you can answer it; standing down. "
-                        + "Its screen says: " + TrustPromptWatcher.meaningfulTail(text))
-                    return .failure(ScriptError(
-                        message: "\(blocking.says) Answer it in the pane, or in Codex once."))
+                        + "Its screen says: " + tail)
+                    return .success(.stoppedOnPrompt(says: blocking.says, screen: tail, pane: pane))
                 }
                 switch Self.classifyCodexResumeScreen(text, settledNeedle: spec?.settledBannerNeedle) {
                 case .alreadyLive:
@@ -1306,19 +1445,19 @@ public enum SessionLauncher {
     public static func showPane(pane: TmuxPaneAddress, why: String) -> Bool {
         guard case .success = Tmux.run(
                 ["has-session", "-t", pane.stableTarget],
-                socket: pane.socketName, timeout: 2),
-              let binary = Tmux.resolveBinary(),
-              let script = TerminalTabFocus.attachScript(
-                binary: binary, socket: pane.socketName,
-                tmuxTmpDir: Tmux.socketDirectory.path, sessionName: pane.sessionName)
+                socket: pane.socketName, timeout: 2)
         else {
             Self.trace?("showPane: \(pane.sessionName) on \(pane.paneTty) — \(why), "
                 + "but no window could be opened for it")
             return false
         }
-        if case .failure(let error) = AppleScript.run(script: script) {
+        // Through `attachFreshSync` rather than a hand-built script, so the
+        // window this opens is RECORDED and the next GO TO AGENT raises it
+        // instead of detaching it and opening another.
+        let opened = TerminalTabFocus.attachFreshSync(pane: pane)
+        guard opened == .focused else {
             Self.trace?("showPane: \(pane.sessionName) on \(pane.paneTty) — \(why), "
-                + "but opening a window failed: \(error.message)")
+                + "but opening a window failed: \(opened)")
             return false
         }
         Self.trace?("showPane: opened \(pane.sessionName) on \(pane.paneTty) — \(why)")
@@ -1375,6 +1514,7 @@ public enum SessionLauncher {
     /// window-only behaviour they had.
     public static func watchForTrustPrompt(
         pane: TmuxPaneAddress, adapter: any HarnessAdapter = ClaudeCodeAdapter(),
+        answerResumePrompt: Bool = false,
         onNeedsHuman: (@Sendable (String) -> Void)? = nil
     ) {
         guard let spec = adapter.trustPrompt else { return }
@@ -1401,6 +1541,7 @@ public enum SessionLauncher {
                          socket: pane.socketName)
             },
             trace: Self.trace, label: pane.sessionName,
+            answerResumePrompt: answerResumePrompt,
             onNeedsHuman: { question in
                 // The panel first, the window second — on purpose. Opening a
                 // window is an AppleScript round trip that can take a second
@@ -1414,18 +1555,10 @@ public enum SessionLauncher {
                 // needs the human's own decision is not "resumed" until
                 // they can see it (ruled 23 Aug — see the needle's own
                 // comment on `ClaudeCodeAdapter.trustPrompt`).
-                guard let binary = Tmux.resolveBinary(),
-                      let script = TerminalTabFocus.attachScript(
-                        binary: binary, socket: pane.socketName,
-                        tmuxTmpDir: Tmux.socketDirectory.path, sessionName: pane.sessionName)
-                else {
-                    Self.trace?("newSession: \(pane.sessionName) needed a human but could not "
-                        + "open a window for it")
-                    return
-                }
-                if case .failure(let error) = AppleScript.run(script: script) {
+                let opened = TerminalTabFocus.attachFreshSync(pane: pane)
+                if opened != .focused {
                     Self.trace?("newSession: \(pane.sessionName) needed a human — opening a "
-                        + "window failed: \(error.message)")
+                        + "window failed: \(opened)")
                 }
             })
     }

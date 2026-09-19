@@ -436,13 +436,34 @@ final class SessionDiscoveryTests: XCTestCase {
         XCTAssertEqual(stale.lastActivityAt.timeIntervalSince(now), -3600, accuracy: 1)
     }
 
+    func testDefaultArchiveIncludesThirtyDaysWithoutDiscardingTheSixtyFirstCandidate() throws {
+        let now = Date()
+        let head = #"{"type":"user","entrypoint":"cli","cwd":"/tmp"}"#
+        var files: [(slug: String, id: String, lines: [String])] = (0..<70).map {
+            ("-tmp-a", "recent-\($0)", [head, assistant(at: now.addingTimeInterval(-3600))])
+        }
+        files.append(("-tmp-a", "last-month", [head, assistant(at: now.addingTimeInterval(-29 * 86400))]))
+        files.append(("-tmp-a", "expired", [head, assistant(at: now.addingTimeInterval(-31 * 86400))]))
+        let root = try makeArchive(files)
+        defer {
+            SessionDiscovery.settleForTesting()
+            try? FileManager.default.removeItem(at: root)
+        }
+        let result = SessionDiscovery.discover(now: now, live: StubAgents([]),
+            projects: root, sessions: emptyCodex, titles: TranscriptTitles(), temporaryRoots: [])
+        XCTAssertEqual(result.sessions.count, 71)
+        XCTAssertTrue(result.sessions.contains { $0.sessionId == "last-month" })
+        XCTAssertFalse(result.sessions.contains { $0.sessionId == "expired" })
+        XCTAssertEqual(result.beyondLimit, 0)
+    }
+
     /// A touch is not a return: a transcript whose conversation ended weeks ago
     /// does not re-enter the window because something brushed its file today.
     func testATouchedAncientSessionStaysOutsideTheWindow() throws {
         let now = Date()
         let root = try makeArchive([
             ("-tmp-a", "ancient", [#"{"type":"user","entrypoint":"cli","cwd":"/tmp"}"#,
-                                   assistant(at: now.addingTimeInterval(-10 * 24 * 3600))]),
+                                   assistant(at: now.addingTimeInterval(-31 * 24 * 3600))]),
         ])
         defer {
             SessionDiscovery.settleForTesting()

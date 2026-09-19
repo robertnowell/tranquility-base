@@ -35,12 +35,7 @@ extension Coordinator {
         // A stored brief for this exact event (written before a restart) is the
         // same summary this call would regenerate — load it instead of paying
         // for a model call twice.
-        let summary: Summary
-        if let restored = restoredSummary(for: session) {
-            summary = restored
-        } else {
-            summary = await summarize(session)
-        }
+        let summary = await resolveSummary(for: session)
         await prepared.put(summary, for: session.sessionId, latest: session.latestId)
         // Text AND audio, both before the press (ruled 08 Aug). Writing the
         // summary ahead of time already removed the model call from the critical
@@ -174,8 +169,17 @@ extension Coordinator {
         let live = Set(sessions.map(\.sessionId))
             .union(ownership.liveNonRegistrySessions().map(\.sessionId))
         let all = yours(try store.waitingSessions())
-        sweep.sweep(all, live: live, trace: Coordinator.trace)
-        return all.filter { live.contains($0.sessionId) }
+        // A REMOTE AGENT IS LIVE BY ITS PROVIDER'S WORD, not by a pid on this
+        // Mac. The two probes above are local facts and a remote agent has
+        // neither, so it read as gone: never announced on its own, swept and
+        // retired 120 s after it was started, and its card offered no door
+        // (15 Sep, Robert's first OpenCode agent: "skipping tranquility-base:
+        // session is gone" one second after "replies now go to" it). The
+        // poller's snapshot is the liveness fact for those, and it is the
+        // same one the grid drew the row from.
+        let local = all.filter { !isRemote($0.sessionId) }
+        sweep.sweep(local, live: live, trace: Coordinator.trace)
+        return all.filter { live.contains($0.sessionId) || isRemote($0.sessionId) }
     }
 
     /// Sessions a person started, which is the only kind worth announcing.
@@ -235,6 +239,8 @@ extension Coordinator {
         /// carrying the reason. A downgrade the user cannot see is a downgrade they
         /// will assume is just how the app sounds now.
         public var degraded: String?
+        public var managedReceipt: GatewayReceipt? = nil
+        public var managedFailure: ManagedSummaryFailure? = nil
 
         /// A2 hail, Core half. DORMANT twice over now: `announceNext` never
         /// spoke this, the app's spoken hail died on 10 Aug ("it never once
@@ -318,10 +324,7 @@ extension Coordinator {
         // Prepared miss — usually a restart. The brief for this exact event may
         // be durable (v6), in which case catch-up needs no model call and the
         // card fields survive. Only a genuine store miss re-summarizes.
-        if let restored = restoredSummary(for: session) {
-            return try await speak(restored, for: session, onWillSpeak: onWillSpeak, onWord: onWord)
-        }
-        let summary = await summarize(session)
+        let summary = await resolveSummary(for: session)
         return try await speak(summary, for: session, onWillSpeak: onWillSpeak, onWord: onWord)
     }
 
@@ -348,7 +351,42 @@ extension Coordinator {
                            systemRoster: VoiceRoster.loadSystem())) ?? (nil, nil)
     }
 
+    private func resolveSummary(for event: WaitingSession) async -> Summary {
+        // A shared task is intentionally not cancelled by an individual audio
+        // caller. Do not create that task if this caller was already cancelled.
+        guard !Task.isCancelled else {
+            return Summary(spoken: summarizer.sanitizer.sanitize(""),
+                           brief: SessionBrief(topic: event.projectLabel, happened: ""),
+                           provider: "none", latencyMs: 0)
+        }
+        if summarizer.providers.contains(where: { $0.usesManagedCredits }) {
+            return await managedPreparations.value(for: event.latestId) {
+                if let restored = restoredSummary(for: event) { return restored }
+                return await summarize(event)
+            }
+        }
+        if let restored = restoredSummary(for: event) { return restored }
+        return await summarize(event)
+    }
+
     private func summarize(_ event: WaitingSession) async -> Summary {
+        // A PERMISSION IS A DECISION, NOT A SUMMARY. The question and its
+        // options are the brief, verbatim: a model's recap of "the agent is
+        // asking permission to read a file" is worse than the file's name,
+        // and the options are what the person answers with. Robert, 15 Sep
+        // 7:47 PM: "there is no decision or anything."
+        if let matcher = event.notificationMatcher,
+           matcher == "agent_question" || matcher == "agent_question_expired",
+           let words = event.lastAssistantMessage, !words.isEmpty {
+            let brief = matcher == "agent_question"
+                ? RemoteSpool.decision(from: words, projectLabel: event.projectLabel)
+                : SessionBrief(topic: "Interrupted", happened: words, recap: words,
+                               proposal: "What should it do next?")
+            let composed = Summary(spoken: SpokenTextSanitizer().sanitize(brief.spokenText()),
+                                   brief: brief, provider: "agent-question", latencyMs: 0)
+            persistBrief(composed, for: event)
+            return composed
+        }
         let context = event.transcriptPath.map {
             TranscriptArchive.sessionContext(in: URL(fileURLWithPath: $0))
         }
@@ -357,8 +395,21 @@ extension Coordinator {
             : (event.transcriptPath
                 .flatMap { TranscriptArchive.lastAssistantMessage(in: URL(fileURLWithPath: $0)) } ?? "")
 
+        // THE TURN, NOT THE LAST LINE. What the agent said before its final
+        // message, from whichever source has it: a polled provider put it on
+        // the event when it saw the turn end; a file-based harness (Claude
+        // Code, Codex) has it in the transcript `TurnText` already reads for
+        // the hub. Only for a finished turn: a permission question is its own
+        // text and must not be diluted with what came before it. Nil when the
+        // turn was one message or nobody can say, and then the summary is
+        // exactly what it was before 17 Sep.
+        let earlier: String? = event.hookEvent == .stop
+            ? (event.earlierThisTurn
+               ?? EarlierThisTurn.earlier(blocks: TurnText.forSession(event.sessionId, limit: 1).last?.blocks ?? []))
+            : nil
+
         // One agents probe serves both the lexicon's live names and the label
-        // stripping in `strippingModelLabels` — summarizing must not double the
+        // stripping (dropped 14 Sep with the label instruction); summarizing must not double the
         // subprocess cost it already pays. Codex names, from `ownership`, ride
         // along too (26 Aug) — cosmetic on its own (a name capitalized wrong
         // in speech, not a functional break), fixed anyway since a full audit
@@ -371,10 +422,23 @@ extension Coordinator {
         let lexicon = Lexicon.harvest(
             store: store, liveSessionNames: liveSessions?.compactMap(\.name) ?? [])
 
+        // A REMOTE TURN NEEDS ITS OPENING TOO. With no first user message the
+        // model was asked to recap an answer to a question it could not see,
+        // said `recap: null`, and the gateway called that a provider failure:
+        // every OpenCode turn fell to the deterministic floor and was read
+        // out verbatim with no ladder (reproduced against the model, 15 Sep;
+        // with the opening supplied the same message got a recap and a
+        // goal). The utterance this app dispatched is the opening, from the
+        // other side; the panel's framing is stripped the way the row's title
+        // strips it.
+        let opening = context?.firstUserMessage
+            ?? (isRemote(event.sessionId)
+                ? (try? store.firstUtteranceText(to: event.sessionId))?.flatMap(HeardContext.spokenPart)
+                : nil)
         let summary = await summarizer.summarize(SummaryRequest(
             lastAssistantMessage: lastMessage,
             projectLabel: event.projectLabel,
-            firstUserMessage: context?.firstUserMessage,
+            firstUserMessage: opening,
             // The transcript first, then the working directory. A session
             // whose own cwd is not a repository records "HEAD" for every
             // entry while doing all of its work inside worktrees that are each
@@ -388,7 +452,9 @@ extension Coordinator {
             gitBranch: Coordinator.branch(transcript: context?.gitBranch, cwd: event.cwd),
             cwd: event.cwd,
             hookEvent: event.hookEvent,
-            notificationMatcher: event.notificationMatcher),
+            notificationMatcher: event.notificationMatcher,
+            managedSource: try? store.summarySource(eventRowid: event.latestId),
+            earlierThisTurn: earlier),
             lexicon: lexicon.allowlistTerms)
 
         if summary.provider == "empty-source" {
@@ -399,7 +465,11 @@ extension Coordinator {
             Coordinator.trace?("digit grounding scrubbed ungrounded number(s): "
                 + "event \(event.latestId) session \(event.sessionId.prefix(8))")
         }
-        let composed = strippingModelLabels(summary, for: event, liveSessions: liveSessions)
+        // No label strip on a fresh summary since 14 Sep: the prompt no longer
+        // asks the model to open with the project label, so there is nothing
+        // to strip. (The restore path below keeps its strip, because rows
+        // written before 14 Sep have the label baked into their recap.)
+        let composed = summary
         persistBrief(composed, for: event)
         return composed
     }
@@ -416,7 +486,8 @@ extension Coordinator {
             try store.saveBrief(
                 summary.brief, sessionId: event.sessionId, eventRowid: event.latestId,
                 provider: summary.provider,
-                callsign: event.callsign ?? ((try? store.callsign(for: event.sessionId)) ?? nil))
+                callsign: event.callsign ?? ((try? store.callsign(for: event.sessionId)) ?? nil),
+                managedReceipt: summary.managedReceipt)
             // The hub catches up the moment the brief exists, not the moment a
             // turn is SPOKEN. Riding the announcement path alone meant a
             // session whose turns were read but never played kept a stale hub
@@ -432,6 +503,8 @@ extension Coordinator {
                 Coordinator.trace?("homebase at persist failed for "
                     + "\(event.sessionId.prefix(8)): \(error)")
             }
+            // And the cloud hub, the same moment.
+            HubMirror.shared?.kick()
         } catch {
             Coordinator.trace?("brief persist failed for event \(event.latestId): \(error)")
         }
@@ -444,8 +517,26 @@ extension Coordinator {
     /// announcement is distinguishable from a fresh one. Nil when the store has
     /// nothing for this event, in which case the caller summarizes as before.
     private func restoredSummary(for event: WaitingSession) -> Summary? {
-        guard let stored = try? store.storedBrief(
-            sessionId: event.sessionId, eventRowid: event.latestId) else { return nil }
+        let managed = summarizer.providers.contains(where: { $0.usesManagedCredits })
+        let cached: (brief: StoredBrief, receipt: GatewayReceipt?)
+        var invalidReceipt = false
+        do {
+            guard let value = try store.storedSummary(sessionId: event.sessionId, eventRowid: event.latestId) else { return nil }
+            cached = value
+        } catch {
+            // In direct mode, metadata corruption is not authority to pay a
+            // personal provider to regenerate already-delivered content.
+            guard !managed, let brief = try? store.storedBrief(sessionId: event.sessionId, eventRowid: event.latestId)
+            else { return nil }
+            cached = (brief, nil)
+            invalidReceipt = true
+        }
+        let stored = cached.brief
+        // Never silently restore a paid brief with its receipt lost. Managed
+        // composition recovers through the same outbox/key; BYOK preserves the
+        // available content with an explicit metadata failure, no extra charge.
+        let missingReceipt = invalidReceipt || (stored.provider.hasPrefix("tranquility-gateway") && cached.receipt == nil)
+        if missingReceipt && managed { return nil }
         let brief = stored.brief
 
         // Same allowlist recipe as a fresh summarize, so a lexicon-established
@@ -455,7 +546,7 @@ extension Coordinator {
             .speakableTerms(in: event.lastAssistantMessage ?? "")
             .union(lexicon.allowlistTerms)
 
-        // Same strip as a fresh summary (`strippingModelLabels`) and for the
+        // The one label strip left (the fresh-summary one went 14 Sep): for the
         // same reason: a restored brief is the model's words, and the model
         // opens with a label most of the time. It cannot reach the live-session
         // probe from here, so it strips the two labels it has.
@@ -464,63 +555,13 @@ extension Coordinator {
             labels,
             from: summarizer.sanitizer.sanitize(brief.spokenText(), allowing: speakable))
         return Summary(spoken: spoken, brief: brief,
-                       provider: stored.provider + "+stored", latencyMs: 0)
+                       provider: stored.provider + "+stored", latencyMs: 0,
+                       managedReceipt: cached.receipt,
+                       managedFailure: missingReceipt ? .invalidResponse : nil)
     }
 
     // MARK: - Attribution
 
-    /// The recap starts with the recap. Ruled 18 Aug 2026.
-    ///
-    /// The spoken callsign is dead — the LAST of its jobs, after the grid took
-    /// its column on 12 Aug and the hub page took its byline on 16 Aug ("on a
-    /// page it read as a third identity competing with the two real ones").
-    /// Two measurements ended it, both the operator's:
-    ///
-    ///  - **The project half names nothing.** Attribution by directory assumes
-    ///    sessions are spread across directories and they are not — 23 of 127
-    ///    minted signs begin "promotions", because that is where the work is.
-    ///  - **The voice already says who.** `session_voice` assigns round-robin
-    ///    from a 14-voice roster, and fewer than fourteen sessions are ever
-    ///    live at once, so the voice is a distinct identity per speaker for
-    ///    every case that actually occurs.
-    ///
-    /// And the topic half was indefensible on its own terms. Nothing chose it:
-    /// the model wrote a topic sentence and `candidateTopicWords` took the
-    /// LONGEST word in it, ties broken by position, as a proxy for
-    /// distinctiveness. That is how a session came to be called "promotions
-    /// stlth". The vowel gate added the same morning does not rescue it — it
-    /// admits "b6y9z" and it admits "stealthy", which is wrong in a way no
-    /// filter can see. A name is a context problem, not a validation problem,
-    /// and the mechanism that would fix it (ask the model for a NAME, telling
-    /// it the name is to be said out loud) is not worth building for a name
-    /// with no remaining listener.
-    ///
-    /// What still has to happen is the STRIP. The tuned prompt asks the model
-    /// to open with the project label and it complies 65/71, so without this
-    /// the recap would open with a label-like prefix on most turns — chosen by
-    /// the model, and wrong on the miss (brand-substitution: "Kopi:" from a
-    /// promotions session whose CONTENT was about Kopi). Prepending is what
-    /// stopped; stripping is what the prepending was hiding.
-    ///
-    /// Nothing is deleted to bring it back: `Callsign` still mints on demand,
-    /// `session_callsign` keeps every name it has, and the stored ones still
-    /// seed the recogniser's lexicon and still name a session in the grid
-    /// until its tab has a title. Re-speaking it is this function again.
-    private func strippingModelLabels(
-        _ summary: Summary, for event: WaitingSession, liveSessions: [LiveSession]?
-    ) -> Summary {
-        let liveName = liveSessions?
-            .first(where: { $0.sessionId == event.sessionId })?.name
-        // The session's own stored callsign is stripped along with the labels:
-        // a sign minted before today can still be echoed back by a model that
-        // saw it in the transcript, and hearing the dead name is worse than
-        // hearing it deliberately.
-        let stored = event.callsign ?? ((try? store.callsign(for: event.sessionId)) ?? nil)
-        let labels = [event.projectLabel, liveName, stored].compactMap { $0 }
-        let spoken = summarizer.sanitizer.strippingLeadingLabels(labels, from: summary.spoken)
-        return Summary(spoken: spoken, brief: summary.brief,
-                       provider: summary.provider, latencyMs: summary.latencyMs)
-    }
 
     private func speak(
         _ summary: Summary, for session: WaitingSession,
@@ -547,7 +588,8 @@ extension Coordinator {
         // let an interrupt handler write a stale copy back over a dismissal.
         let announcement = Announcement(
             event: session, brief: summary.brief, spoken: summary.spoken,
-            via: speech.fallback.name)
+            via: speech.fallback.name,
+            managedReceipt: summary.managedReceipt, managedFailure: summary.managedFailure)
         // The stage has to be TAKEN before anything is spoken into it.
         //
         // This callback used to return Void, so a refusal was invisible from here
@@ -605,7 +647,8 @@ extension Coordinator {
         }
         return .spoke(Announcement(
             event: session, brief: summary.brief, spoken: summary.spoken,
-            via: spoken.provider, degraded: spoken.degraded))
+            via: spoken.provider, degraded: spoken.degraded,
+            managedReceipt: summary.managedReceipt, managedFailure: summary.managedFailure))
     }
 
     /// "HEAD" is not a branch — it is what git reports for a detached checkout

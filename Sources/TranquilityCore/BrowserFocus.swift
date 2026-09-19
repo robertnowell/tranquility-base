@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 /// Open a page without making tab twenty-eight.
@@ -16,15 +17,39 @@ import Foundation
 /// (`better-opn`, `Focus-Tab`) reaches the same conclusion and falls back to a
 /// plain open elsewhere. So does this.
 ///
-/// Three ways it declines, all of them silent:
+/// **And it only runs when Chrome is the default browser.** Ruled 14 Sep 2026,
+/// from a new Mac whose owner lives in Safari: sign-in opened through the
+/// default browser and landed in Safari, and every door after it asked a
+/// running Chrome first, found the hub tab there, and raised it — a browser
+/// that was not signed in, so the sign-in page came back. A door opens the
+/// browser the person chose; the tab-reuse trick is an improvement on top of
+/// that choice, never a substitute for it.
+///
+/// Four ways it declines, all of them silent:
+///   * Chrome is not the default browser — asked of LaunchServices, not the
+///     process list, so a Chrome left open in the background changes nothing.
 ///   * Chrome is not running — `application "X" is running` is used precisely
 ///     because it does not launch anything to find out.
 ///   * The page is not open in any tab.
 ///   * Automation is denied (-1743). macOS stops prompting after the first
 ///     refusal, so this must never surface as a failure the user has to answer.
-/// In all three the caller opens the URL the ordinary way, which is exactly the
+/// In all four the caller opens the URL the ordinary way, which is exactly the
 /// behaviour that existed before this file.
 public enum BrowserFocus {
+
+    /// Whether the browser LaunchServices would hand an https URL to is Chrome.
+    ///
+    /// A static the tests replace, because the answer on the test machine is
+    /// whatever its owner set and the cases here are about the script, not
+    /// the machine. The app never sets it. Exactly `com.google.Chrome`: the
+    /// scripts address the app named "Google Chrome", and Canary and Beta are
+    /// other apps with other names.
+    nonisolated(unsafe) public static var chromeIsDefault: () -> Bool = {
+        guard let probe = URL(string: "https://hq.tranquilitybase.dev/"),
+              let app = NSWorkspace.shared.urlForApplication(toOpen: probe)
+        else { return false }
+        return Bundle(url: app)?.bundleIdentifier == "com.google.Chrome"
+    }
 
     public enum Outcome: Equatable {
         /// An existing tab was raised. Nothing new was opened.
@@ -76,6 +101,75 @@ public enum BrowserFocus {
         """
     }
 
+    /// The hub app is one tab, not one tab per page.
+    ///
+    /// The exact-URL walk above is right for a file the app rewrote: the tab
+    /// that has it is the tab to raise. The hub app is different. Its doors
+    /// point at `/open?session=…&slug=…`, an address that answers with a
+    /// redirect, so no tab ever carries it and the exact match never fires;
+    /// every click made tab twenty-nine, which is what Robert saw on 10 Sep.
+    /// Any tab already on the app IS the app, so the first one found is sent
+    /// to the new address and raised. No reload: the navigation is the reload.
+    ///
+    /// Same three silent declines as above, and the same fallback.
+    static func navigateScript(to url: URL, within base: URL) -> String {
+        let target = escaped(url.absoluteString)
+        let prefix = escaped(base.absoluteString.hasSuffix("/") ? base.absoluteString
+                                                                : base.absoluteString + "/")
+        return """
+        if application "Google Chrome" is running then
+          tell application "Google Chrome"
+            set matched to false
+            repeat with w from 1 to (count of windows)
+              set urls to URL of tabs of window w
+              repeat with t from 1 to (count of urls)
+                set u to item t of urls
+                if u starts with "\(prefix)" then
+                  set index of window w to 1
+                  set active tab index of window w to t
+                  set URL of tab t of window w to "\(target)"
+                  set matched to true
+                  exit repeat
+                end if
+              end repeat
+              if matched then exit repeat
+            end repeat
+            if matched then activate
+            return matched
+          end tell
+        else
+          return false
+        end if
+        """
+    }
+
+    /// Send the tab already on `base` to `url` and raise it, or report that
+    /// there is no such tab. Never opens anything, never launches a browser.
+    @discardableResult
+    public static func navigateExistingTab(to url: URL, within base: URL,
+                                           run: (String) -> Result<String, ScriptError>
+                                               = { AppleScript.run(script: $0) }) -> Outcome {
+        guard chromeIsDefault() else { return .notFound }
+        switch run(navigateScript(to: url, within: base)) {
+        case .success(let output):
+            return output.trimmingCharacters(in: .whitespaces) == "true" ? .focused : .notFound
+        case .failure:
+            return .notFound
+        }
+    }
+
+    /// The door: a hub-app address reuses the app's tab; anything else raises
+    /// its exact tab; and with no tab to raise, the caller opens it.
+    @discardableResult
+    public static func reveal(_ url: URL, app base: URL?, reloading: Bool = true,
+                              run: (String) -> Result<String, ScriptError>
+                                  = { AppleScript.run(script: $0) }) -> Outcome {
+        if let base, url.absoluteString.hasPrefix(base.absoluteString) {
+            return navigateExistingTab(to: url, within: base, run: run)
+        }
+        return focusExistingTab(url, reloading: reloading, run: run)
+    }
+
     /// Raise an existing tab for this URL, or report that there wasn't one.
     /// Never opens anything, never launches a browser, never throws.
     ///
@@ -105,6 +199,7 @@ public enum BrowserFocus {
                                         reloading: Bool = true,
                                         run: (String) -> Result<String, ScriptError>
                                             = { AppleScript.run(script: $0) }) -> Outcome {
+        guard chromeIsDefault() else { return .notFound }
         switch run(script(for: url, reloading: reloading)) {
         case .success(let output):
             return output.trimmingCharacters(in: .whitespaces) == "true" ? .focused : .notFound

@@ -2,8 +2,8 @@
 """Every modifier glyph in human-visible text carries its key's NAME.
 
 Ruled 26 Aug 2026, generalising a rule the panel already held in one place:
-`StateLegend.gettingStartedMessage` spells out "Control + Option" and a drill
-asserts it contains no bare marks. The rest of the app did not follow -- the
+the empty room's old sentence spelled out "Control + Option" and a drill
+asserted it contained no bare marks (both retired 14 Sep 2026; the rule stays). The rest of the app did not follow -- the
 menu hint, the status-item tooltip, two mic status lines and a spoken prompt
 all shipped bare glyphs.
 

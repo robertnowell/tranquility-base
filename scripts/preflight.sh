@@ -1,24 +1,12 @@
 #!/bin/bash
-#
-# Everything that must be true before a branch lands, and nothing that lands it.
-#
-# Why this stops short of pushing: this repo has no CI, and the layer that
-# collides most — Sources/TranquilityApp — has no unit tests at all, so a green
-# `swift test` is not evidence about the panel. A one-command land-and-deploy
-# would put the frictionless path exactly where the judgment is needed. So this
-# does the mechanical part and then prints the command it deliberately did not
-# run.
-#
-# It also closes the failure that actually happened (08 Aug): local `main` sat
-# two unpushed commits away from origin/main for a day while origin/main moved
-# on. Nobody noticed until a merge went looking. Checking is cheap; discovering
-# it mid-merge is not.
-#
-# Usage: scripts/preflight.sh [base]        (default base: origin/main)
+# Local landing preparation: freshness guards, the shared source audit, and
+# informational checks that require this Mac's authenticated harnesses/hooks.
+# CI calls audit-source.sh directly on its assigned immutable candidate.
+# Usage: scripts/preflight.sh [base] (default: origin/main)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-BASE="${1:-origin/main}"
+BASE_REF="${1:-origin/main}"
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
 
 if [ "$BRANCH" = "HEAD" ]; then
@@ -39,20 +27,21 @@ fi
 
 echo "→ fetching"
 git fetch -q origin
+BASE=$(git rev-parse --verify "$BASE_REF^{commit}")
 
 AHEAD=$(git rev-list --count "$BASE..HEAD")
 BEHIND=$(git rev-list --count "HEAD..$BASE")
-echo "→ $BRANCH is $AHEAD ahead, $BEHIND behind $BASE"
+echo "→ $BRANCH is $AHEAD ahead, $BEHIND behind $BASE_REF ($BASE)"
 
 if [ "$BEHIND" -gt 0 ]; then
-  echo "✗ behind $BASE by $BEHIND commit(s) — rebase or merge before landing:" >&2
+  echo "✗ behind $BASE_REF by $BEHIND commit(s) — rebase or merge before landing:" >&2
   git log --oneline "HEAD..$BASE" | sed 's/^/    /' >&2
-  echo "    git merge $BASE        # or: git rebase $BASE" >&2
+  echo "    git merge $BASE_REF        # or: git rebase $BASE_REF" >&2
   exit 1
 fi
 
 if [ "$AHEAD" -eq 0 ]; then
-  echo "✓ nothing to land — $BRANCH is already $BASE"
+  echo "✓ nothing to land — $BRANCH is already $BASE_REF"
   exit 0
 fi
 
@@ -67,121 +56,11 @@ if git show-ref -q --verify refs/heads/main; then
   fi
 fi
 
-# Cheap, and it catches a class the panel's own drills cannot: a bare modifier
-# glyph in text a human reads. The existing drill guards ONE string; this
-# guards every string, which is what the 26 Aug ruling actually asked for.
-echo "→ key names"
-python3 scripts/check-key-names.sh
-
-# Same shape, different rule: no em dashes in copy a human reads in the
-# product. Added 27 Aug after one shipped to a card and the rule turned out
-# to have been fixed by hand once already (copy/no-em-dashes-and-a-tooltip).
-echo "→ house copy"
-python3 scripts/check-house-copy.sh
-
-# Same shape again, but this one guards memory rather than prose. An AEDesc
-# borrowed from NSAppleEventDescriptor that we copy and dispose ourselves is a
-# double free, and a double free does not crash where it is written: the Aug 26
-# to Aug 29 crash corpus blamed GRDB, SQLite, Swift metadata and SwiftUI in
-# turn before the real line was found. Cheap to check, expensive to miss.
-echo "→ borrowed descriptors"
-python3 scripts/check-borrowed-descriptors.sh
-
-echo "→ notarization log parser"
-# Anything that decides WHO WROTE A PAGE runs against the adversarial set
-# first. Both attribution regressions of 03 Sep would have died here in seconds;
-# both were written after the damage instead.
-scripts/test-attribution.sh
-
-scripts/test-notary-log-parser.sh
-
-# The release's last line, which is where 0.3.1053 died with a signed,
-# notarized, stapled, fully audited DMG beside it. Every check between here and
-# there passed; the one that failed was a retry loop that could not retry.
-echo "→ release tag verification"
-scripts/test-release-tag-verification.sh
-scripts/test-debug-symbols.sh
-
-echo "→ building"
-swift build 2>&1 | grep -E "error:|warning: .*never used" || true
-swift build >/dev/null
-
-echo "→ testing"
-# Captured, never piped. `... | grep -q ...` under `set -o pipefail` reports a
-# FAILED pipeline on success: grep exits the moment it matches, the writer takes
-# SIGPIPE, and pipefail faithfully reports that non-zero. It cost one false
-# "tests failed" on a green tree — a check that cries wolf gets deleted, so it
-# is worth the extra variable.
-#
-# That was fixed HALF WAY the first time: the run was captured into a variable,
-# and then the variable was piped into `grep -q` anyway, which is the same race
-# one line further down. It reappeared on 09 Aug the moment the suite grew — the
-# first "with 0 failures" sits near the top of 68KB of output, so grep matched
-# and exited while printf still had most of it to write, and preflight reported
-# "tests failed (exit 0)" on a tree where all 277 passed. Under `bash -x` it
-# passed, which is the signature of a race and cost a while to see.
-#
-# So: no pipe at all. Bash can test a substring without spawning anything, and
-# a check with no subprocess has no pipeline to fail.
-#
-# Two invocations, not one — found 24 Aug on a new machine (App-lane P9): a
-# bare `swift test` here silently runs ONLY the Swift Testing suites and
-# skips every XCTestCase-based test with no error, no non-zero exit, nothing
-# — 31 tests reported as green while 881 XCTestCase tests never ran. Passing
-# `--enable-xctest --disable-swift-testing` is what actually forces the
-# XCTest bundle to run; the default/both-enabled invocation reliably drops
-# it on this toolchain. `arch -arm64e` because plain `swift`/`swift test`
-# resolve to the x86_64 slice in this shell, which cannot dlopen the
-# arm64e-only XCTest bundle at all. Both frameworks are checked separately
-# so a silent zero in either one is a hard failure, not a quiet pass.
-#
-# The exit STATUS is the verdict; the summary line is a corroborating check that
-# the run actually happened rather than dying before it reached the tests.
-# Through scripts/test.sh, which runs both invocations AND refuses to report
-# success unless each half cleared a floor. The two-invocation mechanism below
-# was this file's, found at App-lane P9; the floor is what stops an
-# "Executed 0 tests, with 0 failures" from reading as green.
-TEST_OUT=$(scripts/test.sh 2>&1) && TEST_STATUS=0 || TEST_STATUS=$?
-if [ "$TEST_STATUS" -ne 0 ]; then
-  echo "✗ tests failed (exit $TEST_STATUS)" >&2
-  # The failing ASSERTIONS, not the compiler's source-context lines. `XCTAssert`
-  # also matched the " 65 |   XCTAssertTrue(" context the compiler prints under
-  # a warning, and twenty of those from the build phase pushed every real
-  # failure off the bottom of a CI log (PR #299: three lines, seven times,
-  # and not one of them the failure).
-  printf '%s\n' "$TEST_OUT" | grep -E "✗|: error: |error: -\[|Test Case .* failed|Test Suite .* failed" \
-    | grep -v " warning: " | head -40 >&2 || true
-  exit 1
-fi
-printf '%s\n' "$TEST_OUT" | grep -E "^✓ [0-9]+ XCTest" | tail -1 | sed 's/^✓/ /'
-echo "✓ build clean, tests green"
-
-# The app target is intentionally identical between Dev and Prod, while the
-# packaging envelope must be intentionally different. This builds both from
-# this checkout and guards both halves of that contract, including the exact
-# local-signature-at-the-Prod-path regression that reset TCC grants.
-echo "→ Dev/Prod packaging lanes"
-scripts/test-dev-lanes.sh
-
-# --- the drills that were never actually wired to anything --------------------
-#
-# Found in the arc's closing audit (24 Aug): the arc's own rule 4 requires
-# "the drills" — swift test, scripts/test-dispatch-tmux.sh, --selftest-hud —
-# on every landing, but this file only ever ran the first. The other two were
-# real, working, human-run-when-remembered scripts with no gate behind them:
-# a regression in either could ship and nothing here would catch it before
-# someone noticed by hand. Worse for Codex specifically — test-codex-
-# lifecycle.sh is the ONLY thing in this repo that exercises a real Codex
-# session end to end, and it wasn't run by this script even once.
-#
-# test-dispatch-tmux.sh is a hard gate: it drives its own tmux server on a
-# dedicated socket (tbdrill-<pid>), so it stays correct whether or not a real
-# Tranquility Base instance is running alongside it.
-echo "→ tmux dispatch drill"
-scripts/test-dispatch-tmux.sh
+CANDIDATE=$(git rev-parse HEAD)
+scripts/audit-source.sh "$CANDIDATE"
 
 # test-dispatch-live-tui.sh is the one that closes the gap the eight repairs
-# between 19 and 26 Aug all fell through: the drill above is nine good tests
+# between 19 and 26 Aug all fell through: the source audit's tmux drill is nine good tests
 # against a plain SHELL, which has no prompt glyph, so the composer reader is
 # never exercised by it at all. Every one of those eight was found by a human
 # losing a message. This one runs the real harness.
@@ -192,7 +71,7 @@ scripts/test-dispatch-tmux.sh
 # fails and that is what it is for.
 echo "→ live TUI dispatch drill (informational — needs a logged-in claude)"
 if [ "${TB_SKIP_LIVE_HARNESS_DRILLS:-0}" = "1" ]; then
-  echo "→ skipped in hosted CI (no authenticated third-party harness)"
+  echo "→ skipped by TB_SKIP_LIVE_HARNESS_DRILLS"
 elif scripts/test-dispatch-live-tui.sh; then
   echo "✓ live TUI dispatch drill passed"
 else
@@ -213,36 +92,12 @@ fi
 # gets the same self-contained isolation test-dispatch-tmux.sh already has.
 echo "→ codex lifecycle drill (informational — see comment above)"
 if [ "${TB_SKIP_LIVE_HARNESS_DRILLS:-0}" = "1" ]; then
-  echo "→ skipped in hosted CI (no authenticated third-party harness)"
+  echo "→ skipped by TB_SKIP_LIVE_HARNESS_DRILLS"
 elif scripts/test-codex-lifecycle.sh; then
   echo "✓ codex lifecycle drill passed"
 else
   echo "⚠ codex lifecycle drill failed — not blocking (see preflight.sh's own comment on why)" >&2
 fi
-
-# --- the palette owns every colour --------------------------------------------
-#
-# StateLegend.swift already carries a grep contract in writing, for glyphs: the
-# state characters are "defined here and nowhere else in this module". Colour
-# earns the same rule, and earned it the hard way — CheckView's tick was a
-# hardcoded near-white, correct against the old dark green and 1.88:1 against the
-# new one. An invisible checkmark, in one state, discoverable only by hitting
-# that state at runtime.
-#
-# The contrast drill cannot catch that class: it measures Palette tokens, and a
-# literal pasted into a view is by definition not one. This is the check that
-# sees it, and it costs nothing.
-echo "→ colour literals"
-STRAY=$(grep -rn 'NSColor(srgbRed:\|NSColor(calibratedRed:\|NSColor(red:' \
-  Sources/ --include='*.swift' | grep -v 'Sources/TranquilityApp/StateLegend.swift:' || true)
-if [ -n "$STRAY" ]; then
-  echo "✗ colour literal outside the Palette:" >&2
-  printf '%s\n' "$STRAY" >&2
-  echo "  Add it to StateLegend.Palette and reference it from there — a literal" >&2
-  echo "  in a view is a colour no drill can measure and no theme can move." >&2
-  exit 1
-fi
-echo "✓ every colour comes from the Palette"
 
 # The hooks this Mac actually executes live in the main checkout's WORKING TREE,
 # which any session can move. On 01 Sep it sat on a feature branch 887 commits
@@ -260,16 +115,12 @@ fi
 
 cat <<EOF
 
-Preflight passed. Nothing has been pushed or deployed — deliberately.
+Preflight passed. Nothing has been pushed or deployed.
 
-  Remember what green does and does not mean here: swift test proves
-  TranquilityCore. It says nothing about Sources/TranquilityApp, which has no
-  unit tests. The panel's evidence is the launch self-tests, and those only
-  speak after scripts/relaunch.sh.
+Open or update a pull request against main; required checks still apply:
+  gh pr create --base main --head "$BRANCH"
 
-To land:
-  git branch -f main $BRANCH && git push origin main:main && scripts/relaunch.sh
-
-  (branch -f rather than checkout: it moves the ref without touching a working
-  tree another session may be editing.)
+Observe the completed merge before reporting "merged". A queued request is
+not a completed merge, and a merge is not proof of the running app. Follow
+CLAUDE.md for deployment ownership and runtime verification.
 EOF

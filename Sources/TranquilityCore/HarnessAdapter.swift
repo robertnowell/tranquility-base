@@ -156,6 +156,18 @@ public struct TrustPromptSpec: Sendable {
     /// Consecutive settled-banner sightings required before giving up on a
     /// prompt ever appearing.
     public var settledThreshold: Int
+    /// Claude Code's resume-depth prompt ("Resuming the full session will
+    /// consume ... 1. Resume from summary  2. Resume full session as-is"),
+    /// shown before a session with history resumes. On a REVIVE the watcher
+    /// answers it automatically with Return, which selects the recommended
+    /// summary option, so the agent comes back running instead of locking at
+    /// it. `nil`, and every non-resume launch, leaves it untouched. Ruled
+    /// (Robert, 10 Sep): "the only ruling is that the app should work", which
+    /// overrides the 12 Aug watcher-stops-here and 23 Aug escalate-to-human
+    /// rulings for this one prompt on the revive path. The needle stays in
+    /// `neverAutoAcceptNeedles` too, so any path that is NOT a revive still
+    /// escalates it to the human rather than pressing blind.
+    public var resumeDepthNeedle: String?
     /// Needles this loop must NEVER press through, checked before
     /// `promptNeedles`. Added for Codex's hooks-review dialog ("Hooks need
     /// review... Trust all and continue"): hook-trust is the user's own
@@ -291,12 +303,14 @@ public struct TrustPromptSpec: Sendable {
                neverAutoAcceptNeedles: [RecognizedPrompt] = [], stuckThreshold: Int = 3,
                acceptOptionNeedles: [String] = [],
                trustPromptSays: String = "It is asking whether you trust this folder.",
-               selectionGlyph: String = "❯") {
+               selectionGlyph: String = "❯",
+               resumeDepthNeedle: String? = nil) {
         self.promptNeedles = promptNeedles
         self.trustPromptSays = trustPromptSays
         self.startedWithNoPromptNeedle = startedWithNoPromptNeedle
         self.settledBannerNeedle = settledBannerNeedle
         self.settledThreshold = settledThreshold
+        self.resumeDepthNeedle = resumeDepthNeedle
         self.acceptOptionNeedles = acceptOptionNeedles.filter { !$0.isEmpty }
         self.selectionGlyph = selectionGlyph
         self.stuckThreshold = stuckThreshold
@@ -379,7 +393,13 @@ public struct ClaudeCodeAdapter: HarnessAdapter {
             // `acceptOptionNeedles` for what pressing Return without this
             // cost on 27 Aug.
             acceptOptionNeedles: ["Yes, I trust this folder"],
-            trustPromptSays: "It is asking whether you trust this folder.")
+            trustPromptSays: "It is asking whether you trust this folder.",
+            // On a revive, answer this one automatically with summary (Return
+            // selects the recommended option) instead of escalating it, so an
+            // agent brought back after a restart comes up running rather than
+            // locked. Kristen's whole afternoon of "agents won't stay open"
+            // was a mass re-resume, every one of them stuck here. Ruled 10 Sep.
+            resumeDepthNeedle: "Resuming the full session will consume")
     }
 
     public var capabilities: HarnessCapabilities {
@@ -609,6 +629,12 @@ public enum TrustPromptWatcher {
         // amounts of help, and the second one costs a `first(where:)` over a
         // screen this loop has already read. A caller that only wants to open
         // a window ignores it.
+        // When true (the revive path only), the resume-depth prompt
+        // (`spec.resumeDepthNeedle`) is answered with Return, which selects the
+        // recommended summary option, instead of being escalated to the human.
+        // Default false, so a fresh launch is byte-for-byte unchanged and only
+        // a revive ever presses through this particular screen.
+        answerResumePrompt: Bool = false,
         onNeedsHuman: (String) -> Void = { _ in }
     ) {
         var settled = 0
@@ -628,6 +654,17 @@ public enum TrustPromptWatcher {
             // rather than about which branch happened to look at it.
             if text == lastScreen { unchanged += 1 } else { unchanged = 1 }
             lastScreen = text
+            // The revive path answers the resume-depth prompt itself: Return
+            // selects the recommended summary option. Checked BEFORE
+            // `neverAutoAcceptNeedles`, which still lists this same needle, so
+            // that only a revive presses it and every other path escalates it.
+            if answerResumePrompt, let resumeNeedle = spec.resumeDepthNeedle,
+               text.contains(resumeNeedle) {
+                press(0)
+                trace?("newSession: answered the resume prompt in \(label) with summary "
+                    + "(Return selects the recommended option), user-commanded revive")
+                return
+            }
             if let blocking = spec.neverAutoAcceptNeedles
                 .first(where: { text.contains($0.needle) }) {
                 // The line NAMES the screen, exactly as the give-up line does
@@ -683,6 +720,16 @@ public enum TrustPromptWatcher {
                 for _ in 0..<3 {
                     usleep(UInt32(pollInterval * 1_000_000))
                     guard let followUp = read() else { continue }
+                    // The resume-depth prompt on a first-run revive renders
+                    // right here, a beat after trust is answered. Same rule as
+                    // the main loop: on a revive, answer it with summary.
+                    if answerResumePrompt, let resumeNeedle = spec.resumeDepthNeedle,
+                       followUp.contains(resumeNeedle) {
+                        press(0)
+                        trace?("newSession: answered the resume prompt in \(label) with "
+                            + "summary, after the trust prompt, user-commanded revive")
+                        return
+                    }
                     // `first`, not `contains`: this branch used to match a
                     // needle and then throw it away, leaving nothing to name
                     // the screen with but the top line of the pane.

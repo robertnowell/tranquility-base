@@ -23,11 +23,11 @@ final class PastAgentsList: NSView {
     /// One row per session, in the grid's own shape: the same lamp column, the
     /// same name, the same short id. Nothing here has to be learned twice, and
     /// a session looks the same wherever you meet it.
-    struct Item: Equatable {
+    struct Item: Equatable, Sendable {
         let row: SessionRow
         /// What a click does. Dead sessions come back; live ones get focus.
         let revivable: Bool
-        /// Everything the filter matches against, lowercased once at build.
+        /// Short identity and directory text for the keyword index.
         let haystack: String
         /// What THIS list's right column says, when it is not what the grid's
         /// says. The grid answers "which one is this" and shows the short id;
@@ -60,15 +60,19 @@ final class PastAgentsList: NSView {
     private let filterField = FilterRowView()
     private var items: [Item] = []
     private var shown: [Item] = []
-    /// What each session SAID, as UTF-8, harvested in the background. Kept out
-    /// of `Item.haystack` deliberately: the haystack is matched inline on every
-    /// keystroke, and megabytes in there is the beach ball of 19 Aug.
-    private var content: [String: [UInt8]] = [:]
-    /// Bumped by every keystroke. A background content pass that returns after
-    /// the needle has moved on belongs to a question nobody is asking any more.
+    typealias Search = @Sendable (String) async throws -> [SessionKeywordIndex.Match]
+    private var search: Search?
+    private var searchTask: Task<Void, Never>?
     private var filterGeneration = 0
+    private var query = ""
+    private var partial = false
+    private(set) var openingGeneration = 0
+    private(set) var searchPublications = 0
 
-    var onPick: ((_ id: String, _ revivable: Bool) -> Void)?
+    /// The tap. Carries the row's lamp because the verb depends on it (ruled
+    /// 15 Sep): an amber row's tap is Go to Agent, a green or quiet row's tap
+    /// picks it up, a dead row's tap revives it.
+    var onPick: ((_ id: String, _ revivable: Bool, _ lamp: Lamp) -> Void)?
     /// A click on the LAMP COLUMN, which is the session's power switch and
     /// never navigation — see `SessionRow.lampAction(for:)`. The whole row is
     /// handed over rather than an id, because the switch's verb is a function
@@ -162,116 +166,107 @@ final class PastAgentsList: NSView {
     var archiveRead = true
 
     func apply(items: [Item]) {
+        openingGeneration += 1
+        searchTask?.cancel()
+        search = nil
+        partial = false
         self.items = items
         filterField.reset()
         filter("")
-        scrollToTop()
     }
 
-    /// Widen every haystack with what the sessions actually SAID, once the
-    /// background harvest has read them. See `TranscriptSearchText` for why
-    /// that read is bounded and why it cannot happen on the way in: it is
-    /// 0.26s over the sessions this list shows, which is a frozen frame if the
-    /// main actor pays it, and an unnoticed one if it does not.
-    ///
-    /// This is the one sanctioned exception to "built on open, never repainted
-    /// while you read it" — and it is not really an exception, because it only
-    /// repaints through `filter`, which is the path every keystroke already
-    /// takes. With no needle typed there is nothing to re-answer, so the items
-    /// are swapped silently and the reader's scroll position is not touched.
-    func widen(_ extra: [String: [UInt8]]) {
-        guard !extra.isEmpty else { return }
-        // Stored beside the items, never concatenated into them. Building a
-        // 2 MB String per row on the main actor was its own freeze, separate
-        // from the matching one, and neither was necessary.
-        content = extra
-        let typed = filterField.currentText.trimmingCharacters(in: .whitespaces)
-        guard !typed.isEmpty else { return }
-        filter(typed)
+    /// A cold archive finishes once per opening. Preserve any text already typed.
+    func finishArchive(items: [Item], opening: Int) {
+        guard opening == openingGeneration else { return }
+        self.items = items
+        archiveRead = true
+        filter(query)
     }
 
-    /// Case-insensitive substring, over the name, the short id and the project
-    /// directory — the three things you actually remember about a session you
-    /// are trying to find again. Substring rather than fuzzy on purpose: a
-    /// filter you can predict is a filter you can trust, and "mirai" matching
-    /// something without those five letters in it reads as a bug.
-    private func filter(_ text: String) {
-        let needle = text.trimmingCharacters(in: .whitespaces).lowercased()
+    func installSearch(_ search: @escaping Search, opening: Int, partial: Bool = false) {
+        guard opening == openingGeneration else { return }
+        self.search = search
+        self.partial = partial
+        if !query.isEmpty { filter(query) }
+    }
+
+    func searchFailed(opening: Int) {
+        guard opening == openingGeneration else { return }
+        summary = "Search unavailable · reopen to retry"
+        onFilterChanged?()
+    }
+
+    func cancelSearch() {
+        openingGeneration += 1
         filterGeneration += 1
-        // The instant answer, over the three short strings — name, short id,
-        // directory. This is the whole of what the filter used to be, and it is
-        // back on the keystroke path unchanged: a few hundred bytes a row, so
-        // the list narrows under the finger with nothing to wait for.
-        let named = needle.isEmpty ? items : items.filter { $0.haystack.contains(needle) }
-        shown = named
-        namedCount = named.count
-        contentCount = 0
-        // A PARTIAL list is the dangerous state, not an empty one. The two
-        // archives warm independently and land at different times, so the list
-        // spends a beat every launch looking complete while one harness is
-        // entirely missing from it: 33 rows, none of them Codex, under a
-        // confident "33 sessions". Empty is obvious; this is not.
-        summary = needle.isEmpty
-            ? (archiveRead
-                ? "\(items.count) session\(items.count == 1 ? "" : "s") · 7 days"
-                : (items.isEmpty
-                    ? "reading the archive…"
-                    : "\(items.count) so far · still reading"))
-            : "\(shown.count) of \(items.count)"
-        rebuild()
-        setHovered(nil)
-        // And the slower answer, over what the sessions said, off the main
-        // thread. 88ms of `memmem` is five dropped frames if the keystroke pays
-        // it; nobody can feel it here. Results widen the list when they land.
-        scheduleContentPass(needle)
-        // Filtering re-answers the question, so it re-answers it from the top:
-        // being left half-way down a list you just narrowed is disorienting in
-        // the same way opening at the bottom was.
-        scrollToTop()
+        searchTask?.cancel()
     }
 
-    /// How the current result set was arrived at, so the summary can say it.
-    /// Robert, 19 Aug: "I searched Mirai and 32 agents returned — do all of
-    /// those contain Mirai?" A count he cannot decompose is a count he cannot
-    /// trust, and the honest answer has two halves.
-    private var namedCount = 0
-    private var contentCount = 0
-
-    /// Search what the sessions SAID, off the main actor, for one needle.
-    ///
-    /// Guarded by `filterGeneration` rather than by comparing needles: two
-    /// keystrokes can produce the same needle (type a letter, delete it, type
-    /// it again) and the older pass must still lose. Silent when it finds
-    /// nothing new, so a narrowing search does not repaint for no reason.
-    private func scheduleContentPass(_ needle: String) {
-        guard !needle.isEmpty, !content.isEmpty else { return }
+    /// Keep the previous answer while computing one complete ranked answer.
+    /// Both generations matter: an old query can finish after clearing the
+    /// field, and the same text can be entered again after reopening the list.
+    private func filter(_ text: String) {
+        query = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        filterGeneration += 1
+        searchTask?.cancel()
+        guard !query.isEmpty else {
+            shown = items
+            summary = archiveRead
+                ? "\(items.count) session\(items.count == 1 ? "" : "s") · 30 days"
+                : "Reading the archive…"
+            rebuild()
+            setHovered(nil)
+            scrollToTop()
+            onFilterChanged?()
+            return
+        }
+        guard let search else {
+            summary = "Preparing search…"
+            onFilterChanged?()
+            return
+        }
+        summary = "Searching…"
+        onFilterChanged?()
         let generation = filterGeneration
-        let already = Set(shown.map { $0.row.id })
-        let snapshot = content
-        let target = Array(needle.utf8)
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            var extra: Set<String> = []
-            for (id, hay) in snapshot where !already.contains(id) {
-                if TranscriptSearchText.contains(hay, target) { extra.insert(id) }
-            }
-            guard !extra.isEmpty else { return }
-            DispatchQueue.main.async {
-                guard let self, self.filterGeneration == generation else { return }
-                self.shown = self.items.filter {
-                    already.contains($0.row.id) || extra.contains($0.row.id)
+        let opening = openingGeneration
+        let requested = query
+        searchTask = Task { [weak self] in
+            do {
+                try await Task.sleep(for: .milliseconds(70))
+                let matches = try await search(requested)
+                try Task.checkCancellation()
+                guard let self, self.filterGeneration == generation,
+                      self.openingGeneration == opening else { return }
+                let byID = Dictionary(self.items.map { ($0.row.id, $0) },
+                                      uniquingKeysWith: { first, _ in first })
+                self.shown = matches.compactMap { match in
+                    guard let item = byID[match.id] else { return nil }
+                    let tooltip = [item.tooltip, match.excerpt.isEmpty ? nil : match.excerpt]
+                        .compactMap { $0 }.joined(separator: "\n\n")
+                    return Item(row: item.row, revivable: item.revivable,
+                                haystack: item.haystack, aux: item.aux, tooltip: tooltip)
                 }
-                self.contentCount = extra.count
                 self.summary = "\(self.shown.count) of \(self.items.count)"
-                    + " · \(self.namedCount) by name, \(self.contentCount) by what they said"
-                // No `scrollToTop` here, deliberately. The reader has been
-                // looking at these rows for a beat already; yanking them to the
-                // top because a background pass finished is the panel moving
-                // for its own reasons rather than for theirs.
+                    + (self.partial ? " · some text unavailable" : "")
+                self.searchPublications += 1
                 self.rebuild()
                 self.setHovered(nil)
+                self.scrollToTop()
                 self.onFilterChanged?()
+            } catch is CancellationError { }
+            catch {
+                guard let self, self.filterGeneration == generation,
+                      self.openingGeneration == opening else { return }
+                self.searchFailed(opening: opening)
             }
         }
+    }
+
+    var shownIDsForTesting: [String] { shown.map { $0.row.id } }
+    func filterForTesting(_ text: String) {
+        filterField.input.stringValue = text
+        filterField.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification,
+                                                       object: filterField.input))
     }
 
     private func rebuild() {
@@ -391,7 +386,7 @@ final class PastAgentsList: NSView {
     @objc private func rowTapped(_ sender: NSControl) {
         guard let id = sender.identifier?.rawValue,
               let item = shown.first(where: { $0.row.id == id }) else { return }
-        onPick?(id, item.revivable)
+        onPick?(id, item.revivable, item.row.lamp)
     }
 
     @objc private func goToPicked(_ sender: NSMenuItem) {
@@ -629,6 +624,12 @@ final class PastRowView: NSControl {
     /// recomputed — a drill that recomputes the answer cannot catch a label
     /// that stopped being set from it.
     var verbForTesting: String { verbLabel.stringValue }
+
+    /// The row names its verb, and amber's is the terminal (ruled 15 Sep).
+    static func verb(for item: PastAgentsList.Item) -> String {
+        if item.revivable { return "REVIVE ›" }
+        return item.row.lamp == .fault ? "GO TO ›" : "OPEN ›"
+    }
     var auxWidthForTesting: CGFloat { idLabel.frame.width }
     private let highlight = NSView()
     /// Held so the hover can step its ink and put it back — see `setHovered`.
@@ -639,7 +640,7 @@ final class PastRowView: NSControl {
         idLabel = NSTextField(labelWithString: item.aux ?? item.row.aux)
         // Green for a resurrection, advisory grey for a door — the same two
         // channels the card uses for the same two meanings.
-        verbLabel = NSTextField(labelWithString: item.revivable ? "REVIVE ›" : "OPEN ›")
+        verbLabel = NSTextField(labelWithString: Self.verb(for: item))
         super.init(frame: .zero)
         self.target = target
         self.action = action
@@ -724,7 +725,7 @@ final class PastRowView: NSControl {
         idLabel.translatesAutoresizingMaskIntoConstraints = false
 
         verbLabel.attributedStringValue = Widgets.letterspaced(
-            item.revivable ? "REVIVE ›" : "OPEN ›", size: 9.5, tracking: 1.33,
+            Self.verb(for: item), size: 9.5, tracking: 1.33,
             color: item.revivable ? StateLegend.Palette.ready : StateLegend.Palette.accent)
         verbLabel.alignment = .right
         verbLabel.isHidden = true
@@ -777,6 +778,12 @@ final class PastRowView: NSControl {
         super.resetCursorRects()
         addCursorRect(bounds, cursor: .pointingHand)
     }
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        PointerCursor.track(self)
+    }
+    override func cursorUpdate(with event: NSEvent) { PointerCursor.show() }
 
     /// Told, not tracked. The list decides who is hovered — see its own note:
     /// a row cannot know it stopped being under the pointer when the thing that
@@ -876,6 +883,7 @@ private final class PlacardHalf: NSControl {
         super.resetCursorRects()
         addCursorRect(bounds, cursor: .pointingHand)
     }
+    override func cursorUpdate(with event: NSEvent) { PointerCursor.show() }
 
     init(title: String, glyph: String, alignment: NSLayoutConstraint.Attribute,
          target: AnyObject, action: Selector, harness: String? = nil) {
@@ -961,6 +969,7 @@ private final class PlacardHalf: NSControl {
         addTrackingArea(NSTrackingArea(
             rect: bounds, options: [.mouseEnteredAndExited, .activeAlways],
             owner: self, userInfo: nil))
+        PointerCursor.track(self)
     }
     override func mouseEntered(with event: NSEvent) {
         mark.attributedStringValue = StateLegend.hoveredInk(resting[0])
@@ -1189,13 +1198,26 @@ final class SettingsTabBar: NSView {
     }
 }
 
-/// Which harness the Agents tab's LAUNCH/DIRECTORY rows are showing — Claude
-/// Code or Codex (25 Aug, default launcher). Modeled on `SettingsTabBar`
-/// itself: hand-drawn buttons, not `NSSegmentedControl`'s bezel, for the same
-/// reason. A second affordance the tab bar doesn't need — MAKE DEFAULT —
-/// because viewing a harness's settings and making it the one `New Agent`
-/// launches are different questions; switching which one is SHOWN must never
-/// itself change the default.
+/// Which agent the Agents tab's configuration rows are showing, and which one
+/// `New Agent` starts. Modeled on `SettingsTabBar` itself: hand-drawn buttons,
+/// not `NSSegmentedControl`'s bezel, for the same reason.
+///
+/// **SELECTING IS SETTING, since 14 Sep 2026.** This row used to carry a second
+/// affordance, MAKE DEFAULT, on the argument that viewing an agent's settings
+/// and making it the one `New Agent` launches are different questions, and that
+/// switching which one is SHOWN must never itself change the default.
+///
+/// They ARE different questions and the extra click was still not worth it.
+/// Ruled: "to the user it's just which agent do I want to use." The risk the
+/// old design guarded against is real but small and visible: the picker shows
+/// which agent is current, so opening this tab to look at one and thereby
+/// selecting it is something you can see, not something that happens behind
+/// you.
+///
+/// See `docs/rulings/ruling-settings-picks-an-agent-not-a-mechanism.md`, which
+/// also settles that this picker lists agents of BOTH kinds, harnesses and
+/// providers alike, with no indication of which is which. That distinction is
+/// ours to carry, not the user's.
 final class HarnessPickerRow: NSView {
     static let height: CGFloat = 30
     private var buttons: [String: NSButton] = [:]

@@ -232,6 +232,7 @@ final class GridRowView: NSControl {
         addTrackingArea(NSTrackingArea(
             rect: bounds, options: [.mouseEnteredAndExited, .activeAlways],
             owner: self, userInfo: nil))
+        PointerCursor.track(self)
     }
 
     /// The hover pill. Held so hover can paint it rather than the row's layer,
@@ -312,6 +313,7 @@ final class GridRowView: NSControl {
         super.resetCursorRects()
         addCursorRect(bounds, cursor: .pointingHand)
     }
+    override func cursorUpdate(with event: NSEvent) { PointerCursor.show() }
 
     /// "Mischief managed" (ruled 06 Aug): clicking a lit lamp switches it off —
     /// marks the turn heard without inviting the session. Set only on rows

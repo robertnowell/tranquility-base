@@ -38,6 +38,12 @@ final class Updates: NSObject {
     /// twenty-minute read-back is one line, not a hundred and twenty.
     private var gate = UpdateReadiness.InstallGate()
     private var lastReportedBlock: UpdateReadiness.Block?
+    /// How the check about to report a result was triggered: a launch check,
+    /// a menu check, or nil for the background scheduled timer. Set when a
+    /// check starts, read once and cleared when the cycle ends, so a
+    /// scheduled miss on a quiet tick is never mistaken for a check the user
+    /// asked for (12 Sep).
+    private var pendingCheckVia: String?
 
     /// Identity configuration, not a compile-time Dev branch. The published
     /// app exercises this exact implementation; local and TEST identities must
@@ -101,6 +107,7 @@ final class Updates: NSObject {
                 return
             }
             self.log("updates: launch check")
+            self.pendingCheckVia = "launch"
             Track.record("update_checked", ["via": "launch"])
             updater.checkForUpdatesInBackground()
         }
@@ -115,6 +122,7 @@ final class Updates: NSObject {
             log("updates: no updater to check with")
             return
         }
+        pendingCheckVia = "menu"
         Track.record("update_checked", ["via": "menu"])
         controller.checkForUpdates(sender)
     }
@@ -176,6 +184,9 @@ extension Updates: @preconcurrency SPUUpdaterDelegate {
     }
 
     func updater(_ updater: SPUUpdater, didFindValidUpdate item: SUAppcastItem) {
+        // A found update is this check's terminal outcome: consume the
+        // trigger so the next scheduled cycle is not tagged with this one's.
+        pendingCheckVia = nil
         log("updates: found \(item.displayVersionString)")
         Track.record("update_found", ["to_version": Track.token(from: item.displayVersionString)])
     }
@@ -194,6 +205,7 @@ extension Updates: @preconcurrency SPUUpdaterDelegate {
     }
 
     func updaterDidNotFindUpdate(_ updater: SPUUpdater, error: Error) {
+        pendingCheckVia = nil
         stage("no_update")
     }
 
@@ -219,6 +231,10 @@ extension Updates: @preconcurrency SPUUpdaterDelegate {
 
     func updater(_ updater: SPUUpdater, failedToDownloadUpdate item: SUAppcastItem, error: Error) {
         stage("download_failed", item, detail: error.localizedDescription)
+        // The stage event's detail is truncated to a phrase; file the full
+        // reason so a download that keeps failing is debuggable remotely.
+        Failures.report(.updateFailed,
+                        reason: "update download failed: \(error.localizedDescription)")
     }
 
     func updater(_ updater: SPUUpdater, willInstallUpdate item: SUAppcastItem) {
@@ -238,15 +254,53 @@ extension Updates: @preconcurrency SPUUpdaterDelegate {
         stage("checks_not_scheduled")
     }
 
+    /// The trigger of the check about to report a result. Read once and
+    /// cleared, so a background scheduled miss reads as "scheduled" and never
+    /// borrows the tag of the last launch or menu check.
+    private func checkTrigger() -> String {
+        defer { pendingCheckVia = nil }
+        return pendingCheckVia ?? "scheduled"
+    }
+
     func updater(_ updater: SPUUpdater, didAbortWithError error: Error) {
         // Sparkle reports "no update found" through this path too. It is not a
         // failure and must not read like one in the log.
-        let quiet = (error as NSError).code == Int(SUError.noUpdateError.rawValue)
-        let text = quiet
-            ? "updates: already current"
-            : "updates: check failed, \(error.localizedDescription)"
-        log(text)
-        Track.record("update_check_result", ["result": quiet ? "current" : "failed"])
+        let ns = error as NSError
+        guard ns.code != Int(SUError.noUpdateError.rawValue) else {
+            log("updates: already current")
+            Track.record("update_check_result", ["result": "current", "via": .token(checkTrigger())])
+            return
+        }
+        // Two very different outcomes wear the word "failed". A check that
+        // never reached the feed is the fleet's normal condition on the
+        // scheduled timer (asleep, offline), so it is DATA, tagged offline,
+        // and never alerted. Only a check that reached the feed and still
+        // failed (a bad signature, a malformed appcast, an HTTP error) is
+        // actionable, and only that files a Failure (11 Sep: a remote user
+        // stuck on an old build was an opaque count; 12 Sep: but the offline
+        // case must not storm the alert channel).
+        let why = error.localizedDescription
+        let via = checkTrigger()
+        // The whole chain, every time. The top error's domain and code were
+        // recorded alone until 15 Sep, and for an appcast fetch they are
+        // always "SUSparkleErrorDomain 2001": the same two words for a Mac
+        // with no network and for a feed that answered garbage.
+        let chain = UpdateReadiness.chain(ns)
+        if UpdateReadiness.isOffline(ns) {
+            log("updates: check could not reach the feed (\(via)), \(why) [\(chain)]")
+            Track.record("update_check_result", [
+                "result": "offline", "detail": .prose(why), "via": .token(via),
+                "domain": Track.token(from: ns.domain), "code": .int(ns.code),
+                "chain": .prose(chain)])
+            return
+        }
+        log("updates: check failed (\(via)), \(why) [\(chain)]")
+        Track.record("update_check_result", [
+            "result": "failed", "detail": .prose(why), "via": .token(via),
+            "domain": Track.token(from: ns.domain), "code": .int(ns.code),
+            "chain": .prose(chain)])
+        Failures.report(.updateFailed,
+                        reason: "update check failed [\(via)]: \(why) [\(chain)]")
     }
 
     // MARK: - Waiting

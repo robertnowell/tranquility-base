@@ -189,6 +189,7 @@ public enum AudioInputDevice {
     final class DeviceCache: @unchecked Sendable {
         private let lock = NSLock()
         private let maxAge: TimeInterval
+        private let now: @Sendable () -> Date
         private let loader: @Sendable () -> ([Device], AudioDeviceID)
         private var devices: [Device] = []
         private var defaultId = AudioDeviceID(0)
@@ -197,12 +198,14 @@ public enum AudioInputDevice {
 
         /// `loader` is the test seam; production reads the HAL.
         init(maxAge: TimeInterval = 300,
+             now: @escaping @Sendable () -> Date = { Date() },
              loader: @escaping @Sendable () -> ([Device], AudioDeviceID) = {
                 AudioSystemHealth.shared.timed("device list") {
                     (AudioInputDevice.allInputs(), AudioInputDevice.systemDefaultId())
                 }
              }) {
             self.maxAge = maxAge
+            self.now = now
             self.loader = loader
         }
 
@@ -214,7 +217,7 @@ public enum AudioInputDevice {
         func current() -> [Device] {
             lock.lock()
             let snapshot = devices
-            let fresh = stamp.map { Date().timeIntervalSince($0) <= maxAge } ?? false
+            let fresh = stamp.map { now().timeIntervalSince($0) <= maxAge } ?? false
             let claimed = !fresh && !refreshing
             if claimed { refreshing = true }
             lock.unlock()
@@ -222,7 +225,7 @@ public enum AudioInputDevice {
                 DispatchQueue.global(qos: .utility).async { [self] in
                     let (loaded, id) = loader()
                     lock.lock()
-                    devices = loaded; defaultId = id; stamp = Date(); refreshing = false
+                    devices = loaded; defaultId = id; stamp = now(); refreshing = false
                     lock.unlock()
                 }
             }
@@ -238,7 +241,7 @@ public enum AudioInputDevice {
         func refreshNow() {
             let (loaded, id) = loader()
             lock.lock()
-            devices = loaded; defaultId = id; stamp = Date(); refreshing = false
+            devices = loaded; defaultId = id; stamp = now(); refreshing = false
             lock.unlock()
         }
 

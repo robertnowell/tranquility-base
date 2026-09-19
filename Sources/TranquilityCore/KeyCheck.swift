@@ -101,9 +101,29 @@ public enum KeyCheck {
     /// Read-only on purpose: verifying a key must never create, spend, or
     /// transcribe anything. A summarize call would have proved the same thing and
     /// billed for it.
-    static func request(for key: Secrets.Key, value: String) -> URLRequest? {
+    /// `providerBase` is injectable for one reason, and the reason is a test
+    /// that would otherwise pass vacuously: a provider-backed key produces no
+    /// request on a machine with no address configured for it, so
+    /// `testEveryProviderHasAReadOnlyRequest` would have skipped the two keys
+    /// added on 13 Sep while appearing to cover every case. A seam here lets
+    /// the invariant be asserted against a configured provider instead of
+    /// against nil.
+    static func request(for key: Secrets.Key, value: String,
+                        providerBase: (String) -> URL? = { ProviderConfig.baseURL($0) })
+        -> URLRequest? {
         var request: URLRequest
         switch key {
+        // Nothing to ask. There is no provider to validate it against: it is
+        // this machine's own key, and the only thing that can tell you it
+        // works is a signature the Gateway accepts. A checked, working row
+        // here would be a claim nobody made.
+        case .deviceKey: return nil
+        case .hubToken:
+            // The hub lists this Mac's own devices: read-only, tenant-scoped,
+            // and a 401 is exactly "this token is not yours any more".
+            let base = HubApp.baseURL ?? URL(string: "https://hq.tranquilitybase.dev")!
+            request = URLRequest(url: base.appendingPathComponent("api/devices"))
+            request.setValue("Bearer " + value, forHTTPHeaderField: "Authorization")
         case .anthropicAPIKey:
             guard let url = URL(string: "https://api.anthropic.com/v1/models") else { return nil }
             request = URLRequest(url: url)
@@ -140,6 +160,61 @@ public enum KeyCheck {
             guard let url = URL(string: "https://api.openai.com/v1/models") else { return nil }
             request = URLRequest(url: url)
             request.setValue("Bearer \(value)", forHTTPHeaderField: "Authorization")
+        case .crobotAPIKey:
+            // `/api/v1/me` ON THE GATEWAY, which is NOT `/api/auth/me`.
+            //
+            // `/api/auth/me` is JARVIS's route. The gateway calls it
+            // internally to turn a key into a user (`gateway/src/jarvis.ts:82`)
+            // and does not serve it. Its own identity route is `/me`, mounted
+            // at both `/api` and `/api/v1` (`gateway/src/routes.ts:473`,
+            // `1069-1070`).
+            //
+            // Measured live against crobot.coframe.com, 13 Sep 2026, and the
+            // wrong path fails in the direction that hides the mistake: the
+            // auth middleware runs on `/api/*`, so a BAD key is correctly
+            // refused 401 there, while a GOOD key falls through to the single
+            // page app and comes back **200 with HTML**. The check would have
+            // read "checked, working" off a page, having proved only that the
+            // credential authenticates and nothing about whether an identity
+            // resolves behind it.
+            //
+            // `/api/v1/me` passes the same auth AND org-scope middleware chain
+            // as `/api/v1/tasks`, so a pass is evidence about the calls the
+            // provider will really make. That is the ElevenLabs lesson above,
+            // applied: verify against the route the product uses.
+            //
+            // Nil when no base URL is configured, which `verify` turns into
+            // `.unreachable` -- the honest verdict, since an unconfigured
+            // provider says nothing about the credential. It is NOT
+            // `.rejected`, and the difference is somebody rotating a key that
+            // was fine.
+            guard let base = providerBase("crobot") else { return nil }
+            request = URLRequest(url: base.appendingPathComponent("api/v1/me"))
+            request.setValue("Bearer " + value, forHTTPHeaderField: "Authorization")
+        case .openCodePassword:
+            // HTTP BASIC, not Bearer, and the username is the literal
+            // `opencode`. Read from the crobot gateway's own proxy, which sets
+            // exactly this header when it forwards to a sandbox's OpenCode
+            // server (`gateway/src/routes.ts:1051`):
+            //
+            //     headers.set("authorization",
+            //       "Basic " + Buffer.from(`opencode:${conn.password}`)...)
+            //
+            // The first draft sent Bearer, which the server would have refused,
+            // reporting a correct password as rejected. Same defect as the
+            // crobot route above and found the same way: by reading the client
+            // that already talks to this server rather than assuming the shape.
+            //
+            // `/session` rather than `/app`: it is the route the provider
+            // actually calls, so a pass is evidence about the real work. An
+            // unreachable result means the server is not running, which is the
+            // thing a person needs to be told.
+            guard let base = providerBase("opencode"),
+                  let encoded = "opencode:\(value)".data(using: .utf8)
+            else { return nil }
+            request = URLRequest(url: base.appendingPathComponent("session"))
+            request.setValue("Basic " + encoded.base64EncodedString(),
+                             forHTTPHeaderField: "Authorization")
         }
         request.httpMethod = "GET"
         // Short: this runs while somebody watches a row. A check that hangs for

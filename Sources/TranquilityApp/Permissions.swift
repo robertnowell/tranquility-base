@@ -512,6 +512,23 @@ struct Permissions {
     private static var automationProbeRunning = false
     private static var automationProbeGeneration = 0
 
+    /// ALWAYS RETURNS THE SEED ON ITS FIRST CALL IN A PROCESS, and callers
+    /// that report rather than react need to know it. The refresh below runs
+    /// on a `Task { @MainActor }`, which cannot start until the main thread
+    /// returns to the run loop, so anything asking from inside
+    /// `applicationDidFinishLaunching` is guaranteed `procNotFound` ->
+    /// `unknowable` whatever TCC holds. Measured 13 Sep on install aa699c62:
+    /// 11 of 11 `app_launched` events said `unknowable`, never once `active`,
+    /// with the permission granted and Terminal running throughout.
+    ///
+    /// That is honest -- at that instant nothing HAS been measured -- and it
+    /// is now harmless, because `failingTheGate` does not count `unknowable`
+    /// as a refusal. Resist "fixing" it by deferring the caller into a `Task`
+    /// so it can await a real reading: that was tried at `e770131` and the
+    /// launch event vanished instead, because `beginDrills()` holds
+    /// `Track.suppressed` for the whole self-test slate and `relaunch.sh`
+    /// passes `--selftest-hud` on every deploy. A sharper reading belongs in a
+    /// later event of its own, not in a late copy of an early one.
     private static func automationStatus() -> OSStatus {
         if !automationProbeRunning, Date().timeIntervalSince(automationCheckedAt) >= 2 {
             automationProbeRunning = true
@@ -663,6 +680,22 @@ struct Permissions {
     /// the restart gap.
     static var allActive: Bool {
         Kind.allCases.filter(\.isRequired).allSatisfy { opensTheGate(state($0)) }
+    }
+
+    /// The permissions genuinely in the way: everything the gate refuses.
+    ///
+    /// THE ONE SPELLING for "what is missing", and it exists because the
+    /// alternative kept being rewritten by hand. The launch event asked
+    /// `state != .active` (7 Sep) and so reported a permission it had merely
+    /// failed to READ as one the user had refused -- the 29 Aug bug, reborn in
+    /// a layer nobody thought of as a gate, alerting on a machine where the
+    /// app itself was letting the user straight in. A rule that lives in a
+    /// helper only holds where the helper is called, so callers get a named
+    /// list rather than a comparison to get wrong.
+    ///
+    /// `unknowable` is absent from this list ON PURPOSE. See `opensTheGate`.
+    static var failingTheGate: [Kind] {
+        Kind.allCases.filter { !opensTheGate(state($0)) }
     }
 
     /// Anything granted that this process still cannot use. One restart clears

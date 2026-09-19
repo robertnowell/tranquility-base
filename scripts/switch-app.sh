@@ -7,6 +7,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 . "$(dirname "$0")/lib/app-process.sh"
+. "$(dirname "$0")/lib/deployment.sh"
 
 SUPPORT="$HOME/Library/Application Support/VoiceDispatch"
 PROD_APP="/Applications/Tranquility Base.app"
@@ -37,6 +38,19 @@ fail() { echo "✗ $*" >&2; exit 1; }
 read_target() { /usr/libexec/PlistBuddy -c "Print :$1" "$TARGET/Contents/Info.plist" 2>/dev/null; }
 [ -d "$TARGET" ] || fail "$TARGET is not installed"
 [ "$(read_target CFBundleIdentifier)" = "$TARGET_ID" ] || fail "$TARGET has the wrong bundle id"
+# Keep the same lock across install-dev's exec into this script.
+tb_deployment_lock
+trap tb_deployment_unlock EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 141' PIPE
+TARGET_SHA=$(read_target TBSourceCommit)
+UNMERGED=0
+if [ "$channel" = dev ]; then
+  git merge-base --is-ancestor "$TARGET_SHA" origin/main >/dev/null 2>&1 || UNMERGED=1
+fi
+tb_deployment_authorize switch "$TARGET_SHA" "$channel" "$UNMERGED"
+
 codesign --verify --deep --strict "$TARGET" 2>/dev/null || fail "$TARGET has an invalid signature"
 if [ "$channel" = "prod" ]; then
   TARGET_SIGNING=$(codesign -dv --verbose=4 "$TARGET" 2>&1 || true)
@@ -58,19 +72,6 @@ else
     *) fail "Dev is ad-hoc signed; its permissions would not survive a rebuild" ;;
   esac
 fi
-
-# A merge deploy and a lane switch both stop and start the same singleton. Use
-# the deployer's existing lock so they can never interleave.
-LOCKDIR="/tmp/tb-relaunch.lock"
-if ! mkdir "$LOCKDIR" 2>/dev/null; then
-  HOLDER=$(cat "$LOCKDIR/pid" 2>/dev/null || echo "")
-  if [ -n "$HOLDER" ] && kill -0 "$HOLDER" 2>/dev/null; then
-    fail "another app mutation (pid $HOLDER) is in progress"
-  fi
-  rm -rf "$LOCKDIR"
-  mkdir "$LOCKDIR" 2>/dev/null || fail "lost the app-mutation lock race"
-fi
-echo $$ > "$LOCKDIR/pid"
 
 ACTIVE_BEFORE=""
 app_at_path_running "$PROD_APP" && ACTIVE_BEFORE="$PROD_APP"
@@ -94,7 +95,6 @@ PLIST
 }
 
 cleanup() {
-  rm -rf "$LOCKDIR"
   if [ "$SWITCHED" -eq 0 ] && [ -n "$ACTIVE_BEFORE" ] \
      && [ -d "$ACTIVE_BEFORE" ]; then
     # "An app is running" is not rollback: after a late singleton failure it
@@ -103,15 +103,16 @@ cleanup() {
     if [ "$TARGET" != "$ACTIVE_BEFORE" ] && app_at_path_running "$TARGET"; then
       app_stop_path "$TARGET"
     fi
-    if app_at_path_running "$ACTIVE_BEFORE"; then return; fi
+    if app_at_path_running "$ACTIVE_BEFORE"; then tb_deployment_unlock; return; fi
     echo "→ switch failed; restoring the previous lane" >&2
     write_login_item "$ACTIVE_BEFORE"
     launchctl bootout "gui/$UID/$LOGIN_LABEL" 2>/dev/null || true
     launchctl bootstrap "gui/$UID" "$LOGIN_PLIST" 2>/dev/null \
       || open "$ACTIVE_BEFORE" 2>/dev/null || true
   fi
+  tb_deployment_unlock
 }
-trap cleanup EXIT INT TERM PIPE
+trap cleanup EXIT
 
 # Refuse a target older than the schema already on disk. Before a newer target
 # advances it, take a transactionally consistent backup so an intentional

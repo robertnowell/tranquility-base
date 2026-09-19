@@ -9,6 +9,10 @@ import Security
 /// genuinely hard to diagnose — it cost an hour during development. Anything that
 /// shells out (the `claude -p` fallback provider) must likewise scrub it.
 public enum Secrets {
+    /// Local credential changes notify the one managed session, without carrying
+    /// credentials in notification payloads. Other-process changes are caught
+    /// by the uncached Hub-token read before every managed operation.
+    public static let hubIdentityDidChange = Notification.Name("TranquilityHubIdentityDidChange")
     /// The Keychain service name, deliberately NOT renamed with the product.
     ///
     /// This string is the lookup key for every stored credential. Changing it does
@@ -24,6 +28,27 @@ public enum Secrets {
         case elevenLabsAPIKey = "elevenlabs-api-key"
         case assemblyAIAPIKey = "assemblyai-api-key"
         case openAIAPIKey = "openai-api-key"
+        /// The hub's device token: this Mac's credential for the mirror,
+        /// minted by the hub when the Mac was connected. Not a key a person
+        /// pastes, so no console URL.
+        case hubToken = "hub-token"
+        /// This Mac's proof-of-possession key. For an enclave key this is the
+        /// enclave's own wrapped blob, which is useless on any other machine;
+        /// for the software fallback it is a real private key. Never leaves
+        /// this file, and never travels anywhere: only signatures do.
+        case deviceKey = "device-key"
+        /// crobot, through Jarvis. Minted in Jarvis under user settings, API
+        /// Keys tab, with NO permissions: crobot only calls `/api/auth/me`
+        /// with it and that route enforces no scope. Jarvis refuses an empty
+        /// scope list, so tick one harmless box and choose specific
+        /// organizations, never all, and never a `coframe-integration:*`
+        /// scope. It does not expire and is revocable from the same screen.
+        case crobotAPIKey = "crobot-api-key"
+        /// Local OpenCode's server password, when its server has one. Genuinely
+        /// optional: a server started without `--password` accepts
+        /// unauthenticated requests from localhost, so the absence of this is a
+        /// configuration, not a fault.
+        case openCodePassword = "opencode-password"
 
         /// The provider's name, as a person would say it.
         public var provider: String {
@@ -32,6 +57,10 @@ public enum Secrets {
             case .elevenLabsAPIKey: return "ElevenLabs"
             case .assemblyAIAPIKey: return "AssemblyAI"
             case .openAIAPIKey: return "OpenAI"
+            case .hubToken: return "Tranquility Knowledge Base"
+            case .deviceKey: return "This Mac's key"
+            case .crobotAPIKey: return "crobot"
+            case .openCodePassword: return "OpenCode"
             }
         }
 
@@ -42,6 +71,29 @@ public enum Secrets {
             case .elevenLabsAPIKey: return "the voice; without it, the system one"
             case .assemblyAIAPIKey: return "the live transcript while you speak"
             case .openAIAPIKey: return "Whisper, the durable transcript when streaming fails"
+            case .hubToken: return "the mirror: every page and turn, in the hub"
+            case .deviceKey: return "proves this Mac is this Mac, for anything that spends"
+            case .crobotAPIKey: return "your crobot agents, as rows you can answer"
+            case .openCodePassword: return "a local OpenCode server that asks for one"
+            }
+        }
+
+        /// Whether a person ever types this in.
+        ///
+        /// Most of these are pasted from somebody's console, and every one of
+        /// those needs a checklist row to paste it into: a credential the app
+        /// can store but offers nowhere to enter is a dead end, which is what
+        /// `testEveryPastableCredentialHasARowToTypeItIn` exists to prevent.
+        ///
+        /// Two are not pasted. The hub mints its token during the connect
+        /// flow, and this Mac makes its own device key. Neither has a row
+        /// because neither has anything for a person to do, and stating that
+        /// here rather than as an exception in the test means the next key
+        /// added has to answer the question rather than inherit an omission.
+        public var isPasted: Bool {
+            switch self {
+            case .hubToken, .deviceKey: return false
+            default: return true
             }
         }
 
@@ -57,7 +109,38 @@ public enum Secrets {
             case .elevenLabsAPIKey: return URL(string: "https://elevenlabs.io/app/settings/api-keys")
             case .assemblyAIAPIKey: return URL(string: "https://www.assemblyai.com/dashboard/api-keys")
             case .openAIAPIKey: return URL(string: "https://platform.openai.com/api-keys")
+            case .hubToken: return nil
+            // Made on this machine, by this machine. There is nowhere to go
+            // and get one, which is the property that makes it worth having.
+            case .deviceKey: return nil
+            // Jarvis mints it, under user settings. No stable deep link to that
+            // tab exists, so the console root is the honest answer rather than
+            // a guessed fragment that 404s.
+            case .crobotAPIKey: return URL(string: "https://jarvis.coframe.com/settings")
+            // Nothing to sign up for: it is whatever password the user passed
+            // to their own `opencode serve`. A console URL here would point at
+            // a product page and teach them nothing.
+            case .openCodePassword: return nil
             }
+        }
+    }
+
+    /// The credential a cloud agent provider authenticates with, or nil for a
+    /// provider that needs none.
+    ///
+    /// The one place the mapping lives, so a checklist row, a key check and a
+    /// provider adapter cannot disagree about which secret a provider uses.
+    /// Keyed by `AgentProvider.id`, deliberately NOT by a string built from
+    /// the raw value: "crobot" and "crobot-api-key" are two vocabularies and
+    /// deriving one from the other is how they drift.
+    /// NOT named `provider`: `Key` already has an instance property by that
+    /// name (the provider's name, as a person would say it), and a static
+    /// function sharing it reads as the same concept from the wrong side.
+    public static func credential(forProvider id: String) -> Key? {
+        switch id {
+        case "crobot": return .crobotAPIKey
+        case "opencode": return .openCodePassword
+        default: return nil
         }
     }
 
@@ -159,7 +242,8 @@ public enum Secrets {
     /// happens once, from `tbase` — the binary that owns the keychain items — so the
     /// app has no keychain code path at all.
     public static func read(_ key: Key) -> String? {
-        cache.value(for: key) { readFile()[key.rawValue].flatMap { $0.isEmpty ? nil : $0 } }
+        if key == .hubToken { return readFile()[key.rawValue].flatMap { $0.isEmpty ? nil : $0 } }
+        return cache.value(for: key) { readFile()[key.rawValue].flatMap { $0.isEmpty ? nil : $0 } }
     }
 
     /// Explicit, one-time move of every key out of the keychain into the file.
@@ -203,6 +287,7 @@ public enum Secrets {
         values[key.rawValue] = value
         try writeFile(values)
         cache.invalidate(key)
+        if key == .hubToken { NotificationCenter.default.post(name: hubIdentityDidChange, object: nil) }
     }
 
     /// Legacy keychain writer, kept only so existing items remain readable for the

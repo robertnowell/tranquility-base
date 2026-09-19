@@ -137,4 +137,78 @@ final class UpdateReadinessTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(UpdateReadiness.requiredIdlePolls, 2)
         XCTAssertLessThanOrEqual(UpdateReadiness.requiredIdlePolls, 6)
     }
+    // MARK: - Offline (data) vs a real update-check failure (alert)
+
+    /// The transport errors the scheduled timer trips over on a sleeping or
+    /// disconnected Mac. On 1152 these fired hourly, fleet-wide, on Apple
+    /// Silicon too; routing them to the alert stream would have stormed Slack,
+    /// so they must classify as offline and stay data-only.
+    func testTransportErrorsClassifyAsOffline() {
+        for code in [NSURLErrorNotConnectedToInternet, NSURLErrorTimedOut,
+                     NSURLErrorNetworkConnectionLost, NSURLErrorCannotFindHost,
+                     NSURLErrorDNSLookupFailed, NSURLErrorCannotConnectToHost] {
+            let e = NSError(domain: NSURLErrorDomain, code: code)
+            XCTAssertTrue(UpdateReadiness.isOffline(e), "URL code \(code) is offline")
+        }
+    }
+
+    /// Sparkle nests the URL error under its own domain; a wrapped transport
+    /// error still reads as offline.
+    func testWrappedTransportErrorIsOffline() {
+        let inner = NSError(domain: NSURLErrorDomain, code: NSURLErrorTimedOut)
+        let outer = NSError(domain: "SUSparkleErrorDomain", code: 2001,
+                            userInfo: [NSUnderlyingErrorKey: inner])
+        XCTAssertTrue(UpdateReadiness.isOffline(outer))
+    }
+
+    /// The shape an appcast fetch actually produces (Sparkle 2,
+    /// SUAppcastDriver over SPUDownloader): the transport error is TWO levels
+    /// down. One level of unwrapping read this as a real failure and alerted
+    /// on it every hour a Dallas Mac dark-woke without network (15 Sep 2026).
+    func testAnAppcastFetchWrapsTheTransportErrorTwice() {
+        let transport = NSError(domain: NSURLErrorDomain, code: NSURLErrorNotConnectedToInternet)
+        let downloader = NSError(domain: "SUSparkleErrorDomain", code: 2001, userInfo: [
+            NSLocalizedDescriptionKey: "Failed to download temporary data.",
+            NSUnderlyingErrorKey: transport])
+        let appcast = NSError(domain: "SUSparkleErrorDomain", code: 2001, userInfo: [
+            NSLocalizedDescriptionKey: "An error occurred in retrieving update information. Please try again later.",
+            NSUnderlyingErrorKey: downloader])
+        XCTAssertTrue(UpdateReadiness.isOffline(appcast))
+        XCTAssertEqual(UpdateReadiness.chain(appcast),
+                       "SUSparkleErrorDomain 2001 > SUSparkleErrorDomain 2001 > NSURLErrorDomain -1009")
+    }
+
+    /// The same two Sparkle layers over a feed that ANSWERED badly stay a
+    /// real failure: the depth of the wrapping is not the verdict, the
+    /// innermost error is.
+    func testTwoLayersOverAServerAnswerIsStillAFailure() {
+        let http = NSError(domain: NSURLErrorDomain, code: NSURLErrorBadServerResponse)
+        let downloader = NSError(domain: "SUSparkleErrorDomain", code: 2001, userInfo: [NSUnderlyingErrorKey: http])
+        let appcast = NSError(domain: "SUSparkleErrorDomain", code: 2001, userInfo: [NSUnderlyingErrorKey: downloader])
+        XCTAssertFalse(UpdateReadiness.isOffline(appcast))
+    }
+
+    /// An error that names itself as its own cause cannot spin the walk.
+    func testASelfReferentialChainTerminates() {
+        var info: [String: Any] = [:]
+        let leaf = NSError(domain: "X", code: 1)
+        info[NSUnderlyingErrorKey] = leaf
+        let e = NSError(domain: "X", code: 1, userInfo: info)
+        XCTAssertFalse(UpdateReadiness.isOffline(e))
+        XCTAssertEqual(UpdateReadiness.chain(e), "X 1 > X 1")
+    }
+
+    /// A check that REACHED the feed and still failed is not offline, so it
+    /// alerts: a bad signature, a malformed appcast, an HTTP status. These are
+    /// ours to fix and must reach the failure stream, not be swallowed as data.
+    func testFeedAndSignatureErrorsAreNotOffline() {
+        let signature = NSError(domain: "SUSparkleErrorDomain", code: 4001)
+        let appcast = NSError(domain: "SUSparkleErrorDomain", code: 1001)
+        let http = NSError(domain: NSURLErrorDomain, code: NSURLErrorBadServerResponse)
+        let tls = NSError(domain: NSURLErrorDomain, code: NSURLErrorSecureConnectionFailed)
+        XCTAssertFalse(UpdateReadiness.isOffline(signature), "a bad signature is actionable")
+        XCTAssertFalse(UpdateReadiness.isOffline(appcast), "a parse error is actionable")
+        XCTAssertFalse(UpdateReadiness.isOffline(http), "an HTTP status means the feed answered")
+        XCTAssertFalse(UpdateReadiness.isOffline(tls), "a TLS failure could be a cert problem")
+    }
 }

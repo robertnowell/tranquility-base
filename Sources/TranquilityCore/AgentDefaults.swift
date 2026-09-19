@@ -63,14 +63,38 @@ public enum AgentDefaults {
     /// edits (Settings, and `agent-command.json` on disk). Anyone who wants
     /// the review gate back deletes eleven words and approves the menu once by
     /// hand; nothing in the app needs a second switch to express that.
+    ///
+    /// `-c check_for_update_on_startup=false` rides with it since 11 Sep, and
+    /// is the price of a revive that comes back running. Codex checks for a
+    /// new release at every start, and on a standalone install the check is
+    /// not a banner but a CHOOSER whose default row is "1. Update now (runs
+    /// `curl … | sh`)". TB refuses to press through that screen (see
+    /// `CodexAdapter.neverAutoAcceptNeedles`), which was the right refusal
+    /// and still cost a session: measured 11 Sep 09:00, `codex resume` on
+    /// 0.153.4 with 0.154.0 released stopped on the chooser, the revive
+    /// adopted the waiting process as RESUMED, the next dictation was typed
+    /// into the menu, and its Return chose "Update now". The installer ran,
+    /// the old process exited, and the words never reached the agent. The
+    /// switch is Codex's own (`check_for_update_on_startup`, a documented
+    /// config key), measured live the same morning: with it off, a start that
+    /// otherwise prints the update banner prints nothing about updates at all.
+    /// Updating Codex is still a thing the human does, on purpose, with
+    /// `codex update`; it is not something a revive should be able to trigger.
     public static let codexFallback =
-        "codex --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust"
+        "codex --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust "
+        + "-c check_for_update_on_startup=false"
 
     /// What `codexFallback` was before hooks needed trusting. A machine that
     /// stored this verbatim never CHOSE it, it just inherited the old default,
     /// so `normalized()` upgrades it in place. Anything else the user typed is
     /// left exactly as typed.
     static let codexFallbackBeforeHookTrust = "codex --dangerously-bypass-approvals-and-sandbox"
+
+    /// And what it was between 28 Aug and 11 Sep, before the update check was
+    /// switched off. Same rule: verbatim means inherited, and inherited is
+    /// upgraded; one changed character means chosen, and chosen is kept.
+    static let codexFallbackBeforeUpdateCheck =
+        "codex --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust"
 
     /// The fallback for a given harness, falling back itself to Claude
     /// Code's for any id this hasn't heard of — better than crashing on a
@@ -80,16 +104,68 @@ public enum AgentDefaults {
     }
 
     /// Where a new agent starts when you have not said otherwise, for a given
-    /// harness. The home directory, as it always was — ruled 15 Aug that this
-    /// becomes a setting alongside the command, global for now: "we could
-    /// just make that a global setting for now and see if we need more
-    /// granular later." (Per-harness as of 25 Aug is exactly the "more
-    /// granular later.")
+    /// harness. Ruled 15 Aug that this becomes a setting alongside the
+    /// command, global for now: "we could just make that a global setting for
+    /// now and see if we need more granular later." (Per-harness as of 25 Aug
+    /// is exactly the "more granular later.")
+    ///
+    /// Until 14 Sep 2026 the fallback was the home directory, and on a new
+    /// Mac that day it produced a cascade of permission prompts: an agent
+    /// started in `~` looks around, and every glance at Desktop, Downloads or
+    /// Documents is a separate macOS dialog for the terminal, on top of the
+    /// harness's own "trust this folder?" for the whole home. Ruled the same
+    /// day: "the root is not the answer." The fallback is now a folder of the
+    /// app's own beside the agents folder, `~/Documents/tranquility-base`
+    /// (named 15 Sep), made on first use. Beside, not inside: agents build
+    /// things where they start, and the agents folder is the hub's source of
+    /// pages, mirrored and indexed, so a build tree in there would be a page
+    /// nobody wrote. One folder for every agent rather than one each, on
+    /// purpose: a folder is a harness project, with its own trust prompt and
+    /// its own history, and one prompt answered once is the whole point. The
+    /// terminal already needs Documents for the pages agents write, so this
+    /// adds no dialog.
+    ///
+    /// Home only when the folder cannot be used, and every way that happens
+    /// is handled rather than assumed away: Documents missing (created with
+    /// intermediates), the path taken by a file (home, and a log line, never
+    /// a launch into a file), a Documents the app cannot write to (home). The
+    /// check is on the resolved path, so a symlinked Documents is followed.
     ///
     /// A REVIVED agent ignores this entirely and uses the directory its own
     /// transcript records, because resuming a conversation somewhere it never
     /// ran is not the same session in any sense that matters.
-    public static var fallbackDirectory: String { NSHomeDirectory() }
+    public static let workspaceName = "tranquility-base"
+
+    public static var fallbackDirectory: String {
+        let workspace = HomeBase.root.deletingLastPathComponent()
+            .appendingPathComponent(workspaceName, isDirectory: true)
+        return usableDirectory(workspace) ?? NSHomeDirectory()
+    }
+
+    /// The path if it is, or can be made into, a writable directory; nil
+    /// otherwise. Split out so the cases can be driven in a test without a
+    /// real home.
+    static func usableDirectory(_ url: URL, fm: FileManager = .default) -> String? {
+        var isDir: ObjCBool = false
+        if fm.fileExists(atPath: url.path, isDirectory: &isDir) {
+            guard isDir.boolValue else {
+                Track.trace?("workspace: \(url.path) exists and is not a directory; starting at home")
+                return nil
+            }
+        } else {
+            do {
+                try fm.createDirectory(at: url, withIntermediateDirectories: true)
+            } catch {
+                Track.trace?("workspace: could not create \(url.path): \(error.localizedDescription); starting at home")
+                return nil
+            }
+        }
+        guard fm.isWritableFile(atPath: url.path) else {
+            Track.trace?("workspace: \(url.path) is not writable; starting at home")
+            return nil
+        }
+        return url.path
+    }
 
     /// Overridable for tests; the app always uses the support directory. The
     /// filename is the old one so a machine that has already set a command
@@ -166,13 +242,17 @@ public enum AgentDefaults {
     /// It does not WRITE. Rewriting the file from a read path would mean a
     /// launch mutating settings behind the user's back, and `save` already
     /// persists the upgraded value the next time anything sets a command.
+    ///
+    /// Two old defaults now, not one: the 25 Aug string (no hook trust) and the
+    /// 28 Aug string (no update-check switch). Either one, verbatim, is a
+    /// machine that never chose, and both land on the current default.
     private static func upgradedCodexHookTrust(
         _ byHarness: [String: HarnessEntry]
     ) -> [String: HarnessEntry] {
         let codex = CodexAdapter().id
+        let inherited = [codexFallbackBeforeHookTrust, codexFallbackBeforeUpdateCheck]
         guard var entry = byHarness[codex],
-              entry.command.trimmingCharacters(in: .whitespaces)
-                  == codexFallbackBeforeHookTrust
+              inherited.contains(entry.command.trimmingCharacters(in: .whitespaces))
         else { return byHarness }
         entry.command = codexFallback
         var upgraded = byHarness

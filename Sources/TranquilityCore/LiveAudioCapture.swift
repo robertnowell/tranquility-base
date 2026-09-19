@@ -42,12 +42,61 @@ import Foundation
 ///   the length of an utterance instead of the length of a write.
 public final class LiveAudioCapture: @unchecked Sendable {
     /// Live recordings carry this while they are still being spoken. A file
-    /// with this extension in the audio directory means a process died holding
-    /// a microphone open — see `LiveAudioCapture.interrupted(in:)`.
+    /// with this extension in the audio directory means a capture ended and no
+    /// row claimed it: a process died holding a microphone open, or an
+    /// abandon kept speech — see `LiveAudioCapture.interrupted(in:)`.
     public static let liveExtension = "live"
 
     public let utteranceId: String
     public let url: URL
+
+    // MARK: - Partial transcript sidecar
+    //
+    // The streamed transcript used to live only in the AssemblyAI session
+    // object until a clean close, so a process death mid-hold kept the audio
+    // and lost every word already recognised (the "still open" line of the
+    // 10 Sep ruling, built 15 Sep 2026). Now each partial the stream reports
+    // is written beside the live audio as `<id>.partial`, atomically, and a
+    // boot that adopts the audio adopts the words with it. The sidecar is
+    // consumed on adoption and removed when the capture finishes or is
+    // discarded, so it never outlives the file it describes.
+
+    public static let partialExtension = "partial"
+
+    public static func partialURL(for utteranceId: String, in directory: URL) -> URL {
+        directory.appendingPathComponent("\(utteranceId).\(partialExtension)")
+    }
+
+    /// The sidecar for a live or finished audio file at `url`.
+    public static func partialURL(beside url: URL) -> URL {
+        partialURL(for: AudioStore.utteranceId(of: url), in: url.deletingLastPathComponent())
+    }
+
+    public var partialURL: URL { Self.partialURL(for: utteranceId, in: url.deletingLastPathComponent()) }
+
+    /// Record the stream's accumulated text so far. Whole-file atomic write
+    /// of a few kilobytes at most, on the provider's callback thread; a
+    /// capture that has already closed writes nothing, so a late partial
+    /// cannot resurrect a sidecar the close removed.
+    public func notePartial(_ text: String) {
+        lock.lock(); defer { lock.unlock() }
+        guard !closed else { return }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        try? trimmed.write(to: partialURL, atomically: true, encoding: .utf8)
+        PrivateStorage.protect(partialURL)
+    }
+
+    /// The words a dead process had already heard, if any. Reads and REMOVES
+    /// the sidecar: the caller is putting the text on a row, and a sidecar
+    /// with no live file beside it is exactly the orphan this must not leave.
+    public static func takePartialTranscript(beside url: URL) -> String? {
+        let sidecar = partialURL(beside: url)
+        defer { try? FileManager.default.removeItem(at: sidecar) }
+        guard let text = try? String(contentsOf: sidecar, encoding: .utf8) else { return nil }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
     private let sampleRate: Double
     private let handle: FileHandle
     private let lock = NSLock()
@@ -159,6 +208,9 @@ public final class LiveAudioCapture: @unchecked Sendable {
         try rewriteSizes()
         try handle.close()
         closed = true
+        // The live stream still holds the same words in memory and the
+        // ordinary path takes them from there.
+        try? FileManager.default.removeItem(at: partialURL)
 
         let target = url.deletingPathExtension()
         if FileManager.default.fileExists(atPath: target.path) {
@@ -175,27 +227,58 @@ public final class LiveAudioCapture: @unchecked Sendable {
             durationMs: Int64((Double(frameBytes) / 2.0 / sampleRate) * 1000))
     }
 
-    /// Give up on this recording and remove the file.
+    /// How a capture that was given up on ended: the file is gone, or the
+    /// file is still on disk as `.wav.live` because it held speech.
+    public enum Ending: Equatable, Sendable {
+        case removed
+        case kept(URL)
+    }
+
+    /// A capture at least this long is never deleted by `abandon`, whatever
+    /// the caller thinks it was. Ruled 10 Sep 2026: "we shouldn't throw away
+    /// the audio, especially if it's longer than 10 seconds or has speech."
+    public static let keepAfterSeconds: Double = 10
+
+    /// Give up on this recording. Removes the file when the capture was a
+    /// slip; keeps it when it was speech.
     ///
     /// For the arm-window discard (docs/instant-arm.md), where the capture was
-    /// optimistic and the user never committed to it. Distinct from a process
-    /// dying: that one deliberately leaves the file behind to be found.
-    public func abandon() {
+    /// optimistic and the user never committed to it, and for a press that
+    /// died before anything came of it. Those are milliseconds of room tone
+    /// and the file goes.
+    ///
+    /// **Deletion needs a reason, and "the caller said abandon" is not one.**
+    /// On 10 Sep 2026 a committed five-minute hold was abandoned because a
+    /// stray keystroke had disqualified the gesture, and this method unlinked
+    /// 5m08s of speech on the spot — the only copy, since the row is written
+    /// at key-up. So the file is kept, still `.wav.live`, when it runs past
+    /// `keepAfterSeconds` or the caller has evidence of speech (`hadSpeech`,
+    /// the recorder's peak against its silence floor). A kept file is exactly
+    /// what a process death leaves behind, and the boot sweep adopts it into
+    /// Recents the same way (`QueueStore.reconcileOnBoot`).
+    @discardableResult
+    public func abandon(hadSpeech: Bool = false) -> Ending {
         lock.lock(); defer { lock.unlock() }
-        guard !closed else { return }
+        guard !closed else { return .removed }
+        let seconds = Double(frameBytes) / 2.0 / sampleRate
+        let keep = seconds >= Self.keepAfterSeconds || hadSpeech
+        if keep { try? rewriteSizes() }
         try? handle.close()
         closed = true
+        if keep { return .kept(url) }
         try? FileManager.default.removeItem(at: url)
+        try? FileManager.default.removeItem(at: partialURL)
+        return .removed
     }
 
     // MARK: - Recovery
 
     /// Recordings a previous process left open, newest first.
     ///
-    /// A `.wav.live` file in the audio directory can only mean one thing: a
-    /// process held a microphone and did not come back. Nothing writes this
-    /// extension except an in-progress capture, and every ordinary ending —
-    /// `finish` or `abandon` — removes it.
+    /// A `.wav.live` file in the audio directory means a capture ended with
+    /// no row claiming it: a process held a microphone and did not come back,
+    /// or `abandon` kept the file because it held speech. Nothing writes this
+    /// extension except an in-progress capture, and `finish` removes it.
     public static func interrupted(in directory: URL) -> [Interrupted] {
         let fm = FileManager.default
         guard let files = try? fm.contentsOfDirectory(
@@ -230,6 +313,23 @@ public final class LiveAudioCapture: @unchecked Sendable {
         /// Seconds of audio that survived, from the file's own length.
         public func durationMs(sampleRate: Double = 16000) -> Int64 {
             Int64((Double(max(0, byteCount - 44)) / 2.0 / sampleRate) * 1000)
+        }
+
+        /// The loudest sample in the file, 0...1 — the same evidence the
+        /// recorder's `peakLevel` gives a live capture, read back from disk
+        /// for one a dead process left. A three-minute file is ~3M samples
+        /// and reads in milliseconds.
+        public func peak() -> Float {
+            guard let data = try? Data(contentsOf: url), data.count > 44 else { return 0 }
+            var loudest: Int32 = 0
+            data.withUnsafeBytes { raw in
+                let samples = raw.bindMemory(to: Int16.self)
+                for i in 22..<samples.count {
+                    let v = Int32(Int16(littleEndian: samples[i]))
+                    loudest = max(loudest, abs(v))
+                }
+            }
+            return Float(loudest) / 32768
         }
     }
 

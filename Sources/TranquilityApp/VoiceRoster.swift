@@ -195,6 +195,12 @@ private final class CheckView: NSControl {
         super.resetCursorRects()
         addCursorRect(bounds, cursor: .pointingHand)
     }
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        PointerCursor.track(self)
+    }
+    override func cursorUpdate(with event: NSEvent) { PointerCursor.show() }
 
     init(on: Bool, onToggle: @escaping () -> Void) {
         self.onToggle = onToggle

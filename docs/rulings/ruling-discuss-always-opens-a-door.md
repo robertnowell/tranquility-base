@@ -68,3 +68,47 @@ grace. Tapping the same row in the grid revives the agent. The 7 Sep rule read
 
 The deep-link rule stands: nothing here records, sends, or types. A revive
 starts a process in a pane, which the grid's tap already does on one click.
+
+## Amended 14 Sep 2026: a quiet live row reads the card
+
+Measured on `gary-first-run.html`, 14 Sep 16:15. The agent was alive and idle,
+its turn had been dismissed at 15:55, and three clicks on Discuss each logged
+`row=running turn=true -> agentTerminal` and focused a tmux pane. The 9 Sep
+amendment was measured on a dead agent; its sentence "every other live lamp
+opens the terminal" rewrote the quiet-alive case without a measurement, and
+contradicted the 7 Sep line it sits under: "the card remains the normal Discuss
+behaviour, tmux is the first-turn fallback."
+
+**A quiet live row with a completed turn opens the card.** The card carries GO
+TO AGENT, so the terminal is one tap away and nothing is lost. Working and fault
+still open the terminal (no finished turn to read; the terminal is where the
+fault is), dead still revives, and a quiet row with nothing recorded is still
+the terminal. `DeepLink.discussDestination` now reads the row's lamp, and
+`DeepLinkTests` pins all four.
+
+**A dismiss that ends a reply leaves the turn owed.** The 15:55 dismiss did two
+things in one instant: it ended a 3m31s dictation (#440 keeps the words) and
+dismissed the turn behind it, which sent the row from green to quiet and, with
+twenty lit rows in twenty slots, off the grid into Past Agents. Robert, 14 Sep:
+*"just hitting the Escape key once, I don't think should dismiss the
+[summary]... I'm not actually even aware of what that Escape key does. So I'd
+say just turn that off."* `PanelState.dismissKeepsTheTurn` is true for every
+face the reply flow owns (arming, listening, transcribing, pendingSend); the
+panel reads it before `endCapture` moves the state, and the app skips the
+turn's dismissal when it is true. A card's own Dismiss still dismisses the turn.
+
+## Amended 15 Sep 2026: only amber goes straight to the agent
+
+Ruled on the Past Agents list, where blue rows had kept the card while the
+grid sent them to the terminal: *"I actually like that it opens the card
+rather than going straight to the agent. So only amber should go straight to
+the agent, and blue and green obviously should open the card."* Asked whether
+that meant the list or everywhere: *"Everywhere."*
+
+`SessionRow.action(for:)` now reads: amber takes the door; green, blue and
+quiet open the card when they have a recorded turn and take the door when they
+do not (the rule green already had since #458/#483); dead revives. Discuss
+follows it: a row that is not amber and has a completed turn reads the card.
+The 24 Aug reason for blue taking the door (announce had nothing to say) no
+longer holds: a heard turn is read on request since #439, and the card carries
+GO TO AGENT, so the card is a superset of the door.

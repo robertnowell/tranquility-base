@@ -163,6 +163,40 @@ final class TrackTests: XCTestCase {
         XCTAssertEqual(seen.value.count, 3, "after attach, events go straight through")
     }
 
+    func testResetDrainsOldEventsBeforeTheNextTestAttaches() {
+        let entered = DispatchSemaphore(value: 0)
+        let release = DispatchSemaphore(value: 0)
+        defer { release.signal() }
+        Track.attach { event in
+            if event.name == "blocked" {
+                entered.signal()
+                release.wait()
+            }
+        }
+        Track.record("blocked")
+        XCTAssertEqual(entered.wait(timeout: .now() + 2), .success)
+        Track.record("previous_test")
+        let resetStarted = DispatchSemaphore(value: 0)
+        let resetFinished = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async {
+            resetStarted.signal()
+            Track.resetForTesting()
+            resetFinished.signal()
+        }
+        XCTAssertEqual(resetStarted.wait(timeout: .now() + 2), .success)
+        let early = resetFinished.wait(timeout: .now() + 0.1)
+        XCTAssertEqual(early, .timedOut, "reset must wait for queued events")
+        release.signal()
+        if early == .timedOut {
+            XCTAssertEqual(resetFinished.wait(timeout: .now() + 2), .success)
+        }
+        Track.flush()
+        let seen = Box<[String]>([])
+        Track.attach { event in seen.update { $0.append(event.name) } }
+        Track.flush()
+        XCTAssertEqual(seen.value, [], "old events must not reach the next test's sink")
+    }
+
     func testSuppressedEventsAreCountedNotWrittenNotForwarded() {
         Track.suppressed = true
         let forwarded = Box<Int>(0)

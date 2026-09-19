@@ -133,4 +133,18 @@ final class EarconNewArrivalTests: XCTestCase {
         previous = ["b"]
         XCTAssertTrue(EarconGate.hasNewArrival(waiting: ["a", "b"], previous: previous)) // a came back
     }
+
+    /// A question on a row that was already green is an arrival: the chime
+    /// is for "something needs you now". A fresh remote agent is green from
+    /// the moment it starts, so an ask on it never chimed (15 Sep, 27 minutes).
+    func testAQuestionOnAnAlreadyGreenRowIsAnArrival() {
+        let fresh = SessionRow(id: "r", name: "r", aux: "", lamp: .ready, read: .none, harness: "opencode")
+        let before = EarconGate.arrivalKeys([fresh])
+        let asking = SessionRow(id: "r", name: "r", aux: "Read x?", lamp: .fault, read: .unread, harness: "opencode")
+        let after = EarconGate.arrivalKeys([asking])
+        XCTAssertTrue(EarconGate.hasNewArrival(waiting: after, previous: before))
+        let broken = SessionRow(id: "r", name: "r", aux: "cannot reach it", lamp: .fault, read: .none, harness: "opencode")
+        XCTAssertFalse(EarconGate.hasNewArrival(waiting: EarconGate.arrivalKeys([broken]), previous: before),
+                       "amber with nothing to answer is not an arrival")
+    }
 }

@@ -141,7 +141,7 @@ extension StatusHUD {
         var count: Int { lock.lock(); defer { lock.unlock() }; return n }
     }
 
-    private func beginDrills() {
+    func beginDrills() {
         drillsHoldThePanel = true
         // A drill paints failures on purpose. They are counted (so a drill
         // can prove the wiring) and never written or forwarded: a record that
@@ -160,7 +160,7 @@ extension StatusHUD {
         Permissions.log("selftest: drills hold the panel — ambient repaints suspended")
     }
 
-    private func endDrills() {
+    func endDrills() {
         guard drillsHoldThePanel else { return }
         drillsHoldThePanel = false
         Failures.suppressed = false
@@ -170,6 +170,113 @@ extension StatusHUD {
         Permissions.log("selftest: drills released the panel; sinks: "
             + "failures \(Failures.hasSink ? "attached" : "none"), "
             + "track \(Track.hasSink ? "attached" : "none")")
+        handBackTheStage()
+    }
+
+    /// A real key beats a drill. Always.
+    ///
+    /// For the five seconds the slate runs, a drill's fixture owns the stage,
+    /// and a face that owns the stage refuses what arrives next. Measured
+    /// 13 Sep at 23:36:31 and again at 23:36:32: two ⌃⌥ presses played the
+    /// green recognised chime and were then dropped with `announce: refused,
+    /// reply flow on stage`, because the fixture on stage was a `pendingSend`
+    /// whose countdown the drill had already cancelled. A zombie: the state
+    /// said a reply flow was live, and there was no reply flow.
+    ///
+    /// This is the 08 Aug incident, which a comment two files away says was
+    /// fixed. It was not, and it cannot be fixed by making the fixtures
+    /// tidier, because the problem is not which face is up. The problem is
+    /// that a self-test was allowed to outrank the person using the app.
+    ///
+    /// So the slate stands down, at once, and the gesture goes on to act on a
+    /// real panel. Called from the hotkey callback in `main.swift` and NOT
+    /// from `handle(_:)`, deliberately: drills drive `handle` directly for the
+    /// arm battery, and a yield there would have every drill stand its own
+    /// slate down.
+    ///
+    /// Deploy cost, measured: the synchronous drills finish about a second
+    /// after launch. The rest of the window is two timers, so a press that
+    /// lands in it costs the slate two deferred verdicts, which report SKIP.
+    func yieldTheSlateToAGesture() {
+        guard drillsHoldThePanel else { return }
+        Permissions.log("selftest: a real gesture arrived mid-slate, standing "
+            + "the drills down so the press lands on a real panel")
+        slateInterruptedByAGesture = true
+        // endDrills releases the hold, restores the sinks, and hands the stage
+        // back through the user door, which is what clears the zombie.
+        endDrills()
+    }
+
+    /// The slate hands the panel back, once, at the end: a backstop under
+    /// every drill's own cleanup rather than a replacement for them.
+    ///
+    /// Each drill stands its own fixture down, and each of those cleanups is
+    /// conditional on what THAT drill left up. None of them can know what the
+    /// drill after it will leave, and on 11 Sep two changes made the drills
+    /// overlap for the first time: #357 put a `SessionDiscovery` scan in Go to
+    /// Agent's not-live branch (5 s on a cold cache at launch) and #359 dropped
+    /// the in-flight guard before it, so the go-to fixture's REFUSAL now lands
+    /// several seconds later, inside the five-second window
+    /// `selfTestPendingSend`'s card owns. Both cleanups then miss it:
+    /// pendingSend's bails on `guard case .pendingSend` because the refusal has
+    /// already taken the stage, and `goToSessionDrill`'s sweep reads
+    /// `bodyLabel`, which no longer holds the message (a failure arriving while
+    /// a capture owns the stage goes to the amber strip, `face.captureFault`,
+    /// not the body).
+    ///
+    /// Measured in app.log, 12 to 13 Sep: seven of ten launches ended on that
+    /// red card instead of the grid (55 s, 1m37, 1m41, 8m30, 61m14, one never
+    /// cleared), and every single one was cleared by Robert pressing ⌃⌥ home.
+    ///
+    /// Narrow on purpose. Two kinds of face are restored, and they are the two
+    /// that are WRONG to leave up rather than merely untidy:
+    ///
+    ///   - anything that owns the stage, because it refuses the next real
+    ///     arrival. This is the 08 Aug incident: `announce: refused, reply flow
+    ///     on stage` to every press, with ten drills reporting PASS above it.
+    ///   - `.result`, because `Failures.suppressed` was true for the whole
+    ///     window, so a failure card here cannot be a real one.
+    ///
+    /// A `.speaking`, `.settings` or `.pastAgents` face is left alone: those
+    /// admit what comes next, and a real announcement CAN take the stage
+    /// mid-slate (the drill hold suspends ambient surfacing, not transitions).
+    func handBackTheStage() {
+        // A spoken card is the one face left alone: a real announcement can
+        // take the stage mid-slate, and the slate running out is not a reason
+        // to pull it off. Settings and Past Agents are opened deliberately and
+        // are not the slate's to close.
+        switch state {
+        case .speaking, .settings, .pastAgents: return
+        default: break
+        }
+        Permissions.log("selftest: slate over with \(state.name) on stage, "
+            + "handing the panel back to the grid")
+        // Through the user door: a capture state does not admit idle by
+        // design, so a bare repaint would log REFUSED and change nothing.
+        if state.ownsStage { endCapture(because: "selftest slate over") }
+        returnToTheGrid(because: "selftest slate over")
+    }
+
+    /// The one way back to the grid, for the drills and for the slate.
+    ///
+    /// Two rules, and the second is the one that was missing:
+    ///
+    ///   1. The rows come from `gridRows`, never from the caller. A drill that
+    ///      names its own rows is a drill asserting something ABOUT the grid,
+    ///      which is a fixture; a drill going home is not naming anything.
+    ///   2. With no provider wired, this paints NOTHING. Falling back to `[]`
+    ///      would put the lie back, and a panel left as it was is always safer
+    ///      than a panel told there are no agents.
+    ///
+    /// Every "go back to the grid" in the slate routes here, so there is one
+    /// place to be right rather than twenty-nine places to remember.
+    func returnToTheGrid(because reason: String) {
+        guard let gridRows else {
+            Permissions.log("selftest: \(reason), but no rows source is wired "
+                + "so the panel is left alone rather than painted empty")
+            return
+        }
+        showIdle(rows: gridRows(), because: reason)
     }
 
     /// Prove that LEAVING the read-back stops the send — not just pressing the
@@ -205,7 +312,8 @@ extension StatusHUD {
         // And it must stay dead past the window it was armed for — the same
         // assertion `pendingSend.afterWindow` makes, through the other door.
         DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
-            SelfTest.report("readbackDoor.afterWindow", [("stillNotSent", !sent)])
+            SelfTest.report("readbackDoor.afterWindow", [("stillNotSent", !sent)],
+                            skippedBecauseOfAGesture: self.slateInterruptedByAGesture)
         }
     }
 
@@ -239,7 +347,8 @@ extension StatusHUD {
 
         // And it must stay stopped: the timer should be dead, not merely ignored.
         DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
-            SelfTest.report("pendingSend.afterWindow", [("stillNotSent", !sent)])
+            SelfTest.report("pendingSend.afterWindow", [("stillNotSent", !sent)],
+                            skippedBecauseOfAGesture: self?.slateInterruptedByAGesture ?? false)
             // Then stand the drill's card down. It is the only drill whose
             // assertion outlives the call that starts it, so it is the only one
             // that cannot clean up before returning — and for as long as its
@@ -268,7 +377,7 @@ extension StatusHUD {
             defer { self.endDrills() }
             guard case .pendingSend = self.state else { return }
             self.endCapture(because: "selftest pendingSend cleanup")
-            self.showIdle(rows: [])
+            self.returnToTheGrid(because: "selftest pendingSend cleanup")
         }
     }
 
@@ -476,7 +585,7 @@ extension StatusHUD {
                     // `items()`, which counts one hooks row per harness this
                     // machine has, rather than a constant.
                     ("everyPrerequisiteHasARow",
-                     rows == Prerequisites.items().count),
+                     rows == Prerequisites.live().count),
                     ("agentFieldsAreGone",
                      self.launchRow?.isHidden == true
                         && self.harnessPicker?.isHidden == true),
@@ -494,6 +603,12 @@ extension StatusHUD {
                     ("noRowEditorialises",
                      self.setupChecklist?.rowTextForSelfTest
                         .contains("recommended") == false),
+                    // The pane on this screen, not a screen in general: the
+                    // rows scroll and the panel clamps, so the bottom door is
+                    // on the glass (14 Sep).
+                    ("fitsTheScreen",
+                     (self.panel?.frame.height ?? .greatestFiniteMagnitude)
+                        <= (NSScreen.main?.visibleFrame.height ?? 0) - 32),
                 ])
             }),
             // The settings state's second pane. What must hold: a
@@ -822,13 +937,15 @@ extension StatusHUD {
         // the change text colour impact", 18 Aug). Asserted separately from the
         // pill because they fail separately: the pill rests mid-ramp and passed
         // this whole time.
+        // Reversed 15 Sep ("the title doesn't need to be clickable"): the
+        // title is NOT a door, so it must neither lift under the pointer
+        // nor claim the cursor. Same shape of assertion, opposite sign.
         let titleResting = titleLabel.attributedStringValue
         titleLabel.setHovered(true)
         let titleHovered = titleLabel.attributedStringValue
         titleLabel.setHovered(false)
-        let titleAnswersTheCursor = titleLabel.isADoor
-            && firstColour(titleHovered) != firstColour(titleResting)
-            && firstColour(titleLabel.attributedStringValue) == firstColour(titleResting)
+        let titleAnswersTheCursor = !titleLabel.isADoor
+            && firstColour(titleHovered) == firstColour(titleResting)
         // Through the button's own hover seam, not a cast to a class it is not.
         // The first version of this claim cast `goButton` to a type that had
         // never been in the tree — the panel already had `ConsoleButton` with an
@@ -1019,7 +1136,7 @@ extension StatusHUD {
             ("bottomRowFits", bottomRowFits),
             ("footerFits", footerFits),
             ("pillAnswersTheCursor", pillAnswersTheCursor),
-            ("titleAnswersTheCursor", titleAnswersTheCursor),
+            ("titleIsNotADoor", titleAnswersTheCursor),
             ("doorAnswersTheCursor", doorAnswersTheCursor),
             ("stripIsNotADoor", stripIsNotADoor),
             ("rowLightsItsName", rowLightsItsName),
@@ -1459,7 +1576,11 @@ extension StatusHUD {
         // Through the user door, exactly as a real abort must go — showIdle alone
         // is (correctly) refused from a capture state.
         endCapture(because: "selftest cleanup")
-        showIdle(rows: [])
+        // The truth, not an empty list. The drill four calls up deliberately
+        // paints an empty room to prove its door appears; leaving the slate on
+        // that fixture is how an empty grid ends up on a machine running
+        // twenty agents.
+        returnToTheGrid(because: "selftest cleanup")
 
         // The collapsed strip. Three properties, and the third is the ruling.
         let mixed: [SessionRow] = [
@@ -1542,8 +1663,22 @@ extension StatusHUD {
         defer { CollapsedStrip.glowSeconds = realGlow }
         flashArrival(.ready)
         let glowLit = collapsedGlowStrength > 0
-        RunLoop.current.run(until: Date().addingTimeInterval(0.45))
+        // A single run(until:) can return after a slow callback without giving
+        // the overdue glow timer another turn (#532). Observe the real timer's
+        // invalidation, pumping short slices; never call stepGlow from the
+        // drill or turn a stuck timer into a pass. Two seconds bounds scheduling
+        // delay, while the glow itself still has its 0.2-second test duration.
+        let glowWaitStarted = Date()
+        let glowDeadline = glowWaitStarted.addingTimeInterval(2)
+        while collapsedGlowTimerIsActive && Date() < glowDeadline {
+            RunLoop.current.run(mode: .default,
+                                before: min(Date().addingTimeInterval(0.02), glowDeadline))
+        }
+        let glowWait = Date().timeIntervalSince(glowWaitStarted)
         let glowDecayed = collapsedGlowStrength == 0
+        let glowTimerCompleted = !collapsedGlowTimerIsActive && glowWait < 2
+        Permissions.log("collapse glow: wait=\(Int(glowWait * 1000))ms "
+                        + "timerActive=\(collapsedGlowTimerIsActive) strength=\(collapsedGlowStrength)")
         setCollapsed(false)
         flashArrival(.ready)
         let glowIgnoredWhenExpanded = collapsedGlowStrength == 0
@@ -1731,6 +1866,7 @@ extension StatusHUD {
             ("expandRestoresTheGrid", expandedAgain),
             ("glowLit", glowLit),
             ("glowDecayedOnItsOwn", glowDecayed),
+            ("glowTimerCompletedWithinDeadline", glowTimerCompleted),
             ("glowOnlyWhenCollapsed", glowIgnoredWhenExpanded),
             ("dismissTakesItAway", wentAway && dismissedAgain),
             ("showIdleWouldRaise", showIdleDoesRaise),
@@ -1881,34 +2017,44 @@ extension StatusHUD {
             ("failureStartsNothing", failureStartsNothing),
             ("failureIsStillAmber", failureIsStillAmber),
         ])
-        // The empty room. Its ten seconds are backdated rather than waited out —
-        // the clock is a timestamp precisely so it can be reasoned about without
-        // a ten-second drill — but everything after the clock is the real path:
-        // the same showIdle every ambient tick calls, painting the real panel.
+        // The empty room is the grid, empty (ruled 14 Sep 2026): it describes
+        // itself, wears the grid's own footer, and offers the one door that
+        // fills it. The ten-second teaching card is gone; on Gary Marx's
+        // first run it read as a stalled startup screen, and the press it
+        // taught does nothing on an empty grid. The same showIdle every
+        // ambient tick calls, painting the real panel.
         showIdle(rows: [])
-        let describesItselfFirst = !face.gettingStarted
-            && titleLabel.stringValue == "Tranquility Base"
-        emptySince = Date().addingTimeInterval(-StateLegend.gettingStartedAfter - 1)
-        showIdle(rows: [])
-        let teaches = face.gettingStarted
-            && bodyLabel.stringValue == StateLegend.gettingStartedMessage
-            && titleLabel.isHidden && stateLabel.isHidden
-            && bodyLabel.alignment == .center
-        // The ruling's other half: this surface spells the keys out. A glyph
-        // creeping back in is the failure the drill is here to catch.
-        let spelledOut = !StateLegend.gettingStartedMessage.contains("⌃")  // key-names:exempt — asserts absence
-            && !StateLegend.gettingStartedMessage.contains("⌥")  // key-names:exempt — asserts absence
-        // An agent reporting in takes the room back, and the ambient repaint
-        // that follows must not inherit the big centred type.
+        let describesItself = face.grid && bodyLabel.stringValue.isEmpty
+            && stateLabel.attributedStringValue.string.contains(StateLegend.gridStripTitle)
+        let offersTheDoor = !waitingRows.isHidden
+            && waitingRows.arrangedSubviews.contains { $0 is SplitPlacardRowView }
+            && !waitingRows.arrangedSubviews.contains { $0 is GridRowView }
+        let wearsTheGridChrome = !gridFooter.isHidden
+        // The Dock tile is there while the app runs (ruled 15 Sep 2026), so
+        // the rule is one line and it is asserted on every paint below,
+        // including after the panel has been hidden.
+        let dockRule = { () -> Bool in NSApp.activationPolicy() == .regular }
+        let tileFollowsTheEmptyRoom = dockRule()
+        // An agent reporting in takes the room back: the door goes, the
+        // rows come, and the ambient repaint must not inherit anything.
         showIdle(rows: [SessionRow(
             id: "drill", name: "an agent arrives", aux: "drill", lamp: .ready)])
-        let roomTakenBack = !face.gettingStarted && emptySince == nil
+        let roomTakenBack = face.grid && face.sessionRows.count == 1
+            && waitingRows.arrangedSubviews.contains { $0 is GridRowView }
             && bodyLabel.alignment == .natural
+        let tileFollowsTheArrival = dockRule()
+        // The tile is not asserted across a hide() here: the first deploy
+        // of this drill hid the panel mid-sequence and the closedRows and
+        // terminate drills that follow measured a panel that had not come
+        // back the way they expect. The rule is one line and is asserted on
+        // both paints above; a hidden panel changes nothing about it.
         SelfTest.report("emptyRoom", [
-            ("describesItselfFirst", describesItselfFirst),
-            ("teachesAfterTheClock", teaches),
-            ("spelledOutNotGlyphs", spelledOut),
+            ("describesItself", describesItself),
+            ("offersTheDoor", offersTheDoor),
+            ("wearsTheGridChrome", wearsTheGridChrome),
+            ("tileFollowsTheEmptyRoom", tileFollowsTheEmptyRoom),
             ("roomTakenBack", roomTakenBack),
+            ("tileFollowsTheArrival", tileFollowsTheArrival),
         ])
 
         contrastDrill()
@@ -1916,12 +2062,16 @@ extension StatusHUD {
         titleDoorDrill()
         harnessMarkDrill()
         revivedDoorDrill()
+        ledgerDrill()
         selectionDrill()
         hoverDrill()
         quietRowsDrill()
         litLampsOnlyDrill()
         restartedAgentDrill()
         closedRowsDrill()
+        agentGridDrill()
+        crobotFinishDrill()
+        openCodeRowDrill()
         lampSwitchDrill()
         pickUpDrill()
         resumePromptDrill()
@@ -1935,8 +2085,12 @@ extension StatusHUD {
         trayTeardownChurnDrill()
         cardPasteDrill()
         elasticGridDrill()
+        paintGuardDrill()
+        slateHandsBackDrill()
+        slateYieldsDrill()
         goToSessionDrill()
         speechCallbackDrill()
+        dismissKeepsTheTurnDrill()
 
         endCapture(because: "selftest cleanup")
         showIdle(rows: [])

@@ -26,38 +26,101 @@ extension AppDelegate {
     /// session is waiting on you; quiet when it is merely alive. Dead sessions
     /// appear nowhere. Identity is the minted callsign with the project label
     /// (or live session name) as fallback until minted.
+    /// The exit-reason spine. Runs each tick beside the lamp spine: for every
+    /// agent that was live last tick and is gone now, read its tmux corpse (if
+    /// it left one) for why it died, record it, and reap the corpse. A death
+    /// the user asked for disarmed remain-on-exit first and left no corpse, so
+    /// it is silently skipped here (see `onTerminateSession` and `postMortem`).
+    func observeExits() {
+        // The cold lookup runs a server inventory and process probes for each
+        // agent. Doing it in the UI tick stalled the collapse drill past its
+        // two-second frame deadline on 18 Sep (#541). One background snapshot
+        // at a time also prevents an older result arriving after a newer one.
+        guard !exitObservationInFlight else { return }
+        exitObservationInFlight = true
+        exitProbesStarted += 1
+        let cachedNames = paneNameById
+        Task.detached { [weak self] in
+            // The probe below is synchronous, with no suspension until its
+            // result returns to the main actor. Check this execution segment.
+            let ranOffMain = { !Thread.isMainThread }()
+            let liveSessions = (ClaudeAgentsCLI().sessions() ?? [])
+                + FileSessionOwnershipStore.shared.liveNonRegistrySessions()
+            var names = cachedNames
+            // Retain the verified name while the agent is alive, for the
+            // later post-mortem. Ownership verification is unchanged.
+            for session in liveSessions where names[session.sessionId] == nil {
+                if let name = TmuxOwnership.pane(
+                    forSessionId: session.sessionId, pid: session.pid)?.sessionName {
+                    names[session.sessionId] = name
+                }
+            }
+            let live = liveSessions.map {
+                (id: $0.sessionId, harness: $0.harness, sessionName: names[$0.sessionId])
+            }
+            let resolvedNames = names
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                self.paneNameById = resolvedNames
+                self.exitProbesCompleted += 1
+                self.exitProbeRanOffMain = ranOffMain
+                self.exitObservationInFlight = false
+                self.recordObservedExits(live)
+            }
+        }
+    }
+
+    private func recordObservedExits(_ live: [(id: String, harness: String, sessionName: String?)]) {
+        for vanished in exitWatch.observe(live) {
+            paneNameById[vanished.id] = nil
+            guard let name = vanished.sessionName else { continue }
+            let id = vanished.id
+            let harness = vanished.harness
+            let alive = vanished.secondsAlive
+            // tmux blocks, so the read, the record and the reap all go off-main.
+            Task.detached {
+                guard let postMortem = SessionLauncher.postMortem(session: name) else { return }
+                if postMortem.status == "0" {
+                    // A clean self-exit (a finished run, a typed `/exit`).
+                    // Recorded so the grid's disappearance has a cause, but it
+                    // is not a failure and never pages.
+                    Track.record("agent_ended", [
+                        "agent_id": Track.hash(id), "harness": .token(harness),
+                        "outcome": "exited", "via": "left_the_grid",
+                        "seconds_alive": .int(alive)])
+                } else {
+                    // A non-zero exit: a crash, a kill, an update pulling it
+                    // down mid-turn. This is the death worth surfacing, and it
+                    // rides the same failure path a launch death does, so it
+                    // reaches Sentry with the full last line and the Slack
+                    // route with the count.
+                    let reason = "agent exited (status \(postMortem.status))"
+                        + (postMortem.tail.isEmpty ? "" : ": \(postMortem.tail)")
+                    Failures.report(.agentExited, reason: reason, harness: harness, session: id)
+                }
+                // Reap either way: the pane has done its one job, and a corpse
+                // left on the socket is a leak.
+                Tmux.run(["kill-session", "-t", name], socket: Tmux.socketName)
+            }
+        }
+    }
+
+    /// The four bands moved to Core on 13 Sep (#381, `GridRows.swift`), and
+    /// this is what is left: gather the inputs, call it, apply the writes.
+    ///
+    /// Everything the old body reached for directly is now handed in, which is
+    /// the whole of the change. The two pieces of AppDelegate state it owns —
+    /// `lastSeenLive`, the liveness-grace cache, and `delivering` — stay here
+    /// and are passed as a value and a closure. `GridAssembler`'s August
+    /// comment declined this move for exactly that reason, proposing a
+    /// stateful Core type to carry them; parameters turned out to be enough,
+    /// and they are enough because the bands only ever READ those two.
     func sessionRowsNow() -> [SessionRow] {
         guard let coordinator else { return [] }
-        let waiting = (try? coordinator.waiting()) ?? []
-        // One probe serves every row; the name shown is Claude's own (re-ruled
-        // 05 Aug — the terminal tab's string, verbatim), callsign as fallback.
-        //
-        // `uniquingKeysWith:` rather than `uniqueKeysWithValues:`, because the latter
-        // TRAPS on a duplicate key and `agents --json` genuinely returns them:
-        // `claude --resume <id>` leaves the original process running and adds a second
-        // live entry carrying the SAME sessionId. That killed the app twice —
-        // 06 Aug 14:35 and 07 Aug 17:39 — the second crash landing eighteen seconds
-        // after a resume started. EXC_BREAKPOINT in a refresh timer, so it fires as
-        // soon as the duplicate appears and there is no recovery path.
-        //
-        // First-seen wins, matching the `first(where:)` lookups used on every other
-        // path (Coordinator.dispatch among them), so one rule governs everywhere
-        // rather than this view resolving collisions differently from dispatch.
-        // WHICH duplicate is the right target is a separate, open question — both
-        // processes are alive and both answer to the id — so the collision is logged
-        // rather than silently settled.
-        // `agents` alone missed a live Codex session at every downstream use
-        // of `liveById` (26 Aug) — a genuinely running Codex row could be
-        // skipped from the grid, or read blockedOnYou wrong, because Codex
-        // has no registry of its own to appear in here. `liveNonRegistrySessions()`
-        // adds ownership's own answer for a harness with no registry.
-        // Moved ABOVE the live map, which now reads it: for a harness with no
-        // registry, the latest of UserPromptSubmit/Stop IS the busy signal,
-        // and this is already loaded for the waiting band below.
-        let boundaries = (try? store?.latestTurnBoundaries()) ?? [:]
-        // Codex's own thread names, one read per repaint. The disk band has
-        // used these since 30 Aug; a LIVE Codex session never reaches that
-        // band, which is why two working sessions both showed as "Projects".
+
+        // Codex's own thread names, one read per repaint. A LIVE Codex session
+        // never reaches the disk band, which is why two working sessions both
+        // showed as "Projects".
         let codexNames = CodexThreadNames.all()
         if codexNames.count != lastCodexNameCount {
             let before = lastCodexNameCount == -1 ? "none yet" : String(lastCodexNameCount)
@@ -65,132 +128,40 @@ extension AppDelegate {
             lastCodexNameCount = codexNames.count
         }
 
-        var liveById: [String: LiveSession] = [:]
-        for session in (ClaudeAgentsCLI().sessions() ?? [])
+        // `agents` alone missed a live Codex session at every downstream use of
+        // `liveById` (26 Aug): a genuinely running Codex row could be skipped
+        // from the grid, or read blockedOnYou wrong, because Codex has no
+        // registry of its own to appear in. `liveNonRegistrySessions` adds
+        // ownership's own answer for a harness with no registry.
+        let found = (ClaudeAgentsCLI().sessions() ?? [])
             + FileSessionOwnershipStore.shared.liveNonRegistrySessions(
-                // NO STATUS FOR CODEX, since 01 Sep. This used to say
-                // "busy" whenever a prompt had gone in with no Stop after it,
-                // which was a compensation for one thing: `SessionActivity`
-                // could not read a rollout, so without a hook to lean on the
-                // file had nothing to say. It can read one now.
+                // NO STATUS FOR CODEX, since 01 Sep. This used to say "busy"
+                // whenever a prompt had gone in with no Stop after it, which
+                // was a compensation for one thing: `SessionActivity` could not
+                // read a rollout, so without a hook to lean on the file had
+                // nothing to say. It can read one now.
                 //
                 // The compensation was never sound. "No Stop has come back"
                 // fails OPEN — a turn that dies fires no Stop at all — and a
                 // `busy` status OUTRANKS the file, so the proxy did not just
                 // guess wrong, it silenced the one witness that knew. That is
                 // how a turn which died at 01:51 held a blue lamp until the
-                // next afternoon. Yesterday's ceiling bounded the damage at an
-                // hour; this removes the cause.
+                // next afternoon.
                 //
-                // Nothing is lost by staying quiet. The hooks exist because
-                // Claude Code's transcript reads idle 9.8% of the time an
-                // agent is working — a finished turn and a mid-turn pause are
-                // the same shape in that file. They are NOT the same shape in
-                // a rollout: Codex writes `task_started` and `task_complete`
-                // itself, so its own file answers the question the hooks were
-                // introduced to answer, first-hand.
-                //
-                // `boundaries` still reaches the classifier as `boundary:`,
-                // where it can only resolve a genuine ambiguity. What it can
-                // no longer do is overrule a file that has stated the answer.
+                // Nothing is lost by staying quiet. Codex writes `task_started`
+                // and `task_complete` itself, so its own file answers the
+                // question the hooks were introduced to answer, first-hand.
                 status: { _ in nil },
-                name: { codexNames[$0.lowercased()] }) {
-            if let existing = liveById[session.sessionId] {
-                Permissions.log("agents: duplicate sessionId \(session.sessionId.prefix(8)) "
-                    + "— pids \(existing.pid) and \(session.pid); keeping \(existing.pid)")
-                continue
-            }
-            liveById[session.sessionId] = session
-        }
-        // Smooth a transient miss in the probe above (see `lastSeenLive`'s
-        // doc comment): a session seen live within the grace window but
-        // absent from THIS read keeps its last-known entry rather than
-        // dropping straight to "closed". Refresh every session this read
-        // did find, backfill the ones it briefly lost, then prune anything
-        // that has aged out — so a session actually gone still reads gone
-        // the moment the window lapses.
+                name: { codexNames[$0.lowercased()] })
+
         let now = Date()
-        for (id, session) in liveById { lastSeenLive[id] = (session, now) }
-        for (id, remembered) in lastSeenLive
-        where liveById[id] == nil && now.timeIntervalSince(remembered.at) < Self.liveGrace {
-            liveById[id] = remembered.session
-        }
-        lastSeenLive = lastSeenLive.filter { now.timeIntervalSince($0.value.at) < Self.liveGrace }
-        // The topic is the stored brief's composed 3–6-word label, carried by
-        // the waiting query's brief join — NEVER a prose prefix of summaryText
-        // or the raw assistant message (ruled: that derivation produced orphan
-        // fragments like "**Voices for lif"). No brief yet = name only.
-        // Turn boundaries serve BOTH bands now: waiting() keeps a heard-but-
-        // unanswered session in this band, and if the user answered it IN THE
-        // TERMINAL the agent is already chewing — green ("you have not
-        // answered this") would be a lie, so the transcript's verdict wins.
-        // The user's own half of the switch, read once for the whole repaint.
-        // The OFF half is applied at the bottom of this function, after every
-        // band; ON has to travel INTO the lamp rule, because it changes what
-        // colour a row is rather than which face draws it.
-        // Recorded before the bands run so the card can ask the same question
-        // the rows answered, and get the same answer.
-        harnessById = liveById.reduce(into: [:]) { $0[$1.key] = $1.value.harness }
-        let switchedOn = LampSwitch.loadOn()
-        var rows = waiting.map { (event: WaitingSession) -> SessionRow in
-            let evidence = event.transcriptPath.flatMap {
-                SessionActivity.evidence(transcriptPath: $0,
-                                         boundary: boundaries[event.sessionId])
-            }
-            // Blue here means "it is chewing on your last reply". A resumed
-            // session is not: the turn the file describes died with the process
-            // that wrote it. Green is the truth — you still owe it an answer,
-            // and now nothing at all moves until you type one.
-            let resumed = AgentRestart.resumed(
-                startedAt: liveById[event.sessionId]?.startedAtDate,
-                lastWord: AgentRestart.lastWord(observedAt: evidence?.observedAt,
-                                                boundary: boundaries[event.sessionId]))
-            // Green says "you have not answered this". While a reply to
-            // this very turn is in flight that is the most misleading thing
-            // the grid can say — the cursor does not advance until the send
-            // confirms, so the row goes on asking for the user seconds after
-            // they spoke to it. A newer turn arriving still wins: see
-            // DeliveryInFlight.supersedesWaiting. A terminal reply wins the
-            // same way: the transcript says working, so the row does too.
-            // The process outranks the stored turn, on this band too (19 Aug).
-            // A session locked at a dialog has not read your last reply and is
-            // not about to: green would offer to read out something it said
-            // before it was killed, while the only move that helps is in the
-            // terminal. See `blockedOnYou` for the case that is always here.
-            let blocked = GridAssembler.blockedOnYou(liveById[event.sessionId], resumed: resumed)
-            return SessionRow(
-                id: event.sessionId,
-                name: tabDisplayName(for: event, live: liveById[event.sessionId]),
-                // The id, not the callsign — ruled 12 Aug, and the same in
-                // every band so a row means the same thing wherever it sits.
-                // A blocked row spends the column on its reason, like every
-                // other amber row on the panel.
-                aux: blocked?.reason ?? SessionRow.shortId(event.sessionId),
-                lamp: blocked?.lamp
-                    ?? (!resumed
-                        && (evidence?.activity == .working
-                            || delivering.supersedesWaiting(event.sessionId,
-                                                            latestId: event.latestId))
-                        ? .working : .ready),
-                // This band is the only one with a real read state: these
-                // rows HAVE a waiting turn. Everywhere else the answer is
-                // `.none`, which rests at the same intensity as `.opened`
-                // (16 Aug) — an idle session is not asking for you either.
-                read: event.heard ? .opened : .unread,
-                // And the hover carries the whole sentence, as it does on every
-                // other amber row — the column can only hold a clause.
-                detail: blocked?.detail,
-                harness: liveById[event.sessionId]?.harness)
-        }
-        // Live sessions with nothing waiting: quiet rows, so a skipped or heard
-        // session stays findable. Walked via `known` — already latestId DESC —
-        // so the band is recency-ordered like the waiting band above it, never
-        // Dictionary.values hash order (which reshuffled between refreshes).
-        // (Turn boundaries were computed above the waiting band — see
-        // SessionActivity.classify's precedence note: the hooks settle
-        // working-vs-idle, which the transcript alone gets wrong 9.8% of the
-        // time an agent is working.)
-        let waitingIds = Set(waiting.map(\.sessionId))
+        let smoothed = GridAssembler.smoothedLive(
+            found: found, remembered: lastSeenLive, now: now, grace: Self.liveGrace,
+            log: { Permissions.log($0) })
+        lastSeenLive = smoothed.remembered
+        let liveById = smoothed.live
+
+        let boundaries = (try? store?.latestTurnBoundaries()) ?? [:]
         let known = (try? store?.allKnownSessions()) ?? []
         // Minted callsigns outlive the process that earned them, so a dead row
         // keeps the name you have been calling it. The store is the only place
@@ -198,157 +169,51 @@ extension AppDelegate {
         let closedCallsigns = Dictionary(
             known.compactMap { row in row.callsign.map { (row.sessionId, $0) } },
             uniquingKeysWith: { first, _ in first })
-        var placed = waitingIds
-        for stored in known where !placed.contains(stored.sessionId) {
-            guard let live = liveById[stored.sessionId] else { continue }
-            // Ruled 12 Aug: headless is headless whether it is running or not.
-            // Liveness used to hide these by accident — a cron job is gone
-            // before anyone looks — but a LONG one is live and got a row, and
-            // then vanished on exit instead of joining the closed band. One
-            // rule across all four bands now, and it is the same fail-open
-            // predicate the announcer uses.
-            guard !SessionDiscovery.isHeadless(transcriptPath: stored.transcriptPath)
-            else { continue }
-            placed.insert(stored.sessionId)
-            let evidence = stored.transcriptPath.flatMap {
-                SessionActivity.evidence(transcriptPath: $0,
-                                         boundary: boundaries[stored.sessionId])
-            }
-            let storedLamp = lampAndReason(for: evidence, sessionId: stored.sessionId,
-                                           live: live,
-                                           boundary: boundaries[stored.sessionId],
-                                           pickedUp: switchedOn.contains(stored.sessionId))
-            rows.append(SessionRow(
-                id: stored.sessionId,
-                name: tabDisplayName(for: stored, live: live),
-                aux: storedLamp.reason ?? SessionRow.shortId(stored.sessionId),
-                lamp: storedLamp.lamp, detail: storedLamp.detail,
-                harness: live.harness))
-        }
-        // Live sessions with no stored events yet: nothing to rank them by,
-        // so they close the live half of the grid.
-        for live in liveById.values where !placed.contains(live.sessionId) {
-            let path = live.cwd.map {
-                TranscriptTitles.defaultPath(cwd: $0, sessionId: live.sessionId)
-            }
-            // A session with no stored events has no recorded transcript path,
-            // so this is the one band that has to derive one. `defaultPath`
-            // rebuilds it from the two fields the agents API supplies, and an
-            // unreadable path fails open exactly like everywhere else.
-            guard !SessionDiscovery.isHeadless(transcriptPath: path) else { continue }
-            placed.insert(live.sessionId)
-            let evidence = path.flatMap {
-                SessionActivity.evidence(transcriptPath: $0,
-                                         boundary: boundaries[live.sessionId])
-            }
-            let liveLamp = lampAndReason(for: evidence, sessionId: live.sessionId,
-                                         live: live,
-                                         boundary: boundaries[live.sessionId],
-                                         pickedUp: switchedOn.contains(live.sessionId))
-            rows.append(SessionRow(
-                id: live.sessionId,
-                name: GridAssembler.tabDisplayName(live: live, callsign: nil),
-                aux: liveLamp.reason ?? SessionRow.shortId(live.sessionId),
-                lamp: liveLamp.lamp, detail: liveLamp.detail,
-                harness: live.harness))
-        }
-        // And the sessions that are not awake (ruled 11 Aug). Everything above
-        // this line is enumerated from PROCESSES, which is why a machine
-        // restart used to empty the panel; everything below is enumerated from
-        // the transcripts on disk, which outlive the process.
-        //
-        // Deliberately ADDITIVE rather than a replacement of the bands above.
-        // The live half already agrees with the store and with the announcer;
-        // rebuilding it from disk would give the same rows by a second route,
-        // and two routes to one answer is how they start disagreeing. Disk
-        // enumerates only the population the process list cannot: the dead.
-        for found in (SessionDiscovery.discoverIfScanned()?.sessions ?? [])
-        where !placed.contains(found.sessionId) && found.liveness != .live {
-            placed.insert(found.sessionId)
-            // One conversation, one row (ruled 10 Sep). A session Claude Code
-            // continued under a new id (the left arrow does this) is the same
-            // agent; when any other member of its family already has a row,
-            // this transcript is that agent's earlier or later half, not a
-            // second agent with the same name.
-            if SessionLineage.family(of: found.sessionId)
-                .contains(where: { $0 != found.sessionId && placed.contains($0) }) {
-                continue
-            }
-            rows.append(SessionRow(
-                id: found.sessionId,
-                name: GridAssembler.tabDisplayName(
-                    discovered: found.title, sessionId: found.sessionId,
-                    callsign: closedCallsigns[found.sessionId], cwd: found.cwd),
-                // Same precedence as the live band above: a session that died
-                // mid-error says why, and otherwise the column carries the id.
-                // For a closed row that id is the whole point — it is the
-                // thing you would otherwise be grepping ~/.claude/projects for.
-                aux: found.activity?.shortReason
-                    ?? SessionRow.shortId(found.sessionId),
-                lamp: .unlit,
-                revivable: found.revivable,
-                // The harness names itself in the hover when it is not the
-                // default one, matching this app's rule that explanatory text
-                // lives in a tooltip rather than inline. Codex used to get a
-                // whole second band for this line.
-                detail: found.activity?.fullReason
-                    ?? (found.harness == CodexAdapter().id ? "Codex session" : nil),
-                harness: found.harness))
-        }
-        // The user's own switch, applied last and to every band at once.
-        //
-        // Derived on every repaint rather than stored on the row, so a session
-        // that starts waiting stops being filed the moment it does — see
-        // `LampSwitch.isOff`, where that exception is the whole policy. And the
-        // switch is CLEARED, not merely overridden, when a turn arrives: the
-        // file should hold only sessions that are filed right now, or the row
-        // would quietly drop off the grid again as soon as the user read it.
-        let switchedOff = LampSwitch.load()
-        if !switchedOff.isEmpty {
-            for row in rows where row.lamp == .ready && switchedOff.contains(row.id) {
-                LampSwitch.turnOn(row.id)
-                Permissions.log("lamp: \(row.id.prefix(8)) is waiting — switch cleared")
-            }
-            rows = rows.map { row in
-                // A dead session is in the list by liveness already; filing it
-                // as well would say the user switched off something that has
-                // no lamp to switch.
-                guard row.lamp != .unlit,
-                      LampSwitch.isOff(row.id, waiting: row.lamp == .ready,
-                                       switchedOff: switchedOff)
-                else { return row }
-                return row.switchedOffCopy()
-            }
-        }
-        // Last, and after every band has been appended: a session that is merely
-        // alive drops below the ones doing something, without disturbing the
-        // recency order the bands above spent this whole function establishing.
-        return SessionRow.quietRowsLast(rows)
-    }
 
-    /// The lamp/reason/name derivations moved to Core (App-lane P8, 24 Aug
-    /// — `GridAssembler`, see its own doc comment): `blockedOnYou`,
-    /// `lampAndReason`, `tabTitle`, `tabDisplayName` all depended on
-    /// nothing but Core types, so the app layer was just where they
-    /// happened to be written. `sessionRowsNow` below still calls them —
-    /// through `GridAssembler.` now — and stays app-side itself,
-    /// deliberately: it owns `lastSeenLive` and reads `delivering`, two
-    /// pieces of AppDelegate's own state that would need a real stateful
-    /// Core type to carry, which is a bigger redesign than this pass.
-    func lampAndReason(for evidence: SessionActivity.Evidence?, sessionId: String,
-                               live: LiveSession?,
-                               boundary: SessionActivity.TurnBoundary? = nil,
-                               pickedUp: Bool = false) -> (lamp: Lamp, reason: String?, detail: String?) {
-        GridAssembler.lampAndReason(for: evidence, sessionId: sessionId, live: live,
-                                    boundary: boundary, pickedUp: pickedUp,
-                                    isInFlight: delivering.isInFlight(sessionId))
+        let delivering = self.delivering
+        let verdict = GridAssembler.rows(GridAssembler.RowInputs(
+            waiting: (try? coordinator.waiting()) ?? [],
+            known: known,
+            discovered: SessionDiscovery.discoverIfScanned()?.sessions ?? [],
+            liveById: liveById,
+            boundaries: boundaries,
+            switchedOff: LampSwitch.load(),
+            switchedOn: LampSwitch.loadOn(),
+            evidence: { SessionActivity.evidence(transcriptPath: $0, boundary: $1) },
+            isHeadless: { SessionDiscovery.isHeadless(transcriptPath: $0) },
+            family: { SessionLineage.family(of: $0) },
+            supersedesWaiting: { delivering.supersedesWaiting($0, latestId: $1) },
+            isInFlight: { delivering.isInFlight($0) },
+            closedCallsigns: closedCallsigns,
+            remote: remoteAgents(waiting: (try? coordinator.waiting()) ?? [])))
+
+        // Recorded before anything is drawn so the card can ask the same
+        // question the rows answered, and get the same answer.
+        harnessById = verdict.harnessById
+        // The writes the bands decided but deliberately did not perform: a
+        // filed lamp is CLEARED, not merely overridden, when a turn arrives, or
+        // the row would quietly drop off the grid again as soon as the user
+        // read it.
+        for id in verdict.clearSwitches {
+            LampSwitch.turnOn(id)
+            Permissions.log("lamp: \(id.prefix(8)) is waiting — switch cleared")
+        }
+        return verdict.rows
     }
 
     /// See `GridAssembler.tabDisplayName` — this is the thin AppDelegate-side
     /// name for the same call, kept so the many call sites elsewhere in the
     /// app don't all need to say `GridAssembler.` themselves.
     func tabDisplayName(for event: WaitingSession, live: LiveSession?) -> String {
-        GridAssembler.tabDisplayName(for: event, live: live)
+        // A remote agent's name is the provider's title for it, the same
+        // name its row wears. The local rule reads a transcript title and
+        // falls back to the directory, and a remote agent has no transcript
+        // here, so its card said "tranquility-base" over an answer about
+        // software markets (Robert, 16 Sep 2:15 PM: "name on card incorrect").
+        if let agent = agents?.snapshot.agent(event.sessionId), !agent.title.isEmpty {
+            return agent.title
+        }
+        return GridAssembler.tabDisplayName(for: event, live: live)
     }
 
     /// The one route to the idle face: assemble the grid and show it.
@@ -356,6 +221,43 @@ extension AppDelegate {
     /// to pass one. Twenty-five call sites reach the grid; asking each to label
     /// itself is twenty-five chances to paste the neighbour's string, which is
     /// how they all ended up saying "idle repaint" in the first place.
+    /// The fifth band's inputs, from whatever the poller last saw.
+    ///
+    /// Empty on a machine with no provider configured, which draws no remote
+    /// rows and costs nothing. Read from the snapshot rather than fetched:
+    /// a repaint must never wait on a network call, which is the same rule
+    /// `lastSeenLive` follows for the local bands.
+    func remoteAgents(waiting: [WaitingSession]) -> GridAssembler.RowInputs.RemoteAgents {
+        guard let snapshot = agents?.snapshot else { return .init() }
+        return Self.remoteAgents(snapshot: snapshot, waiting: waiting)
+    }
+
+    /// The pure half, so the panel's own drill can drive it with a posed
+    /// snapshot and a temporary store's waiting list, exactly as the grid
+    /// does with the real ones.
+    static func remoteAgents(snapshot: AgentPoller.Snapshot,
+                             waiting: [WaitingSession]) -> GridAssembler.RowInputs.RemoteAgents {
+        // UNREAD COMES FROM THE STORED EVENT LOG, exactly like every local
+        // row's green lamp, rather than from the provider's own opinion. The
+        // spool line a remote turn wrote is what puts it here, so a remote
+        // agent goes green by the same route a local one does.
+        //
+        // From the WAITING list, which joins the heard cursor. This read
+        // `allKnownSessions()`, which does not, so `heard` was nil for every
+        // row and every remote row stayed unread for ever, however many times
+        // it was heard (Robert, 15 Sep: "read state isn't updating"). A
+        // dismissed session is not in the waiting list at all, which is also
+        // right: dismissed is read.
+        let unread = Set(waiting.filter { !$0.heard }.map(\.sessionId))
+        let heard = Set(waiting.filter { $0.heard }.map(\.sessionId))
+        let ids = Set(snapshot.agents.map(\.id))
+        return .init(agents: snapshot.agents,
+                     requests: snapshot.requests,
+                     unread: unread.intersection(ids),
+                     unreachable: snapshot.unreachable,
+                     heard: heard.intersection(ids))
+    }
+
     func showIdleGrid(note: String? = nil,
                               caller: String = #function, line: Int = #line) {
         hud.showIdle(note: note, rows: sessionRowsNow(),

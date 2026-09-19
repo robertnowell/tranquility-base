@@ -60,7 +60,7 @@ extension AppDelegate {
             case let .home(s, r):    session = s; ref = r
             case let .hear(s):       session = s; ref = nil
             case let .reply(s):      session = s; ref = nil
-            case .show, .unknown:    session = nil; ref = nil
+            case .show, .connect, .new, .unknown: session = nil; ref = nil
             }
             Permissions.log("deeplink: \(action) session=\(session?.prefix(8) ?? "-")")
             var link: [String: TrackValue] = ["action": Track.token(from: action),
@@ -124,6 +124,20 @@ extension AppDelegate {
                 }
             case "show":
                 showPanel()
+            case "new":
+                // The same call the button and the menu item make; nothing
+                // is decided here that they do not decide.
+                newSession()
+            case "connect":
+                // "Begin", and nothing else: the link carries no token and no
+                // address, so this is the same flow the Setup row starts. The
+                // panel comes up because the phrase to compare is on it.
+                showPanel()
+                HubConnect.shared.onChange = { [weak self] in
+                    if let note = HubConnect.shared.note { self?.hud.note(note) }
+                }
+                HubConnect.shared.begin()
+                if let note = HubConnect.shared.note { hud.note(note) }
             default:
                 Permissions.log("deeplink: unknown action \(action)")
             }
@@ -160,8 +174,12 @@ extension AppDelegate {
             Permissions.log("openHub: no briefs for \(session.prefix(8))")
             return false
         }
-        if BrowserFocus.focusExistingTab(file) == .notFound {
-            NSWorkspace.shared.open(file)
+        // The local hub is still written (it is the offline export and what
+        // the file:// footers reach); the door itself opens the agent in the
+        // hub app when one is configured.
+        let target = HubApp.openURL(session: session) ?? file
+        if BrowserFocus.reveal(target, app: HubApp.baseURL) == .notFound {
+            NSWorkspace.shared.open(target)
         }
         return true
     }
@@ -202,6 +220,7 @@ extension AppDelegate {
         let known = resolved.flatMap { id in try? store?.latestStop(for: id) } ?? nil
         let action = row.map { SessionRow.action(for: $0) }
         let destination = DeepLink.discussDestination(rowAction: action,
+                                                      lamp: row?.lamp,
                                                       hasCompletedTurn: known != nil)
         let who = resolved?.prefix(8) ?? session?.prefix(8) ?? "-"
         Permissions.log("deeplink: discuss, \(who) row="
@@ -223,6 +242,16 @@ extension AppDelegate {
         case .agentTerminal:
             guard let resolved else { return }
             goToSession(resolved)
+        case .agentShell(let command, let directory):
+            openShell(command, in: directory)
+        case .agentPane(let name):
+            attachPane(name)
+        case .agentPage(let url):
+            // The remote half of `agentTerminal`. `goToSession` focuses a pane
+            // this Mac owns, and a remote agent has none; its provider already
+            // told us where it lives. Same intent, different door, decided by
+            // the row rather than by anything here asking what it is.
+            NSWorkspace.shared.open(url)
         case .revive:
             guard let row else { return }
             // `revive` speaks the stored brief first and resumes behind it, so
@@ -338,6 +367,97 @@ extension AppDelegate {
     /// recorder's peak may belong to a later arm by now) and the face says
     /// "Retrying" — re-entering `.transcribing` restarts the elapsed clock,
     /// which is the visible acknowledgment the first Retry never had.
+    /// Whether stopping the app now would lose words. Read by the in-flight
+    /// guard every second and written to `CaptureMarker`, which the deploy
+    /// scripts wait on. Every leg of the promise, in the order a reply takes
+    /// it: mic open, transcribing, the read-back countdown, keystrokes in
+    /// flight to a terminal.
+    var utteranceInFlight: Bool { utteranceInFlightReason != "idle" }
+
+    var utteranceInFlightReason: String {
+        if recorder.isRecording { return "mic open" }
+        if inFlightTranscription != nil { return "transcribing" }
+        switch hud.state {
+        case .transcribing: return "transcribing"
+        case .pendingSend: return "read-back countdown"
+        default: break
+        }
+        if !delivering.inFlightSessions().isEmpty { return "delivering" }
+        return "idle"
+    }
+
+    /// Audio the app got back after losing it — a kept file adopted at boot
+    /// or on abandon — is transcribed once, unasked, so the words are in
+    /// Recents and not only the sound. Ruled 14 Sep 2026: "even if that
+    /// happens, the transcription should be in Recents." One attempt per
+    /// capture, through the ordinary chain; a row it cannot transcribe stays
+    /// for a human's Retry, and the 13 Aug rule against re-spending on
+    /// FAILED rows is untouched. Never delivered: the target it was spoken
+    /// to is a restart ago, and a paste with no read-back is the one thing
+    /// worse than a lost reply.
+    func transcribeRecovered(_ ids: [String], because trigger: String) {
+        guard let store, !ids.isEmpty else { return }
+        Task { @MainActor in
+            for id in ids {
+                do {
+                    guard let row = try await store.retryTranscription(utteranceId: id, trigger: trigger) else { continue }
+                    let seconds = Int((row.audioDurationMs ?? 0) / 1000)
+                    if let text = row.transcriptText, !text.isEmpty {
+                        Permissions.log("recovered: \(id.prefix(8)) (\(seconds)s) → \(text.count) chars (\(row.transcriptProvider ?? "?"))")
+                        hud.note("Recovered a \(seconds >= 60 ? "\(seconds / 60)m\(String(format: "%02d", seconds % 60))s" : "\(seconds)s") recording. Transcript in Recents.")
+                    } else {
+                        Permissions.log("recovered: \(id.prefix(8)) (\(seconds)s) → no transcript (\(row.transcriptionOutcome ?? "?")); Retry in Recents")
+                    }
+                    Track.record("audio_recovered", ["trigger": .token(trigger),
+                                                     "outcome": row.transcriptText == nil ? "no_transcript" : "transcribed",
+                                                     "audio_ms": .int(Int(row.audioDurationMs ?? 0))])
+                } catch {
+                    Permissions.log("recovered: \(id.prefix(8)) transcription failed: \(error)")
+                }
+            }
+            hud.updateRecentAudio(events: recentAudioEvents())
+        }
+    }
+
+    /// A capture ended by Dismiss (the button, the menu bar toggle, Escape's
+    /// teardown): kept and transcribed into Recents, never sent. The durable
+    /// half is `QueueStore.keepDismissedCapture`; this is the app's wrapper —
+    /// the peak the recorder measured, the stream the recorder opened, the
+    /// log line, and the pane refresh. Off the gesture's thread for the
+    /// transcription, back on main for the paint (rule 9).
+    func keepDismissedCapture(_ capture: Recorder.Capture, stream: StreamedUtterance?) {
+        guard let store else { return }
+        let seconds = Double(capture.pcm16.count) / 2.0 / 16_000.0
+        let peak = recorder.peakLevel
+        let id = UUID().uuidString
+        Permissions.log(String(format: "dismiss: keeping %.1fs (peak %.4f) as ", seconds, peak)
+                        + id.prefix(8) + ", transcribing")
+        Task { @MainActor in
+            do {
+                let streamed = await stream?.finish()
+                let row = try await Track.$captureID.withValue(capture.id) {
+                    try await store.keepDismissedCapture(
+                        pcm16: capture.pcm16, sampleRate: 16_000, peak: peak, chain: RecoveryChain(),
+                        streamed: streamed, streamHadRecognizedText: stream?.hasRecognizedText ?? false,
+                        streamNoSpeechProvider: stream?.noSpeechProvider,
+                        preWritten: capture.fileURL, utteranceId: id)
+                }
+                if let row {
+                    Permissions.log("dismiss: kept \(id.prefix(8)) → "
+                        + "\(row.transcriptText.map { "\($0.count) chars" } ?? "no transcript") "
+                        + "(\(row.transcriptProvider ?? "no provider"), \(row.status.rawValue))")
+                } else {
+                    Permissions.log("dismiss: room tone, nothing kept")
+                }
+            } catch {
+                Permissions.log("dismiss: keep failed: \(error)")
+                Failures.report(.transcriptionProvider, reason: "dismissed capture not kept: \(error)",
+                                card: "Couldn't keep that recording. Audio kept.")
+            }
+            self.hud.updateRecentAudio(events: self.recentAudioEvents())
+        }
+    }
+
     func sendReply(_ capture: Recorder.Capture, isRetry: Bool = false) {
         guard let coordinator else { return }
         // Unpacked once, at the top, from the value stop() returned. Both of
@@ -355,10 +475,28 @@ extension AppDelegate {
         // noise floor is refused before any model touches it: hallucinated words
         // in a real terminal are worse than asking you to speak again.
         let seconds = Double(pcm.count) / 2.0 / 16_000.0
-        if !isRetry, seconds < 0.5 || recorder.peakLevel < 0.005 {
+        if !isRetry, seconds < 0.5 || recorder.peakLevel < Recorder.silenceFloor {
             Permissions.log(String(format:
                 "send: refused, silence gate (%.2fs, peak %.4f)", seconds, recorder.peakLevel))
             recordingDestination = nil
+            if seconds < 0.5 {
+                // Refused here, the write-ahead file has no row and never
+                // will; left alone it sits as `.wav.live` — the shape of a
+                // kept capture — until the 72h reap. Thirteen of them were on
+                // disk on 14 Sep. Under half a second is room tone: cleanup.
+                if let capturedFile { try? FileManager.default.removeItem(at: capturedFile) }
+            } else if let store {
+                // Long enough to be words, too quiet to send unread. Ruled
+                // 14 Sep 2026: salvageable audio is salvaged. A row with Play
+                // and Retry, no provider spent unasked.
+                if let row = try? store.keepUntranscribed(pcm16: pcm, sampleRate: 16_000,
+                                                           preWritten: capturedFile, because: "silence_gate") {
+                    Permissions.log("send: quiet capture kept untranscribed as \(row.id.prefix(8))")
+                    Track.record("capture_kept", ["reason": "silence_gate", "outcome": "kept_untranscribed",
+                                                  "audio_ms": .int(Int(seconds * 1000))])
+                    hud.updateRecentAudio(events: recentAudioEvents())
+                }
+            }
             reportNothingHeard(because: seconds < 0.5 ? "too short" : "below signal threshold")
             return
         }
@@ -533,6 +671,10 @@ extension AppDelegate {
                 let answering = (try? coordinator.waiting())?
                     .first { $0.sessionId == spokenTo }?.latestId
                 delivering.began(sessionId: spokenTo, answering: answering)
+                // Words typed while the microphone was open ride this
+                // dictation too: staged as a chip BEFORE Core snapshots the
+                // tray onto the utterance below.
+                hud.flushTypedLineIntoTray()
                 // One clear-site, not eight. Every exit below closes the window
                 // — the supersede return, the six terminal outcomes, the catch —
                 // except `.readyToSend`, which hands the delivery to the undo
@@ -651,15 +793,21 @@ extension AppDelegate {
                     lastStatusLine = "can't send, \(why); audio kept"
                     hud.showResult("Can't send yet, \(why). Recording kept. Try again shortly.")
                 case .transcriptionFailed(let utteranceId):
-                    if let row = try? self.store?.utterance(id: utteranceId),
-                       row.transcriptionOutcome == TranscriptionDisposition.noSpeechDetected.rawValue {
+                    // The disposition is a fixed enum value (no_speech_detected,
+                    // provider_error, authentication_failed, ...), never the
+                    // transcript, so it is safe to log and is the one thing that
+                    // says WHY the transcription failed instead of a bare count.
+                    let disposition = (try? self.store?.utterance(id: utteranceId))?
+                        .transcriptionOutcome
+                    if disposition == TranscriptionDisposition.noSpeechDetected.rawValue {
                         Track.replyOutcome("no_speech_detected", stage: "capture", agent: spokenTo)
                         finishWithoutRecognizedSpeech()
                         break
                     }
                     Track.replyOutcome("transcription_failed", stage: "capture", agent: spokenTo)
                     lastStatusLine = "couldn't transcribe, audio kept"
-                    Failures.report(.transcriptionProvider, reason: "transcription failed; audio kept",
+                    Failures.report(.transcriptionProvider,
+                                    reason: "transcription failed (\(disposition ?? "unknown")); audio kept",
                                     card: "Couldn't transcribe that. The audio is saved. Retry from the menu.",
                                     session: spokenTo)
                     hud.showResult("Couldn't transcribe that. The audio is saved. Retry from the menu.")
@@ -702,6 +850,10 @@ extension AppDelegate {
                 }
             } catch {
                 Track.replyOutcome("threw", stage: "capture")
+                // File the reason, the way the confirm-stage twin already does.
+                // Without this the exception lived only in a local status
+                // string, invisible remotely.
+                Failures.report(.deliveryFailed, reason: "capture stage threw: \(error)")
                 lastStatusLine = "reply failed: \(error)"
             }
             rebuildMenu()
@@ -780,7 +932,7 @@ extension AppDelegate {
     @objc func editKey(_ sender: NSMenuItem) {
         guard let raw = sender.representedObject as? String,
               let key = Secrets.Key(rawValue: raw) else { return }
-        KeySheet.prompt(for: key) { status in
+        KeySheet.prompt(for: key) { status, _ in
             // The menu is gone by the time a verdict lands, so it goes to the
             // HUD, which is where this app already says things that outlive the
             // click that caused them.
@@ -1069,11 +1221,119 @@ extension AppDelegate {
     /// turns enter the loop — and the grid — as soon as the session first
     /// stops.
     func newSession() {
-        let harness = AgentDefaults.defaultHarness
-        let adapter = KnownHarnesses.adapter(for: harness)
-        newSession(directory: AgentDefaults.directory(for: harness),
-                   command: AgentDefaults.load(for: harness),
+        let selected = AgentDefaults.defaultHarness
+
+        // A PROVIDER FIRST. Settings offers OpenCode and crobot as tiles, and
+        // until 15 Sep picking one and pressing New Agent looked the tile up as
+        // a terminal harness, found none, and `KnownHarnesses.adapter(for:)`
+        // fell back to Claude Code without a word. The tile promised one agent
+        // and the button started another. An agent the registry can drive is
+        // started through it, in the workspace, with no terminal at all (#374).
+        if let registry = providerRegistry, let provider = registry.provider(selected) {
+            startProviderAgent(provider)
+            return
+        }
+
+        // Then a terminal harness, and ONLY one that exists. `adapter(for:)`
+        // fails open to Claude Code for callers that predate a third harness;
+        // this one has just checked the registry and the harness table both,
+        // so an id neither knows is a card, never a different agent.
+        guard KnownHarnesses.all.contains(where: { $0.id == selected }) else {
+            let card = "No launcher for \(selected): it is not an installed agent or a terminal harness."
+            Failures.report(.launchFailed, reason: card, card: card)
+            hud.showResult(card)
+            return
+        }
+        let adapter = KnownHarnesses.adapter(for: selected)
+        newSession(directory: AgentDefaults.directory(for: selected),
+                   command: AgentDefaults.load(for: selected),
                    adapter: adapter)
+    }
+
+    /// A provider agent, started the way a terminal one is: the greeting card
+    /// FIRST, spoken in the voice the agent is about to be given, then the
+    /// start, then the session bound underneath it. Same pieces as the local
+    /// path above (`showGreeting`, `GreetingCache`, `LaunchGreeting.record`,
+    /// `activeConversation`, `bindGreeting`), because the promise is the
+    /// same: the next thing you say goes to the agent you just started.
+    ///
+    /// Robert pressed New Agent → OpenCode on 15 Sep and got a card that said
+    /// "opencode is up. Say something to it." with nowhere for the words to
+    /// go: the row existed, the reply target did not move, and the card wore
+    /// another session's title. A remote agent becomes a reply target the way
+    /// a local one does, by a greeting turn in the store under its id, and
+    /// the dispatcher already routes an id the poller has seen to its
+    /// provider (`RemoteDispatchTransport`).
+    ///
+    /// No `PendingLaunch`: a protocol start is sub-second (0.8 s measured),
+    /// so words spoken before the id exists are a window too small to build
+    /// a promise for. A failure is a card with the provider's reason, because
+    /// a silent no-op after pressing New Agent is the defect this replaces.
+    private func startProviderAgent(_ provider: any AgentProvider) {
+        // **The door, if the provider has one.** One verb, one place: an agent
+        // that begins in its own UI (crobot, in a web page) is opened there,
+        // and `start` is not called. Its first question — which repository? —
+        // is answered where every later question would be, on the agent's own
+        // surface, so New Agent never renders a provider's questions itself
+        // (ruled 15 Sep). A local harness returns nil here and is begun below.
+        if let compose = provider.composeURL(for: Brief(prompt: "")) {
+            Permissions.log("new agent: \(provider.id) opens its own compose page")
+            Track.record("new_agent_compose", ["provider": .token(provider.id)])
+            NSWorkspace.shared.open(compose)
+            return
+        }
+        let dir = AgentDefaults.directory(for: provider.id)
+        let label = (dir as NSString).lastPathComponent
+        let line = LaunchGreeting.nextLine()
+        let voice = (try? store?.nextVoiceInRotation(roster: VoiceRoster.load())) ?? nil
+        let conversationAtLaunch = activeConversation?.sessionId
+        if hud.showGreeting(line: line, label: label) {
+            Task.detached(priority: .userInitiated) {
+                await GreetingCache.speak(line, voiceId: voice)
+            }
+        }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                let id = try await provider.start(Brief(prompt: ""))
+                Permissions.log("new agent: \(provider.id) started \(id)")
+                self.agents?.kick()
+                // The destination follows the launch, unless you moved on
+                // since pressing the button (ruled 19 Aug, same rule as above).
+                if LaunchAdoption.claimsTheReply(
+                    isNewestLaunch: true,
+                    conversationAtLaunch: conversationAtLaunch,
+                    conversationNow: self.activeConversation?.sessionId) {
+                    self.activeConversation = (id, label, dir)
+                    Permissions.log("launch: replies now go to \(id.prefix(8))")
+                } else {
+                    Permissions.log("launch: \(id.prefix(8)) started, but you moved on — "
+                        + "replies stay where you put them")
+                }
+                // The durable half: a row, a reply target, a turn the agent's
+                // own first turn supersedes.
+                if let store = self.store {
+                    do {
+                        if try LaunchGreeting.record(sessionId: id, directory: dir, line: line,
+                                                     voice: voice, store: store) != nil {
+                            Permissions.log("greeting: recorded for \(id.prefix(8)) in \(dir)")
+                        }
+                    } catch {
+                        Permissions.log("greeting: not recorded for \(id.prefix(8)): \(error)")
+                    }
+                }
+                if self.hud.bindGreeting(sessionId: id, pid: nil, label: label, cwd: dir) {
+                    Permissions.log("greeting: bound \(id.prefix(8)) to the card")
+                } else {
+                    Permissions.log("greeting: NOT bound \(id.prefix(8)) — card moved on; replies still go to it")
+                }
+            } catch {
+                let reason = "\(provider.id) could not start: \(error)"
+                Failures.report(.launchFailed, reason: reason, card: reason)
+                self.hud.markLaunchFailed()
+                self.hud.showResult(reason)
+            }
+        }
     }
 
     /// The grid's handoff is deliberately an ordinary New Agent launch with
@@ -1159,82 +1419,75 @@ extension AppDelegate {
     /// Off-main because the scan can walk the archive, then applied on the main
     /// actor in one shot.
     func openPastAgents() {
-        // The SAME rows the grid is built from, minus the ones it is showing.
-        // Not a second query: two queries can disagree, and the disagreement
-        // was visible — every live session appeared in both surfaces at once,
-        // and appeared here with a quiet lamp whatever it was actually doing.
-        // A working agent read as idle, which is the lamp lying.
-        let rows = sessionRowsNow()
-        let hidden = Array(StatusHUD.pastAgents(rows))
-        // The directory is the one thing a row does not carry and the filter
-        // wants, so it comes from the scan the rows were built from — already
-        // warm, since sessionRowsNow just used it.
-        let scanned = SessionDiscovery.discoverIfScanned()?.sessions ?? []
-        let cwds = Dictionary(scanned.map { ($0.sessionId, $0.cwd ?? "") },
-                              uniquingKeysWith: { first, _ in first })
-        // When each agent last MOVED — the conversation's own clock, not the
-        // file's. It rides the same scan the rows and the directories came from,
-        // so the column, the lamp and the ranking are all reading one number;
-        // a second source here is how the list would start disagreeing with the
-        // band order it is drawn in.
-        let moved = Dictionary(scanned.map { ($0.sessionId, $0.lastActivityAt) },
-                               uniquingKeysWith: { first, _ in first })
+        let warm = SessionDiscovery.hasScanned()
+        let initial = warm ? pastAgentItems() : []
+        hud.pastList?.archiveRead = warm
+        hud.showPastAgents(items: initial)
+        guard case .pastAgents = hud.state, let list = hud.pastList else { return }
+        let opening = list.openingGeneration
+        let index = pastAgentSearch
+        let store = store
         let now = Date()
-        let items = hidden.map { row -> PastAgentsList.Item in
-            // Everything the filter matches, lowercased once: the name you half
-            // remember, the id you would have grepped for, and the directory you
-            // were working in.
-            let haystack = [row.name, row.id, cwds[row.id] ?? ""]
-                .joined(separator: " ").lowercased()
-            // The column answers "when", because that is the question this face
-            // exists for (ruled 19 Aug). A stopped session used to spend the
-            // whole column on its stall reason — a 46-character sentence,
-            // right-aligned — and the name label yields its width to it, so the
-            // three longest-stalled rows on the list rendered with no visible
-            // name at all. The reason is not lost; it moves to the tooltip,
-            // uncut, next to the id it now shares that space with.
-            let when = moved[row.id].map { SessionActivity.lastMovedLabel($0, now: now) }
+        let since = now.addingTimeInterval(-SessionDiscovery.defaultWindow)
+        pastAgentPreparation?.cancel()
+        pastAgentPreparation = Task.detached(priority: .userInitiated) { [weak self] in
+            do {
+                let scanned = SessionDiscovery.discover().sessions
+                try Task.checkCancellation()
+                let documents: [SessionKeywordIndex.Document]? = await MainActor.run {
+                    guard let self, case .pastAgents = self.hud.state,
+                          self.hud.pastList.openingGeneration == opening else { return nil }
+                    let items = warm ? initial : self.pastAgentItems()
+                    if !warm { self.hud.pastList.finishArchive(items: items, opening: opening) }
+                    let byID = Dictionary(scanned.map { ($0.sessionId, $0) },
+                                          uniquingKeysWith: { first, _ in first })
+                    Track.record("past_agents_opened", ["rows": .int(items.count)])
+                    return items.map { item in
+                        let session = byID[item.row.id]
+                        return SessionKeywordIndex.Document(id: item.row.id, title: item.row.name,
+                            metadata: item.haystack,
+                            activity: session?.lastActivityAt ?? .distantPast)
+                    }
+                }
+                guard let documents else { return }
+                let sources = try SessionKeywordIndex.sources(documents: documents,
+                    discovered: scanned, store: store, since: since, reportsRoot: HomeBase.root)
+                let preparation = try await index.prepare(sources: sources, since: since)
+                try Task.checkCancellation()
+                await MainActor.run {
+                    guard let self, case .pastAgents = self.hud.state else { return }
+                    self.hud.pastList.installSearch({ query in try await index.search(query) },
+                        opening: opening, partial: preparation.unreadableSources > 0)
+                    Permissions.log("past agents keyword index: \(preparation.documents) sessions, "
+                        + "\(preparation.unreadableSources) unreadable sources")
+                }
+            } catch is CancellationError { }
+            catch {
+                await MainActor.run {
+                    guard let self, case .pastAgents = self.hud.state else { return }
+                    self.hud.pastList.searchFailed(opening: opening)
+                    Permissions.log("past agents keyword preparation failed: \(error)")
+                }
+            }
+        }
+    }
+
+    /// Use the grid's own partition and names. The archive and index never
+    /// invent a competing set of row identities or navigation actions.
+    private func pastAgentItems() -> [PastAgentsList.Item] {
+        let hidden = Array(StatusHUD.pastAgents(sessionRowsNow()))
+        let scanned = SessionDiscovery.discoverIfScanned()?.sessions ?? []
+        let byID = Dictionary(scanned.map { ($0.sessionId, $0) },
+                              uniquingKeysWith: { first, _ in first })
+        let now = Date()
+        return hidden.map { row in
+            let session = byID[row.id]
+            let haystack = [row.name, row.id, session?.cwd ?? ""].joined(separator: " ")
+            let when = session.map { SessionActivity.lastMovedLabel($0.lastActivityAt, now: now) }
             let hover = [SessionRow.hoverText(for: row), SessionRow.shortId(row.id)]
                 .compactMap { $0 }.joined(separator: "\n")
-            // The row's OWN lamp, carried through. A session below the fold is
-            // usually quiet, but it is not quiet by definition — on a small
-            // screen an agent can be working and still not fit — and the lamp
-            // must say which.
             return PastAgentsList.Item(row: row, revivable: row.revivable,
-                                       haystack: haystack,
-                                       aux: when, tooltip: hover)
-        }
-        // Tell the list whether the archive has actually been read, so an
-        // empty one can say "reading" rather than "0 sessions".
-        hud.pastList?.archiveRead = SessionDiscovery.hasScanned()
-        // A text census of the same list, for answering "is this harness in
-        // here at all" without squinting at a screenshot of the first ten
-        // rows. Logged, not printed: this runs inside a live app.
-        let codex = items.filter { $0.row.id.hasPrefix("01a0") }.count
-        Permissions.log("past agents: \(items.count) rows "
-            + "(\(codex) codex, \(items.count - codex) claude-code), "
-            + "archiveRead=\(SessionDiscovery.hasScanned())")
-        Track.record("past_agents_opened", ["rows": .int(items.count), "codex": .int(codex)])
-        hud.showPastAgents(items: items)
-
-        // The list is on screen and usable before a single transcript is read.
-        // What the sessions SAID arrives afterwards, off-main, because it costs
-        // 0.26s over the sessions shown — nothing on a background queue, and a
-        // visibly frozen open if the main actor paid it (rule 9). Robert asked
-        // for this so that "microphone" finds "recording lost": the name tells
-        // you what a session was CALLED, and the turns tell you what it was
-        // about. See `TranscriptSearchText` for the bound and its measurement.
-        let paths = Dictionary(scanned.map { ($0.sessionId, $0.transcriptPath) },
-                               uniquingKeysWith: { first, _ in first })
-        let wanted = hidden.map(\.id)
-        Task.detached(priority: .userInitiated) {
-            var extra: [String: [UInt8]] = [:]
-            for id in wanted {
-                guard let path = paths[id] else { continue }
-                let text = TranscriptSearchText.shared.bytes(forTranscriptAt: path)
-                if !text.isEmpty { extra[id] = text }
-            }
-            await MainActor.run { [weak self] in self?.hud.widenPastAgents(extra) }
+                                       haystack: haystack, aux: when, tooltip: hover)
         }
     }
 
@@ -1266,14 +1519,92 @@ extension AppDelegate {
     /// follow-up; until it happens, a change to this verb has to be made
     /// twice, and this comment is the warning that it does.
     ///
+    /// Ask claude itself why a launch could not come up, off the main thread,
+    /// and log the verdict so we can tell for sure. Not shown to the user
+    /// (non-technical, ruled 10 Sep): the app repairs what it safely can and
+    /// this is the record for us. Fire-and-forget, so a failure card is never
+    /// delayed by the probe's deadline. Claude-only: the probe is a claude
+    /// startup, so it is skipped for other harnesses.
+    nonisolated func diagnoseClaudeHealth(adapter: any HarnessAdapter, because reason: String) {
+        guard adapter.id == ClaudeCodeAdapter().id else { return }
+        Task.detached {
+            let verdict = ClaudeHealth.check()
+            Permissions.log("claude-health (\(reason)): \(verdict.kind.rawValue): "
+                + verdict.summary
+                + (verdict.evidence.isEmpty ? "" : " :: " + verdict.evidence))
+            Track.record("claude_health", [
+                "kind": .token(verdict.kind.rawValue),
+                "because": .token(reason),
+                "detail": .prose(verdict.summary
+                    + (verdict.evidence.isEmpty ? "" : ", " + verdict.evidence))])
+        }
+    }
+
+    /// Go to Agent for an agent whose interface is a program on this Mac:
+    /// a Terminal window running it in the agent's directory. OpenCode's TUI
+    /// opens the same session the protocol provider is driving
+    /// (`opencode --session`), so what you see there is what you have been
+    /// talking to. Off the main thread, like every other AppleScript here.
+    func openShell(_ command: String, in directory: String) {
+        let line = SessionLauncher.manualLaunch(directory: directory, command: command)
+        Permissions.log("door: shell in \(directory): \(command)")
+        Task.detached(priority: .userInitiated) {
+            // Every dynamic piece goes through `quoted form of`, never
+            // Swift-side escaping (the rule `TerminalTabFocus` records).
+            let literal = line.replacingOccurrences(of: "\\", with: "\\\\")
+                .replacingOccurrences(of: "\"", with: "\\\"")
+            let script = """
+                tell application "Terminal"
+                  activate
+                  do script "\(literal)"
+                end tell
+                """
+            if case .failure(let error) = AppleScript.run(script: script) {
+                Failures.report(.launchFailed, reason: "shell door: \(error)",
+                                card: "Couldn't open a Terminal for that agent: \(error)")
+            }
+        }
+    }
+
+    /// Go to Agent for a screen that lives in a named pane on our tmux socket
+    /// (an OpenCode agent's TUI). Raise the window already showing it, or
+    /// attach one; never a second copy of the same screen.
+    func attachPane(_ name: String) {
+        Permissions.log("door: pane \(name)")
+        Task.detached(priority: .userInitiated) {
+            let outcome = await TerminalTabFocus.focus(tmuxSession: name)
+            Permissions.log("door: pane \(name) -> \(outcome)")
+            if case .failed(let reason) = outcome {
+                Failures.report(.launchFailed, reason: "pane door: \(reason)",
+                                card: "Couldn't open that agent's window: \(reason)")
+            }
+        }
+    }
+
     /// And every outcome speaks. Four of the five exits used to be a log line
     /// and a silent return, which on a control you just pressed is
-    /// indistinguishable from the app being broken — the exact complaint.
-    func goToSession(_ sessionId: String) {
+    /// indistinguishable from the app being broken, the exact complaint.
+    ///
+    /// `reviveIfGone`: a dead agent is revived and then opened, in that order,
+    /// rather than reported. Ruled 11 Sep, after the card said "That agent
+    /// isn't running any more. Revive it from Past Agents." to a person who
+    /// had just watched it die: *"Well no shit it's no longer running. Like,
+    /// restart it if it's no longer running. What the fuck is that supposed
+    /// to do?"* The verb is GO TO AGENT; an agent that has to be brought
+    /// back first gets brought back first. `false` on the hop the revive
+    /// itself makes afterwards, so a session that came back without a
+    /// findable process is said so once, never chased in a loop.
+    func goToSession(_ sessionId: String, reviveIfGone: Bool = true) {
         let began = Date()
-        let report: @Sendable (String) -> Void = { outcome in
-            Track.record("go_to_agent", ["agent_id": Track.hash(sessionId), "outcome": .token(outcome),
-                                         "ms": .int(Int(Date().timeIntervalSince(began) * 1000))])
+        // `detail` is the transfer failure's reason (the app's own words, an
+        // AppleScript error, why a resume did not restart), never the user's,
+        // and until now it reached app.log only. Scrubbed and bounded by .prose.
+        let report: @Sendable (String, String?) -> Void = { outcome, detail in
+            var props: [String: TrackValue] = [
+                "agent_id": Track.hash(sessionId), "outcome": .token(outcome),
+                "ms": .int(Int(Date().timeIntervalSince(began) * 1000))]
+            if let detail { props["detail"] = .prose(detail) }
+            Track.record("go_to_agent", props)
         }
         Task.detached { [weak self] in
             // `agents` alone made GO TO AGENT a permanent no-op for every
@@ -1282,11 +1613,42 @@ extension AppDelegate {
             guard let live = ((ClaudeAgentsCLI().sessions() ?? [])
                 + FileSessionOwnershipStore.shared.liveNonRegistrySessions())
                 .first(where: { $0.sessionId == sessionId }) else {
-                Permissions.log("goTo: \(sessionId.prefix(8)) is not live any more")
-                report("not_live")
+                let short = sessionId.prefix(8)
+                // The card's guard comes down HERE, before anything else is
+                // looked up. The 12 Aug contract is that the button never
+                // blocks on a walk, and the walk below is a discovery scan:
+                // 5 s on a cold cache at launch, measured 11 Sep by the
+                // launch self-test, whose 3 s round trip failed on the first
+                // deploy of this branch. Whatever follows paints for itself:
+                // the revive its receipt, the refusal its own result card.
+                await MainActor.run { [weak self] in self?.hud.releaseGoToSessionGuard() }
+                // Not running, but on disk and revivable: bring it back, then
+                // come back here with `reviveIfGone: false` to open it.
+                if reviveIfGone,
+                   let known = SessionDiscovery.discover().sessions
+                       .first(where: { $0.sessionId == sessionId }),
+                   known.revivable {
+                    let name = known.title
+                        ?? CodexThreadNames.all()[sessionId]
+                        ?? short.uppercased()
+                    Permissions.log("goTo: \(short) is not live any more — reviving \(name) "
+                        + "first, then opening it")
+                    report("not_live_reviving", nil)
+                    await MainActor.run { [weak self] in
+                        self?.revive(sessionId, name: name, thenGoTo: true)
+                    }
+                    return
+                }
+                Permissions.log("goTo: \(short) is not live any more"
+                    + (reviveIfGone ? ", and nothing on disk can bring it back"
+                                    : ", even after its revive"))
+                report("not_live", nil)
                 await MainActor.run { [weak self] in
-                    self?.hud.finishGoToSession("That agent isn't running any more. "
-                                         + "Revive it from Past Agents.")
+                    self?.hud.finishGoToSession(reviveIfGone
+                        ? "That agent isn't running any more, and I can't find its history "
+                          + "to bring it back from."
+                        : "That agent came back, but I can't find its process to open. "
+                          + "Try again in a moment.", about: sessionId)
                 }
                 return
             }
@@ -1310,11 +1672,41 @@ extension AppDelegate {
 
             // Already in a pane? Then this is only a matter of raising a
             // window. Registry first — a tty is two stale hops from the truth.
-            let owned = TmuxOwnership.pane(forSessionId: sessionId, pid: live.pid)
+            //
+            // The ledger's whole answer is read here, not its nil-collapsed
+            // view: on 15 Sep a TEST build read "not on my server" as
+            // "hand-started", ended two live agents and moved them where the
+            // real app could not follow. `.elsewhere` and `.unknown` are
+            // answers, and neither is a transfer.
+            let location = AgentLedger.locate(sessionId: sessionId, pid: live.pid, harness: live.harness)
             let tty: String
-            if let owned {
+            switch location {
+            case .here(let owned, _):
                 tty = owned.paneTty
-            } else {
+            case .elsewhere(let why):
+                Permissions.log("goTo: \(sessionId.prefix(8)) is \(why); nothing to do from here")
+                report("elsewhere", why)
+                await MainActor.run { [weak self] in
+                    self?.hud.finishGoToSession("That agent is running under another Tranquility "
+                        + "Base instance (\(why)). Nothing was closed.", about: sessionId)
+                }
+                return
+            case .unknown(let why):
+                Permissions.log("goTo: \(sessionId.prefix(8)) location unknown: \(why)")
+                report("location_unknown", why)
+                await MainActor.run { [weak self] in
+                    self?.hud.finishGoToSession("I can't tell where that agent is right now "
+                        + "(\(why)). Nothing was closed. Try again in a moment.", about: sessionId)
+                }
+                return
+            case .gone:
+                Permissions.log("goTo: \(sessionId.prefix(8)) is gone by the ledger's account")
+                report("gone", nil)
+                await MainActor.run { [weak self] in
+                    self?.hud.finishGoToSession("That agent isn't running any more.", about: sessionId)
+                }
+                return
+            case .unhosted:
                 // Hand-started: end it and bring it up under tmux, which is
                 // the only way a human and this app can both reach it. Same
                 // mechanism the card uses, with the session's OWN harness.
@@ -1329,7 +1721,7 @@ extension AppDelegate {
                     case .endedButNotRestarted(let why, _, let manual):
                         Permissions.log("goTo: transfer ended but did not restart "
                             + "\(sessionId.prefix(8)) — \(why)")
-                        report("transfer_ended_not_restarted")
+                        report("transfer_ended_not_restarted", why)
                         await MainActor.run {
                             NSPasteboard.general.clearContents()
                             NSPasteboard.general.setString(manual, forType: .string)
@@ -1358,13 +1750,15 @@ extension AppDelegate {
                             let outcome = await TerminalTabFocus.focus(
                                 tty: pane.paneTty, sessionId: sessionId)
                             if case .focused = outcome {
-                                report("focused_other_holder")
+                                report("focused_other_holder", nil)
                                 await MainActor.run { [weak self] in
-                                    self?.hud.finishGoToSession(nil)
+                                    self?.hud.finishGoToSession(nil, about: sessionId)
                                 }
                                 return
                             }
                             Permissions.log("goTo: could not raise \(pane.paneTty) — \(outcome)")
+                            Failures.report(.deliveryFailed,
+                                            reason: "goTo: could not raise \(pane.paneTty): \(outcome)")
                         }
                         // Copy per the house rule: no em dashes on a card
                         // (`scripts/check-house-copy.sh`, landed with the
@@ -1377,8 +1771,8 @@ extension AppDelegate {
                     case .moved:
                         message = ""
                     }
-                    report("transfer_refused")
-                    await MainActor.run { [weak self] in self?.hud.finishGoToSession(message) }
+                    report("transfer_refused", message)
+                    await MainActor.run { [weak self] in self?.hud.finishGoToSession(message, about: sessionId) }
                     return
                 }
                 await MainActor.run { [weak self] in
@@ -1388,26 +1782,42 @@ extension AppDelegate {
             }
 
             let outcome = await TerminalTabFocus.focus(tty: tty, sessionId: sessionId)
+            // What was actually raised, not what we asked for. The old line
+            // printed the PANE tty while the script raised a Terminal tab it
+            // had found by a different tty entirely, so twelve wrong windows
+            // in a row logged as twelve successes and the record could not be
+            // used to tell a hit from a corpse (13 Sep). The window id here
+            // is only as honest as the raise that just used it: on 17 Sep the
+            // table held a stranger's id and four "focused … window 725"
+            // lines agreed with it. `TerminalTabFocus` now refuses to raise a
+            // window whose name does not carry this session, so an id that
+            // reaches this line has been checked against the window itself.
+            let landedOn = TmuxOwnership.pane(forSessionId: sessionId, pid: nil)
+                .map { pane in
+                    TerminalWindows.windowId(for: pane.sessionName)
+                        .map { "\(pane.sessionName) in Terminal window \($0)" }
+                        ?? pane.sessionName
+                } ?? tty
             await MainActor.run { [weak self] in
                 guard let self else { return }
                 switch outcome {
                 case .focused:
-                    Permissions.log("goTo: focused \(tty)")
-                    report(owned == nil ? "focused_after_transfer" : "focused")
-                    self.hud.finishGoToSession(nil)
+                    Permissions.log("goTo: focused \(landedOn)")
+                    report(location.pane == nil ? "focused_after_transfer" : "focused", nil)
+                    self.hud.finishGoToSession(nil, about: sessionId)
                 case .tabGone:
                     Permissions.log("goTo: tab not found for \(tty)")
-                    report("tab_gone")
-                    self.hud.finishGoToSession("That agent's window isn't open any more.")
+                    report("tab_gone", nil)
+                    self.hud.finishGoToSession("That agent's window isn't open any more.", about: sessionId)
                 case .timedOut(let seconds):
                     Permissions.log("goTo TIMEOUT after \(seconds)s for \(tty)")
-                    report("timed_out")
+                    report("timed_out", nil)
                     self.hud.finishGoToSession("Terminal didn't answer within \(seconds) seconds. "
-                                        + "The session is fine. Try again in a moment.")
+                                        + "The session is fine. Try again in a moment.", about: sessionId)
                 case .failed(let message):
                     Permissions.log("goTo FAILED: \(message)")
-                    report("failed")
-                    self.hud.finishGoToSession("Couldn't control Terminal: \(message)")
+                    report("failed", nil)
+                    self.hud.finishGoToSession("Couldn't control Terminal: \(message)", about: sessionId)
                 }
             }
         }
@@ -1441,18 +1851,19 @@ extension AppDelegate {
     /// is touched only through `MainActor.run`.
     nonisolated func recoverParkedSession(_ sessionId: String, live: LiveSession,
                                           job: LiveSession.ParkedJob,
-                                          report: @Sendable (String) -> Void) async {
+                                          report: @Sendable (String, String?) -> Void) async {
         let short = String(sessionId.prefix(8))
         let name = GridAssembler.tabDisplayName(live: live, callsign: nil)
         let pane = TmuxOwnership.pane(forSessionId: sessionId, pid: live.pid)
 
         if job.status == "busy" {
             Permissions.log("recover: \(short) is parked and its job \(job.jobId) is busy; raising the window only")
-            report("parked_busy")
+            report("parked_busy", nil)
             if let pane { _ = await TerminalTabFocus.focus(tty: pane.paneTty, sessionId: sessionId) }
             await MainActor.run {
                 self.hud.finishGoToSession("\(name) is still working in the background. "
-                    + "Tap again when it goes idle and it will come back as a normal session.")
+                    + "Tap again when it goes idle and it will come back as a normal session.",
+                    about: sessionId)
             }
             return
         }
@@ -1477,6 +1888,9 @@ extension AppDelegate {
                     + out.trimmingCharacters(in: .whitespacesAndNewlines).prefix(120))
             case .failure(let error):
                 Permissions.log("recover: claude stop \(job.jobId) failed: \(error.message.prefix(160))")
+                Failures.report(.reviveFailed,
+                                reason: "recover: claude stop \(job.jobId) failed: \(error.message.prefix(160))",
+                                session: job.sessionId)
             }
         }
         if let jobFull = job.sessionId {
@@ -1509,7 +1923,7 @@ extension AppDelegate {
             }
             if ProcessProbe.isAlive(live.pid) {
                 Permissions.log("recover: shell pid \(live.pid) would not exit; stopping here")
-                report("shell_would_not_exit")
+                report("shell_would_not_exit", nil)
                 await MainActor.run {
                     self.hud.showReceipt(.notRevived(
                         "the old shell (pid \(live.pid)) would not exit; nothing else was changed"))
@@ -1520,11 +1934,15 @@ extension AppDelegate {
 
         Permissions.log("recover: \(short): job \(job.jobId) stopped, shell \(live.pid) ended, "
             + "resuming \(resumeId.prefix(8))")
-        report(resumeId == sessionId ? "recovered_origin" : "recovered_job")
+        report(resumeId == sessionId ? "recovered_origin" : "recovered_job", nil)
         await MainActor.run { self.revive(resumeId, name: name) }
     }
 
-    func revive(_ sessionId: String, name: String) {
+    /// `thenGoTo`: GO TO AGENT on a dead row lands here, and once the session
+    /// is confirmed live it goes on to open it (11 Sep). Only on a CONFIRMED
+    /// pid: a revive whose process never registered has nothing to open, and
+    /// says so instead of hopping.
+    func revive(_ sessionId: String, name: String, thenGoTo: Bool = false) {
         Track.record("agent_revive_requested", ["agent_id": Track.hash(sessionId)])
         hud.showReceipt(.reviving(name))
         Task.detached {
@@ -1581,12 +1999,39 @@ extension AppDelegate {
                     Permissions.log("revive: attached codex \(sessionId.prefix(8))")
                     // The same finish as Claude's branch, by the same call: the
                     // card that says RESUMED needs the pid to grow its door.
-                    if await self.confirmRevivedPid(sessionId: sessionId) == nil {
+                    let pid = await self.confirmRevivedPid(sessionId: sessionId)
+                    if pid == nil {
                         Permissions.log("revive: codex \(sessionId.prefix(8)) attached but "
                             + "never showed up as a live process — the card keeps its "
                             + "receipt and loses its door")
                     }
-                    await MainActor.run { [weak self] in self?.hud.showReceipt(.revived(name)) }
+                    await MainActor.run { [weak self] in
+                        self?.hud.showReceipt(.revived(name))
+                        if thenGoTo, pid != nil { self?.goToSession(sessionId, reviveIfGone: false) }
+                    }
+                    return
+                }
+                // The pane came up and STOPPED on a screen only a person
+                // answers (the hooks-review consent, the update chooser). It
+                // is alive, it is ours, and it is not resumed. Until 11 Sep
+                // this was a `.failure`, which fell through to the adoption
+                // below: the process on the chooser was adopted as RESUMED,
+                // the next dictation was typed into the menu, and its Return
+                // chose "Update now". Show the pane and say what it asks;
+                // never adopt it.
+                if case .success(.stoppedOnPrompt(let says, let screen, let pane)) = outcome {
+                    Permissions.log("revive: codex \(sessionId.prefix(8)) is waiting on a "
+                        + "question, not resumed. Its screen says: " + screen)
+                    let opened = SessionLauncher.showPane(
+                        pane: pane,
+                        why: "the revive stopped on a question only a person answers")
+                    await MainActor.run { [weak self] in
+                        self?.hud.showResult(
+                            "\(name) is waiting for you. \(says)"
+                            + (opened ? " I opened its terminal."
+                                      : " I couldn't open its terminal; it is in tmux pane "
+                                        + pane.paneId + "."))
+                    }
                     return
                 }
                 // Both remaining answers mean "already running", and BOTH of
@@ -1604,8 +2049,11 @@ extension AppDelegate {
                     // finds the pid on its first look — but it is the same call
                     // either way, because two ways to finish a revive is how
                     // one of them ends up missing a door.
-                    await self.confirmRevivedPid(sessionId: sessionId)
-                    await MainActor.run { [weak self] in self?.hud.showReceipt(.revived(name)) }
+                    let pid = await self.confirmRevivedPid(sessionId: sessionId)
+                    await MainActor.run { [weak self] in
+                        self?.hud.showReceipt(.revived(name))
+                        if thenGoTo, pid != nil { self?.goToSession(sessionId, reviveIfGone: false) }
+                    }
                     return
                 }
                 switch outcome {
@@ -1634,6 +2082,9 @@ extension AppDelegate {
                     }
                 case .failure(let error):
                     Permissions.log("revive: failed codex \(sessionId.prefix(8)) — \(error.message)")
+                    Failures.report(.reviveFailed,
+                                    reason: "revive failed (codex): \(error.message)",
+                                    harness: "codex", session: sessionId)
                     await MainActor.run { [weak self] in
                         self?.hud.showReceipt(.notRevived("couldn't attach"))
                     }
@@ -1722,6 +2173,7 @@ extension AppDelegate {
                     guard let self else { return }
                     if registered {
                         self.hud.showReceipt(.revived(name))
+                        if thenGoTo { self.goToSession(sessionId, reviveIfGone: false) }
                     } else {
                         // It launched and it is not answering. Say so, and
                         // hand over the line that does not need us — the same
@@ -1784,6 +2236,8 @@ extension AppDelegate {
                 // where every in-app launch died and this line worked all
                 // morning — and a retry offer only when a retry could differ.
                 Permissions.log("revive: failed \(sessionId.prefix(8)) — \(error.message)")
+                Failures.report(.reviveFailed,
+                                reason: "revive failed: \(error.message)", session: sessionId)
                 let manual = SessionLauncher.manualRevival(
                     sessionId: sessionId, directory: command.cwd, launch: launch)
                 await MainActor.run { [weak self] in
@@ -2022,6 +2476,7 @@ extension AppDelegate {
                         + "To see it yourself, run in a terminal: \(byHand)"
                     Failures.report(.launchFailed, reason: error.message, card: card,
                                     reproduction: byHand, harness: adapter.id)
+                    self?.diagnoseClaudeHealth(adapter: adapter, because: "launch_failed")
                     // The harness may have just changed under us (an update, a
                     // reinstall); the next record should describe it as it is now.
                     await MainActor.run { [weak self] in
@@ -2190,11 +2645,23 @@ extension AppDelegate {
             // distinctive enough to skip a sibling MCP-server child on the
             // same tty (measured live: a codex launch's own child process
             // shares its tty and does not contain this string).
-            if isCodex, let pid = ProcessProbe.pid(onTty: tty, containing: command) {
+            //
+            // Every harness, since 15 Sep. This was `if isCodex`, on the
+            // premise that Claude Code's own registry was address enough; it
+            // names a pane without its server, and that is how a TEST
+            // build's pane %1 was answered with the real app's pane %1.
+            // Claude Code's pid is read from its registry entry (the launch
+            // argv carries no session id to match); Codex's by command.
+            let launchedPid = isCodex
+                ? ProcessProbe.pid(onTty: tty, containing: command)
+                : SessionRegistry.entry(forSessionId: sessionId)?.pid
+            if let pid = launchedPid {
                 FileSessionOwnershipStore.shared.record(SessionOwnershipRecord(
-                    sessionId: sessionId, harness: CodexAdapter().id, pid: pid,
+                    sessionId: sessionId, harness: adapter.id, pid: pid,
                     paneId: pane.paneId, socketName: pane.socketName,
                     sessionName: pane.sessionName, paneTty: pane.paneTty, cwd: dir))
+                Permissions.log("launcher: ledger \(sessionId.prefix(8)) = \(pane.sessionName) "
+                    + "\(pane.paneId) pid \(pid)")
             }
 
             // Kept BEFORE the greeting row is written and before the card is
@@ -2208,6 +2675,15 @@ extension AppDelegate {
             // dropped on the greeting card has to be under that id already.
             if let launch, let attachments = await self?.coordinator?.attachments {
                 attachments.adopt(stagingKey: launch.stagingKey, asSession: sessionId)
+                // And re-point the panel at the agent in the same breath.
+                // `adopt` moves the fragments; without this the card goes on
+                // naming the staging key until the next ambient tick, which
+                // sits behind a model call — so the chip row shows an empty
+                // tray under a launch that has already become an agent, and
+                // reads as "my screenshot vanished". The alias in the tray is
+                // what makes a drop in that window still land correctly; this
+                // is what stops it looking wrong while it does.
+                await MainActor.run { [weak self] in self?.refreshDropTarget() }
             }
             launch?.resolve(sessionId: sessionId)
             guard greet else { return }

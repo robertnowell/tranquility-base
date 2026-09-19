@@ -705,6 +705,55 @@ extension HarnessAdapterTests {
                       "pressing Return here runs a curl-pipe-sh installer")
     }
 
+    /// The screen a resume stopped on at 09:00 on 11 Sep, as `capture-pane`
+    /// handed it to the launcher (from app.log, the launcher's own trace of
+    /// `meaningfulTail`). The verdict must be the chooser, by the row that
+    /// runs the installer, and it must be a verdict the caller can act on
+    /// rather than a failure it can misread as "not attached, adopt".
+    func testTheRealUpdateChooserIsABlockingPromptForResume() {
+        let screen = """
+        ✨ Update available! 0.153.4 -> 0.154.0
+        Release notes: https://github.com/openai/codex/releases/latest
+        › 1. Update now (runs `sh -c 'curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh'`)
+          2. Skip
+          3. Skip until next version
+        """
+        let spec = CodexAdapter().trustPrompt!
+        let blocking = SessionLauncher.blockingPrompt(on: screen, spec: spec)
+        XCTAssertEqual(blocking?.needle, "1. Update now")
+        XCTAssertEqual(blocking?.says, "Codex is asking whether to update itself before it starts.")
+    }
+
+    /// A healthy resume, even one wearing the passive update banner that a
+    /// dismissed version leaves behind, is not blocked: the needle is the menu
+    /// row, and the banner has no rows.
+    func testASettledResumeWithTheUpdateBannerIsNotBlocked() {
+        let screen = """
+        ✨ Update available! 0.150.1 -> 0.151.0
+        Run sh -c 'curl -fsSL https://chatgpt.com/codex/install.sh | sh' to update.
+        › Ask Codex to do anything
+          gpt-5.6-sol high · ~/Projects
+        """
+        XCTAssertNil(SessionLauncher.blockingPrompt(on: screen, spec: CodexAdapter().trustPrompt!))
+    }
+
+    /// The outcome is a named success, not a failure, and it carries the pane:
+    /// the caller shows it, never adopts it.
+    func testStoppedOnPromptCarriesWhatTheCallerNeeds() {
+        let pane = TmuxPaneAddress(socketName: "tb", paneId: "%10",
+                                   sessionName: "tb-6ad2abcc", paneTty: "/dev/ttys031")
+        let outcome = SessionLauncher.CodexResumeOutcome.stoppedOnPrompt(
+            says: "Codex is asking whether to update itself before it starts.",
+            screen: "› 1. Update now", pane: pane)
+        if case .stoppedOnPrompt(let says, _, let carried) = outcome {
+            XCTAssertEqual(carried, pane)
+            XCTAssertFalse(says.isEmpty)
+        } else {
+            XCTFail("the outcome must be its own case")
+        }
+        XCTAssertNotEqual(outcome, .alreadyLive, "a pane on a question is not a live session elsewhere")
+    }
+
     func testCodexNeverAutoAcceptsHookReview() {
         XCTAssertTrue(CodexAdapter().trustPrompt!
             .neverAutoAcceptNeedles.contains { $0.needle == "Hooks need review" })

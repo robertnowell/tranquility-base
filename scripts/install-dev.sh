@@ -7,6 +7,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 . "$(dirname "$0")/lib/paths.sh"
 . "$(dirname "$0")/lib/app-process.sh"
+. "$(dirname "$0")/lib/deployment.sh"
 
 APP_NAME="Tranquility Base Dev"
 BUNDLE_ID="com.robertnowell.voice-dispatch.dev"
@@ -20,14 +21,28 @@ for arg in "$@"; do
   esac
 done
 
+tb_deployment_lock
+trap tb_deployment_unlock EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 141' PIPE
+
 if [ -z "$SRC" ]; then
   if [ -n "$(git status --porcelain)" ]; then
     echo "✗ the worktree is dirty; commit before building an app to launch." >&2
     git status --short >&2
     exit 1
   fi
-  scripts/bundle-dev.sh debug
   SRC="$(tb_bundle_dir debug)/$APP_NAME.app"
+  SOURCE_SHA=$(git rev-parse HEAD)
+  UNMERGED=1
+  git merge-base --is-ancestor "$SOURCE_SHA" origin/main >/dev/null 2>&1 && UNMERGED=0
+  tb_deployment_authorize install "$SOURCE_SHA" dev "$UNMERGED"
+  if app_at_path_running "$SRC"; then
+    echo "✗ source bundle is running; build from a separate worktree before installing" >&2
+    exit 1
+  fi
+  scripts/bundle-dev.sh debug
 fi
 
 [ -d "$SRC" ] || { echo "✗ no bundle at $SRC" >&2; exit 1; }
@@ -38,6 +53,11 @@ read_plist() { /usr/libexec/PlistBuddy -c "Print :$1" "$SRC/Contents/Info.plist"
   || { echo "✗ source is not stamped as the development channel" >&2; exit 1; }
 [ "$(read_plist TBUpdatesEnabled)" = "false" ] \
   || { echo "✗ Dev updater is enabled; refusing to install" >&2; exit 1; }
+SOURCE_SHA=$(read_plist TBSourceCommit)
+UNMERGED=1
+git merge-base --is-ancestor "$SOURCE_SHA" origin/main >/dev/null 2>&1 && UNMERGED=0
+tb_deployment_authorize install "$SOURCE_SHA" dev "$UNMERGED"
+
 codesign --verify --deep --strict "$SRC" 2>/dev/null \
   || { echo "✗ Dev source signature does not verify" >&2; exit 1; }
 

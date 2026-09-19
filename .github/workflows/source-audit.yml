@@ -6,6 +6,12 @@ on:
   merge_group:
     types: [checks_requested]
 
+# A new PR revision supersedes that PR's work. Merge-group identities are
+# immutable and distinct, so one candidate cannot cancel another's audit.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.event.merge_group.head_sha || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 
@@ -20,6 +26,7 @@ jobs:
       - name: Check out the proposed merge
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
+          ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -30,11 +37,17 @@ jobs:
           fi
 
       - name: Audit the source as it would land
-        env:
-          BASE_REF: ${{ github.base_ref || 'main' }}
-        run: |
-          git checkout -B ci-source-audit "$GITHUB_SHA"
-          TB_SKIP_LIVE_HARNESS_DRILLS=1 scripts/preflight.sh "origin/$BASE_REF"
+        run: scripts/audit-source.sh "$GITHUB_SHA"
+
+
+      - name: Retain test progress and stall diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: test-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .build/ci-diagnostics/
+          if-no-files-found: ignore
+          retention-days: 7
 
   intel:
     name: Intel slice (native x86_64)
@@ -60,6 +73,7 @@ jobs:
       - name: Check out the proposed merge
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
+          ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
 

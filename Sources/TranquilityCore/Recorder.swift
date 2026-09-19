@@ -71,6 +71,18 @@ public final class Recorder: @unchecked Sendable {
     /// thread out of the hardware's way entirely.
     private let audioQueue = DispatchQueue(label: "base.tranquility.capture-unit")
     private var unit: CaptureUnit?
+    /// One rate converter per unit, kept across every buffer of a capture —
+    /// see `StreamingPCM16Converter` for why a fresh one per buffer cut 3.4%
+    /// of every recording. Built with the unit (it is tied to the tap
+    /// format), reset at capture start, used only on the render thread.
+    private var pcmConverter: StreamingPCM16Converter?
+    /// Set under `lock` at capture start, consumed on the render thread
+    /// before the next conversion, so the reset is serial with the converts
+    /// it separates and never races a trailing callback.
+    private var converterResetPending = false
+    /// Logged once: the converter could not be built and every buffer is
+    /// going through the per-buffer path this class exists to replace.
+    private var converterFallbackLogged = false
     /// Listeners registered on the bound device, so a rebuild can remove
     /// exactly what it added.
     private var listeners: [(AudioObjectID, AudioObjectPropertyAddress)] = []
@@ -142,6 +154,13 @@ public final class Recorder: @unchecked Sendable {
     /// The machine crossed the wedge threshold. Invoked on the main queue,
     /// once per wedge entry, after the capture fault for the same open.
     public var onWedge: (() -> Void)?
+
+    /// `abandon` kept a file because it held speech. The app gives it a row
+    /// at once (`QueueStore.adoptKeptCapture`), so a kept capture is in
+    /// Recents while the person still remembers saying it, not at the next
+    /// boot (14 Sep 2026). Called off the gesture's thread with the file
+    /// already closed; seconds is the audio that survived.
+    public var onCaptureKept: ((URL, Double) -> Void)?
 
     /// Deferred teardown: a device config change landed mid-capture. The
     /// capture keeps whatever audio arrives; the unit is discarded and
@@ -304,6 +323,12 @@ public final class Recorder: @unchecked Sendable {
                 }
             }
             unit = built
+            pcmConverter = StreamingPCM16Converter(
+                from: built.clientFormat, targetSampleRate: sampleRate)
+            if pcmConverter == nil {
+                Recorder.trace?("mic: streaming converter unavailable for "
+                    + "\(built.clientFormat); falling back to per-buffer conversion")
+            }
             installListeners(on: deviceID)
             let name = AudioInputDevice.allInputs().first { $0.id == deviceID }?.name
                 ?? "device \(deviceID)"
@@ -340,6 +365,7 @@ public final class Recorder: @unchecked Sendable {
         removeListeners()
         unit?.dispose()
         unit = nil
+        pcmConverter = nil
     }
 
     // MARK: - Config-change listeners (the settle machinery)
@@ -449,6 +475,7 @@ public final class Recorder: @unchecked Sendable {
         diagnosticCaptureID = reservedCaptureID ?? UUID().uuidString
         reservedCaptureID = nil
         buffer.removeAll(keepingCapacity: true)
+        converterResetPending = true
         peakLevel = 0
         tapBuffersDelivered = 0
         tapBuffersKept = 0
@@ -466,6 +493,11 @@ public final class Recorder: @unchecked Sendable {
         if openingStream {
             stream = streamFactory?()
             stream?.diagnosticCaptureID = diagnosticCaptureID
+            // Every partial lands beside the audio as it arrives, so a death
+            // mid-hold loses no word the stream had already heard.
+            if let capture = liveCapture {
+                stream?.partialSink = { text in capture.notePartial(text) }
+            }
             if let s = stream { Task { await s.start() } }
         }
         lock.unlock()
@@ -648,9 +680,22 @@ public final class Recorder: @unchecked Sendable {
 
     private func deliver(_ pcmBuffer: AVAudioPCMBuffer) {
         // Convert first, outside the lock — it is the expensive part and
-        // nothing else needs serialising for it. Unchanged from the tap era.
-        let converted = BuddyPCM16Converter.pcm16Data(
-            from: pcmBuffer, targetSampleRate: sampleRate)
+        // nothing else needs serialising for it. The converter itself is
+        // used only here, on AUHAL's one render thread, so it is serial by
+        // construction; the lock is taken just to read the reset flag.
+        lock.lock()
+        let resetNow = converterResetPending
+        converterResetPending = false
+        let converter = pcmConverter
+        lock.unlock()
+        let converted: Data?
+        if let converter {
+            if resetNow { converter.reset() }
+            converted = converter.convert(pcmBuffer)
+        } else {
+            converted = BuddyPCM16Converter.pcm16Data(
+                from: pcmBuffer, targetSampleRate: sampleRate)
+        }
         lock.lock()
         // A heal probe is not a capture: count and bail.
         if case .wedged = machine.state {
@@ -806,7 +851,13 @@ public final class Recorder: @unchecked Sendable {
             "buffers_kept": .int(kept), "peak": .double(Double(peak)),
             "speech_evidence": "unknown", "audio_saved": .bool(captureURL != nil),
         ])
-        guard captured.count > 1600 else { throw RecorderError.nothingRecorded }  // <50ms
+        guard captured.count > 1600 else {  // <50ms
+            // Nothing to hand back, so nothing will ever claim the write-ahead
+            // file; `close()` above left it `.wav.live`, which is the shape a
+            // kept capture has, and it would sit there as one until the reap.
+            if let captureURL { try? FileManager.default.removeItem(at: captureURL) }
+            throw RecorderError.nothingRecorded
+        }
         return Capture(pcm16: captured, fileURL: captureURL, id: id)
     }
 
@@ -845,22 +896,47 @@ public final class Recorder: @unchecked Sendable {
         }
     }
 
+    /// The peak below which a capture is treated as silence: the send path's
+    /// gate, and the evidence `abandon` uses to keep a short recording.
+    public static let silenceFloor: Float = 0.005
+
     /// Abandon without returning audio — a press cancelled before anything
     /// came of it.
+    ///
+    /// The file is not necessarily gone afterwards. A capture that ran past
+    /// `LiveAudioCapture.keepAfterSeconds`, or a shorter one whose peak
+    /// cleared the silence floor, stays on disk as `.wav.live` for the boot
+    /// sweep to adopt (ruled 10 Sep 2026). The tap-abort that instant-arm was
+    /// built on is milliseconds of room tone and is removed as before.
     public func abandon() {
         let ended = submit(.captureEnded, because: "abandoned")
-        if ended.accepted {
-            Track.record("capture_audio_closed", ["capture_id": Track.hash(captureID), "outcome": "cancelled"])
-        }
         lock.lock()
         lastOpenSeconds = openedAt.map { Date().timeIntervalSince($0) } ?? 0
         openedAt = nil
         awaitingFirstBuffer = false
         let discarding = liveCapture
         liveCapture = nil
+        let seconds = Double(buffer.count) / 2.0 / sampleRate
+        let peak = peakLevel
+        let id = diagnosticCaptureID
         buffer.removeAll(keepingCapacity: false)
         lock.unlock()
-        discarding?.abandon()
+        let hadSpeech = seconds >= 0.5 && peak >= Self.silenceFloor
+        let ending = discarding?.abandon(hadSpeech: hadSpeech) ?? .removed
+        if ended.accepted {
+            var fields: [String: TrackValue] = [
+                "capture_id": Track.hash(id),
+                "outcome": ending == .removed ? "cancelled" : "cancelled_kept",
+                "audio_ms": .int(Int(seconds * 1000)), "peak": .double(Double(peak)),
+            ]
+            if case .kept = ending { fields["audio_saved"] = .bool(true) }
+            Track.record("capture_audio_closed", fields)
+        }
+        if case .kept(let url) = ending {
+            Recorder.trace?(String(format: "capture: abandoned but KEPT — %.1fs, peak %.4f, ",
+                                   seconds, peak) + url.lastPathComponent)
+            onCaptureKept?(url, seconds)
+        }
         verification?.cancel(); verification = nil
         if ended.accepted {
             // Async for the same reason stop() is: no gesture waits on the HAL.
@@ -900,11 +976,15 @@ public final class Recorder: @unchecked Sendable {
         }
     }
 
+    /// Stops the heartbeat; leaves the file. Key-up is not the end of the
+    /// promise — transcription and delivery follow — so the app's in-flight
+    /// guard (`CaptureMarker.settle`) owns removal. Where no guard runs
+    /// (tests, tools) the file goes stale in `staleAfter` seconds and the
+    /// scripts ignore it.
     private func endMarkerHeartbeat() {
         markerQueue.sync {
             markerTimer?.cancel()
             markerTimer = nil
-            CaptureMarker.end()
         }
     }
 

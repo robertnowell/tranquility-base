@@ -34,7 +34,7 @@ final class GridAssemblerTests: XCTestCase {
         // waiting-for value — the process is the plainest signal there is.
         let result = GridAssembler.lampAndReason(
             for: nil, sessionId: "s",
-            live: live(status: "waiting", waitingFor: "permission prompt"))
+            live: live(status: "waiting", waitingFor: "permission prompt"), isInFlight: false)
         XCTAssertEqual(result.lamp, .fault)
     }
 
@@ -42,14 +42,14 @@ final class GridAssemblerTests: XCTestCase {
         // "The process is right and it costs nothing to believe it."
         let evidence = SessionActivity.Evidence(activity: .working, observedAt: nil, modifiedAt: nil)
         let result = GridAssembler.lampAndReason(for: evidence, sessionId: "s",
-                                                  live: live(status: "idle"))
+                                                  live: live(status: "idle"), isInFlight: false)
         XCTAssertEqual(result.lamp, .running)
     }
 
     func testWorkingFileWithBusyProcessReadsAsWorking() {
         let evidence = SessionActivity.Evidence(activity: .working, observedAt: nil, modifiedAt: nil)
         let result = GridAssembler.lampAndReason(for: evidence, sessionId: "s",
-                                                  live: live(status: "busy"))
+                                                  live: live(status: "busy"), isInFlight: false)
         XCTAssertEqual(result.lamp, .working)
     }
 
@@ -57,7 +57,7 @@ final class GridAssemblerTests: XCTestCase {
         let evidence = SessionActivity.Evidence(
             activity: .blocked(reason: "usage limit"), observedAt: nil, modifiedAt: nil)
         let result = GridAssembler.lampAndReason(for: evidence, sessionId: "s",
-                                                  live: live(status: "idle"))
+                                                  live: live(status: "idle"), isInFlight: false)
         XCTAssertEqual(result.lamp, .fault)
     }
 
@@ -67,28 +67,28 @@ final class GridAssemblerTests: XCTestCase {
         let evidence = SessionActivity.Evidence(
             activity: .stalled(reason: "silent"), observedAt: nil, modifiedAt: nil)
         let result = GridAssembler.lampAndReason(for: evidence, sessionId: "s",
-                                                  live: live(status: "idle"))
+                                                  live: live(status: "idle"), isInFlight: false)
         XCTAssertEqual(result.lamp, .running)
     }
 
     func testStalledWithNoProcessAtAllStaysFault() {
         let evidence = SessionActivity.Evidence(
             activity: .stalled(reason: "silent"), observedAt: nil, modifiedAt: nil)
-        let result = GridAssembler.lampAndReason(for: evidence, sessionId: "s", live: nil)
+        let result = GridAssembler.lampAndReason(for: evidence, sessionId: "s", live: nil, isInFlight: false)
         XCTAssertEqual(result.lamp, .fault)
     }
 
     func testIdleFileWithBusyProcessIsWorkingNotQuiet() {
         let evidence = SessionActivity.Evidence(activity: .idle, observedAt: nil, modifiedAt: nil)
         let result = GridAssembler.lampAndReason(for: evidence, sessionId: "s",
-                                                  live: live(status: "busy"))
+                                                  live: live(status: "busy"), isInFlight: false)
         XCTAssertEqual(result.lamp, .working)
     }
 
     func testInFlightDeliveryUpgradesQuietToWorking() {
         let evidence = SessionActivity.Evidence(activity: .idle, observedAt: nil, modifiedAt: nil)
         let quiet = GridAssembler.lampAndReason(for: evidence, sessionId: "s",
-                                                live: live(status: "idle"))
+                                                live: live(status: "idle"), isInFlight: false)
         XCTAssertEqual(quiet.lamp, .running, "sanity: quiet without a delivery in flight")
         let inFlight = GridAssembler.lampAndReason(for: evidence, sessionId: "s",
                                                     live: live(status: "idle"), isInFlight: true)
@@ -120,14 +120,14 @@ final class GridAssemblerTests: XCTestCase {
     func testPickedUpOnlyAppliesToARowThatWasGoingToBeQuiet() {
         let evidence = SessionActivity.Evidence(activity: .idle, observedAt: nil, modifiedAt: nil)
         let pickedUp = GridAssembler.lampAndReason(for: evidence, sessionId: "s",
-                                                    live: live(status: "idle"), pickedUp: true)
+                                                    live: live(status: "idle"), pickedUp: true, isInFlight: false)
         XCTAssertEqual(pickedUp.lamp, .fault)
         XCTAssertEqual(pickedUp.reason, "standing by")
 
         // A row with something of its own to say is never overridden by pickedUp.
         let working = SessionActivity.Evidence(activity: .working, observedAt: nil, modifiedAt: nil)
         let stillWorking = GridAssembler.lampAndReason(for: working, sessionId: "s",
-                                                        live: live(status: "busy"), pickedUp: true)
+                                                        live: live(status: "busy"), pickedUp: true, isInFlight: false)
         XCTAssertEqual(stillWorking.lamp, .working)
     }
 
