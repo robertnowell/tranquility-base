@@ -98,22 +98,31 @@ class JevClient:
                "thinking aloud while supervising a fleet of coding agents, and speaks only "
                "when addressed. Lines marked 'you' are the developer; other lines were spoken "
                "by the assistant or by an agent, and the developer heard them.")
-        state = {"context": ctx,
-                 "exchange_so_far": EXCHANGE[-8:],
-                 "agent_on_stage": (stage or {}).get("goal"),
-                 "utterance": utterance,
-                 "note": (f"The transcriber often misspells the name {NAME}: Drinkody, Tranquillity, "
-                          "Tranquilly, Tranquil, Trank. A turn opening with such a word is addressed.")}
+        state = {
+            "context": ctx,
+            "conversation_before": [
+                {"who": e["who"], "status": e["status"], "text": e["text"]} for e in EXCHANGE[-8:]
+            ],
+            "agent_on_stage": (stage or {}).get("goal"),
+            "text_to_judge": utterance,
+            "rules": (
+                "Judge ONLY text_to_judge. conversation_before is context: 'you' is the developer, "
+                "other names are the assistant or an agent speaking; a status of 'acted' or 'spoken' "
+                "means that turn was already handled and must not be acted on again. "
+                f"The transcriber often misspells the name {NAME}: Drinkody, Tranquillity, Tranquilly, "
+                "Tranquil, Trank; a turn opening with such a word is addressed."),
+        }
         answers = await self.ask(state, {
             "addressed": {"type": "noul",
-                "instructions": f"Is the speaker addressing the assistant {NAME} directly, with a request or a question meant for it?",
+                "instructions": (f"In text_to_judge, is the developer asking the assistant {NAME} to speak "
+                                 "or act RIGHT NOW? Earlier turns do not count; only this text."),
                 "criteria": {"true": (f"Names {NAME}, or asks or instructs the assistant directly"
                                       + (", or asks about the agent on stage: its goal, findings, next step, reasons, or tells it to do something"
                                          if stage else "")),
                              "false": ("Thinking aloud, a rhetorical question, talking to another "
                                        f"person, reading text aloud, or the word {NAME.lower()} used for something else")}},
             "intent": {"type": "choice",
-                "instructions": "If the assistant were addressed, which kind of request is this?",
+                "instructions": "If text_to_judge is a request to the assistant, which kind is it?",
                 "criteria": INTENTS},
         })
         return float(answers["addressed"]["noul"]), answers["intent"]
@@ -140,17 +149,19 @@ class JevClient:
 TRANSCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "transcript.md")
 
 
-EXCHANGE: list[str] = []  # "who: text", newest last; what Jev and the brain see
+# The conversation before the text being judged: who said it, what, and whether it
+# was already handled. Every earlier turn is context and only context; a request
+# that was acted on is marked so it is never replayed.
+EXCHANGE: list[dict] = []
 
 
-def note(who: str, text: str):
-    """What was said, by whom, for a person to read later, and for the models to
+def note(who: str, text: str, status: str = "said"):
+    """What was said, by whom, for a person to read later and for the models to
     see as context. Seeded from the transcript on start so a restart forgets nothing."""
-    line = f"{who}: {text.strip()}"
-    EXCHANGE.append(line)
+    EXCHANGE.append({"who": who, "text": text.strip(), "status": status})
     del EXCHANGE[:-12]
     with open(TRANSCRIPT, "a") as f:
-        f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')}  {line}\n")
+        f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')}  {who} [{status}]: {text.strip()}\n")
 
 
 def seed_exchange():
@@ -158,10 +169,17 @@ def seed_exchange():
         with open(TRANSCRIPT) as f:
             for raw in f.readlines()[-12:]:
                 parts = raw.rstrip("\n").split("  ", 1)
-                if len(parts) == 2:
-                    EXCHANGE.append(parts[1])
+                if len(parts) != 2 or ": " not in parts[1]:
+                    continue
+                head, text = parts[1].split(": ", 1)
+                who, _, status = head.partition(" [")
+                EXCHANGE.append({"who": who, "text": text, "status": status.rstrip("]") or "said"})
     except FileNotFoundError:
         pass
+
+
+def exchange_lines(n: int = 8) -> list[str]:
+    return [f"{e['who']} ({e['status']}): {e['text']}" for e in EXCHANGE[-n:]]
 
 
 def _chosen(choice: dict) -> str:
@@ -220,7 +238,7 @@ class Brain:
                 "'the branch', 'the PR', 'PR five forty-seven'.")},
             {"role": "user", "content": f"Facts about this session:\n{json.dumps(facts, ensure_ascii=False)}\n\n"
                                         f"The end of the session's transcript:\n{tail}\n\n"
-                                        f"The exchange so far (you = the supervisor):\n" + "\n".join(EXCHANGE[-8:]) + f"\n\nQuestion: {question}"},
+                                        f"The exchange so far (you = the supervisor):\n" + "\n".join(exchange_lines()) + f"\n\nQuestion: {question}"},
         ]
         body = {"model": self.model, "messages": msgs, "max_tokens": 400, "temperature": 0.3}
         t0 = time.monotonic()
@@ -293,7 +311,7 @@ class Manager(FrameProcessor):
                    answers=self._jev.last.get("answers"), raw_p=round(raw_p, 2), rule=rule)
         speak = p >= THRESHOLD
         logger.info(f"gate p={p:.2f} {intent} {ms}ms {'SPEAK' if speak else 'silent'} :: {text[:80]}")
-        note("you" if speak else "you (to the room)", text)
+        note("you", text, "acted" if speak else "silent")
         await emit(self, "addressed" if speak else "listening",
                    p=round(p, 2), intent=intent if speak else None, ms=ms, text=text[:120])
         if not speak:
@@ -323,7 +341,7 @@ class Manager(FrameProcessor):
         brief = await self._brief(nxt["sessionId"])
         spoken = " ".join(x for x in ((brief or {}).get("recap"), (brief or {}).get("proposal")) if x)
         await emit(self, "speaking", voice="agent", session=nxt["sessionId"], text=spoken[:200])
-        note(nxt.get("goal") or nxt.get("project") or nxt["sessionId"][:8], spoken or "(no brief stored)")
+        note(nxt.get("goal") or nxt.get("project") or nxt["sessionId"][:8], spoken or "(no brief stored)", "spoken")
         await _run("open", f"{SCHEME}://hear?session={nxt['sessionId']}")
 
     async def _do_rung_goal(self, t, f, d): await self._rung("goal", t, f, d)
@@ -345,7 +363,7 @@ class Manager(FrameProcessor):
         # The session speaks its own rung: a speak-only deep link into the app.
         await emit(self, "speaking", voice="agent", session=self.stage["sessionId"],
                    rung=kind, text=rung["spoken"][:160])
-        note(self.stage.get("goal") or self.stage["sessionId"][:8], rung["spoken"])
+        note(self.stage.get("goal") or self.stage["sessionId"][:8], rung["spoken"], "spoken")
         await _run("open", f"{SCHEME}://rung?session={self.stage['sessionId']}&kind={kind}")
 
     async def _do_custom(self, text, frame, direction):
@@ -374,7 +392,7 @@ class Manager(FrameProcessor):
             return
         answer = spoken(answer)
         await emit(self, "speaking", voice="agent", session=sid, text=answer[:160])
-        note(self.stage.get("goal") or sid[:8], answer)
+        note(self.stage.get("goal") or sid[:8], answer, "spoken")
         await _run("open", f"{SCHEME}://say?session={sid}&text={quote(answer)}")
 
     async def _do_teach(self, text, frame, direction):
@@ -466,7 +484,7 @@ class Manager(FrameProcessor):
 
     async def _say(self, text: str, voice: str = "manager", session: str | None = None):
         await emit(self, "speaking", voice=voice, session=session, text=text[:160])
-        note("Tranquility", text)
+        note("Tranquility", text, "spoken")
         await self.push_frame(TTSSpeakFrame(text))
 
     async def _earcon(self, name: str):
