@@ -66,6 +66,9 @@ def names_the_manager(text: str) -> bool:
 COMMANDS = {"invite_next", "send_message", "start_agent", "rung_goal", "rung_findings",
             "rung_solution", "rung_why", "summarize_recent"}
 
+# With a session on stage, a confident question about its work is for the manager.
+STAGE_QUESTIONS = {"rung_goal", "rung_findings", "rung_solution", "rung_why", "custom", "send_message"}
+
 RUNG_FOR = {"rung_goal": "goal", "rung_findings": "findings",
             "rung_solution": "solution", "rung_why": "why"}
 
@@ -187,6 +190,9 @@ class Manager(FrameProcessor):
             p, rule = max(p, 0.95), "named"  # the transcriber's spelling is not a veto
         elif intent in COMMANDS and float(intent_answer.get("confidence", 0)) >= 0.9 and p >= 0.3:
             p, rule = max(p, 0.6), "fleet command"  # nobody else can execute it
+        elif (self.stage and intent in STAGE_QUESTIONS
+              and float(intent_answer.get("confidence", 0)) >= 0.8 and p >= 0.4):
+            p, rule = max(p, 0.6), "about the stage"  # a question about the work on stage
         await emit(self, "jev", ms=self._jev.last.get("ms"), state=self._jev.last.get("state"),
                    answers=self._jev.last.get("answers"), raw_p=round(raw_p, 2), rule=rule)
         speak = p >= THRESHOLD
