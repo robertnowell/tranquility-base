@@ -109,8 +109,11 @@ public enum RemoteSpool {
                                       latest: WaitingSession?) -> Bool {
         guard latest?.notificationMatcher == "agent_question" else { return false }
         switch event.kind {
-        case .answered: return true
-        case .appeared: return pending == nil
+        case .answered: return pending == nil
+        case .appeared(let session):
+            // Adoption may arrive before request details. A blocked or
+            // unknown agent is not evidence that its question disappeared.
+            return pending == nil && !session.state.isBlocked && session.state != .unknown
         default: return false
         }
     }

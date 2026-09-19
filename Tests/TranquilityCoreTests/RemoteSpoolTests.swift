@@ -69,7 +69,15 @@ final class RemoteSpoolTests: XCTestCase {
         XCTAssertTrue(RemoteSpool.closesQuestion(event(.appeared(adopted)), pending: nil, latest: asked))
         XCTAssertFalse(RemoteSpool.closesQuestion(event(.appeared(adopted)), pending: open, latest: asked),
                        "the ask survived; it stays open and amber")
+        for state in [AgentSessionState.inputRequired, .authRequired, .unknown] {
+            XCTAssertFalse(RemoteSpool.closesQuestion(event(.appeared(agent(state: state))), pending: nil, latest: asked),
+                           "missing request details cannot close a blocked or unknown agent's question")
+        }
+        XCTAssertTrue(RemoteSpool.closesQuestion(event(.appeared(agent(state: .working))), pending: nil, latest: asked),
+                      "an agent observed working without a request has moved past the earlier question")
         XCTAssertTrue(RemoteSpool.closesQuestion(event(.answered(requestId: "q")), pending: nil, latest: asked))
+        XCTAssertFalse(RemoteSpool.closesQuestion(event(.answered(requestId: "old")), pending: open, latest: asked),
+                       "an earlier answer cannot dismiss a question that is still pending")
         XCTAssertFalse(RemoteSpool.closesQuestion(event(.changed(adopted)), pending: nil, latest: asked),
                        "a live change is not a restart")
         let finished = WaitingSession(sessionId: adopted.id, latestId: 9, createdAtMs: 1_000,

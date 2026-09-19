@@ -668,6 +668,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     // either an amber lamp that needs you, or an update from
                     // the last turn from the agent, not a templated message".
                     for event in events {
+                        switch event.kind {
+                        case .answered, .appeared: break
+                        default: continue
+                        }
                         guard let store = self.store,
                               let latest = try? store.latestStop(for: event.session) else { continue }
                         if RemoteSpool.closesQuestion(event, pending: snapshot?.requests[event.session],
