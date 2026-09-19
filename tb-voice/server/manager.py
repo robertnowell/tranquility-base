@@ -413,6 +413,7 @@ class Manager(FrameProcessor):
         await emit(self, "tool", argv=["tbase", "send", session_id[:8]], exit=code, meaning=meaning)
         if code == 0:
             await self._earcon("dispatched")
+            await self._say(os.getenv("TB_SENT_LINE", "Sent. What's next?"))
         else:
             await self._say(f"Not sent: {meaning}.")
 

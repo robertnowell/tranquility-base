@@ -9,7 +9,7 @@ import os
 
 from loguru import logger
 from pipecat.adapters.schemas.function_schema import FunctionSchema
-from pipecat.frames.frames import FunctionCallResultProperties
+from pipecat.frames.frames import FunctionCallResultProperties, TTSSpeakFrame
 
 from events import line
 
@@ -54,11 +54,23 @@ async def brief(params):
     await params.result_callback(_json_or_text(code, out))
 
 
+SENT_LINE = os.getenv("TB_SENT_LINE", "Sent. What's next?")
+
+
 async def send_message(params):
     a = params.arguments
-    code, out = await _run(TBASE, "send", a["session"], a["text"])
-    meaning = {0: "confirmed", 2: "not dispatched", 3: "deferred", 4: "ambiguous target", 5: "failed"}
-    await params.result_callback({"exit": code, "meaning": meaning.get(code, "unknown"), "text": out[-500:]})
+    sid = await _full_id(a["session"])
+    code, out = await _run(TBASE, "send", sid, a["text"])
+    meaning = {0: "sent", 2: "not dispatched", 3: "deferred", 4: "ambiguous target", 5: "failed"}
+    line("tool", argv=["tbase", "send", sid[:8]], exit=code, meaning=meaning.get(code, "unknown"))
+    if code == 0:
+        # The sent cue and one fixed line; the model is not asked to narrate a send.
+        line("earcon", name="dispatched")
+        line("speaking", voice="manager", text=SENT_LINE)
+        await params.llm.push_frame(TTSSpeakFrame(SENT_LINE))
+        await params.result_callback({"exit": 0, "meaning": "sent"}, properties=SILENT)
+    else:
+        await params.result_callback({"exit": code, "meaning": meaning.get(code, "unknown"), "text": out[-300:]})
 
 
 async def start_agent(params):
