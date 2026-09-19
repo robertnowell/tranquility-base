@@ -654,24 +654,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     guard let self else { return }
                     let snapshot = self.agents?.snapshot
                     let lines = events.flatMap { event -> [RemoteSpool.SpoolLine] in
-                        let agent = snapshot?.agent(event.session)
-                        var out = RemoteSpool.lines(for: event, agent: agent)
-                        // An adopted agent whose last word here was a question
-                        // nobody can answer any more: say so, as a turn.
-                        if case .appeared = event.kind, snapshot?.requests[event.session] == nil,
-                           let latest = try? self.store?.latestStop(for: event.session) {
-                            out += RemoteSpool.expiredQuestion(for: event, agent: agent, latest: latest)
-                        }
-                        return out
+                        RemoteSpool.lines(for: event, agent: snapshot?.agent(event.session))
                     }
-                    // A question answered elsewhere (the attached terminal,
-                    // with Enter) is done here too: the "asking permission"
-                    // turn is dismissed, or the row would stay unread for a
-                    // decision already made.
+                    // A question that is no longer open is done here too, or
+                    // the row would stay unread for a decision already made:
+                    // answered elsewhere (the attached terminal, with Enter),
+                    // or gone with the process it lived in (an agent adopted
+                    // with no request while this app's last word on it is
+                    // still the question). Dismissed, not replaced: the row
+                    // then reads the agent's last real words. A templated
+                    // "the permission expired, say what to do next" turn stood
+                    // here from 16 Sep to 17 Sep; Robert, 11:10 AM: "it is
+                    // either an amber lamp that needs you, or an update from
+                    // the last turn from the agent, not a templated message".
                     for event in events {
-                        if case .answered = event.kind, let store = self.store,
-                           let latest = try? store.latestStop(for: event.session),
-                           latest.notificationMatcher == "agent_question" {
+                        switch event.kind {
+                        case .answered, .appeared: break
+                        default: continue
+                        }
+                        guard let store = self.store,
+                              let latest = try? store.latestStop(for: event.session) else { continue }
+                        if RemoteSpool.closesQuestion(event, pending: snapshot?.requests[event.session],
+                                                      latest: latest) {
                             try? store.advanceCursor(sessionId: event.session,
                                                      heardThrough: latest.latestId,
                                                      dismissedThrough: latest.latestId)
@@ -694,6 +698,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Sole owner: the ownership lock above is held, so a live file
             // modified seconds ago belongs to the process this one replaced.
             let report = try store.reconcileOnBoot(soleOwner: true)
+            // Data repair for the templated "permission expired" turns
+            // written 16 to 17 Sep (matcher agent_question_expired): they
+            // are dismissed, so the row reads the agent's last real words,
+            // as a fresh adoption now does. Idempotent; a no-op once none
+            // are left unheard.
+            for stale in (try? store.waitingSessions()) ?? []
+            where stale.notificationMatcher == "agent_question_expired" {
+                try? store.advanceCursor(sessionId: stale.sessionId, heardThrough: stale.latestId,
+                                         dismissedThrough: stale.latestId)
+                Permissions.log("queue: dismissed a templated expired-question turn for \(stale.sessionId.prefix(8))")
+            }
             if !report.adoptedAudio.isEmpty {
                 // Speech a previous process left unclaimed — a death, or an
                 // abandon that kept it — is in Recents now, not on the reap.
