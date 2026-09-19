@@ -688,6 +688,7 @@ enum StateLegend {
         ("⌃ Ctrl + ⌥ Option", "hear the next agent update"),
         ("hold ⌥ Option", "speak"),
         ("⌃ Ctrl twice", "hear more"),
+        ("⌃ Ctrl + ⌥ Option + ⌘ Cmd", "hands-free on or off"),
     ]
 
     /// The same three doors when the manager is on: phrases, not chords. The

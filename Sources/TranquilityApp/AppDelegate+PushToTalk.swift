@@ -43,7 +43,7 @@ extension AppDelegate {
             hud.releaseAcknowledge()
         case .replyBegan:
             break  // already lit by the arm that preceded it
-        case .next, .dismiss, .optionTapped, .pauseToggled, .controlDoubleTapped:
+        case .next, .dismiss, .optionTapped, .pauseToggled, .controlDoubleTapped, .handsFreeToggled:
             hud.acknowledge(.recognized)
         case .controlRegistered:
             // Blue: received, not acted on. The second ⌃ of a ⌃⌃ arrives while
@@ -126,6 +126,9 @@ extension AppDelegate {
             activeConversation = nil   // moving on is the explicit end of a conversation
             announceNext()
 
+        case .handsFreeToggled:
+            Permissions.log("hotkey: ⌃⌥⌘ hands-free \(managerIsOn ? "off" : "on")")
+            toggleManagerMode()
         case .dismiss:
             Analytics.gesture("ctrl_shift", phase: "tapped", decision: {
                 if case .transcribing = hud.state { return "cancelled_transcription" }
