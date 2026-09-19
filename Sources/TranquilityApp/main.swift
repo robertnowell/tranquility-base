@@ -1478,7 +1478,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // that opens Setup. The summariser keeps the standing; the panel only
         // shows it. Ruled 15 Sep after a floor summary read as a broken prompt.
         CreditStanding.observe { [weak self] _ in
-            DispatchQueue.main.async { self?.hud.setCreditStanding(CreditStanding.current.line) }
+            // Out of credits with a pasted key is not amber: the key carries on.
+            let ownKey = Secrets.read(.anthropicAPIKey) != nil
+            DispatchQueue.main.async { self?.hud.setCreditStanding(CreditStanding.current.line(ownKey: ownKey)) }
         }
         // One door per pane. The panel asks for a tab; the host assembles that
         // tab's data and shows it. Nothing re-renders a pane it has not fed.
