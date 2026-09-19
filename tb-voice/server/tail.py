@@ -40,7 +40,7 @@ function ts(t){const d=new Date(t*1000);return d.toTimeString().slice(0,8)+'.'+S
 const es=new EventSource('/stream');
 es.onopen=()=>s.textContent='live';es.onerror=()=>s.textContent='reconnecting…';
 es.addEventListener('event',m=>{const e=JSON.parse(m.data);const d=document.createElement('div');d.className='e '+e.event;
- let x='';if(e.p!==undefined&&e.p!==null)x+='<span class="bar" style="width:'+Math.round(e.p*80)+'px"></span>'+e.p.toFixed(2)+' ';
+ let x='';if(e.p!==undefined&&e.p!==null){x+='<span class="bar" style="width:'+Math.round(e.p*80)+'px"></span>'+e.p.toFixed(2)+' ';x+=e.event==='addressed'?'<b style="color:#f3f1e9">SPEAK</b> ':'<span class="t">silent</span> ';}
  if(e.intent)x+='<b>'+e.intent+'</b> ';if(e.ms)x+='<span class="t">'+e.ms+'ms</span> ';if(e.text)x+='<span class="x">'+e.text.replace(/</g,'&lt;')+'</span>';
  if(e.goal)x+='<span class="x">'+e.goal+'</span>';if(e.name)x+=e.name;if(e.argv)x+=e.argv.join(' ');if(e.meaning)x+=' → '+e.meaning;if(e.reason)x+='<span class="x">'+e.reason+'</span>';if(e.voice)x+=' ['+e.voice+']';
  d.innerHTML='<span class="t">'+ts(e.t)+'</span><span class="k">'+e.event+'</span><span>'+x+'</span>';ev.append(d);while(ev.children.length>300)ev.firstChild.remove();ev.parentElement.scrollTop=ev.parentElement.scrollHeight;});
@@ -53,7 +53,7 @@ def follow(path, start_at_end=True):
     pos = os.path.getsize(path) if start_at_end and os.path.exists(path) else 0
     while True:
         if os.path.exists(path):
-            with open(path, "r", errors="replace") as f:
+            with open(path, errors="replace") as f:
                 f.seek(pos)
                 for line in f:
                     yield line.rstrip("\n")
@@ -79,6 +79,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
             with open(EVENTS, errors="replace") as f:
                 for line in f.readlines()[-40:]:
                     self._send("event", line.strip())
+        except FileNotFoundError:
+            pass
+        try:
+            with open(LOG, errors="replace") as f:
+                for line in f.readlines()[-400:]:
+                    m = GATE.match(line.rstrip("\n"))
+                    if m:
+                        self._send("log", json.dumps({"time": m.group(1), "level": m.group(2), "line": m.group(3)}))
         except FileNotFoundError:
             pass
         ev, lg = follow(EVENTS), follow(LOG)
