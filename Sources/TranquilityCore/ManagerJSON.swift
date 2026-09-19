@@ -112,6 +112,25 @@ public enum ManagerJSON {
             lastAssistantMessage: stop.lastAssistantMessage.map { String($0.prefix(600)) })
     }
 
+    /// The stored announcement for a session's latest turn, rebuilt from the
+    /// brief table with no model call: what the ladder and the `rung` verb read.
+    public static func announcement(store: QueueStore, sessionId: String) throws -> Coordinator.Announcement? {
+        guard let stop = try store.latestStop(for: sessionId),
+              let stored = try store.storedBrief(sessionId: sessionId, eventRowid: stop.latestId)
+        else { return nil }
+        let brief = stored.brief
+        let spoken = SpokenTextSanitizer().sanitize(brief.spokenText(), allowing: [])
+        return Coordinator.Announcement(event: stop, brief: brief, spoken: spoken, via: "manager")
+    }
+
+    /// One rung by name ("goal", "findings", "solution", "why", "message"), or
+    /// nil when that rung is empty for this turn. A ladder is never padded.
+    public static func rung(store: QueueStore, sessionId: String, kind: String) throws -> SpokenComposition.LadderRung? {
+        guard let announcement = try announcement(store: store, sessionId: sessionId) else { return nil }
+        return SpokenComposition.ladderRungs(for: announcement)
+            .first { $0.kind.rawValue.lowercased() == kind.lowercased() }
+    }
+
     public static func encode<T: Encodable>(_ value: T) -> String {
         let enc = JSONEncoder()
         enc.outputFormatting = [.sortedKeys]

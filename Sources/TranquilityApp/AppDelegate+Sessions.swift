@@ -60,6 +60,8 @@ extension AppDelegate {
             case let .home(s, r):    session = s; ref = r
             case let .hear(s):       session = s; ref = nil
             case let .reply(s):      session = s; ref = nil
+            case let .rung(s, _):    session = s; ref = nil
+            case let .say(s, _):     session = s; ref = nil
             case .show, .connect, .new, .unknown: session = nil; ref = nil
             }
             Permissions.log("deeplink: \(action) session=\(session?.prefix(8) ?? "-")")
@@ -76,6 +78,20 @@ extension AppDelegate {
                 discuss(session: session, ref: ref)
             case "hear":
                 announceNext(only: session)
+            case "rung":
+                // The manager asking for one rung of the ladder, in the
+                // session's own voice. Speak-only, like `hear`.
+                guard case let .rung(_, kind) = parsed, let session, let kind,
+                      let store, let rung = try? ManagerJSON.rung(store: store, sessionId: session, kind: kind)
+                else { hud.showResult("That rung is empty for this turn."); break }
+                speakForManager(session: session, spoken: rung.spoken, placard: rung.kind.rawValue)
+            case "say":
+                // The manager handing the session a line to say in its own
+                // voice: a custom answer about its work. Capped and sanitized;
+                // it reaches the synthesizer and nothing else.
+                guard case let .say(_, text) = parsed, let session, let text else { break }
+                let spoken = SpokenTextSanitizer().sanitize(text, allowing: [])
+                speakForManager(session: session, spoken: spoken, placard: "SAY")
             case "reply":
                 // A deep link may not record. It is the one rule this surface
                 // has that the others do not need: any page in any browser can

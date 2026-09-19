@@ -185,8 +185,10 @@ class Manager(FrameProcessor):
             have = [r["kind"] for r in (brief or {}).get("rungs", []) if r["kind"] != "message"]
             await self._say(f"That rung is empty for this turn. It has: {', '.join(have) or 'only the message'}.")
             return
-        # Unit 4 swaps this for the session's own voice via a speak-only deep link.
-        await self._say(rung["spoken"], voice="agent", session=self.stage["sessionId"])
+        # The session speaks its own rung: a speak-only deep link into the app.
+        await emit(self, "speaking", voice="agent", session=self.stage["sessionId"],
+                   rung=kind, text=rung["spoken"][:160])
+        await _run("open", f"{SCHEME}://rung?session={self.stage['sessionId']}&kind={kind}")
 
     async def _do_teach(self, text, frame, direction):
         await self._llm(frame, direction, text, "teach")

@@ -112,6 +112,13 @@ public enum DeepLink {
         case home(session: String?, ref: String?)
         case hear(session: String?)
         case reply(session: String?)
+        /// The manager's two speak-only verbs (19 Sep). `rung` reads one rung of
+        /// the session's stored ladder in the session's own voice; `say` speaks
+        /// a short text in that voice. Both obey rule 1: they speak, and nothing
+        /// else. The text is spoken, never typed and never shelled; it is capped
+        /// and sanitized on the way to the synthesizer like any spoken line.
+        case rung(session: String?, kind: String?)
+        case say(session: String?, text: String?)
         case show
         /// "Start a session", the same verb as the panel's button and the
         /// status menu's item, with the agent Settings has selected. Carries
@@ -153,6 +160,9 @@ public enum DeepLink {
         case "discuss": return .discuss(session: value("session"), ref: value("ref"))
         case "home":    return .home(session: value("session"), ref: value("ref"))
         case "hear":    return .hear(session: value("session"))
+        case "rung":    return .rung(session: value("session"), kind: value("kind"))
+        case "say":     return .say(session: value("session"),
+                                    text: value("text").map { String($0.prefix(sayLimit)) })
         case "reply":   return .reply(session: value("session"))
         case "show":    return .show
         case "connect": return .connect
@@ -160,6 +170,10 @@ public enum DeepLink {
         case let other: return .unknown(other)
         }
     }
+
+    /// The longest text `say` will carry. A manager line is thirty words; this
+    /// is room for a whole rung and nothing like a document.
+    public static let sayLimit = 600
 
     /// Characters that cannot appear in an artifact path the invitation is
     /// willing to build a command from.

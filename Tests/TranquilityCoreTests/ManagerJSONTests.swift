@@ -80,4 +80,12 @@ final class ManagerJSONTests: XCTestCase {
         let rung = ManagerJSON.Rung(kind: "goal", spoken: "ship it")
         XCTAssertEqual(ManagerJSON.encode(rung), #"{"kind":"goal","spoken":"ship it"}"#)
     }
+
+    func testRungByKindReadsTheStoredLadder() throws {
+        _ = try seed()
+        let rung = try XCTUnwrap(ManagerJSON.rung(store: store, sessionId: "sess-1", kind: "solution"))
+        XCTAssertEqual(rung.kind, .solution)
+        XCTAssertTrue(rung.spoken.text.contains("guard the empty case"))
+        XCTAssertNil(try ManagerJSON.rung(store: store, sessionId: "sess-1", kind: "nope"))
+    }
 }

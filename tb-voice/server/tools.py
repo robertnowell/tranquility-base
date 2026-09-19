@@ -80,7 +80,19 @@ async def invite_to_speak(params):
     await params.result_callback({"exit": code, "status": "the session is speaking"}, properties=SILENT)
 
 
+async def say_as_session(params):
+    """The LLM's answer about the agent on stage, spoken in that agent's voice."""
+    from urllib.parse import quote
+    a = params.arguments
+    text = " ".join(a["text"].split())[:600]
+    code, out = await _run("open", f"{SCHEME}://say?session={a['session']}&text={quote(text)}")
+    await params.result_callback({"exit": code, "status": "the session is speaking"}, properties=SILENT)
+
+
 SCHEMAS = [
+    FunctionSchema("say_as_session", "Speak a short answer (30 words max) in a session's own voice. Use for any answer about the agent on stage. Say nothing after.",
+                   {"session": {"type": "string"}, "text": {"type": "string"}},
+                   ["session", "text"], handler=say_as_session),
     FunctionSchema("list_agents", "List live coding-agent sessions with their state and ids.",
                    {}, [], handler=list_agents),
     FunctionSchema("whats_waiting", "Which sessions are waiting on the user, with their brief topic.",
