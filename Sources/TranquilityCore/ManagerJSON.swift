@@ -56,6 +56,9 @@ public enum ManagerJSON {
         /// The ladder as the app would speak it, in order, empties skipped.
         public var rungs: [Rung]
         public var lastAssistantMessage: String?
+        /// Where the session's own transcript lives, so a question about the
+        /// work can be answered from the record, not only from the brief.
+        public var transcriptPath: String?
     }
 
     // MARK: - Builders
@@ -109,7 +112,8 @@ public enum ManagerJSON {
             recap: brief.recap, proposal: brief.proposal, goal: brief.goal,
             findings: brief.findings, solution: brief.solution, why: brief.rationale,
             rungs: rungs,
-            lastAssistantMessage: stop.lastAssistantMessage.map { String($0.prefix(600)) })
+            lastAssistantMessage: stop.lastAssistantMessage.map { String($0.prefix(600)) },
+            transcriptPath: stop.transcriptPath)
     }
 
     /// The stored announcement for a session's latest turn, rebuilt from the

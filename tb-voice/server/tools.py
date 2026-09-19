@@ -74,8 +74,18 @@ async def start_agent(params):
     await params.result_callback({"exit": code, "session": reg, "text": out[-500:]})
 
 
+async def _full_id(sid: str) -> str:
+    """The manager keeps eight-character ids; the app's doors want the whole thing."""
+    if len(sid) >= 32:
+        return sid
+    code, out = await _run(TBASE, "targets", "--json")
+    data = _json_or_text(code, out).get("data") or []
+    hits = [t["sessionId"] for t in data if isinstance(t, dict) and t.get("sessionId", "").startswith(sid)]
+    return hits[0] if len(hits) == 1 else sid
+
+
 async def invite_to_speak(params):
-    sid = params.arguments["session"]
+    sid = await _full_id(params.arguments["session"])
     code, out = await _run("open", f"{SCHEME}://hear?session={sid}")
     await params.result_callback({"exit": code, "status": "the session is speaking"}, properties=SILENT)
 
@@ -85,7 +95,8 @@ async def say_as_session(params):
     from urllib.parse import quote
     a = params.arguments
     text = " ".join(a["text"].split())[:600]
-    code, out = await _run("open", f"{SCHEME}://say?session={a['session']}&text={quote(text)}")
+    sid = await _full_id(a["session"])
+    code, out = await _run("open", f"{SCHEME}://say?session={sid}&text={quote(text)}")
     await params.result_callback({"exit": code, "status": "the session is speaking"}, properties=SILENT)
 
 

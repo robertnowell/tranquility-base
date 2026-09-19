@@ -10,12 +10,39 @@ import TranquilityCore
 /// sends, or types; it is the ⌃⌃ ladder's speaking half, reached by URL.
 extension AppDelegate {
 
-    /// Speak `spoken` as the session would, and show it on the card. The same
-    /// sequence the ladder uses: stop what is playing, supersede any armed
-    /// announcement, then speak with the session's voice pair.
+    /// A session id, or the unique session the prefix names. The manager
+    /// reads ids from JSON and often keeps only the first eight characters.
+    func resolveSession(_ raw: String?) -> String? {
+        guard let raw else { return nil }
+        if raw.count >= 32 { return raw }
+        return (try? store?.sessionId(matching: raw)) ?? raw
+    }
+
+    /// Speak `spoken` as the session would. With the manager on, the orb stays
+    /// on the grid and the line under it says who is speaking; the card is for
+    /// hands. Otherwise the same sequence the ladder uses: stop what is
+    /// playing, supersede any armed announcement, show the card, speak.
     @MainActor
     func speakForManager(session: String, spoken: SanitizedSpokenText, placard: String) {
         guard let coordinator else { return }
+        Permissions.log("manager: speaking \(placard) for \(session.prefix(8)): \(spoken.text.prefix(200))")
+        if managerIsOn {
+            returnToGridWork?.cancel()
+            let previous = announceTask
+            announceTask = Task { @MainActor in
+                coordinator.speech.stop()
+                previous?.cancel()
+                _ = await previous?.value
+                guard !Task.isCancelled else { return }
+                let goal = (try? store.flatMap { try ManagerJSON.brief(store: $0, sessionId: session) })??.goal
+                hud.setManagerState(StatusHUD.orbState, line: "speaking: \(goal ?? String(session.prefix(8)))", mood: "speaking")
+                let voices = coordinator.voices(for: session)
+                _ = await coordinator.speech.speak(
+                    spoken, voice: voices.cloud, systemVoice: voices.system, onWord: { _ in })
+                hud.setManagerState(StatusHUD.orbState, line: "listening")
+            }
+            return
+        }
         returnToGridWork?.cancel()
         let previous = announceTask
         announceTask = Task { @MainActor in
@@ -36,7 +63,6 @@ extension AppDelegate {
                 cwd: event?.cwd ?? live?.cwd,
                 eventId: session,
                 placard: "\(StateLegend.Glyph.speaking) \(placard)")
-            Permissions.log("manager: speaking \(placard) for \(session.prefix(8))")
             let voices = coordinator.voices(for: session)
             _ = await coordinator.speech.speak(
                 spoken, voice: voices.cloud, systemVoice: voices.system, onWord: { _ in })

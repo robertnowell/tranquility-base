@@ -1,3 +1,5 @@
 bot.log
 .env
 events.jsonl
+transcript.md
+calls.jsonl

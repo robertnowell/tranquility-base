@@ -42,6 +42,7 @@ from pipecat.turns.user_stop.turn_analyzer_user_turn_stop_strategy import (
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from pipecat.workers.runner import WorkerRunner
 
+from llm import RecordedLLMService
 from manager import JevClient, Manager
 from prompt import SYSTEM
 from tools import SCHEMAS
@@ -55,7 +56,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
         api_key=os.environ["GRADIUM_API_KEY"],
         settings=GradiumTTSService.Settings(voice=os.getenv("GRADIUM_VOICE_ID") or None),
     )
-    llm = OpenAILLMService(
+    llm = RecordedLLMService(
         api_key=os.environ["GC_API_KEY"],
         base_url=os.getenv("GC_BASE_URL", "https://api.generalcompute.com/v1"),
         settings=OpenAILLMService.Settings(

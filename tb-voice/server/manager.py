@@ -18,6 +18,7 @@ from loguru import logger
 from pipecat.frames.frames import Frame, LLMContextFrame, TTSSpeakFrame
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
+from calls import record
 from events import emit
 from tools import _json_or_text, _run
 
@@ -36,10 +37,10 @@ INTENTS = {
     "rung_findings": "Asks what the agent found or what happened",
     "rung_solution": "Asks for the recommended next step, the solution, or what it proposes",
     "rung_why": "Asks why, for the rationale or reasoning",
-    "custom": "Any other question or remark about the agent on stage or its work",
+    "custom": "Any other question about the agent on stage or its work: files, code, status, details, opinions",
     "send_message": "Tells an agent to do something; a message or instruction to relay",
     "start_agent": "Asks to start, spin up, or open a new agent or session",
-    "summarize_recent": "Asks what has been going on recently, across agents, or what we did",
+    "summarize_recent": "Asks what has been going on recently across ALL agents, or what we did today or yesterday; not about one session",
     "teach": "Asks what the manager can do, what this is, or how it works",
     "speak": "Tells the manager to say something, speak, respond, answer, or prove it is listening",
     "none": "Addressed but nothing to do: an acknowledgement, a compliment, or filler",
@@ -86,8 +87,9 @@ class JevClient:
             JEV_URL, json={"state": state, "model": "jev-latest", "questions": questions})
         r.raise_for_status()
         answers = r.json()["answers"]
-        self.last = {"state": state, "questions": list(questions), "answers": answers,
-                     "ms": int((time.monotonic() - t0) * 1000)}
+        ms = int((time.monotonic() - t0) * 1000)
+        self.last = {"state": state, "questions": list(questions), "answers": answers, "ms": ms}
+        record("jev", {"state": state, "model": "jev-latest", "questions": questions}, r.json(), ms=ms)
         return answers
 
     async def turn(self, utterance: str, recent: list[str], stage: dict | None):
@@ -131,6 +133,15 @@ class JevClient:
         return answers["answer"]
 
 
+TRANSCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "transcript.md")
+
+
+def note(who: str, text: str):
+    """What was said, by whom, for a person to read later. Not a log."""
+    with open(TRANSCRIPT, "a") as f:
+        f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')}  {who}: {text.strip()}\n")
+
+
 def _chosen(choice: dict) -> str:
     # A Jev choice answer: {"choice": name, "confidence": c, "probabilities": {name: p}}.
     probs = choice.get("probabilities") or {}
@@ -147,19 +158,51 @@ class Brain:
             headers={"Authorization": f"Bearer {os.environ.get('GC_API_KEY', '')}"}, timeout=20.0)
         self.model = os.getenv("GC_MODEL", "minimax-m2.7")
 
+    @staticmethod
+    def transcript_tail(path: str | None, limit: int = 7000) -> str:
+        """The last stretch of the session's own transcript: what it and its
+        supervisor actually said, text parts only."""
+        if not path or not os.path.exists(path):
+            return ""
+        parts = []
+        try:
+            with open(path, "rb") as f:
+                f.seek(max(0, os.path.getsize(path) - 400_000))
+                for raw in f.read().decode(errors="replace").splitlines():
+                    try:
+                        o = json.loads(raw)
+                    except Exception:
+                        continue
+                    if o.get("type") not in ("assistant", "user"):
+                        continue
+                    c = (o.get("message") or {}).get("content")
+                    if isinstance(c, str):
+                        parts.append(f"{o['type']}: {c}")
+                    elif isinstance(c, list):
+                        txt = " ".join(p.get("text", "") for p in c if isinstance(p, dict) and p.get("type") == "text")
+                        if txt.strip():
+                            parts.append(f"{o['type']}: {txt}")
+        except Exception as e:
+            logger.warning(f"transcript read failed: {e}")
+        return "\n".join(parts)[-limit:]
+
     async def answer(self, question: str, brief: dict, recent: list[str]) -> str:
         facts = {k: brief.get(k) for k in ("goal", "recap", "proposal", "findings", "solution", "why", "lastAssistantMessage")}
+        tail = self.transcript_tail(brief.get("transcriptPath"))
         msgs = [
             {"role": "system", "content": (
                 "You are a coding-agent session answering its supervisor aloud, in first person "
                 "plural ('we'). Answer ONLY from the facts given. One or two sentences, 30 words "
                 "max, no lists, no markdown. If the facts do not say, say so in one sentence.")},
             {"role": "user", "content": f"Facts about this session:\n{json.dumps(facts, ensure_ascii=False)}\n\n"
+                                        f"The end of the session's transcript:\n{tail}\n\n"
                                         f"Recent words from the supervisor: {recent[-2:]}\n\nQuestion: {question}"},
         ]
-        r = await self._client.post("/chat/completions", json={
-            "model": self.model, "messages": msgs, "max_tokens": 400, "temperature": 0.3})
+        body = {"model": self.model, "messages": msgs, "max_tokens": 400, "temperature": 0.3}
+        t0 = time.monotonic()
+        r = await self._client.post("/chat/completions", json=body)
         r.raise_for_status()
+        record("brain", body, r.json(), ms=int((time.monotonic() - t0) * 1000))
         text = (r.json()["choices"][0]["message"].get("content") or "").strip()
         return " ".join(text.split())[:600]
 
@@ -225,6 +268,7 @@ class Manager(FrameProcessor):
                    answers=self._jev.last.get("answers"), raw_p=round(raw_p, 2), rule=rule)
         speak = p >= THRESHOLD
         logger.info(f"gate p={p:.2f} {intent} {ms}ms {'SPEAK' if speak else 'silent'} :: {text[:80]}")
+        note("you" if speak else "you (to the room)", text)
         await emit(self, "addressed" if speak else "listening",
                    p=round(p, 2), intent=intent if speak else None, ms=ms, text=text[:120])
         if not speak:
@@ -250,6 +294,10 @@ class Manager(FrameProcessor):
         await emit(self, "stage", session=nxt["sessionId"], goal=nxt.get("goal"),
                    project=nxt.get("project"))
         await self._earcon("returned")
+        brief = await self._brief(nxt["sessionId"])
+        spoken = " ".join(x for x in ((brief or {}).get("recap"), (brief or {}).get("proposal")) if x)
+        await emit(self, "speaking", voice="agent", session=nxt["sessionId"], text=spoken[:200])
+        note(nxt.get("goal") or nxt.get("project") or nxt["sessionId"][:8], spoken or "(no brief stored)")
         await _run("open", f"{SCHEME}://hear?session={nxt['sessionId']}")
 
     async def _do_rung_goal(self, t, f, d): await self._rung("goal", t, f, d)
@@ -271,6 +319,7 @@ class Manager(FrameProcessor):
         # The session speaks its own rung: a speak-only deep link into the app.
         await emit(self, "speaking", voice="agent", session=self.stage["sessionId"],
                    rung=kind, text=rung["spoken"][:160])
+        note(self.stage.get("goal") or self.stage["sessionId"][:8], rung["spoken"])
         await _run("open", f"{SCHEME}://rung?session={self.stage['sessionId']}&kind={kind}")
 
     async def _do_custom(self, text, frame, direction):
@@ -298,6 +347,7 @@ class Manager(FrameProcessor):
             await self._say("The session's notes don't say.")
             return
         await emit(self, "speaking", voice="agent", session=sid, text=answer[:160])
+        note(self.stage.get("goal") or sid[:8], answer)
         await _run("open", f"{SCHEME}://say?session={sid}&text={quote(answer)}")
 
     async def _do_teach(self, text, frame, direction):
@@ -388,6 +438,7 @@ class Manager(FrameProcessor):
 
     async def _say(self, text: str, voice: str = "manager", session: str | None = None):
         await emit(self, "speaking", voice=voice, session=session, text=text[:160])
+        note("Tranquility", text)
         await self.push_frame(TTSSpeakFrame(text))
 
     async def _earcon(self, name: str):
