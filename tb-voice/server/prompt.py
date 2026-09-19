@@ -1,6 +1,6 @@
 import os
 
-NAME = os.getenv("TB_MANAGER_NAME", "Base")
+NAME = os.getenv("TB_MANAGER_NAME", "Tranquility")
 
 SYSTEM = f"""You are {NAME}, the hands-free manager for Tranquility Base.
 

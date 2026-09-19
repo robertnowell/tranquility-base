@@ -16,7 +16,7 @@ from pipecat.frames.frames import Frame, LLMContextFrame
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
 JEV_URL = "https://api.typesafe.ai/v1/systemone"
-NAME = os.getenv("TB_MANAGER_NAME", "Base")
+NAME = os.getenv("TB_MANAGER_NAME", "Tranquility")
 THRESHOLD = float(os.getenv("TB_ADDRESSED_THRESHOLD", "0.5"))
 
 CONTEXT = (
