@@ -29,6 +29,9 @@ from pipecat.transports.base_transport import BaseTransport, TransportParams
 from pipecat.turns.user_start.min_words_user_turn_start_strategy import (
     MinWordsUserTurnStartStrategy,
 )
+from pipecat.turns.user_stop.speech_timeout_user_turn_stop_strategy import (
+    SpeechTimeoutUserTurnStopStrategy,
+)
 from pipecat.turns.user_stop.turn_analyzer_user_turn_stop_strategy import (
     TurnAnalyzerUserTurnStopStrategy,
 )
@@ -64,9 +67,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
         context,
         user_params=LLMUserAggregatorParams(
-            vad_analyzer=SileroVADAnalyzer(
-                params=VADParams(stop_secs=0.2, confidence=0.8, min_volume=0.7)
-            ),
+            vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=0.2)),
             # A turn starts on words, not on VAD: in a loud room VAD fired 300 ms into
             # every answer and cancelled it before TTS. Two words of transcript start a
             # turn; noise and one-word backchannels do not.
@@ -83,7 +84,12 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
                                 stop_secs=float(os.getenv("TB_STOP_SECS", "1.0"))
                             )
                         )
-                    )
+                    ),
+                    # A pause ends the turn even when the model is unsure: the
+                    # default outcome of a turn is silence, so ending early is cheap.
+                    SpeechTimeoutUserTurnStopStrategy(
+                        user_speech_timeout=float(os.getenv("TB_SPEECH_TIMEOUT", "1.2"))
+                    ),
                 ]
             ),
         ),
@@ -111,14 +117,17 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
     runner = WorkerRunner(handle_sigint=runner_args.handle_sigint)
     await runner.add_workers(worker)
 
-    @transport.event_handler("on_client_connected")
-    async def on_client_connected(transport, client):
-        logger.info("Client connected; listening. Say the name to be answered.")
+    try:
+        @transport.event_handler("on_client_connected")
+        async def on_client_connected(transport, client):
+            logger.info("Client connected; listening. Say the name to be answered.")
 
-    @transport.event_handler("on_client_disconnected")
-    async def on_client_disconnected(transport, client):
-        logger.info(f"Client disconnected; heard {gate.heard}, addressed {gate.addressed}")
-        await runner.cancel()
+        @transport.event_handler("on_client_disconnected")
+        async def on_client_disconnected(transport, client):
+            logger.info(f"Client disconnected; heard {gate.heard}, addressed {gate.addressed}")
+            await runner.cancel()
+    except Exception:  # the local transport has no clients; it listens until killed
+        pass
 
     await runner.run()
 
@@ -135,7 +144,42 @@ async def bot(runner_args: RunnerArguments):
     await run_bot(transport, runner_args)
 
 
-if __name__ == "__main__":
-    from pipecat.runner.run import main
+async def run_local():
+    """Hosted by the app (or `--local`): the Mac's mic and speakers, no browser.
+    The runner has no local transport, so this builds one and calls run_bot."""
+    import asyncio
 
-    main()
+    from pipecat.transports.local.audio import LocalAudioTransport, LocalAudioTransportParams
+
+    transport = LocalAudioTransport(
+        LocalAudioTransportParams(
+            audio_in_enabled=True,
+            audio_out_enabled=True,
+            audio_in_sample_rate=16000,
+            audio_out_sample_rate=48000,
+        )
+    )
+
+    class Args:
+        handle_sigint = True
+        body = {}
+        session_id = "local"
+
+    await run_bot(transport, Args())
+
+
+if __name__ == "__main__":
+    import sys
+
+    if "--local" in sys.argv or os.getenv("TB_HOST") == "app":
+        import asyncio
+
+        # The log goes to bot.log here; stdout/stderr are the host's or the envelope's.
+        logger.remove()
+        logger.add("bot.log", level=os.getenv("TB_LOG", "INFO"))
+
+        asyncio.run(run_local())
+    else:
+        from pipecat.runner.run import main
+
+        main()

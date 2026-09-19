@@ -7,16 +7,29 @@ Events: listening, addressed, speaking, stage, earcon, tool.
 """
 
 import json
+import os
 import sys
 import time
 
 from pipecat.processors.frameworks.rtvi import RTVIServerMessageFrame
 
+_sink = None
+
+
+def _out():
+    """stdout, or the FIFO the host names in TB_EVENTS (see run.sh)."""
+    global _sink
+    if _sink is None:
+        path = os.getenv("TB_EVENTS")
+        _sink = open(path, "a", buffering=1) if path else sys.stdout
+    return _sink
+
 
 def line(event: str, **fields) -> dict:
     rec = {"event": event, "t": round(time.time(), 3), **fields}
-    sys.stdout.write(json.dumps(rec, separators=(",", ":")) + "\n")
-    sys.stdout.flush()
+    out = _out()
+    out.write(json.dumps(rec, separators=(",", ":")) + "\n")
+    out.flush()
     return rec
 
 
