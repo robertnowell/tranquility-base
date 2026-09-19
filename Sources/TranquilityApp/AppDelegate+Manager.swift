@@ -94,6 +94,8 @@ extension AppDelegate {
         }
         managerTransport = transport
         hud.setManager(on: true)
+        // The mic-open cue: hands-free begins the way a held ⌥ does, "go ahead".
+        Earcons.acknowledge(.listening)
         Permissions.log("manager: started \(argv.joined(separator: " "))")
         managerTask = Task { @MainActor [weak self] in
             for await line in transport.lines() {

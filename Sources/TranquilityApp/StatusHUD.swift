@@ -76,6 +76,8 @@ final class StatusHUD: NSObject {
     /// the grid up and resize the panel on a mouse-over, which is the same
     /// reflow-on-hover the collapsed strip forbids, for the same reason.
     var controlsSticky: ControlsNoteView!
+    /// The note's hands-free twin: the same doors as phrases (19 Sep).
+    var voiceSticky: ControlsNoteView!
     /// The card's copy of the word, in the middle of the action row. The grid's
     /// copy lives in its footer; both drive `setControlsNote(open:above:)`, so
     /// there is one note and one behaviour behind two placements.
@@ -595,17 +597,22 @@ final class StatusHUD: NSObject {
     }
 
     func setControlsNote(open: Bool, above host: NSView? = nil) {
-        guard let controlsSticky else { return }
+        guard let controlsSticky, let voiceSticky else { return }
+        // Hands-free shows phrases; the chords still work, but the note teaches
+        // the mode you are in.
+        let note = managerOn ? voiceSticky : controlsSticky
+        let other = managerOn ? controlsSticky : voiceSticky
+        other.isHidden = true
         if open { controlsNoteClose?.cancel(); controlsNoteClose = nil }
-        if open, let host, let background = controlsSticky.superview {
+        if open, let host, let background = note.superview {
             NSLayoutConstraint.deactivate(stickyPlacement)
             stickyPlacement = [
-                controlsSticky.centerXAnchor.constraint(equalTo: background.centerXAnchor),
-                controlsSticky.bottomAnchor.constraint(equalTo: host.topAnchor, constant: -8),
+                note.centerXAnchor.constraint(equalTo: background.centerXAnchor),
+                note.bottomAnchor.constraint(equalTo: host.topAnchor, constant: -8),
             ]
             NSLayoutConstraint.activate(stickyPlacement)
         }
-        controlsSticky.isHidden = !open
+        note.isHidden = !open
     }
 
     /// Restore exactly the face arming replaced. No-op unless the panel is
@@ -2444,7 +2451,7 @@ final class StatusHUD: NSObject {
         // The footer belongs to the grid alone, and the sticky dies with it: a
         // note left open while the face changes underneath is exactly the
         // residue class render()'s baseline exists to make impossible.
-        gridFooter.isHidden = true; controlsSticky.isHidden = true
+        gridFooter.isHidden = true; controlsSticky.isHidden = true; voiceSticky.isHidden = true
         stripLabel.stringValue = ""
         voiceList.isHidden = true; waitingRows.isHidden = true
         setupChecklist?.isHidden = true; setupScroll?.isHidden = true

@@ -690,6 +690,14 @@ enum StateLegend {
         ("⌃ Ctrl twice", "hear more"),
     ]
 
+    /// The same three doors when the manager is on: phrases, not chords. The
+    /// name is what wakes it; everything else it hears is context.
+    static let voiceNote: [(chord: String, meaning: String)] = [
+        ("\u{201C}Tranquility, invite the next agent\u{201D}", "hear the next agent update"),
+        ("\u{201C}tell it to \u{2026}\u{201D}", "send a message to the agent on stage"),
+        ("\u{201C}what\u{2019}s the next step?\u{201D}", "hear more: goal, findings, next step, why"),
+    ]
+
     /// The panel signs its own bottom-right corner (ruled 10 Aug: "subtle but
     /// noticeable"). It balances `Controls` across a line that would otherwise
     /// be a word alone in a corner, and it is the expanded grid's half of the
