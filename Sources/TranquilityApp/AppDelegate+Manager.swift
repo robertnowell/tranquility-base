@@ -34,12 +34,13 @@ extension AppDelegate {
                 previous?.cancel()
                 _ = await previous?.value
                 guard !Task.isCancelled else { return }
-                let goal = (try? store.flatMap { try ManagerJSON.brief(store: $0, sessionId: session) })??.goal
-                hud.setManagerState(StatusHUD.orbState, line: goal ?? "the session is speaking", mood: "speaking")
+                // The words themselves go under the orb, and stay there after the
+                // voice stops: what was said is what you want to read.
+                hud.setManagerState(StatusHUD.orbState, line: spoken.text, mood: "speaking")
                 let voices = coordinator.voices(for: session)
                 _ = await coordinator.speech.speak(
                     spoken, voice: voices.cloud, systemVoice: voices.system, onWord: { _ in })
-                hud.setManagerState(StatusHUD.orbState, line: "listening")
+                hud.setManagerState(StatusHUD.orbState, line: spoken.text)
             }
             return
         }
@@ -132,11 +133,11 @@ extension AppDelegate {
         case .hearing:
             hud.setManagerState(StatusHUD.orbState, line: "hearing you", mood: "hearing")
         case .listening:
-            hud.setManagerState(StatusHUD.orbState, line: "listening")
+            break  // silent on a turn: whatever was last said stays on the panel
         case .addressed:
             hud.setManagerState(StatusHUD.orbState, line: Self.intentLine(e.intent))
         case .speaking:
-            hud.setManagerState(StatusHUD.orbState, line: e.voice == "agent" ? "the agent is speaking" : "speaking", mood: "speaking")
+            hud.setManagerState(StatusHUD.orbState, line: e.text ?? (e.voice == "agent" ? "the agent is speaking" : "speaking"), mood: "speaking")
         case .stage:
             hud.setManagerState(StatusHUD.orbState, line: "on stage: \(e.goal ?? e.project ?? "")")
         case .earcon:

@@ -12,7 +12,7 @@ import WebKit
 /// while a session holds the stage.
 @MainActor
 final class ManagerOrbView: NSView {
-    static let height: CGFloat = 118
+    static let height: CGFloat = 150
     private let web: WKWebView
     private var ready = false
     private var pending: (String, String, String)?
