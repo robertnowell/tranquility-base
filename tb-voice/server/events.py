@@ -32,9 +32,17 @@ def line(event: str, **fields) -> dict:
     global _file
     rec = {"event": event, "t": round(time.time(), 3), **fields}
     text = json.dumps(rec, separators=(",", ":")) + "\n"
-    out = _out()
-    out.write(text)
-    out.flush()
+    global _sink
+    try:
+        out = _out()
+        out.write(text)
+        out.flush()
+    except (BrokenPipeError, OSError) as err:
+        # The host went away (an app relaunch orphans its child). Keep the file
+        # stream; never let a dead pipe fail a turn.
+        if _sink is not sys.stderr:
+            sys.stderr.write(f"events: host pipe gone ({err}); file only from here\n")
+        _sink = sys.stderr
     # And always to events.jsonl beside the log, so `tail -f` shows the stream
     # whether the app, the playground, or nobody is listening.
     if _file is None:

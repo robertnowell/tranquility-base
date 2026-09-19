@@ -262,7 +262,7 @@ class Manager(FrameProcessor):
         elif intent in COMMANDS and float(intent_answer.get("confidence", 0)) >= 0.9 and p >= 0.3:
             p, rule = max(p, 0.6), "fleet command"  # nobody else can execute it
         elif (self.stage and intent in STAGE_QUESTIONS
-              and float(intent_answer.get("confidence", 0)) >= 0.8 and p >= 0.4):
+              and float(intent_answer.get("confidence", 0)) >= 0.8 and p >= 0.3):
             p, rule = max(p, 0.6), "about the stage"  # a question about the work on stage
         await emit(self, "jev", ms=self._jev.last.get("ms"), state=self._jev.last.get("state"),
                    answers=self._jev.last.get("answers"), raw_p=round(raw_p, 2), rule=rule)
