@@ -3278,13 +3278,15 @@ final class StatusHUD: NSObject {
     var managerOn = false
     /// One globe, always. The dotted sphere is the manager's face; only its
     /// colour changes (green while you talk, amber while something speaks).
-    static let orbState = "searching"
+    static let orbState = "composing"
+    /// While the child connects: the ring, breathing.
+    static let orbConnecting = "breathing"
     lazy var managerOrb = ManagerOrbView(frame: .zero)
     var onManagerToggle: (() -> Void)?
 
     func setManager(on: Bool) {
         managerOn = on
-        managerOrb.set(Self.orbState, line: on ? "listening" : "off")
+        managerOrb.set(on ? Self.orbConnecting : Self.orbState, line: on ? "connecting" : "off")
         if case .idle = state { render() }
     }
 

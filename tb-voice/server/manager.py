@@ -15,7 +15,13 @@ import time
 
 import httpx
 from loguru import logger
-from pipecat.frames.frames import BotStoppedSpeakingFrame, Frame, LLMContextFrame, TTSSpeakFrame
+from pipecat.frames.frames import (
+    BotStoppedSpeakingFrame,
+    Frame,
+    LLMContextFrame,
+    StartFrame,
+    TTSSpeakFrame,
+)
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
 from calls import record
@@ -318,6 +324,9 @@ class Manager(FrameProcessor):
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
+        if isinstance(frame, StartFrame):
+            # The pipeline is running and the mic is open: now it is listening.
+            await emit(None, "ready")
         if isinstance(frame, BotStoppedSpeakingFrame):
             self._bot_stopped.set()
             await emit(None, "quiet")  # the manager's voice stopped; the orb goes back to rest

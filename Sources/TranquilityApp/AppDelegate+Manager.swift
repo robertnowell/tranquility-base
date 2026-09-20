@@ -94,9 +94,7 @@ extension AppDelegate {
             return
         }
         managerTransport = transport
-        hud.setManager(on: true)
-        // The mic-open cue: hands-free begins the way a held ⌥ does, "go ahead".
-        Earcons.acknowledge(.listening)
+        hud.setManager(on: true)  // breathing, "connecting", until the child says ready
         Permissions.log("manager: started \(argv.joined(separator: " "))")
         managerTask = Task { @MainActor [weak self] in
             for await line in transport.lines() {
@@ -140,6 +138,10 @@ extension AppDelegate {
         switch e.event {
         // The thinking orb (composing) is the resting face. Hearing you lights
         // the gradient; addressed switches to solving; speaking weaves.
+        case .ready:
+            // The mic-open cue plays now, when it is true: the pipeline is up.
+            Earcons.acknowledge(.listening)
+            hud.setManagerState(StatusHUD.orbState, line: "listening")
         case .hearing:
             hud.setManagerState(StatusHUD.orbState, line: "hearing you", mood: "hearing")
         case .listening:
