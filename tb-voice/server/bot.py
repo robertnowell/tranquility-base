@@ -86,8 +86,14 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
         api_key=os.environ["ASSEMBLYAI_API_KEY"],
         settings=AssemblyAISTTService.Settings(keyterms_prompt=await keyterms()),
     )
+    # ElevenLabs is asked for pcm_24000 explicitly; the transport runs at the
+    # device's native 48 kHz and Pipecat's SOXR resampler bridges the two. A
+    # 24 kHz PortAudio stream into a 48 kHz virtual device (LoomAudioDevice was
+    # the default output at 18:22) played grainy on two voices; Gradium at
+    # 48 kHz on the same path did not.
     tts = SpokenTTSService(
         api_key=os.environ["ELEVENLABS_API_KEY"],
+        sample_rate=24000,
         settings=SpokenTTSService.Settings(
             voice=os.getenv("ELEVENLABS_VOICE_ID", "SAz9YHcvj6GT2YYXdXww"),  # River: neutral, calm
         ),
@@ -191,7 +197,7 @@ async def bot(runner_args: RunnerArguments):
         "webrtc": lambda: TransportParams(
             audio_in_enabled=True,
             audio_out_enabled=True,
-            audio_out_sample_rate=24000,
+            audio_out_sample_rate=48000,
         ),
     }
     transport = await create_transport(runner_args, transport_params)
@@ -210,7 +216,7 @@ async def run_local():
             audio_in_enabled=True,
             audio_out_enabled=True,
             audio_in_sample_rate=16000,
-            audio_out_sample_rate=24000,  # ElevenLabs pcm_24000
+            audio_out_sample_rate=48000,  # device native; TTS is resampled up from 24 kHz
         )
     )
 
