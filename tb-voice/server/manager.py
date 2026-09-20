@@ -147,6 +147,19 @@ class JevClient:
                         "criteria": crit}})
         return answers["target"]
 
+    async def is_action(self, utterance: str, stage_name: str) -> float:
+        """A request about the session on stage: is it asking the session to DO
+        something, or asking about its work? An action is typed in; a question is
+        answered from the record. 17:21: 'can you open that in the browser?' was
+        answered with a promise the brain could not keep."""
+        answers = await self.ask(
+            {"agent_on_stage": stage_name, "text_to_judge": utterance},
+            {"action": {"type": "noul",
+                        "instructions": "Is the developer asking the agent on stage to perform an action (open, run, create, change, send, fix, deploy, show), rather than asking a question about its work?",
+                        "criteria": {"true": "An instruction or request for the agent to do something",
+                                     "false": "A question about what the agent did, found, proposes, or why"}}})
+        return float(answers["action"]["noul"])
+
     async def confirm(self, utterance: str, question: str) -> dict:
         answers = await self.ask(
             {"question_asked": question, "reply": utterance},
@@ -246,7 +259,8 @@ class Brain:
                 "plural ('we'). Answer ONLY from the facts given. One or two sentences, 30 words "
                 "max, no lists, no markdown. If the facts do not say, say so in one sentence. "
                 "Spoken, so never say an id, hash, path, URL, branch or file name; say 'the file', "
-                "'the branch', 'the PR', 'PR five forty-seven'.")},
+                "'the branch', 'the PR', 'PR five forty-seven'. You answer questions; you cannot perform "
+                "actions and must never claim to (no 'opening', 'sending', 'doing it now').")},
             {"role": "user", "content": f"Facts about this session:\n{json.dumps(facts, ensure_ascii=False)}\n\n"
                                         f"The end of the session's transcript:\n{tail}\n\n"
                                         f"The exchange so far (you = the supervisor):\n" + "\n".join(exchange_lines()) + f"\n\nQuestion: {question}"},
@@ -477,6 +491,16 @@ class Manager(FrameProcessor):
     async def _do_custom(self, text, frame, direction):
         if not self.stage:
             await self._llm(frame, direction, text, "custom")
+            return
+        # An instruction to the session on stage is typed in; a question is answered.
+        try:
+            p_action = await self._jev.is_action(text, self.stage.get("name") or self.stage.get("goal") or "")
+        except Exception as e:
+            logger.warning(f"is_action failed: {e}")
+            p_action = 0.0
+        if p_action >= 0.5:
+            await emit(self, "addressed", p=1.0, intent="send_message", ms=0, text=text[:120])
+            await self._do_send_message(text, frame, direction)
             return
         await self._answer_about_stage(text, await self._brief(self.stage["sessionId"]))
 
