@@ -12,6 +12,10 @@ import time
 from pipecat.frames.frames import BotStartedSpeakingFrame, BotStoppedSpeakingFrame, Frame
 from pipecat.turns.user_mute.base_user_mute_strategy import BaseUserMuteStrategy
 
+# The manager sets this when it hands the app a line to speak in a session's
+# voice; the app's audio is echo too, and the bot never sees its frames.
+EXTERNAL_UNTIL = {"t": 0.0}
+
 
 class WhileBotSpeaksMuteStrategy(BaseUserMuteStrategy):
     def __init__(self, tail_secs: float = 0.6):
@@ -27,4 +31,5 @@ class WhileBotSpeaksMuteStrategy(BaseUserMuteStrategy):
         elif isinstance(frame, BotStoppedSpeakingFrame):
             self._speaking = False
             self._stopped_at = time.monotonic()
-        return self._speaking or (time.monotonic() - self._stopped_at) < self._tail
+        return (self._speaking or (time.monotonic() - self._stopped_at) < self._tail
+                or time.monotonic() < EXTERNAL_UNTIL["t"])
