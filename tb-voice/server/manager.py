@@ -20,6 +20,7 @@ from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
 from calls import record
 from events import emit
+from mute import EXTERNAL_UNTIL
 from spoken import spoken
 from tools import _json_or_text, _run
 
@@ -302,16 +303,12 @@ class Manager(FrameProcessor):
         self.heard = 0
         self.addressed = 0
         self._bot_stopped = asyncio.Event()
+        self._voice = asyncio.Lock()        # one voice at a time, manager or agent
+        self._held: str | None = None       # a turn that ended mid-sentence, waiting for its rest
+        self._held_task: asyncio.Task | None = None
 
     async def _say_and_wait(self, text: str, timeout: float = 8.0):
-        """Speak in the manager's voice and return when the voice has stopped, so
-        what follows (an agent's voice) does not land on top of it."""
-        self._bot_stopped.clear()
-        await self._say(text)
-        try:
-            await asyncio.wait_for(self._bot_stopped.wait(), timeout)
-        except TimeoutError:
-            pass
+        await self._say(text)  # _say already waits for its own voice to stop
 
     async def hearing(self):
         """The user started speaking: the orb shows it before any verdict."""
@@ -333,12 +330,34 @@ class Manager(FrameProcessor):
         if not text:
             await self.push_frame(frame, direction)
             return
+        # A turn cut mid-sentence (no terminal punctuation) waits up to 1.2 s for
+        # its continuation; the two are judged as one. 16:58:32: "…the risks,
+        # tradeof" / "uncertainties we're still facing" were judged separately
+        # and both spoke, on top of each other.
+        if self._held is not None:
+            if self._held_task:
+                self._held_task.cancel()
+            text = (self._held + " " + text).strip()
+            self._held = None
+            logger.info(f"joined turn: {text[:80]}")
+        if not text.rstrip().endswith((".", "?", "!")) and len(text.split()) > 3:
+            self._held = text
+            self._held_task = asyncio.create_task(self._release_held(frame, direction))
+            return
         self.heard += 1
         # The handler runs detached: an interruption cancels the frame task it
         # started from, and an invite that dies between "Inviting…" and the hear
         # verb leaves nobody speaking (16:49:39).
         self._handler = asyncio.create_task(self._handle_turn(text, frame, direction))
         self._recent.append(text)
+
+    async def _release_held(self, frame, direction):
+        await asyncio.sleep(1.2)
+        text, self._held = self._held, None
+        if text:
+            self.heard += 1
+            self._handler = asyncio.create_task(self._handle_turn(text, frame, direction))
+            self._recent.append(text)
 
     async def _handle_turn(self, text, frame, direction):
         try:
@@ -359,6 +378,9 @@ class Manager(FrameProcessor):
         p, intent_answer = await self._jev.turn(text, self._recent, self.stage)
         ms = int((time.monotonic() - t0) * 1000)
         intent = _chosen(intent_answer)
+        low = text.lower()
+        if "send" in low and any(w in low for w in ("message", "to this agent", "to the agent", "to it")):
+            intent = "send_message"  # the words say so; Jev's tie-break does not
         if not self.stage and intent in RUNG_FOR:
             # "What's next?" with nobody on stage is the ⌃⌥ question: the next
             # agent's update, not a lecture about the stage being empty.
@@ -419,7 +441,7 @@ class Manager(FrameProcessor):
         spoken = " ".join(x for x in ((brief or {}).get("recap"), (brief or {}).get("proposal")) if x)
         await emit(self, "speaking", voice="agent", session=nxt["sessionId"], text=spoken[:200])
         note(nxt.get("name") or nxt.get("goal") or nxt["sessionId"][:8], spoken or "(no brief stored)", "spoken")
-        await _run("open", f"{SCHEME}://hear?session={nxt['sessionId']}")
+        await self._app_speaks(f"{SCHEME}://hear?session={nxt['sessionId']}", spoken or "x " * 20)
 
     async def _do_rung_goal(self, t, f, d): await self._rung("goal", t, f, d)
     async def _do_rung_findings(self, t, f, d): await self._rung("findings", t, f, d)
@@ -441,7 +463,7 @@ class Manager(FrameProcessor):
         await emit(self, "speaking", voice="agent", session=self.stage["sessionId"],
                    rung=kind, text=rung["spoken"][:160])
         note(self.stage.get("name") or self.stage.get("goal") or self.stage["sessionId"][:8], rung["spoken"], "spoken")
-        await _run("open", f"{SCHEME}://rung?session={self.stage['sessionId']}&kind={kind}")
+        await self._app_speaks(f"{SCHEME}://rung?session={self.stage['sessionId']}&kind={kind}", rung["spoken"])
 
     async def _do_custom(self, text, frame, direction):
         if not self.stage:
@@ -470,7 +492,7 @@ class Manager(FrameProcessor):
         answer = spoken(answer)
         await emit(self, "speaking", voice="agent", session=sid, text=answer[:160])
         note(self.stage.get("name") or self.stage.get("goal") or sid[:8], answer, "spoken")
-        await _run("open", f"{SCHEME}://say?session={sid}&text={quote(answer)}")
+        await self._app_speaks(f"{SCHEME}://say?session={sid}&text={quote(answer)}", answer)
 
     CAPABILITIES = ("Say what's next to hear the next agent. Ask for the goal, findings, next step "
                     "or why. Say tell it to, then your message. Say stop to mute. Say start an agent.")
@@ -604,10 +626,27 @@ class Manager(FrameProcessor):
     # -- doors ----------------------------------------------------------------------
 
     async def _say(self, text: str, voice: str = "manager", session: str | None = None):
-        await emit(self, "speaking", voice=voice, session=session, text=text[:160])
-        # The synthesizer notes the line when it speaks it (tts.py), so every
-        # path the manager's voice takes lands in the transcript exactly once.
-        await self.push_frame(TTSSpeakFrame(text))
+        """The manager's voice. Holds the voice lock until its own speech stops,
+        so nothing else can start talking over it."""
+        async with self._voice:
+            await emit(self, "speaking", voice=voice, session=session, text=text[:160])
+            self._bot_stopped.clear()
+            # The synthesizer notes the line when it speaks it (tts.py), so every
+            # path the manager's voice takes lands in the transcript exactly once.
+            await self.push_frame(TTSSpeakFrame(text))
+            try:
+                await asyncio.wait_for(self._bot_stopped.wait(), 12.0)
+            except TimeoutError:
+                pass
+
+    async def _app_speaks(self, url: str, text: str):
+        """A session speaks through the app. Hold the voice lock and mute the mic
+        for the line's estimated length: the app's voice is echo to this mic."""
+        secs = min(20.0, 1.2 + 0.42 * len(text.split()))
+        async with self._voice:
+            EXTERNAL_UNTIL["t"] = time.monotonic() + secs
+            await _run("open", url)
+            await asyncio.sleep(secs)
 
     async def _earcon(self, name: str):
         await emit(self, "earcon", name=name)
