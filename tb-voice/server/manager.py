@@ -33,6 +33,8 @@ from tools import _json_or_text, _run
 JEV_URL = "https://api.typesafe.ai/v1/systemone"
 NAME = os.getenv("TB_MANAGER_NAME", "Tranquility")
 THRESHOLD = float(os.getenv("TB_ADDRESSED_THRESHOLD", "0.5"))
+HOLD_SECS = float(os.getenv("TB_HOLD_SECS", "1.2"))
+HOLD_NAMED_SECS = float(os.getenv("TB_HOLD_NAMED_SECS", "2.5"))
 SCHEME = os.getenv("TB_URL_SCHEME", "tranquilitybase")
 SOUNDS = os.getenv("TB_SOUNDS", "")
 TBASE = os.getenv("TBASE_BIN", "tbase")
@@ -353,19 +355,24 @@ class Manager(FrameProcessor):
         if not text:
             await self.push_frame(frame, direction)
             return
-        # A turn cut mid-sentence (no terminal punctuation) waits up to 1.2 s for
-        # its continuation; the two are judged as one. 16:58:32: "…the risks,
+        # A turn cut mid-sentence (no terminal punctuation) waits for its
+        # continuation; the two are judged as one. 16:58:32: "…the risks,
         # tradeof" / "uncertainties we're still facing" were judged separately
-        # and both spoke, on top of each other.
+        # and both spoke, on top of each other. 17:26:12: "Tranquillity, can you"
+        # was three words, under the old four-word floor, so it was judged alone,
+        # spoke a status line, and "tell us about your capabilities?" 1.9 s later
+        # spoke again. A fragment that names the manager will speak whatever
+        # follows, so it waits longer for the rest.
         if self._held is not None:
             if self._held_task:
                 self._held_task.cancel()
             text = (self._held + " " + text).strip()
             self._held = None
             logger.info(f"joined turn: {text[:80]}")
-        if not text.rstrip().endswith((".", "?", "!")) and len(text.split()) > 3:
+        if not text.rstrip().endswith((".", "?", "!")):
             self._held = text
-            self._held_task = asyncio.create_task(self._release_held(frame, direction))
+            wait = HOLD_NAMED_SECS if names_the_manager(text) else HOLD_SECS
+            self._held_task = asyncio.create_task(self._release_held(frame, direction, wait))
             return
         self.heard += 1
         # The handler runs detached: an interruption cancels the frame task it
@@ -374,8 +381,8 @@ class Manager(FrameProcessor):
         self._handler = asyncio.create_task(self._handle_turn(text, frame, direction))
         self._recent.append(text)
 
-    async def _release_held(self, frame, direction):
-        await asyncio.sleep(1.2)
+    async def _release_held(self, frame, direction, wait: float):
+        await asyncio.sleep(wait)
         text, self._held = self._held, None
         if text:
             self.heard += 1

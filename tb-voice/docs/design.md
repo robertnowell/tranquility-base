@@ -63,9 +63,15 @@ and `SileroVADAnalyzer(VADParams(stop_secs=0.2))`. Turns end fast; the gate deci
 anything happens. Aggressive endpointing is safe *because* the default outcome of a turn is
 silence: a turn cut mid-thought is appended as context and the next fragment joins it.
 
-**Alternative.** Gradium's server-side `enable_turn_detection` with
+**Alternative.** The STT vendor's server-side turn detection with
 `ExternalUserTurnStrategies`. Not chosen on day one: Smart Turn runs locally in 12 ms and
-its knobs are documented in source; Gradium's are not.
+its knobs are documented in source.
+
+**Held fragments.** A turn with no terminal punctuation waits 1.2 s for its continuation
+(2.5 s when it names the manager, since that fragment will speak whatever follows). The
+first version only held fragments over three words; "Tranquillity, can you" was three,
+was judged alone, and spoke a status line before "tell us about your capabilities?" spoke
+again (19 Sep, 17:26:12).
 
 ## 4. Brain: MiniMax M2.7 on General Compute
 
@@ -88,21 +94,38 @@ Compute's wrapper returned clean arguments for both, so the parser is not the re
 SambaNova silicon is the hardware story. Reasoning tokens (33 in the smoke test) are cheap
 at this speed.
 
-## 5. Ears and mouth: Gradium
+## 5. Ears and mouth: AssemblyAI and ElevenLabs (Gradium until 19 Sep, 17:50)
 
-**Decision.** `GradiumSTTService` (PCM 16 kHz) and `GradiumTTSService` (48 kHz fixed; the
-transport's `audio_out_sample_rate` is set to 48000). Free tier is 45k credits, STT costs
-3 credits/s, so an always-on mic has about four hours; coupon `HACKATHON-202609`.
+**Decision.** `AssemblyAISTTService` (Universal-Streaming, PCM 16 kHz) with `keyterms_prompt`
+set at connect time to the manager's name, the sponsors, and every session's display name
+read from `tbase targets --json`; `ElevenLabsTTSService` (`eleven_flash_v2_5`, pcm_24000;
+the transport's `audio_out_sample_rate` is 24000). The manager's voice is River
+(`SAz9YHcvj6GT2YYXdXww`), overridable with `ELEVENLABS_VOICE_ID`; sessions keep their own
+ElevenLabs voices in the app, so the two are never the same voice.
 
-**Two voices, two roles.** The manager speaks in a Gradium voice. When it invites a session
-to speak, the *app* speaks in that session's own ElevenLabs voice through the existing
-`SpeechChain`. The manager never narrates a tool that speaks
-(`FunctionCallResultProperties(run_llm=False)`), so the two never overlap by design rather
-than by timing.
+**Why the swap.** Gradium started the day. Its transcripts read "Tranquillity", "Drinkody",
+"Sambinova planning", "the speech to Texas", and the name gate can only match a name the
+transcriber can spell. The first fix was a misspelling list in the Jev rules; the real fix
+is a transcriber that takes a vocabulary. Neither AssemblyAI nor ElevenLabs is a sponsor;
+the sponsors' parts (General Compute, Pipecat, Jev) are unchanged.
 
-**Alternative.** Route session briefs through Gradium too (read `tbase brief --json`, speak
-it in the manager's voice). Rejected for the demo: "each agent has a voice" is the product;
-the fallback exists if the app is not running.
+**What the swap touched.** `bot.py` (service construction, sample rate, key terms), `tts.py`
+(base class), `run.sh` (which keys are injected), `pyproject.toml` (extras). Nothing in
+`manager.py`'s decisions, the deep links, the app, or the events changed. Both keys were
+already in the Keychain; AssemblyAI's streaming endpoint issued a token and ElevenLabs had
+31M characters of quota, checked before the swap.
+
+**Echo, removed at the source (same hour).** The aggregator's mute drops transcriptions
+only while it is muted, and a streaming STT finalises late: at 17:26:42 Gradium delivered
+fifteen seconds of the manager's own speech six seconds after it stopped, past the 0.6 s
+tail, and Jev judged it as the developer asking to send a message. `EchoGate` now sits
+between the mic and the STT and replaces the audio with zeros while the bot speaks, for a
+beat after, and while the app speaks in a session's voice. Zeros, not dropped frames, so the
+STT's own endpointing sees continuous audio.
+
+**Alternative.** Route session briefs through the manager's TTS too (read
+`tbase brief --json`, speak it in the manager's voice). Rejected for the demo: "each agent
+has a voice" is the product; the fallback exists if the app is not running.
 
 ## 6. Driving the app: only the doors that exist
 

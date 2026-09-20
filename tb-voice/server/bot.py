@@ -1,12 +1,13 @@
 """tb-voice: the hands-free manager for Tranquility Base.
 
-Cascade: Gradium STT -> Smart Turn v3 -> AddressedGate (Jev) -> MiniMax M2.7 on General
-Compute (tools via tbase) -> Gradium TTS. Design: ../docs/design.md.
+Cascade: AssemblyAI STT -> Smart Turn v3 -> AddressedGate (Jev) -> MiniMax M2.7 on General
+Compute (tools via tbase) -> ElevenLabs TTS. Design: ../docs/design.md.
 
 Run with keys injected from the Keychain: ./run.sh
 """
 
 import asyncio
+import json
 import os
 
 from dotenv import load_dotenv
@@ -27,8 +28,7 @@ from pipecat.processors.aggregators.llm_response_universal import (
 )
 from pipecat.runner.types import RunnerArguments
 from pipecat.runner.utils import create_transport
-from pipecat.services.gradium.stt import GradiumSTTService
-from pipecat.services.gradium.tts import GradiumTTSService
+from pipecat.services.assemblyai.stt import AssemblyAISTTService
 from pipecat.services.openai.llm import OpenAILLMService
 from pipecat.transports.base_transport import BaseTransport, TransportParams
 from pipecat.turns.user_start.min_words_user_turn_start_strategy import (
@@ -43,21 +43,54 @@ from pipecat.turns.user_stop.turn_analyzer_user_turn_stop_strategy import (
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from pipecat.workers.runner import WorkerRunner
 
+from echo import EchoGate
 from llm import RecordedLLMService
 from manager import JevClient, Manager
 from mute import WhileBotSpeaksMuteStrategy
 from prompt import SYSTEM
 from tools import SCHEMAS
-from tts import SpokenGradiumTTSService
+from tts import SpokenTTSService
+
+
+KEYTERMS = [
+    "Tranquility", "Tranquility Base", "SambaNova", "General Compute", "Pipecat",
+    "Jev", "TypeSafe", "AssemblyAI", "ElevenLabs", "Codex", "Claude", "AGI House",
+]
+
+
+async def keyterms() -> list[str]:
+    """The fixed names plus every session's display name, best effort."""
+    from tools import TBASE, _run  # tbase targets --json; a failed read costs nothing
+
+    names = list(KEYTERMS)
+    try:
+        code, out = await _run(TBASE, "targets", "--json", timeout=5.0)
+        if code == 0:
+            for t in json.loads(out):
+                name = (t.get("name") or "").strip()
+                if name and name not in names:
+                    names.append(name)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"keyterms: fleet names unavailable: {e}")
+    return names[:100]
 
 
 async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> None:
     logger.info("Starting tb-voice")
 
-    stt = GradiumSTTService(api_key=os.environ["GRADIUM_API_KEY"])
-    tts = SpokenGradiumTTSService(
-        api_key=os.environ["GRADIUM_API_KEY"],
-        settings=GradiumTTSService.Settings(voice=os.getenv("GRADIUM_VOICE_ID") or None),
+    # Key terms steer the transcriber toward the names it will hear: the
+    # manager's own, the sponsors', and every session on the grid. Gradium heard
+    # "Tranquillity" and "Sambinova planning"; a name the STT cannot spell is a
+    # name the gate cannot match.
+    stt = AssemblyAISTTService(
+        api_key=os.environ["ASSEMBLYAI_API_KEY"],
+        settings=AssemblyAISTTService.Settings(keyterms_prompt=await keyterms()),
+    )
+    tts = SpokenTTSService(
+        api_key=os.environ["ELEVENLABS_API_KEY"],
+        settings=SpokenTTSService.Settings(
+            voice=os.getenv("ELEVENLABS_VOICE_ID", "SAz9YHcvj6GT2YYXdXww"),  # River: neutral, calm
+        ),
     )
     llm = RecordedLLMService(
         api_key=os.environ["GC_API_KEY"],
@@ -111,6 +144,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
     pipeline = Pipeline(
         [
             transport.input(),
+            EchoGate(),
             stt,
             user_aggregator,
             gate,
@@ -157,7 +191,7 @@ async def bot(runner_args: RunnerArguments):
         "webrtc": lambda: TransportParams(
             audio_in_enabled=True,
             audio_out_enabled=True,
-            audio_out_sample_rate=48000,
+            audio_out_sample_rate=24000,
         ),
     }
     transport = await create_transport(runner_args, transport_params)
@@ -176,7 +210,7 @@ async def run_local():
             audio_in_enabled=True,
             audio_out_enabled=True,
             audio_in_sample_rate=16000,
-            audio_out_sample_rate=48000,
+            audio_out_sample_rate=24000,  # ElevenLabs pcm_24000
         )
     )
 

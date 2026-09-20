@@ -7,9 +7,9 @@ A Pipecat AI voice agent built with a cascade pipeline (STT → LLM → TTS).
 - **Bot Type**: Web
 - **Transport(s)**: SmallWebRTC
 - **Pipeline**: Cascade
-  - **STT**: Gradium
+  - **STT**: AssemblyAI (Universal-Streaming, key terms from the fleet)
   - **LLM**: OpenAI
-  - **TTS**: Gradium TTS
+  - **TTS**: ElevenLabs (eleven_flash_v2_5)
 
 ## Setup
 

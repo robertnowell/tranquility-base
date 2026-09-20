@@ -1,0 +1,48 @@
+"""Feed the transcriber silence while any voice is playing.
+
+The aggregator's mute drops transcriptions only while it is muted, but a
+streaming STT finalises late: at 17:26:42 Gradium delivered fifteen seconds of
+the manager's own speech ("Listening. 11 waiting on you… I manage voice loops
+for") six seconds after the bot went quiet, past the 0.6 s tail, and it was
+judged as the developer asking to send a message. So the echo is removed
+before the STT ever hears it: while the bot speaks, for a beat after, and while
+the app speaks in a session's voice, the mic frames go through as zeros. Zeros
+rather than nothing, so the STT's own endpointing sees continuous audio and
+closes the turn cleanly.
+"""
+
+import time
+
+from pipecat.frames.frames import (
+    BotStartedSpeakingFrame,
+    BotStoppedSpeakingFrame,
+    Frame,
+    InputAudioRawFrame,
+)
+from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
+
+from mute import EXTERNAL_UNTIL
+
+
+class EchoGate(FrameProcessor):
+    def __init__(self, tail_secs: float = 0.6, **kwargs):
+        super().__init__(**kwargs)
+        self._speaking = False
+        self._stopped_at = 0.0
+        self._tail = tail_secs
+
+    def gated(self) -> bool:
+        now = time.monotonic()
+        return (self._speaking or (now - self._stopped_at) < self._tail
+                or now < EXTERNAL_UNTIL["t"])
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection):
+        await super().process_frame(frame, direction)
+        if isinstance(frame, BotStartedSpeakingFrame):
+            self._speaking = True
+        elif isinstance(frame, BotStoppedSpeakingFrame):
+            self._speaking = False
+            self._stopped_at = time.monotonic()
+        elif isinstance(frame, InputAudioRawFrame) and self.gated():
+            frame.audio = bytes(len(frame.audio))
+        await self.push_frame(frame, direction)

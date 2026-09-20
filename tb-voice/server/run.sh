@@ -17,6 +17,7 @@ cat "$FIFO" &
 exec 3>"$FIFO"   # keep the writer open so cat does not see EOF between events
 exec claude-secrets run \
   --inject general-compute-api-key=GC_API_KEY \
-  --inject gradium-api-key=GRADIUM_API_KEY \
+  --inject ASSEMBLYAI_API_KEY=ASSEMBLYAI_API_KEY \
+  --inject ELEVENLABS_API_KEY=ELEVENLABS_API_KEY \
   --inject typesafe-jev-api-key=JEV_API_KEY \
   -- env TB_EVENTS="$FIFO" uv run bot.py "$@"

@@ -2926,7 +2926,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "httpx", specifier = ">=0.28.1" },
-    { name = "pipecat-ai", extras = ["gradium", "local", "local-smart-turn-v3", "openai", "runner", "silero", "webrtc"], specifier = ">=1.11.0" },
+    { name = "pipecat-ai", extras = ["assemblyai", "elevenlabs", "local", "local-smart-turn-v3", "openai", "runner", "silero", "webrtc"], specifier = ">=1.11.0" },
 ]
 
 [package.metadata.requires-dev]
