@@ -54,7 +54,7 @@ async def brief(params):
     await params.result_callback(_json_or_text(code, out))
 
 
-SENT_LINE = os.getenv("TB_SENT_LINE", "Sent. What's next?")
+SENT_LINE = os.getenv("TB_SENT_LINE", "I've sent your message. What's next?")
 
 
 async def send_message(params):
