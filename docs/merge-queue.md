@@ -20,7 +20,8 @@ python3 scripts/delivery.py admit --pr NUMBER --owner SESSION --head FULL_PR_HEA
 
 This verifies the product remote and merged admission tooling, checks that the
 reviewed head still names an open, non-draft PR targeting main, and refuses a
-conflict, unresolved mergeability, explicit hold or competing GitHub auto-merge.
+conflict, unresolved mergeability or explicit hold. Native auto-merge requires
+an explicit `--handoff-auto-merge` authorization; see supervised-delivery.md.
 It writes durable delivery intent **before** adding `merge-queue`, and observes
 the result without installing. A PR behind main can be admitted; the bot owns
 its update and fresh required validation.
@@ -47,7 +48,8 @@ capture/preview/Quit/channel protection, failure holds and runtime receipts.
 
 ## Ownership and visible recovery
 
-The current coordinator and cohort belong in issue 493. While admitted, the
+The original pilot is recorded in issue 493; ongoing admission recovery is in issue 554.
+Each new shipment has a named owner and uses the admission entry point. While admitted, the
 PR's branch is owned by that coordinator: other sessions must not separately
 rebase, update, or arm auto-merge on it. If source changes are necessary, tell
 the coordinator through the normal workstream record and withdraw/review the
@@ -66,6 +68,10 @@ admission-request timestamps, `queue_state` and `queue_observed_at`:
 | `admission_removed` | Admission was seen/requested and is now absent. Inspect why; do not automatically re-add it. |
 | `queued` | Admission is observed; this alone proves neither bot acceptance nor passing CI. Inspect required checks. |
 | `not_admitted` | No current admission was observed. |
+| `native_auto_merge` | GitHub auto-merge is armed outside the supervised queue; its owner uses an explicit handoff. |
+| `competing` | Both mechanisms are armed; inspect and hand off under one owner. |
+| `handoff_blocked` | A changed head, hold or uncertain absent label needs owner review. |
+| `unknown` / `unavailable` / `stale` | Mergeability or a fresh observation is unavailable; do not infer progress. |
 
 `last_error` plus an old observation timestamp means the remote state is
 unavailable/stale, not an empty queue. `queue_admission_error` records an

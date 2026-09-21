@@ -66,9 +66,59 @@ def resolve_pr(target, repository, cwd, run=subprocess.run):
     return int(json.loads(result.stdout)["number"])
 
 
+def guard_decision(event, run=subprocess.run):
+    """Guard literal product merge commands, including compound shell calls."""
+    command = event.get("tool_input", {}).get("command", "")
+    try:
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|()\n")
+        lexer.whitespace_split = True
+        words = list(lexer)
+    except ValueError:
+        return None
+    for i in range(len(words) - 2):
+        if words[i:i + 3] != ["gh", "pr", "merge"]:
+            continue
+        end = i + 3
+        while end < len(words) and not any(c in words[end] for c in ";&|()\n"):
+            end += 1
+        segment = words[i:end]
+        disable = False
+        j = 3
+        while j < len(segment):
+            if segment[j] in ("--repo", "-R", "--body", "-b", "--body-file", "-F", "--subject", "-t", "--match-head-commit"):
+                j += 2
+                continue
+            disable |= segment[j] == "--disable-auto"
+            j += 1
+        if disable:
+            continue  # The owned handoff can turn off the alternate mechanism.
+        _, target, repository = merge_target(shlex.join(segment))
+        try:
+            pr = resolve_pr(target, repository, event.get("cwd") or ROOT, run=run)
+        except (ValueError, OSError, subprocess.SubprocessError):
+            if repository != REPOSITORY:
+                continue
+            pr = "NUMBER"
+        if pr is None:
+            continue
+        return (f"Use the supervised merge entry for PR {pr}: python3 {ROOT}/scripts/delivery.py admit "
+                f"--pr {pr} --owner SESSION --head REVIEWED_FULL_HEAD_SHA. "
+                "Run from the current deployment checkout. If native auto-merge is already armed, "
+                "add --handoff-auto-merge to authorize its replacement. "
+                "This records delivery intent and gives one coordinator responsibility for updates and CI. "
+                "Do not bypass with a bare label or a separate branch update.")
+    return None
+
+
 def main():
     try:
         event = json.load(sys.stdin)
+        if "--guard" in sys.argv:
+            reason = guard_decision(event)
+            if reason:
+                print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse",
+                      "permissionDecision": "deny", "permissionDecisionReason": reason}}))
+            return 0
         found, target, repository = merge_target(event.get("tool_input", {}).get("command", ""))
         if not found:
             return 0
@@ -78,7 +128,7 @@ def main():
         owner = "session-" + str(event.get("session_id") or "manual")
         result = subprocess.run([sys.executable, str(ROOT / "scripts/delivery.py"), "watch",
                                  "--pr", str(pr), "--owner", owner, "--observe-only"], timeout=180)
-        print(f"PR {pr}: merge progress recorded. Resume delivery with scripts/delivery.py watch --pr {pr} --owner {owner} --wait")
+        print(f"PR {pr}: merge observation recorded; this is not queue admission. Inspect queue_state and queue_action above. Use delivery.py admit with the reviewed head for admission, or watch --wait to follow an already admitted merge through delivery.")
         return 0 if result.returncode in (0, 75) else result.returncode
     except (ValueError, OSError, subprocess.SubprocessError) as error:
         print(f"Merge delivery needs its owner: {error}. Run scripts/delivery.py watch --pr NUMBER --owner SESSION --wait.", file=sys.stderr)
