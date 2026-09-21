@@ -99,34 +99,84 @@ class Delivery:
         return self.run(list(args), cwd=self.root, check=True, text=True,
                         capture_output=True, timeout=45, env=dict(os.environ, LC_ALL="C")).stdout.strip()
 
+    def candidate(self, pr):
+        return json.loads(self.command(
+            "gh", "pr", "view", str(pr), "--repo", REPOSITORY, "--json",
+            "state,mergeCommit,headRefOid,autoMergeRequest,labels,url,mergedAt,mergeStateStatus,"
+            "isDraft,baseRefName,statusCheckRollup"))
+
     def observe(self, pr, owner):
         # Write BEFORE any network access, so even an interrupted query has an
         # explicit retry owner. Preserve prior merge/runtime evidence on errors.
         previous = self.update(pr, retry_owner=owner)
-        observed = json.loads(self.command(
-            "gh", "pr", "view", str(pr), "--repo", REPOSITORY, "--json",
-            "state,mergeCommit,headRefOid,autoMergeRequest,labels,url,mergedAt,mergeStateStatus"))
+        if not previous.get("request_owner"):
+            previous = self.update(pr, request_owner=owner)
+        try:
+            observed = self.candidate(pr)
+        except (OSError, ValueError, subprocess.SubprocessError) as error:
+            self.update(pr, queue_state="unavailable", queue_observation_error=str(error),
+                        queue_attention=False, queue_action="Refresh failed; previous merge state is unverified")
+            raise
         if observed["state"] != "MERGED":
             labels = {label["name"] for label in observed.get("labels", [])}
-            queued = observed.get("autoMergeRequest") or "merge-queue" in labels
+            admitted = "merge-queue" in labels
+            native = observed.get("autoMergeRequest") is not None
+            mode = "competing" if admitted and native else "kodiak" if admitted else "github_auto_merge" if native else "none"
             had_admission = previous.get("queue_first_requested_at") or previous.get("queue_seen_admitted_at")
-            status = "closed" if observed["state"] == "CLOSED" else "queued" if queued else "awaiting_merge"
             conflict = observed.get("mergeStateStatus") == "DIRTY"
-            queue_state = ("closed" if status == "closed" else "held" if "queue-hold" in labels
-                           else "conflict" if conflict else "queued" if queued
+            closed = observed["state"] == "CLOSED"
+            unknown = observed.get("mergeStateStatus") in (None, "UNKNOWN")
+            queue_state = ("closed" if closed else "held" if "queue-hold" in labels
+                           else "conflict" if conflict else "unknown" if unknown
+                           else "handoff_blocked" if previous.get("queue_handoff_state") == "blocked"
+                           else "competing" if admitted and native else "queued" if admitted
+                           else "native_auto_merge" if native
                            else "awaiting_readmission" if had_admission and previous.get("queue_conflict_seen_at")
-                           else "admission_removed" if had_admission
-                           else "not_admitted")
-            return self.update(pr, status=status, head_sha=observed["headRefOid"],
-                               url=observed["url"], last_error=None, queue_state=queue_state,
-                               queue_observed_at=self.now(),
-                               queue_seen_admitted_at=self.now() if "merge-queue" in labels else previous.get("queue_seen_admitted_at"),
-                               queue_admission_error=None if "merge-queue" in labels else previous.get("queue_admission_error"),
+                           else "admission_removed" if had_admission else "not_admitted")
+            checks = [c for c in observed.get("statusCheckRollup") or [] if c.get("name") == "Source audit"]
+            passed = bool(checks) and all(c.get("status") == "COMPLETED" and c.get("conclusion") == "SUCCESS" for c in checks)
+            ready_since = None
+            needs_admission = (not closed and not admitted and native and not observed.get("isDraft")
+                               and queue_state == "native_auto_merge" and observed.get("mergeStateStatus") == "BEHIND" and passed)
+            if needs_admission:
+                if previous.get("head_sha") == observed["headRefOid"]:
+                    ready_since = previous.get("queue_ready_since")
+                if ready_since is None:
+                    ready_since = self.now()
+                    try:
+                        completed = max(datetime.fromisoformat(c["completedAt"].replace("Z", "+00:00")).timestamp() for c in checks)
+                        enabled = datetime.fromisoformat(observed["autoMergeRequest"]["enabledAt"].replace("Z", "+00:00")).timestamp()
+                        ready_since = min(self.now(), max(completed, enabled))
+                    except (KeyError, TypeError, ValueError):
+                        pass  # A missing start time uses first observation, never zero.
+            attention = queue_state in ("competing", "handoff_blocked", "awaiting_readmission", "admission_removed") or (ready_since is not None and self.now() - ready_since >= 300)
+            action = {
+                "handoff_blocked": previous.get("queue_admission_error") or "Admission needs its owner",
+                "held": "Explicit queue hold; only its owner can release it",
+                "conflict": "Resolve and review the conflict, then explicitly re-admit",
+                "unknown": "GitHub mergeability is not yet known",
+                "competing": "Two merge coordinators are armed; use an owned handoff",
+                "native_auto_merge": "GitHub auto-merge is enabled; not admitted to the supervised queue. Use admit --handoff-auto-merge with the reviewed head",
+                "awaiting_readmission": "Review the conflict resolution and explicitly re-admit",
+                "admission_removed": "Admission was removed; inspect before explicitly re-admitting",
+                "not_admitted": "No supervised admission requested",
+                "queued": "Supervised admission observed; the bot owns updates and required CI",
+                "closed": "Closed without merging",
+            }[queue_state]
+            return self.update(pr, status="closed" if closed else "queued" if queue_state == "queued" else "awaiting_merge",
+                               head_sha=observed["headRefOid"], url=observed["url"], last_error=None,
+                               merge_mode=mode, merge_state=observed.get("mergeStateStatus"),
+                               source_audit_passed=passed, queue_ready_since=ready_since,
+                               queue_attention=attention, queue_action=action, queue_state=queue_state,
+                               queue_observation_error=None, queue_observed_at=self.now(),
+                               queue_seen_admitted_at=self.now() if admitted else previous.get("queue_seen_admitted_at"),
+                               queue_admission_error=None if admitted else previous.get("queue_admission_error"),
                                queue_conflict_seen_at=self.now() if conflict else previous.get("queue_conflict_seen_at"))
         merged = state_module.full_sha(observed["mergeCommit"]["oid"])
         self.update(pr, status="merged", merged_sha=merged, merged_at=observed["mergedAt"],
                     url=observed["url"], last_error=None, queue_state="merged", queue_observed_at=self.now(),
-                    queue_admission_error=None)
+                    queue_admission_error=None, queue_observation_error=None, queue_attention=False,
+                    queue_ready_since=None, queue_action=None)
         remote = self.command("git", "remote", "get-url", "origin")
         if remote.removesuffix(".git") not in (f"https://github.com/{REPOSITORY}", f"git@github.com:{REPOSITORY}"):
             raise Blocked("deployment checkout does not use the expected origin")
@@ -138,8 +188,8 @@ class Delivery:
         return self.update(pr, status="deployment_pending", target_sha=target,
                            last_error=None)
 
-    def admit(self, pr, owner, expected_head):
-        """Persist delivery intent before requesting an opt-in queue admission."""
+    def admit(self, pr, owner, expected_head, handoff_auto_merge=False, resume=False):
+        """Authorize one reviewed candidate; durably hand off native auto-merge when requested."""
         if pr < 1 or not owner.strip():
             raise ValueError("a positive PR number and named owner are required")
         expected_head = state_module.full_sha(expected_head)
@@ -156,31 +206,69 @@ class Delivery:
             for path in ("scripts/delivery.py", ".kodiak.toml"):
                 if self.command("git", "hash-object", path) != self.command("git", "rev-parse", f"origin/main:{path}"):
                     raise Blocked(f"queue admission tooling differs from merged main: {path}")
-            candidate = json.loads(self.command(
-                "gh", "pr", "view", str(pr), "--repo", REPOSITORY, "--json",
-                "state,isDraft,baseRefName,headRefOid,autoMergeRequest,labels,mergeStateStatus"))
-            if candidate.get("state") != "OPEN" or candidate.get("isDraft") is not False or candidate.get("baseRefName") != "main":
-                raise Blocked("queue admission requires an open, non-draft PR targeting main")
-            if candidate.get("headRefOid") != expected_head:
-                raise Blocked("PR head changed; review its current source before admission")
-            if candidate.get("autoMergeRequest") is not None:
-                raise Blocked("GitHub auto-merge is already armed; use one merge coordinator")
-            if "queue-hold" in {label["name"] for label in candidate.get("labels", [])}:
-                raise Blocked("queue-hold is present; admission does not release a hold")
-            if candidate.get("mergeStateStatus") in (None, "UNKNOWN", "DIRTY"):
-                raise Blocked("resolve the conflict or wait for GitHub's mergeability result before admission")
             with self.state.transaction():
                 previous = self.read()["requests"].get(str(pr), {})
-            # Label mutation can time out after GitHub applies it. Intent must
-            # already exist; never roll it back or assume the PR was not admitted.
-            self.update(pr, retry_owner=owner, queue_owner=owner, queue_requested_head=expected_head,
-                        queue_first_requested_at=previous.get("queue_first_requested_at", self.now()),
-                        queue_last_requested_at=self.now(), queue_admission_error=None)
+            if resume and (previous.get("queue_owner") != owner or previous.get("queue_requested_head") != expected_head
+                           or previous.get("queue_handoff_state") not in ("disable_requested", "admission_pending", "label_requested")):
+                raise Blocked("no matching durable admission authorization to resume")
+            candidate = self.candidate(pr)
+            if resume and candidate.get("state") in ("MERGED", "CLOSED"):
+                self.update(pr, queue_handoff_state="complete")
+                return self.observe(pr, owner)
+            labels = {label["name"] for label in candidate.get("labels", [])}
+            # A label request may have succeeded before a timeout or session exit.
+            # Once seen, the bot can already have refreshed its head. Do not apply
+            # a second label or demand that its updated head equal the old one.
+            if resume and previous.get("queue_handoff_state") == "label_requested" and "merge-queue" in labels:
+                self.update(pr, queue_handoff_state="complete")
+                return self.observe(pr, owner)
+            def validate(current):
+                if current.get("state") != "OPEN" or current.get("isDraft") is not False or current.get("baseRefName") != "main":
+                    raise Blocked("queue admission requires an open, non-draft PR targeting main")
+                if current.get("headRefOid") != expected_head:
+                    raise Blocked("PR head changed; review its current source before admission")
+                if "queue-hold" in {label["name"] for label in current.get("labels", [])}:
+                    raise Blocked("queue-hold is present; admission does not release a hold")
+                if current.get("mergeStateStatus") in (None, "UNKNOWN", "DIRTY"):
+                    raise Blocked("resolve the conflict or wait for GitHub's mergeability result before admission")
             try:
-                self.command("gh", "pr", "edit", str(pr), "--repo", REPOSITORY, "--add-label", "merge-queue")
+                validate(candidate)
+                if resume and previous.get("queue_handoff_state") == "label_requested":
+                    raise Blocked("label request outcome is uncertain and admission is absent; inspect before explicitly re-admitting")
+                native = candidate.get("autoMergeRequest") is not None
+                if native and not handoff_auto_merge:
+                    raise Blocked("GitHub auto-merge is already armed; use admit --handoff-auto-merge with the reviewed head")
+                self.update(pr, retry_owner=owner, request_owner=previous.get("request_owner") or owner,
+                            queue_owner=owner, queue_requested_head=expected_head,
+                            queue_first_requested_at=previous.get("queue_first_requested_at", self.now()),
+                            queue_last_requested_at=self.now(), queue_admission_error=None,
+                            queue_handoff_state="disable_requested" if native else "admission_pending",
+                            queue_handoff_authorized=bool(handoff_auto_merge))
+                if native:
+                    # Persist authorization first. Disabling is idempotent; never
+                    # restore native auto-merge after an uncertain outcome.
+                    self.command("gh", "pr", "merge", str(pr), "--repo", REPOSITORY, "--disable-auto")
+                candidate = self.candidate(pr)
+                if candidate.get("state") in ("MERGED", "CLOSED"):
+                    self.update(pr, queue_handoff_state="complete")
+                    return self.observe(pr, owner)
+                validate(candidate)
+                if candidate.get("autoMergeRequest") is not None:
+                    raise Blocked("GitHub auto-merge is still armed; no queue label was added")
+                self.update(pr, queue_handoff_state="admission_pending")
+                if "merge-queue" not in {label["name"] for label in candidate.get("labels", [])}:
+                    self.update(pr, queue_handoff_state="label_requested")
+                    self.command("gh", "pr", "edit", str(pr), "--repo", REPOSITORY, "--add-label", "merge-queue")
+                self.update(pr, queue_handoff_state="complete")
                 return self.observe(pr, owner)
             except (Blocked, OSError, ValueError, subprocess.SubprocessError) as error:
-                self.update(pr, queue_admission_error=str(error))
+                # Invalid initial requests create no authorization. A stopped or
+                # uncertain mutation retains its intent and original reviewed head.
+                if str(pr) in self.read()["requests"]:
+                    fields = {"queue_admission_error": str(error)}
+                    if isinstance(error, Blocked):
+                        fields.update(queue_handoff_state="blocked", queue_action=str(error), queue_attention=True)
+                    self.update(pr, **fields)
                 raise
 
     def step(self, pr, owner, blocked_targets=()):
@@ -287,20 +375,28 @@ class Delivery:
         blocked.update(r.get("target_sha") for r in requests if r.get("status") == "failed")
         blocked.discard(None)
         save(phase="checking", reason=None)
-        candidates, errors = [], []
+        candidates, errors, waiting, attention = [], [], [], []
         for request in requests:
             if request.get("status") in ("running", "closed"):
                 continue
             pr = int(request["pr"])
             try:
+                if request.get("queue_handoff_state") in ("disable_requested", "admission_pending", "label_requested"):
+                    self.admit(pr, request["queue_owner"], request["queue_requested_head"],
+                               handoff_auto_merge=request.get("queue_handoff_authorized", False), resume=True)
                 item = self.observe(pr, "desktop-delivery-supervisor")
                 if item["status"] == "deployment_pending": candidates.append(item)
+                elif item["status"] != "closed": waiting.append(pr)
+                if item.get("queue_attention"): attention.append(pr)
             except (Blocked, OSError, ValueError, subprocess.SubprocessError) as error:
                 self.update(pr, retry_owner="desktop-delivery-supervisor", last_error=str(error))
                 errors.append(pr)
         if not candidates:
-            return save(phase="unavailable" if errors else "idle", target_sha=None,
-                        reason="GitHub observation failed; delivery intent retained" if errors else None)
+            return save(phase="unavailable" if errors else "attention" if attention else "awaiting_merge" if waiting else "idle",
+                        target_sha=None, attention_prs=attention,
+                        reason="Observation or admission needs attention; intent retained" if errors else
+                        f"Merge admission needs attention: {', '.join('#' + str(pr) for pr in attention)}" if attention else
+                        "Recorded requests are waiting for protected merge" if waiting else None)
         # Observe chooses current main, containing the requested merge. One tick
         # starts at most one install, however many PRs are waiting.
         item = candidates[-1]
@@ -389,6 +485,8 @@ def main():
     admit.add_argument("--pr", type=int, required=True)
     admit.add_argument("--owner", required=True)
     admit.add_argument("--head", type=state_module.full_sha, required=True, help="reviewed full PR head SHA")
+    admit.add_argument("--handoff-auto-merge", action="store_true",
+                       help="authorize disabling native auto-merge before supervised admission of this reviewed head")
     sub.add_parser("supervise", help="one coalescing tick for the installed background worker")
     record = sub.add_parser("record-running")
     record.add_argument("--pid", type=int, required=True)
@@ -401,7 +499,7 @@ def main():
     delivery = Delivery(state)
     try:
         if args.command == "admit":
-            item = delivery.admit(args.pr, args.owner, args.head)
+            item = delivery.admit(args.pr, args.owner, args.head, handoff_auto_merge=args.handoff_auto_merge)
             print(json.dumps(item))
             return 0 if item.get("status") in ("queued", "deployment_pending", "running") else 75
         if args.command == "supervise":
@@ -414,6 +512,8 @@ def main():
             with state.transaction():
                 status = delivery.read()
             for item in status["requests"].values():
+                if item.get("status") not in ("running", "closed") and (not item.get("queue_observed_at") or time.time() - item["queue_observed_at"] > 300):
+                    item.update(queue_state="stale", queue_action="No fresh merge observation; progress unverified")
                 if item.get("receipt"):
                     item["currently_running"] = delivery.receipt_still_running(item["receipt"])
             print(json.dumps(status, indent=2))
