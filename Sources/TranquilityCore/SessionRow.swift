@@ -169,6 +169,21 @@ public struct SessionRow: Equatable, Sendable {
     /// unchanged.
     public let door: Door
 
+    /// **Has this agent ever finished a turn?** A fact from the store (one
+    /// Stop event under this id, from a hook or a spool line), set by the
+    /// assembler for every band, and the ONLY thing a lit row's tap consults
+    /// to choose between the card and the door.
+    ///
+    /// It is not `read`. `read == .none` was standing in for "nothing
+    /// recorded to read" until 21 Sep, and it means something else: a session
+    /// leaves the waiting set the moment your reply is delivered, and every
+    /// row outside that set carries `.none`. So every blue row you had ever
+    /// answered took the door, which is every blue row you care about.
+    /// Robert, on the panel that morning: "I just clicked a blue lamp and it
+    /// went straight to the agent." The card would have worked: a picked
+    /// announce reads `latestStop(for:)`, which ignores both cursors.
+    public let hasRecordedTurn: Bool
+
     /// **When this agent last did something.** The sort key for lit rows.
     ///
     /// Added 14 Sep 2026 (#454), and it is the field whose absence caused two
@@ -244,6 +259,7 @@ public struct SessionRow: Equatable, Sendable {
                revivable: Bool = false, read: ReadState = .none,
                switchedOff: Bool = false, detail: String? = nil,
                harness: String? = nil, door: Door = .terminal,
+               hasRecordedTurn: Bool = false,
                lastActivity: Date? = nil) {
         self.id = id
         self.name = name
@@ -256,6 +272,7 @@ public struct SessionRow: Equatable, Sendable {
         self.detail = detail
         self.harness = harness
         self.door = door
+        self.hasRecordedTurn = hasRecordedTurn
     }
 
     /// The same row with its lamp out, as a session the user has filed.
@@ -268,7 +285,8 @@ public struct SessionRow: Equatable, Sendable {
     public func switchedOffCopy() -> SessionRow {
         SessionRow(id: id, name: name, aux: aux, lamp: .running,
                    revivable: revivable, read: read, switchedOff: true,
-                   detail: detail, harness: harness, door: door)
+                   detail: detail, harness: harness, door: door,
+                   hasRecordedTurn: hasRecordedTurn)
     }
 
     /// What the pointer gets when it rests on a row: the full name, and
@@ -391,9 +409,16 @@ public struct SessionRow: Equatable, Sendable {
         // obviously should open the card." A row with nothing recorded still
         // takes its door, which is the only honest thing for a mid-turn agent
         // that has not spoken yet.
+        //
+        // "Nothing recorded" is `hasRecordedTurn`, NOT `read == .none`
+        // (21 Sep). The read state answers "is a turn waiting on you", and a
+        // row whose turn you answered is no longer waiting, so `.none` sent
+        // every answered blue row to the door. One question, one fact, the
+        // same for every harness: a Stop under this id, written by a hook or
+        // by a spool line, means there is a card; no Stop means the agent has
+        // not spoken yet and the door is the only honest place to send you.
         case .working, .running:
-            if row.read == .none { return goTo(row) }
-            return .announce
+            return row.hasRecordedTurn ? .announce : goTo(row)
         // **Green consults the door too, since 14 Sep.** Announce reads a
         // finished turn out of the LOCAL store, so it is the right verb only
         // for a row that has one. A remote agent has no local transcript and
@@ -432,8 +457,7 @@ public struct SessionRow: Equatable, Sendable {
         // instead of the answer. The door is for a row with nothing to say,
         // and for Go to Agent on the card, whatever the row's colour.
         case .ready:
-            if row.read == .none { return goTo(row) }
-            return .announce
+            return row.hasRecordedTurn ? .announce : goTo(row)
         case .unlit: return row.revivable ? .revive : .none
         }
     }

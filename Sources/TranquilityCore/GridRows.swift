@@ -77,6 +77,11 @@ public extension GridAssembler {
         public var isInFlight: (String) -> Bool
         /// Callsigns minted for sessions that are no longer running.
         public var closedCallsigns: [String: String]
+        /// Sessions with a finished turn in the store, from
+        /// `QueueStore.sessionsWithARecordedTurn()`. Required rather than
+        /// defaulted: a caller that forgets it routes every answered blue row
+        /// to the door, which is the 21 Sep defect exactly.
+        public var recordedTurns: Set<String>
         /// **The fifth band: agents that run somewhere else.**
         ///
         /// Passed in exactly like the other four rather than fetched here, and
@@ -130,6 +135,7 @@ public extension GridAssembler {
             supersedesWaiting: @escaping (String, Int64) -> Bool,
             isInFlight: @escaping (String) -> Bool,
             closedCallsigns: [String: String] = [:],
+            recordedTurns: Set<String>,
             remote: RemoteAgents = RemoteAgents(),
             livenessKnown: Bool = true
         ) {
@@ -147,6 +153,7 @@ public extension GridAssembler {
             self.supersedesWaiting = supersedesWaiting
             self.isInFlight = isInFlight
             self.closedCallsigns = closedCallsigns
+            self.recordedTurns = recordedTurns
             self.remote = remote
         }
     }
@@ -377,6 +384,10 @@ public extension GridAssembler {
                 // other amber row — the column can only hold a clause.
                 detail: blocked?.detail,
                 harness: input.liveById[event.sessionId]?.harness,
+                // True by construction here (a waiting turn IS a Stop), and
+                // stated from the same set as every other band so the
+                // routing fact never depends on which band drew the row.
+                hasRecordedTurn: input.recordedTurns.contains(event.sessionId),
                 // The timestamp of the transcript entry the verdict rests on,
                 // and otherwise when the turn arrived at the hook. NEVER the
                 // file's mtime: it moves for reasons that are not the
@@ -421,6 +432,9 @@ public extension GridAssembler {
                 name: GridAssembler.tabDisplayName(for: stored, live: live),
                 aux: storedLamp.reason ?? SessionRow.shortId(stored.sessionId),
                 lamp: storedLamp.lamp, detail: storedLamp.detail, harness: live.harness,
+                // The band an answered session lands in: its turn is no
+                // longer waiting, but it was spoken and the card can read it.
+                hasRecordedTurn: input.recordedTurns.contains(stored.sessionId),
                 // The conversation's clock, then the hook's; never the file's.
                 lastActivity: evidence?.observedAt
                     ?? Date(timeIntervalSince1970: Double(stored.createdAtMs) / 1000)))
@@ -450,6 +464,7 @@ public extension GridAssembler {
                 name: GridAssembler.tabDisplayName(live: live, callsign: nil),
                 aux: liveLamp.reason ?? SessionRow.shortId(live.sessionId),
                 lamp: liveLamp.lamp, detail: liveLamp.detail, harness: live.harness,
+                hasRecordedTurn: input.recordedTurns.contains(live.sessionId),
                 // The conversation's clock, then the process start; never the file's.
                 lastActivity: evidence?.observedAt ?? live.startedAtDate))
         }
@@ -496,6 +511,7 @@ public extension GridAssembler {
                 detail: found.activity?.fullReason
                     ?? (found.harness == CodexAdapter().id ? "Codex session" : nil),
                 harness: found.harness,
+                hasRecordedTurn: input.recordedTurns.contains(found.sessionId),
                 lastActivity: found.lastActivityAt))
         }
 
@@ -554,6 +570,9 @@ public extension GridAssembler {
                 // nowhere you can open. Either way the row carries the answer
                 // and nothing downstream asks what kind of agent it is.
                 door: agent.door,
+                // The spool wrote this agent's turns into the same store, so
+                // the same fact answers for a remote row as for a local one.
+                hasRecordedTurn: input.recordedTurns.contains(agent.id),
                 // The provider's own answer, which is the whole point: this
                 // band is enumerated last, so without a timestamp it could
                 // never join the order however recently the agent spoke.

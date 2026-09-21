@@ -1043,6 +1043,23 @@ public final class QueueStore: Sendable {
         }
     }
 
+    /// Every session that has ever finished a turn: one Stop under its id,
+    /// whether a hook wrote it or the spool did for a remote agent. One query
+    /// for the whole grid, on the (sessionId, hookEvent) index; the events
+    /// table holds ~20k rows and this answers in a millisecond.
+    ///
+    /// This is the fact a lit row's tap decides on (card or door). It is
+    /// deliberately not `latest_per_session`, whose latest event for a
+    /// working session is the prompt you just sent, and not the waiting
+    /// list, which a delivered reply removes the session from.
+    public func sessionsWithARecordedTurn() throws -> Set<String> {
+        try dbQueue.read { db in
+            Set(try String.fetchAll(db, sql: """
+                SELECT DISTINCT sessionId FROM events WHERE hookEvent = ?
+                """, arguments: [HookEventKind.stop.rawValue]))
+        }
+    }
+
     /// The newest turn boundary each session recorded — one query for the
     /// whole grid rather than one per row. `UserPromptSubmit` means the agent
     /// was handed work; `Stop` means it finished. Whichever is newer is the

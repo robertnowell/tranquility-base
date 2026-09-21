@@ -119,6 +119,7 @@ final class LiveOpenCodeLoop: XCTestCase {
             switchedOff: [], switchedOn: [],
             evidence: { _, _ in nil }, isHeadless: { _ in false }, family: { [$0] },
             supersedesWaiting: { _, _ in false }, isInFlight: { _ in false },
+            recordedTurns: (try? store.sessionsWithARecordedTurn()) ?? [],
             remote: .init(agents: poller.snapshot.agents, requests: poller.snapshot.requests,
                           unread: [id], unreachable: poller.snapshot.unreachable))).rows
         let row = try XCTUnwrap(rows.first { $0.id == id }, "no row for the agent")
@@ -156,6 +157,7 @@ final class LiveOpenCodeLoop: XCTestCase {
             discovered: [], liveById: [:], boundaries: [:], switchedOff: [], switchedOn: [],
             evidence: { _, _ in nil }, isHeadless: { _ in false }, family: { [$0] },
             supersedesWaiting: { _, _ in false }, isInFlight: { _ in false },
+            recordedTurns: (try? store.sessionsWithARecordedTurn()) ?? [],
             remote: .init(agents: poller.snapshot.agents, requests: poller.snapshot.requests,
                           unread: Set(try coordinator.waiting().filter { !$0.heard }.map(\.sessionId)),
                           unreachable: poller.snapshot.unreachable,
@@ -203,6 +205,7 @@ final class LiveOpenCodeLoop: XCTestCase {
                 discovered: [], liveById: [:], boundaries: [:], switchedOff: [], switchedOn: [],
                 evidence: { _, _ in nil }, isHeadless: { _ in false }, family: { [$0] },
                 supersedesWaiting: { _, _ in false }, isInFlight: { _ in false },
+            recordedTurns: (try? store.sessionsWithARecordedTurn()) ?? [],
                 remote: .init(agents: poller.snapshot.agents, requests: poller.snapshot.requests,
                               unread: [], unreachable: poller.snapshot.unreachable))).rows
             let askingRow = try XCTUnwrap(asking.first { $0.id == id })

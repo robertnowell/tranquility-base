@@ -1395,8 +1395,17 @@ extension StatusHUD {
     /// the defect was in DERIVING that state, so this one starts one step
     /// earlier: a temporary store with a turn and a heard cursor, the app's
     /// own `remoteAgents(snapshot:waiting:)`, the app's own `GridAssembler`,
-    /// the live panel, and the actual `sessionRowTapped`. Three rows, three
-    /// facts: unread, heard-and-undismissed, nothing at all.
+    /// the live panel, and the actual `sessionRowTapped`. Four rows, four
+    /// facts: unread, heard-and-undismissed, answered-and-working, nothing
+    /// at all.
+    ///
+    /// The fourth joined on 21 Sep. Robert tapped a blue row he had replied
+    /// to and got the terminal: a delivered reply leaves the waiting set, the
+    /// row's read state became `.none`, and `.none` was standing in for
+    /// "nothing recorded". The store still held the turn. Now the tap asks
+    /// the store's fact, and this row proves it on the real panel for the
+    /// remote path; the unit tests carry the local bands through the same
+    /// function.
     func openCodeRowDrill() {
         var checks: [(String, Bool)] = []
         let dir = FileManager.default.temporaryDirectory
@@ -1418,8 +1427,10 @@ extension StatusHUD {
         let unread = agent("ses_drill_unread", "Unread turn")
         let heard = agent("ses_drill_heard", "Heard turn")
         let silent = agent("ses_drill_silent", "Never spoke")
+        var answered = agent("ses_drill_answered", "Answered, working on it")
+        answered.state = .working
         var snapshot = AgentPoller.Snapshot()
-        snapshot.agents = [unread, heard, silent]
+        snapshot.agents = [unread, heard, silent, answered]
         // Turns in the store for two of them, as the spool would have written.
         func turn(_ id: String, at ms: Int64) -> Int64? {
             guard (try? store.insert(event: QueuedEvent(
@@ -1432,6 +1443,12 @@ extension StatusHUD {
         if let heardLatest = turn(heard.id, at: 2_000) {
             try? store.advanceCursor(sessionId: heard.id, heardThrough: heardLatest)
         }
+        // Heard AND answered: the dispatch arms advance dismissedThrough when
+        // the reply lands, and the session leaves the waiting list.
+        if let answeredLatest = turn(answered.id, at: 3_000) {
+            try? store.advanceCursor(sessionId: answered.id, heardThrough: answeredLatest,
+                                     dismissedThrough: answeredLatest)
+        }
         let waiting = (try? store.waitingSessions()) ?? []
         let remote = AppDelegate.remoteAgents(snapshot: snapshot, waiting: waiting)
         let rows = GridAssembler.rows(GridAssembler.RowInputs(
@@ -1439,11 +1456,17 @@ extension StatusHUD {
             discovered: [], liveById: [:], boundaries: [:], switchedOff: [], switchedOn: [],
             evidence: { _, _ in nil }, isHeadless: { _ in false }, family: { [$0] },
             supersedesWaiting: { _, _ in false }, isInFlight: { _ in false },
+            recordedTurns: (try? store.sessionsWithARecordedTurn()) ?? [],
             remote: remote)).rows
         func read(_ a: AgentSession) -> ReadState? { rows.first { $0.id == a.id }?.read }
         checks.append(("unreadIsDerivedUnread", read(unread) == .unread))
         checks.append(("heardIsDerivedOpened", read(heard) == .opened))
         checks.append(("silentIsDerivedNone", read(silent) == ReadState.none))
+        // The answered row is `.none` too, which is exactly why `.none` could
+        // never be the routing fact; the lamp is blue and the turn is recorded.
+        checks.append(("answeredIsDerivedNone", read(answered) == ReadState.none))
+        checks.append(("answeredIsBlue", rows.first { $0.id == answered.id }?.lamp == .working))
+        checks.append(("answeredHasItsTurn", rows.first { $0.id == answered.id }?.hasRecordedTurn == true))
 
         // On the live panel, tapped through the real handler; the verbs
         // captured so nothing escapes the drill.
@@ -1451,13 +1474,14 @@ extension StatusHUD {
         var went: [String: String] = [:]
         let savedAnnounce = onPickWaiting, savedShell = onOpenShell, savedPane = onAttachPane
         onPickWaiting = { went[$0] = "card" }
+        let posed = [unread, heard, silent, answered]
         onOpenShell = { command, _ in
-            if let a = [unread, heard, silent].first(where: { command.contains($0.providerID) }) { went[a.id] = "shell" }
+            if let a = posed.first(where: { command.contains($0.providerID) }) { went[a.id] = "shell" }
         }
         onAttachPane = { name in
-            if let a = [unread, heard, silent].first(where: { name == "tb-oc-\($0.providerID)" }) { went[a.id] = "door" }
+            if let a = posed.first(where: { name == "tb-oc-\($0.providerID)" }) { went[a.id] = "door" }
         }
-        for a in [unread, heard, silent] {
+        for a in posed {
             let control = NSButton()
             control.identifier = NSUserInterfaceItemIdentifier(a.id)
             sessionRowTapped(control)
@@ -1467,6 +1491,8 @@ extension StatusHUD {
         checks.append(("unreadTapOpensTheCard", went[unread.id] == "card"))
         checks.append(("heardTapOpensTheCard", went[heard.id] == "card"))
         checks.append(("nothingToSayTapOpensTheAgent", went[silent.id] == "door"))
+        // 21 Sep: answered is not unspoken. Blue, replied to, opens the card.
+        checks.append(("answeredBlueTapOpensTheCard", went[answered.id] == "card"))
         SelfTest.report("openCodeRow", checks)
     }
 
@@ -1493,6 +1519,7 @@ extension StatusHUD {
                 liveById: [:], boundaries: [:], switchedOff: [], switchedOn: [],
                 evidence: { _, _ in nil }, isHeadless: { _ in false }, family: { [$0] },
                 supersedesWaiting: { _, _ in false }, isInFlight: { _ in false },
+                recordedTurns: [dead, deadToo],
                 remote: .init(agents: [cloud]), livenessKnown: livenessKnown)).rows
         }
         let after = assemble(livenessKnown: true)
@@ -1688,22 +1715,28 @@ extension StatusHUD {
     /// would speak out loud on every launch.
     func pickUpDrill() {
         let live = SessionRow(id: "alive", name: "alive", aux: "alive",
-                                          lamp: .running)
+                                          lamp: .running, hasRecordedTurn: true)
         let dead = SessionRow(id: "gone", name: "gone", aux: "gone",
                                           lamp: .unlit, revivable: true)
         // The 15 Sep row: amber, listed here because the grid was full.
         let amber = SessionRow(id: "amber", name: "amber", aux: "usage limit",
                                            lamp: .fault)
+        // The 21 Sep row: alive and quiet, but it has never finished a turn,
+        // so there is no card and the honest verb is the door.
+        let unspoken = SessionRow(id: "unspoken", name: "unspoken", aux: "unspoken",
+                                              lamp: .running)
         showPastAgents(items: [
             PastAgentsList.Item(row: live, revivable: false, haystack: live.name),
             PastAgentsList.Item(row: dead, revivable: true, haystack: dead.name),
             PastAgentsList.Item(row: amber, revivable: false, haystack: amber.name),
+            PastAgentsList.Item(row: unspoken, revivable: false, haystack: unspoken.name),
         ])
         // The row says which verb it has.
         let verbs = pastList.verbsForTesting
         let liveSaysOpen = verbs["alive"] == "OPEN \u{203A}"
         let deadStillRevives = verbs["gone"] == "REVIVE \u{203A}"
         let amberSaysGoTo = verbs["amber"] == "GO TO \u{203A}"
+        let unspokenSaysGoTo = verbs["unspoken"] == "GO TO \u{203A}"
         // Go to agent lives on the right-click now, on the live row only.
         let menus = pastList.menuTitlesForTesting
         let goToIsInTheMenu = menus["alive"]?.contains { $0.hasPrefix("Go to ") } == true
@@ -1718,13 +1751,18 @@ extension StatusHUD {
         onPickWaiting = { cardOpened = $0 }
         onGoToSession = { wentToTerminal = $0 }
         onBreadcrumbHome = {}
-        pastList.onPick?("alive", false, .running)
+        pastList.onPick?(live, false)
         let tapStayedOnThePanel = wentToTerminal == nil
         // The amber row's tap: the terminal, and neither the switch nor the card.
         let switchedOnBefore = switchedOn, cardBefore = cardOpened
-        pastList.onPick?("amber", false, .fault)
+        pastList.onPick?(amber, false)
         let amberWentToTerminal = wentToTerminal == "amber"
         let amberLeftTheRestAlone = switchedOn == switchedOnBefore && cardOpened == cardBefore
+        wentToTerminal = nil
+        // The unspoken row's tap: the door too, and no card that opens on nothing.
+        pastList.onPick?(unspoken, false)
+        let unspokenWentToTerminal = wentToTerminal == "unspoken"
+        let unspokenOpenedNoCard = cardOpened == cardBefore
         wentToTerminal = nil
         // …and the menu's verb, which must still reach the terminal.
         pastList.onGoTo?("alive")
@@ -1746,6 +1784,9 @@ extension StatusHUD {
             // Ruled 15 Sep: amber means needs you, and the terminal is where.
             ("anAmberTapGoesToTheTerminal", amberWentToTerminal),
             ("anAmberTapNeitherSwitchesNorReads", amberLeftTheRestAlone),
+            // 21 Sep: no finished turn, no card; the door, and the label says so.
+            ("anUnspokenRowSaysGoTo", unspokenSaysGoTo),
+            ("anUnspokenTapGoesToTheTerminal", unspokenWentToTerminal && unspokenOpenedNoCard),
             // And what the switch it flips is worth: an idle session the user
             // picked up is lit, so the grid draws it.
             ("aPickedUpSessionIsDrawnOnTheGrid",
