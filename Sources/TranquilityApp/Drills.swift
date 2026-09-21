@@ -2010,13 +2010,16 @@ extension StatusHUD {
             spoken: SpokenTextSanitizer().sanitize("Close KOPI-003 as P2 or defer it?"),
             sessionId: "01a05338", pid: nil,
             project: "Audit Kopi fixes in codebase", cwd: "/tmp")
-        checks.append(("aCardWithNoPidHasNoDoor", goButton.isHidden))
+        // Reversed 21 Sep (was "aCardWithNoPidHasNoDoor"): a card that names
+        // an agent has its door, pid or not; see the visibility rule in
+        // `render()` for the measurement.
+        checks.append(("aCardNamingAnAgentHasItsDoor", !goButton.isHidden))
         checks.append(("butItStillNamesTheAgent",
                        titleLabel.stringValue.contains("Audit Kopi fixes")))
 
         // The resume lands.
         attachLivePid(77633, sessionId: "01a05338")
-        checks.append(("thePidArrivesAndTheDoorOpens", !goButton.isHidden))
+        checks.append(("thePidArrivesAndTheDoorStays", !goButton.isHidden))
         checks.append(("theDoorIsAboutThisSession", currentTarget?.sessionId == "01a05338"))
         checks.append(("andItCarriesThePid", currentTarget?.pid == 77633))
 
@@ -2027,7 +2030,7 @@ extension StatusHUD {
             spoken: SpokenTextSanitizer().sanitize("Another agent entirely."),
             sessionId: "01a05885", pid: nil, project: "Analyze Mirai", cwd: "/tmp")
         attachLivePid(77633, sessionId: "01a05338")
-        checks.append(("aStrangersPidIsIgnored", goButton.isHidden))
+        checks.append(("aStrangersPidIsIgnored", currentTarget?.pid == nil))
 
         // A REMOTE agent has no pid and never will; its door is a program or
         // a page the poller knows about. The card asks the app for it, and
@@ -2049,7 +2052,9 @@ extension StatusHUD {
         _ = showAnnouncement(
             spoken: SpokenTextSanitizer().sanitize("Nobody knows this one."),
             sessionId: "remote-2", pid: nil, project: "elsewhere", cwd: "/tmp")
-        checks.append(("anUnknownRemoteAgentStillHasNoDoor", goButton.isHidden))
+        // Still a named agent, so still a door; the tap resolves it or says
+        // why it cannot.
+        checks.append(("anUnknownRemoteAgentStillHasItsDoor", !goButton.isHidden))
 
         agentDoorForSession = realDoor
 

@@ -54,6 +54,14 @@ public enum ResumeGuard {
         /// At least one live process is already resuming this id. Resuming
         /// again forks the transcript.
         case alreadyResuming([Holder])
+        /// A call in THIS process is still resuming it: the claim below is
+        /// held and its pane may not have exec'd a harness yet. Its own case
+        /// because it used to travel as `.alreadyResuming([])`, the same
+        /// value an unreadable process table returns, and `refusal` rendered
+        /// both as "the process table could not be read". Measured 21 Sep: a
+        /// second tap 3.6 s after the first got that sentence on a card,
+        /// over a resume that was three seconds from landing.
+        case inFlight
 
         public var holders: [Holder] {
             if case .alreadyResuming(let h) = self { return h }
@@ -79,6 +87,13 @@ public enum ResumeGuard {
     /// covers only the claim bookkeeping; the slow work happens outside it.
     private static let lock = NSLock()
     private nonisolated(unsafe) static var inFlight: Set<String> = []
+    /// Ids a DOOR has taken but not yet brought to `claim`. The claim covers
+    /// `resumeTmux`; the revive door spends up to ten seconds before that on
+    /// discovery and an announce (measured 21 Sep: tapped 13:56:41, claimed
+    /// 13:56:54), and a second tap inside that window ran the whole flow
+    /// again, cancelled the first tap's speech, and reached the claim only
+    /// to be refused there. So the door claims first, at the tap.
+    private nonisolated(unsafe) static var intents: Set<String> = []
 
     /// Held for the duration of a resume, released when it ends.
     public final class Claim {
@@ -109,7 +124,7 @@ public enum ResumeGuard {
             lock.unlock()
             SessionLauncher.trace?("resume guard: \(sessionId.prefix(8)) is already being "
                 + "resumed by a call still in flight — refusing the second")
-            return .failure(.alreadyResuming([]))
+            return .failure(.inFlight)
         }
         // Claimed BEFORE the scan is released, so no second caller can slip
         // between the scan and the insert.
@@ -124,6 +139,33 @@ public enum ResumeGuard {
             return .failure(verdict)
         }
         return .success(Claim(sessionId: sessionId))
+    }
+
+    /// Is a resume of this id still running in this process, at either
+    /// stage: a door that has taken it, or a `resumeTmux` holding the claim?
+    /// Reading two sets is the whole cost; no scan.
+    public static func isInFlight(_ sessionId: String) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return inFlight.contains(sessionId) || intents.contains(sessionId)
+    }
+
+    /// The door's own claim: true means this tap owns the revive and must
+    /// call `endIntent` on every exit; false means another tap already
+    /// does, and this one should show the receipt it already has and stop.
+    public static func beginIntent(_ sessionId: String) -> Bool {
+        guard !sessionId.isEmpty else { return true }
+        lock.lock()
+        defer { lock.unlock() }
+        if inFlight.contains(sessionId) || intents.contains(sessionId) { return false }
+        intents.insert(sessionId)
+        return true
+    }
+
+    public static func endIntent(_ sessionId: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        intents.remove(sessionId)
     }
 
     /// Ask the process table directly.
@@ -256,6 +298,14 @@ public enum ResumeGuard {
     /// No em dash: this string reaches a card, and `Drills.copyDrill` sweeps
     /// rendered labels for exactly that character (ruled 18 Aug). The dash
     /// still earns its keep in the trace line one frame up, which is a log.
+    public static func refusal(sessionId: String, verdict: Verdict) -> String {
+        if case .inFlight = verdict {
+            return "\(sessionId.prefix(8)) is already being reopened by this app. "
+                + "Nothing was started a second time."
+        }
+        return refusal(sessionId: sessionId, holders: verdict.holders)
+    }
+
     public static func refusal(sessionId: String, holders: [Holder]) -> String {
         let where_ = holders.isEmpty
             ? "the process table could not be read, so a second writer cannot be ruled out"

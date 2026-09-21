@@ -69,10 +69,20 @@ mkdir -p "$SCRATCH/agents" "$SCRATCH/support"
 export TB_AGENTS_ROOT="$SCRATCH/agents"
 export VOICE_DISPATCH_SUPPORT_DIR="$SCRATCH/support"
 trap 'rm -rf "$SCRATCH"' EXIT
+# The prefix goes on whenever the hardware can take it, NOT only when this
+# shell is translated. Found 21 Sep: the shell was arm64, so no prefix, and
+# `swift test` still loaded an x86_64 xctest against the arm64 bundle. The
+# child that launches it is `python3 run-stage.py`, and the python3 first
+# on that session's PATH was /usr/local/bin/python3, an x86_64 binary: a
+# translated interpreter hands its personality to every child it spawns.
+# Which python3 wins is per-session PATH, so the same commit passed in one
+# worktree at 07:06 and failed in the next at 08:08. `arch -arm64e` re-execs
+# swift natively whatever launched it, and costs nothing when nothing did.
 RUNNER=(env)
-if [ "$(uname -m)" != "arm64" ] && arch -arm64e true 2>/dev/null; then
+if arch -arm64e true 2>/dev/null; then
   RUNNER=(arch -arm64e)
-  echo "→ shell is $(uname -m) on arm64 hardware; running tests under arch -arm64e"
+  [ "$(uname -m)" != "arm64" ] \
+    && echo "→ shell is $(uname -m) on arm64 hardware; running tests under arch -arm64e"
 fi
 
 # TWO invocations, not one. Found independently by the App-lane session at P9

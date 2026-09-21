@@ -97,25 +97,39 @@ final class LaunchReadinessTests: XCTestCase {
 
     // MARK: - The defect, encoded so it cannot come back
 
-    /// EVERY blocked screen contains the settled-banner needle, so
-    /// `classifyPaneScreen` calls all four of them `.started`.
+    /// EVERY blocked screen contains the settled-banner needle. Until 21 Sep
+    /// `classifyPaneScreen` called all four of them `.started`; now the two
+    /// that carry Claude Code's select-menu footer ("Enter to confirm · Esc
+    /// to cancel", `neverSettledNeedles`) read as stopped, and the two that
+    /// do not (the theme picker, the sign-in screen) still read as started.
     ///
-    /// This is not a bug in `classifyPaneScreen`; it is a statement about what
-    /// a one-word needle can do. `ClaudeCodeAdapter.settledBannerNeedle` is
-    /// "Claude", and this harness prints its own name on every screen it can
-    /// stop on, including a code sample that happens to say `Hello, Claude!`.
-    /// The test exists so that anyone tempted to put a screen check back on
-    /// the launch path sees the four screens it would wave through.
-    func testEveryBlockedScreenLooksStartedToTheBannerNeedle() {
+    /// The half that survives is the statement about what a one-word needle
+    /// can do. `ClaudeCodeAdapter.settledBannerNeedle` is "Claude", and this
+    /// harness prints its own name on every screen it can stop on, including
+    /// a code sample that happens to say `Hello, Claude!`. Two screens are
+    /// still waved through, which is why the launch path reads registration
+    /// rather than the screen, and why the footer veto is a better card,
+    /// not a launch verdict.
+    func testTheBannerNeedleStillWavesThroughScreensWithoutTheFooter() {
         guard let spec = ClaudeCodeAdapter().trustPrompt else {
             return XCTFail("Claude Code adapter must carry a trust prompt spec")
         }
         for (label, screen) in Self.blocked {
-            XCTAssertEqual(
-                SessionLauncher.classifyPaneScreen(screen, spec: spec), .started,
-                "\(label) is a BLOCKED screen and the banner needle still calls it started. "
-                + "That is why the launch path reads registration instead.")
+            let hasFooter = screen.contains("Enter to confirm · Esc to cancel")
+            let state = SessionLauncher.classifyPaneScreen(screen, spec: spec)
+            if hasFooter {
+                if case .stopped = state {} else {
+                    XCTFail("\(label) carries the menu footer and must read as stopped: \(state)")
+                }
+            } else {
+                XCTAssertEqual(state, .started,
+                    "\(label) is a BLOCKED screen and the banner needle still calls it started. "
+                    + "That is why the launch path reads registration instead.")
+            }
         }
+        XCTAssertEqual(Self.blocked.filter { $0.1.contains("Enter to confirm · Esc to cancel") }.count, 2,
+                       "two of the four captured screens carry the footer; if a capture changes, "
+                       + "re-read which half of this lesson it belongs to")
     }
 
     /// The trust watcher recognises exactly one of the four, which is the

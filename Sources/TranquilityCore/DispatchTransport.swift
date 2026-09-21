@@ -360,12 +360,28 @@ public struct ScriptError: Error, Sendable, CustomStringConvertible {
     /// sending its reader in a circle. Distinguishing them is the difference
     /// between an offer and a loop.
     public let worthRetrying: Bool
+    /// The live processes that made a resume refuse, when that is what this
+    /// is. A guard refusal is not a launch failure: the session is UP, in a
+    /// pane somebody can be sent to, and a caller that only has the sentence
+    /// can offer nothing but a clipboard. Measured 21 Sep: "already running
+    /// as pid 31293" reached the card as "Couldn't reopen … paste the manual
+    /// revival command", with no Go to Agent, over a pane one keypress from
+    /// running. Empty for every other failure.
+    public let alreadyRunning: [ResumeGuard.Holder]
+    /// The other refusal: this app itself is still resuming the id. Not a
+    /// failure of anything, and not a clipboard's worth of rescue either;
+    /// the tap that owns the resume will report, and this one has nothing
+    /// to add.
+    public let duplicateResume: Bool
     public var description: String { message }
 
-    public init(message: String, timedOut: Bool = false, worthRetrying: Bool = true) {
+    public init(message: String, timedOut: Bool = false, worthRetrying: Bool = true,
+                alreadyRunning: [ResumeGuard.Holder] = [], duplicateResume: Bool = false) {
         self.message = message
         self.timedOut = timedOut
         self.worthRetrying = worthRetrying
+        self.alreadyRunning = alreadyRunning
+        self.duplicateResume = duplicateResume
     }
 }
 

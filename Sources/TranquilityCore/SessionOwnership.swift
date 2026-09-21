@@ -139,6 +139,27 @@ extension SessionOwnershipStore {
     /// Codex's own thread name, but that is the DISK band; a live session
     /// never reaches it, so the rows he was looking at fell back to their
     /// directory and both said "Projects".
+    /// A Claude Code session this app launched whose process is alive on
+    /// the pane it was launched in, but which the registry does not list.
+    ///
+    /// The shape of a pane stopped on a dialog: `claude` has not registered
+    /// because it has not started, and will not until somebody answers. The
+    /// registry is the witness for liveness in general (#523), which is why
+    /// `liveNonRegistrySessions` excludes this harness; this is the narrower
+    /// question a door asks about ONE id, and it is answered by the process
+    /// table, not the record: the pid on the recorded tty must still carry
+    /// the session id in its argv. A stale record with a recycled pid reads
+    /// nil.
+    public func unregisteredButAlive(sessionId: String) -> LiveSession? {
+        guard let record = current(sessionId: sessionId),
+              record.harness == ClaudeCodeAdapter().id,
+              let tty = record.paneTty,
+              let pid = ProcessProbe.pid(onTty: tty, containing: sessionId)
+        else { return nil }
+        return LiveSession(harness: record.harness, pid: pid, sessionId: record.sessionId,
+                           cwd: record.cwd, status: nil, name: nil, waitingFor: nil)
+    }
+
     public func liveNonRegistrySessions(
         status: (String) -> String? = { _ in nil },
         name: (String) -> String? = { _ in nil },
