@@ -18,11 +18,11 @@ final class SessionRowTests: XCTestCase {
     /// production never makes, and hiding the one it does.
     private func row(id: String = "a1b2c3d4e5", lamp: Lamp = .ready, revivable: Bool = false,
                      switchedOff: Bool = false, aux: String = "aux", detail: String? = nil,
-                     read: ReadState? = nil
+                     read: ReadState? = nil, spoke: Bool = true
     ) -> SessionRow {
         SessionRow(id: id, name: "name", aux: aux, lamp: lamp,
                    revivable: revivable, read: read ?? (lamp == .ready ? .unread : .none),
-                   switchedOff: switchedOff, detail: detail)
+                   switchedOff: switchedOff, detail: detail, hasRecordedTurn: spoke)
     }
 
     // MARK: - Lamp
@@ -57,13 +57,34 @@ final class SessionRowTests: XCTestCase {
         // the door, exactly as green does.
         XCTAssertEqual(SessionRow.action(for: row(lamp: .working, read: .opened)), .announce)
         XCTAssertEqual(SessionRow.action(for: row(lamp: .working, read: .unread)), .announce)
-        XCTAssertEqual(SessionRow.action(for: row(lamp: .working, read: .none)), .goToAgent)
+        XCTAssertEqual(SessionRow.action(for: row(lamp: .working, read: .none, spoke: false)), .goToAgent)
+    }
+
+    /// 21 Sep: answered is not unspoken. A delivered reply takes the session
+    /// out of the waiting set, so its row reads `.none`; the turn is still in
+    /// the store and the card still opens. Robert tapped exactly this row and
+    /// got the terminal. The read state is not the routing fact.
+    func testTapOnAnAnsweredBlueRowOpensTheCard() {
+        for lamp: Lamp in [.working, .running, .ready] {
+            XCTAssertEqual(SessionRow.action(for: row(lamp: lamp, read: .none, spoke: true)), .announce,
+                           "\(lamp), answered, must open the card")
+            XCTAssertEqual(SessionRow.action(for: row(lamp: lamp, read: .none, spoke: false)), .goToAgent,
+                           "\(lamp), never spoke, takes the door")
+        }
+        // And the same through a remote door: the spool wrote its turns.
+        let door = SessionRow.Door.pane("tb-oc-ses_1")
+        let answered = SessionRow(id: "r", name: "r", aux: "", lamp: .working, read: .none,
+                                  harness: "opencode", door: door, hasRecordedTurn: true)
+        XCTAssertEqual(SessionRow.action(for: answered), .announce)
+        let unspoken = SessionRow(id: "r", name: "r", aux: "", lamp: .working, read: .none,
+                                  harness: "opencode", door: door)
+        XCTAssertEqual(SessionRow.action(for: unspoken), .attachPane("tb-oc-ses_1"))
     }
 
     func testTapOnQuietOpensTheCardWhenItHasOne() {
         // Same ruling, same shape, for the quiet lamp.
         XCTAssertEqual(SessionRow.action(for: row(lamp: .running, read: .opened)), .announce)
-        XCTAssertEqual(SessionRow.action(for: row(lamp: .running, read: .none)), .goToAgent)
+        XCTAssertEqual(SessionRow.action(for: row(lamp: .running, read: .none, spoke: false)), .goToAgent)
     }
 
     func testOnlyAmberGoesStraightToTheAgent() {
@@ -75,8 +96,10 @@ final class SessionRowTests: XCTestCase {
                            "\(lamp) with a turn must open the card")
         }
         for read: ReadState in [.none, .unread, .opened] {
-            XCTAssertEqual(SessionRow.action(for: row(lamp: .fault, read: read)), .goToAgent,
-                           "amber must go to the agent, read=\(read)")
+            for spoke in [true, false] {
+                XCTAssertEqual(SessionRow.action(for: row(lamp: .fault, read: read, spoke: spoke)), .goToAgent,
+                               "amber must go to the agent, read=\(read) spoke=\(spoke)")
+            }
         }
     }
 
@@ -212,7 +235,8 @@ final class SessionRowTests: XCTestCase {
         let silent = SessionRow(id: "s", name: "s", aux: "", lamp: .ready, read: .none)
         XCTAssertEqual(SessionRow.action(for: silent), .goToAgent)
         XCTAssertTrue(SessionRow.isLive(silent))
-        let heard = SessionRow(id: "h", name: "h", aux: "", lamp: .ready, read: .opened)
+        let heard = SessionRow(id: "h", name: "h", aux: "", lamp: .ready, read: .opened,
+                               hasRecordedTurn: true)
         XCTAssertEqual(SessionRow.action(for: heard), .announce,
                        "a row with a turn in the store still announces it")
     }
@@ -247,7 +271,7 @@ final class SessionRowTests: XCTestCase {
     func testAGreenRemoteRowWithAnUnreadTurnAnnouncesBeforeItsDoor() {
         let door = SessionRow.Door.shell("opencode --session ses_1", directory: "/tmp")
         let unread = SessionRow(id: "r", name: "r", aux: "", lamp: .ready, read: .unread,
-                                harness: "opencode", door: door)
+                                harness: "opencode", door: door, hasRecordedTurn: true)
         XCTAssertEqual(SessionRow.action(for: unread), .announce)
         let silent = SessionRow(id: "r", name: "r", aux: "", lamp: .ready, read: .none,
                                 harness: "opencode", door: door)

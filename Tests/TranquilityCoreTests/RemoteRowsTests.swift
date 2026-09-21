@@ -15,12 +15,14 @@ final class RemoteRowsTests: XCTestCase {
     }
 
     private func rows(_ remote: GridAssembler.RowInputs.RemoteAgents,
-                      switchedOff: Set<String> = []) -> [SessionRow] {
+                      switchedOff: Set<String> = [],
+                      recordedTurns: Set<String> = []) -> [SessionRow] {
         GridAssembler.rows(GridAssembler.RowInputs(
             waiting: [], known: [], discovered: [], liveById: [:], boundaries: [:],
             switchedOff: switchedOff, switchedOn: [],
             evidence: { _, _ in nil }, isHeadless: { _ in false }, family: { [$0] },
             supersedesWaiting: { _, _ in false }, isInFlight: { _ in false },
+            recordedTurns: recordedTurns,
             remote: remote)).rows
     }
 
@@ -223,6 +225,7 @@ final class RemoteRowsTests: XCTestCase {
             switchedOff: [], switchedOn: [],
             evidence: { _, _ in nil }, isHeadless: { _ in false }, family: { [$0] },
             supersedesWaiting: { _, _ in false }, isInFlight: { _ in false },
+            recordedTurns: [],
             remote: .init(agents: [agent]))).rows
         XCTAssertEqual(out.filter { $0.id == id }.count, 1)
     }
@@ -255,7 +258,8 @@ extension RemoteRowsTests {
     /// always carries a read state — band 1 stamps one — which is what makes
     /// announce meaningful.
     func testAGreenLocalRowStillAnnounces() {
-        let local = SessionRow(id: "local", name: "n", aux: "a", lamp: .ready, read: .unread)
+        let local = SessionRow(id: "local", name: "n", aux: "a", lamp: .ready, read: .unread,
+                               hasRecordedTurn: true)
         XCTAssertEqual(SessionRow.action(for: local), .announce)
     }
 
@@ -269,9 +273,28 @@ extension RemoteRowsTests {
     /// announce stays the fallback rather than being traded away.
     func testAGreenRemoteAgentWithNoPageStillAnnounces() {
         let agent = remote("a", state: .completed)
-        let row = rows(.init(agents: [agent], unread: [agent.id])).first
+        // Unread comes from the waiting list, and the waiting list is Stops:
+        // the same spool line put this id in both sets.
+        let row = rows(.init(agents: [agent], unread: [agent.id]), recordedTurns: [agent.id]).first
         XCTAssertEqual(row?.door, SessionRow.Door.none)
         XCTAssertEqual(SessionRow.action(for: row!), .announce)
+    }
+
+    /// 21 Sep: a remote agent you ANSWERED is blue, out of the waiting list,
+    /// and still has its turn in the store. The card, not the door. This is
+    /// the row Robert tapped that morning, on the local grid; the remote band
+    /// reaches the same function with the same fact.
+    func testAnAnsweredBlueRemoteRowOpensItsCard() {
+        var agent = remote("a", state: .working)
+        agent.url = URL(string: "https://crobot.example/task/a")
+        let answered = rows(.init(agents: [agent]), recordedTurns: [agent.id]).first
+        XCTAssertEqual(answered?.lamp, .working)
+        XCTAssertEqual(answered?.read, ReadState.none)
+        XCTAssertEqual(SessionRow.action(for: answered!), .announce)
+        // Never spoke: the door, which for this one is its page.
+        let unspoken = rows(.init(agents: [agent])).first
+        XCTAssertEqual(SessionRow.action(for: unspoken!),
+                       .openPage(URL(string: "https://crobot.example/task/a")!))
     }
 
     /// **And one that has never spoken does nothing rather than announcing

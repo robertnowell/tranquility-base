@@ -164,6 +164,14 @@ extension AppDelegate {
 
         let boundaries = (try? store?.latestTurnBoundaries()) ?? [:]
         let known = (try? store?.allKnownSessions()) ?? []
+        // Which sessions have a card to open. A failed read is logged and
+        // fails toward the door, never toward a card that opens on nothing.
+        let recordedTurns: Set<String>
+        do { recordedTurns = try store?.sessionsWithARecordedTurn() ?? [] }
+        catch {
+            Permissions.log("grid: recorded turns unreadable (\(error)); lit rows take the door")
+            recordedTurns = []
+        }
         // Minted callsigns outlive the process that earned them, so a dead row
         // keeps the name you have been calling it. The store is the only place
         // this exists — nothing on disk records what we named a session.
@@ -186,6 +194,7 @@ extension AppDelegate {
             supersedesWaiting: { delivering.supersedesWaiting($0, latestId: $1) },
             isInFlight: { delivering.isInFlight($0) },
             closedCallsigns: closedCallsigns,
+            recordedTurns: recordedTurns,
             remote: remoteAgents(waiting: (try? coordinator.waiting()) ?? []),
             // nil is "could not read the registry"; [] is "nobody is home".
             livenessKnown: probe != nil))
