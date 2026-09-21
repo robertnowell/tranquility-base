@@ -169,6 +169,52 @@ rates set by hand) if venue wifi drops UDP.
 through the browser. Both play to the speakers; the manager's silence rule after a speaking
 tool is what keeps them apart. ⌥⌥ hands-free lock stays off during the demo.
 
+## 8b. The open message: dictation with a destination (ruled 21 Sep)
+
+**What broke.** 12:58, 21 Sep: "Tranquility, start a Claude Code agent…" followed by
+a two-minute brief. Jev said start_agent at 1.00; the start rode the tool-calling model
+and was cancelled by the next breath (function calls default to
+`cancel_on_interruption=True`); the brief was judged as fourteen commands, each silent,
+three of them the same words (AssemblyAI in Pipecat mode ends a turn after 100 ms of
+silence and every VAD stop forces an endpoint, re-emitting the overlap).
+
+**What the field does** (research 2026-09-21-long-dictation-voice-agents): nobody detects
+the end of a dictated brief from silence. Smart Turn reads 8 s; TurnBench's best is 84.5%
+recall on conversation and monologue is untested. Claude Code, Aider, Pipecat's own
+push-to-talk example, Wispr, Talon, Apple Voice Control and this app's chord all end long
+input on an explicit signal; Siri and Google in-car read a message back and ask before
+sending. Silence is a backstop (Claude Code 15 s / 2 min, Apple 30 s, Wispr 20 min).
+
+**Decision.** One piece of state, `OpenMessage {destination, text, since, asked}`
+(compose.py), and two rules:
+
+1. *The destination is settled at the door.* "Start a new agent" starts Claude Code now,
+   deterministically (`_do_start_agent`), and opens the message to it: "Started Claude
+   Code. What would you like to say?" "Tell the U Vape agent…" picks the session by name
+   and says "For U Vape report. Go ahead." A wrong pick costs one clause ("no, the other
+   one"); no list of eleven is ever read. "Take a note" opens to the notes file and the
+   clipboard.
+2. *The read-back only asks one thing.* While open, every word is the message: no intent,
+   no action, no speech; overlapping finals are dropped. After 30 s of silence, once:
+   "I heard: <20 words>. Send to Claude Code?" Yes sends; no or "wait" holds without a
+   second read-back; anything longer is content. A pause never sends.
+
+The certain path is a phrase on a short turn, no model in the way: "send it", "message
+complete", "that's it", "yes, send it", "go ahead and send"; a long turn that ends with
+one sends the words before it. "Never mind" drops the draft. "Send this to X instead"
+re-picks the destination. Jev backs the phrases up (`compose` question, threshold 0.85)
+and answers the read-back (`confirm`). The message is sent verbatim; the compose model
+stays for one-clause instructions to the stage.
+
+**Wire.** The draft rides the `speaking` event with `voice: draft` (amber, text on the
+line) until the app grows a `composing` kind; `quiet` closes it. The chord exits
+(⌥ tap, ⌃⌥ commit) are the app's gestures and need the app to write a line to the child:
+not built yet, the phrase and the read-back are.
+
+**Drill.** `TB_READBACK_SECS=0.3 uv run python drills/compose_drill.py` runs open,
+overlap, hold, read-back, yes, phrase, trailing phrase, cancel and retarget with the
+doors stubbed.
+
 ## 9. Repository layout
 
 `tb-voice/` at the top level of the fork, beside `tools/` (the existing Python precedent),
