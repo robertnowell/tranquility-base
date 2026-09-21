@@ -989,9 +989,10 @@ extension StatusHUD {
             ("asksForYouAboveBlue", Array(sorted.prefix(4)) == ["r1", "f1", "w1", "w2"]),
             ("hearingARowDoesNotMoveIt",
              SessionRow.quietRowsLast([
-                SessionRow(id: "read", name: "read", aux: "", lamp: .ready, read: .opened),
+                SessionRow(id: "read", name: "read", aux: "", lamp: .ready, read: .opened,
+                           hasRecordedTurn: true),
                 SessionRow(id: "unread", name: "unread", aux: "", lamp: .ready,
-                           read: .unread),
+                           read: .unread, hasRecordedTurn: true),
              ]).map(\.id) == ["read", "unread"]),
             ("blueSinksBelowEveryGreen",
              SessionRow.quietRowsLast([row("a", .ready), row("b", .working),
@@ -1328,17 +1329,19 @@ extension StatusHUD {
     /// escaping the drill.
     func crobotFinishDrill() {
         let page = SessionRow.Door.page(URL(string: "https://crobot.coframe.com/tasks/api-x")!)
-        func row(_ id: String, _ lamp: Lamp, read: ReadState) -> SessionRow {
+        func row(_ id: String, _ lamp: Lamp, read: ReadState, recap: Bool) -> SessionRow {
             SessionRow(id: id, name: "crobot: \(id)", aux: "recap", lamp: lamp,
                        read: read, detail: "It opened the PR and left the tests green.",
-                       harness: "crobot", door: page)
+                       harness: "crobot", door: page, hasRecordedTurn: recap)
         }
-        // green: a finished task whose recap is recorded (read = .unread).
+        // green: a finished task whose recap is recorded (a Stop in the store).
         // blue: still working, but with a prior recap to show.
         // amber: a problem — straight to the agent.
-        let rows = [row("crobot-green", .ready, read: .unread),
-                    row("crobot-blue", .working, read: .unread),
-                    row("crobot-amber", .fault, read: .none)]
+        // The recap is the row's own fact since #552, not a reading of the
+        // read state; the fixture says which rows have one.
+        let rows = [row("crobot-green", .ready, read: .unread, recap: true),
+                    row("crobot-blue", .working, read: .unread, recap: true),
+                    row("crobot-amber", .fault, read: .none, recap: false)]
         showIdle(rows: rows)
 
         // Green and blue take the card path (announce) — driven for real, the
@@ -1571,8 +1574,13 @@ extension StatusHUD {
         // announces" has to be the row production actually makes. This drill
         // was red on every launch from 14:02 to 14:53 on 15 Sep for saying
         // otherwise, alongside `terminate` (#483).
+        // And since #552 the turn is a fact on the row, not a reading of the
+        // read state: a green local row has a Stop in the store, so the
+        // fixture says so. This drill went red on the 21 Sep deploy for
+        // posing "a row with a turn" by read state alone, the same day the
+        // grid stopped routing on it; Rule 7, a third time.
         let liveGreen = SessionRow(id: "live", name: "live", aux: "live",
-                                   lamp: .ready, read: .unread)
+                                   lamp: .ready, read: .unread, hasRecordedTurn: true)
         let unlit = Lamp.unlit
 
         // The row is drawn by presence, not by a fifth colour: nothing in the
@@ -1607,19 +1615,22 @@ extension StatusHUD {
             // the door only when nothing is recorded, exactly as green does.
             ("workingRowWithATurnOpensTheCard",
              SessionRow.action(for: SessionRow(id: "working", name: "working", aux: "working",
-                                               lamp: .working, read: .opened)) == .announce),
+                                               lamp: .working, read: .opened,
+                                               hasRecordedTurn: true)) == .announce),
             ("workingRowWithNothingRecordedTakesTheDoor",
              SessionRow.action(for: row("working", .working)) == .goToAgent),
             ("workingRowIsStillLive", SessionRow.isLive(row("working", .working))),
             ("quietRowWithATurnOpensTheCard",
              SessionRow.action(for: SessionRow(id: "quiet", name: "quiet", aux: "quiet",
-                                               lamp: .running, read: .opened)) == .announce),
+                                               lamp: .running, read: .opened,
+                                               hasRecordedTurn: true)) == .announce),
             ("quietRowIsStillLive", SessionRow.isLive(row("quiet", .running))),
             // Amber is the only lamp that never speaks.
             ("onlyAmberGoesStraightToTheAgent",
              SessionRow.action(for: liveGreen) == .announce
              && SessionRow.action(for: SessionRow(id: "amber2", name: "amber2", aux: "amber2",
-                                                  lamp: .fault, read: .opened)) == .goToAgent),
+                                                  lamp: .fault, read: .opened,
+                                                  hasRecordedTurn: true)) == .goToAgent),
             ("revivableRowRevives",
              SessionRow.action(for: row("dead", unlit, revivable: true)) == .revive),
             ("unprovenRowDoesNothing",
@@ -1857,13 +1868,13 @@ extension StatusHUD {
     func readIntensityDrill() {
         let items = [
             SessionRow(id: "unread", name: "unread", aux: "u",
-                                   lamp: .ready, read: .unread),
+                                   lamp: .ready, read: .unread, hasRecordedTurn: true),
             SessionRow(id: "opened", name: "opened", aux: "o",
-                                   lamp: .ready, read: .opened),
+                                   lamp: .ready, read: .opened, hasRecordedTurn: true),
             SessionRow(id: "w-unread", name: "working unread", aux: "wu",
-                                   lamp: .working, read: .unread),
+                                   lamp: .working, read: .unread, hasRecordedTurn: true),
             SessionRow(id: "w-opened", name: "working opened", aux: "wo",
-                                   lamp: .working, read: .opened),
+                                   lamp: .working, read: .opened, hasRecordedTurn: true),
             SessionRow(id: "idle", name: "idle, nothing waiting", aux: "i",
                                    lamp: .running, read: .none),
         ]

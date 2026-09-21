@@ -69,6 +69,13 @@ python3 scripts/check-compat-comments.sh
 echo "→ row dates"
 python3 scripts/check-row-dates.sh
 
+# And the one that keeps the panel's own fixtures honest (21 Sep): a posed row
+# that carries a waiting or heard turn says the turn exists. #552 retired the
+# read state as the routing proxy; two drills still posed rows by it and went
+# red on the deploy, the same miss the closedRows comment records from 15 Sep.
+echo "→ posed rows"
+python3 scripts/check-posed-rows.sh
+
 echo "→ notarization log parser"
 # Anything that decides WHO WROTE A PAGE runs against the adversarial set
 # first. Both attribution regressions of 03 Sep would have died here in seconds;
