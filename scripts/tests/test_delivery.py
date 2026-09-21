@@ -27,6 +27,11 @@ class DeliveryTests(unittest.TestCase):
         self.observed = {"state": "OPEN", "headRefOid": A, "autoMergeRequest": None,
                          "labels": [], "url": "https://example.invalid/pr/1", "mergedAt": None,
                          "isDraft": False, "baseRefName": "main", "mergeStateStatus": "CLEAN"}
+        self.disable_calls = 0
+        self.disable_timeout = False
+        self.disable_applied = True
+        self.change_during_disable = None
+        self.remove_label_on_timeout = False
         self.admission_calls = 0
         self.admission_timeout = False
         self.merge_during_admission = False
@@ -53,6 +58,16 @@ class DeliveryTests(unittest.TestCase):
         if args[0] == "gh":
             if self.network_failure:
                 raise subprocess.TimeoutExpired(args, 45)
+            if args[:3] == ["gh", "pr", "merge"]:
+                self.assertIn("--disable-auto", args)
+                saved = self.delivery.read()["requests"][args[3]]
+                self.assertEqual(saved["queue_handoff_state"], "disable_requested")
+                self.assertEqual(saved["queue_requested_head"], A)
+                self.assertTrue(saved["queue_handoff_authorized"])
+                self.disable_calls += 1
+                if self.disable_applied: self.observed["autoMergeRequest"] = None
+                if self.change_during_disable: self.observed.update(self.change_during_disable)
+                if self.disable_timeout: raise subprocess.TimeoutExpired(args, 45)
             if args[:3] == ["gh", "pr", "edit"]:
                 # Inspect disk from a fresh instance at the mutation boundary.
                 saved = module.Delivery(self.state).read()["requests"][args[3]]
@@ -63,6 +78,7 @@ class DeliveryTests(unittest.TestCase):
                 if self.merge_during_admission:
                     self.merge()
                 if self.admission_timeout:
+                    if self.remove_label_on_timeout: self.observed["labels"] = []
                     raise subprocess.TimeoutExpired(args, 45)
             output = json.dumps(self.observed)
         elif args[:4] == ["git", "remote", "get-url", "origin"]:
@@ -104,13 +120,122 @@ class DeliveryTests(unittest.TestCase):
         self.assertEqual(self.delivery.step(1, "owner")["status"], "awaiting_merge")
         self.assertEqual(self.install_count, 0)
 
-    def test_queue_admission_is_not_a_merge_or_install(self):
-        for admission in ({"autoMergeRequest": {}}, {"labels": [{"name": "merge-queue"}]}):
-            self.observed.update(admission)
-            if "autoMergeRequest" in admission:
-                self.observed["autoMergeRequest"] = {"enabledAt": "now"}
-            self.assertEqual(self.delivery.step(1, "owner")["status"], "queued")
+    def test_native_auto_merge_is_not_supervised_admission(self):
+        self.observed["autoMergeRequest"] = {"enabledAt": "now"}
+        item = self.delivery.step(1, "owner")
+        self.assertEqual(item["status"], "awaiting_merge")
+        self.assertEqual(item["queue_state"], "native_auto_merge")
+        self.assertEqual(item["merge_mode"], "github_auto_merge")
+        self.assertIsNone(item["queue_seen_admitted_at"])
         self.assertEqual(self.install_count, 0)
+        self.assertEqual(self.admission_calls, 0)
+
+    def test_queue_admission_is_not_a_merge_or_install(self):
+        self.observed["labels"] = [{"name": "merge-queue"}]
+        item = self.delivery.step(1, "owner")
+        self.assertEqual(item["status"], "queued")
+        self.assertEqual(item["merge_mode"], "kodiak")
+        self.assertEqual(self.install_count, 0)
+
+    def test_two_coordinators_never_look_normally_queued(self):
+        self.observed.update(autoMergeRequest={}, labels=[{"name": "merge-queue"}])
+        item = self.delivery.observe(1, "owner")
+        self.assertEqual(item["queue_state"], "competing")
+        self.assertTrue(item["queue_attention"])
+        self.observed["labels"].append({"name": "queue-hold"})
+        self.assertEqual(self.delivery.observe(1, "owner")["queue_state"], "held")
+
+    def test_native_behind_stall_has_real_green_start_and_stable_owner(self):
+        self.delivery.now = lambda: 1000
+        self.observed.update(mergeStateStatus="BEHIND", autoMergeRequest={"enabledAt": "1970-01-01T00:10:00Z"},
+                             statusCheckRollup=[{"name": "Source audit", "status": "COMPLETED", "conclusion": "SUCCESS", "completedAt": "1970-01-01T00:11:00Z"}])
+        self.delivery.observe(1, "author")
+        self.assertEqual(self.delivery.supervise()["phase"], "attention")
+        item = self.delivery.read()["requests"]["1"]
+        self.assertEqual(item["queue_ready_since"], 660)
+        self.assertEqual(item["request_owner"], "author")
+        self.assertEqual(self.disable_calls + self.admission_calls, 0)
+        self.observed["statusCheckRollup"][0].update(status="IN_PROGRESS", conclusion="")
+        item = self.delivery.observe(1, "worker")
+        self.assertIsNone(item["queue_ready_since"])
+        self.assertFalse(item["queue_attention"])
+
+    def test_unobserved_check_start_waits_five_minutes_and_head_change_resets(self):
+        now = [1000]; self.delivery.now = lambda: now[0]
+        self.observed.update(mergeStateStatus="BEHIND", autoMergeRequest={}, statusCheckRollup=[
+            {"name": "Source audit", "status": "COMPLETED", "conclusion": "SUCCESS"}])
+        self.assertFalse(self.delivery.observe(1, "owner")["queue_attention"])
+        now[0] = 1300
+        self.assertTrue(self.delivery.observe(1, "owner")["queue_attention"])
+        self.observed["headRefOid"] = B
+        self.assertFalse(self.delivery.observe(1, "owner")["queue_attention"])
+
+    def test_failed_refresh_retains_evidence_but_marks_it_unavailable(self):
+        self.observed["labels"] = [{"name": "merge-queue"}]
+        old = self.delivery.observe(1, "author")
+        self.network_failure = True
+        with self.assertRaises(subprocess.TimeoutExpired): self.delivery.observe(1, "worker")
+        item = self.delivery.read()["requests"]["1"]
+        self.assertEqual(item["queue_state"], "unavailable")
+        self.assertEqual(item["queue_observed_at"], old["queue_observed_at"])
+        self.assertTrue(item["queue_observation_error"])
+
+    def test_authorized_handoff_disables_before_enrolling(self):
+        self.observed["autoMergeRequest"] = {}
+        item = self.delivery.admit(1, "author", A, handoff_auto_merge=True)
+        self.assertEqual((self.disable_calls, self.admission_calls, self.install_count), (1, 1, 0))
+        self.assertEqual(item["queue_state"], "queued")
+        self.assertEqual(item["queue_handoff_state"], "complete")
+
+    def test_interrupted_handoff_resumes_only_the_recorded_head_after_session_exit(self):
+        self.observed["autoMergeRequest"] = {}; self.disable_timeout = True
+        with self.assertRaises(subprocess.TimeoutExpired): self.delivery.admit(1, "author", A, handoff_auto_merge=True)
+        self.assertEqual(self.admission_calls, 0)
+        self.disable_timeout = False
+        reopened = module.Delivery(self.state, self.root, self.run_command)
+        self.assertEqual(reopened.supervise()["phase"], "awaiting_merge")
+        self.assertEqual(self.admission_calls, 1)
+        self.assertEqual(reopened.read()["requests"]["1"]["queue_owner"], "author")
+        self.merge(); self.returncode, self.make_receipt = 0, True
+        self.assertEqual(reopened.supervise()["phase"], "running")
+
+    def test_handoff_refuses_changed_head_hold_and_rearmed_auto_merge(self):
+        for change in ({"headRefOid": B}, {"labels": [{"name": "queue-hold"}]},
+                       {"autoMergeRequest": {}}, {"mergeStateStatus": "DIRTY"}):
+            with self.subTest(change=change):
+                self.observed.update(headRefOid=A, labels=[], autoMergeRequest={}, mergeStateStatus="CLEAN")
+                self.change_during_disable = change
+                with self.assertRaises(module.Blocked): self.delivery.admit(1, "author", A, handoff_auto_merge=True)
+                self.assertEqual(self.admission_calls, 0)
+                self.assertEqual(self.delivery.read()["requests"]["1"]["queue_handoff_state"], "blocked")
+
+    def test_resume_refuses_a_new_head_without_new_review(self):
+        self.observed["autoMergeRequest"] = {}; self.disable_timeout = True
+        with self.assertRaises(subprocess.TimeoutExpired): self.delivery.admit(1, "author", A, handoff_auto_merge=True)
+        self.observed["headRefOid"] = B; self.disable_timeout = False
+        self.assertEqual(self.delivery.supervise()["phase"], "unavailable")
+        self.assertEqual(self.admission_calls, 0)
+        self.assertEqual(self.delivery.supervise()["phase"], "attention")
+
+    def test_unknown_label_outcome_is_observed_not_blindly_reapplied(self):
+        self.admission_timeout = True
+        with self.assertRaises(subprocess.TimeoutExpired): self.delivery.admit(1, "author", A)
+        self.observed["headRefOid"] = B  # bot already updated the admitted candidate
+        self.admission_timeout = False
+        self.assertEqual(self.delivery.supervise()["phase"], "awaiting_merge")
+        self.assertEqual(self.admission_calls, 1)
+        self.observed["labels"] = []  # later withdrawal must not be undone
+        self.delivery.supervise()
+        self.assertEqual(self.admission_calls, 1)
+        self.assertEqual(self.delivery.read()["requests"]["1"]["queue_state"], "admission_removed")
+
+    def test_unknown_absent_label_needs_owner_instead_of_reapplying_withdrawal(self):
+        self.admission_timeout = self.remove_label_on_timeout = True
+        with self.assertRaises(subprocess.TimeoutExpired): self.delivery.admit(1, "author", A)
+        self.admission_timeout = False
+        self.assertEqual(self.delivery.supervise()["phase"], "unavailable")
+        self.assertEqual(self.admission_calls, 1)
+        self.assertEqual(self.delivery.read()["requests"]["1"]["queue_handoff_state"], "blocked")
 
     def test_actual_squash_sha_and_coalesced_target_are_both_retained(self):
         self.merge()
