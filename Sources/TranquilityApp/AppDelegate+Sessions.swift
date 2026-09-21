@@ -2259,13 +2259,24 @@ extension AppDelegate {
                                     sessionId: sessionId, directory: command.cwd, launch: launch),
                                 forType: .string)
                         }
+                        // The card states what was MEASURED and shows what
+                        // was seen. Not "is asking you a question": the
+                        // measurement is a live process that never started
+                        // and stopped redrawing, which is also what an auth
+                        // screen, an update prompt, or a hang looks like. A
+                        // recognised needle names the screen in the log; the
+                        // card carries the screen itself, which is true for
+                        // every harness and every dialog nobody has named
+                        // yet (ruled 21 Sep: "how is that gonna work for
+                        // every kind of question"). No pid means the process
+                        // is gone, which is the other card entirely.
                         self.hud.showResult(
-                            (asked.says.map { "\(name) is asking you a question. \($0)" }
-                             ?? "\(name) is waiting for you"
-                                + (screen.isEmpty ? "" : ". It says: " + screen))
-                            + (opened
-                               ? " I opened its terminal."
-                               : " I couldn't open its terminal, so the manual revival "
+                            (pid == nil
+                             ? "\(name) didn't start; its process is gone."
+                             : "\(name) is up but hasn't started. It's waiting on this:")
+                            + (screen.isEmpty ? "" : " " + screen)
+                            + (opened || pid == nil ? ""
+                               : " I couldn't open its terminal; the manual revival "
                                  + "command is on your clipboard."),
                             about: (sessionId: sessionId, pid: pid, label: name))
                     }
@@ -2300,11 +2311,9 @@ extension AppDelegate {
                 await MainActor.run { [weak self] in
                     guard let self else { return }
                     self.hud.showResult(
-                        "\(name) is already open"
-                        + (asked.says.map { " and asking you a question. \($0)" }
-                           ?? (asked.tail.isEmpty ? "." : ". Its screen says: \(asked.tail)"))
-                        + (opened ? " I opened its terminal."
-                                  : (pane == nil ? " I can't find its terminal to open." : "")),
+                        "\(name) is already running"
+                        + (asked.tail.isEmpty ? "." : " and its screen shows this: \(asked.tail)")
+                        + (pane == nil ? " I can't find its terminal to open." : ""),
                         about: (sessionId: sessionId, pid: holders[0].pid, label: name))
                 }
             case .failure(let error):
