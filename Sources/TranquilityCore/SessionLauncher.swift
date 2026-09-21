@@ -408,13 +408,16 @@ public enum SessionLauncher {
         case .success(let c):
             claim = c
         case .failure(let verdict):
-            let why = ResumeGuard.refusal(sessionId: sessionId, holders: verdict.holders)
+            let why = ResumeGuard.refusal(sessionId: sessionId, verdict: verdict)
             Self.trace?("resumeTmux: \(why)")
             // Not worth retrying: the conflict is a live process, and pressing
             // the button again will find it again. The caller's job is to
             // navigate the reader to the session that already exists, not to
-            // offer a loop.
-            return .failure(ScriptError(message: why, worthRetrying: false))
+            // offer a loop — so the holders ride the error, which is the only
+            // way the caller can find that session's pane.
+            return .failure(ScriptError(message: why, worthRetrying: false,
+                                        alreadyRunning: verdict.holders,
+                                        duplicateResume: verdict == .inFlight))
         }
         defer { claim.release() }
         // Quoted individually, same discipline as `directory` a few lines
@@ -1411,6 +1414,29 @@ public enum SessionLauncher {
         return TrustPromptWatcher.meaningfulTail(text)
     }
 
+    /// What a pane is asking, for a card that has to say it.
+    ///
+    /// `says` is the adapter's own written sentence for a screen it
+    /// recognises (`RecognizedPrompt.says`, "the sentence is written, never
+    /// lifted"); nil for a screen nobody named. `tail` is the evidence
+    /// either way, the bottom of the pane as `paneTail` reads it.
+    ///
+    /// One capture, recognised on the WHOLE screen. `paneTail` alone could
+    /// not do this: a needle sits on a dialog's headline, and the external
+    /// imports dialog is ten lines tall, so the six-line tail never carried
+    /// its headline and no needle could match it (21 Sep).
+    public static func paneQuestion(pane: TmuxPaneAddress,
+                                    adapter: any HarnessAdapter) -> (says: String?, tail: String) {
+        guard case .success(let text) = Tmux.run(
+            ["capture-pane", "-p", "-t", pane.stableTarget],
+            socket: pane.socketName, timeout: 3)
+        else { return (nil, "") }
+        let says = adapter.trustPrompt.flatMap {
+            TrustPromptWatcher.recognisedQuestion(on: text, spec: $0)
+        }
+        return (says, TrustPromptWatcher.questionTail(text))
+    }
+
     public static func paneState(pane: TmuxPaneAddress,
                                  adapter: any HarnessAdapter) -> PaneState {
         guard let spec = adapter.trustPrompt,
@@ -1426,6 +1452,9 @@ public enum SessionLauncher {
     /// already keep — so the decision is testable against captured screens
     /// (including the real Codex update prompt) with no live pane.
     static func classifyPaneScreen(_ text: String, spec: TrustPromptSpec) -> PaneState {
+        if spec.neverSettledNeedles.contains(where: { text.contains($0) }) {
+            return .stopped(screen: TrustPromptWatcher.meaningfulTail(text))
+        }
         if text.contains(spec.settledBannerNeedle) { return .started }
         if let noPrompt = spec.startedWithNoPromptNeedle, text.contains(noPrompt) { return .started }
         return .stopped(screen: TrustPromptWatcher.meaningfulTail(text))

@@ -2389,7 +2389,17 @@ final class StatusHUD: NSObject {
         // this Mac and never will — got a card with no Go to Agent on it at
         // all, while its own row in the grid was carrying the URL the whole
         // time. The row already knows; the card just never asked.
-        goButton.isHidden = currentTarget?.pid == nil && remoteDoorForCurrentTarget == nil
+        // **A card that names an agent has its door** (ruled 21 Sep: "Go to
+        // Agent should always be on the bottom right. That's just
+        // idiomatic."). This read `pid == nil` since 26 Aug, when a card said
+        // RESUMED over a process that never registered, so a door then would
+        // have opened nothing. The measurement that reverses it: three cards
+        // on 21 Sep named an agent that was alive on a dialog, and none had
+        // a door, because a pane on a dialog never registers. The button is
+        // the promise to TAKE you there; `goToSession` already keeps it for
+        // every state (live: open; on a dialog: open; gone: revive; nothing
+        // on disk: say so), so a pid is a shortcut, not a precondition.
+        goButton.isHidden = currentTarget == nil && remoteDoorForCurrentTarget == nil
         // The card's second door. It rides the same rule as "Go to agent" —
         // shown wherever an agent is named. The label follows the destination:
         // a report this turn just wrote, or the hub. Retitled per render

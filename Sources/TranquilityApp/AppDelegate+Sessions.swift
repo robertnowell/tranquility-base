@@ -1610,9 +1610,18 @@ extension AppDelegate {
             // `agents` alone made GO TO AGENT a permanent no-op for every
             // Codex session (26 Aug) — silently logged and returned, never
             // navigated, because Codex has no registry to appear in here.
+            // The registry first; then the one shape the registry cannot
+            // witness, a Claude Code pane this app launched that is alive on
+            // its tty and stopped on a dialog, so it has not registered and
+            // will not until somebody answers. That somebody is the person
+            // pressing this button; refusing them with "isn't running any
+            // more" and a revive that the guard then refuses (21 Sep) is a
+            // door painted on a wall.
             guard let live = ((ClaudeAgentsCLI().sessions() ?? [])
                 + FileSessionOwnershipStore.shared.liveNonRegistrySessions())
-                .first(where: { $0.sessionId == sessionId }) else {
+                .first(where: { $0.sessionId == sessionId })
+                ?? FileSessionOwnershipStore.shared.unregisteredButAlive(sessionId: sessionId)
+            else {
                 let short = sessionId.prefix(8)
                 // The card's guard comes down HERE, before anything else is
                 // looked up. The 12 Aug contract is that the button never
@@ -1944,8 +1953,23 @@ extension AppDelegate {
     /// says so instead of hopping.
     func revive(_ sessionId: String, name: String, thenGoTo: Bool = false) {
         Track.record("agent_revive_requested", ["agent_id": Track.hash(sessionId)])
+        // The door claims the id HERE, before discovery and the announce,
+        // not at `resumeTmux` where the guard's own claim begins. A second
+        // tap 3.6 s after the first (21 Sep) ran the whole flow again: its
+        // announce cancelled the first tap's brief mid-sentence, and its
+        // resume reached the guard only to be refused, which the card then
+        // rendered as "Couldn't reopen … paste the manual revival command"
+        // over a resume that landed three seconds later. A second tap is
+        // the same receipt the first one already showed, and nothing else.
+        guard ResumeGuard.beginIntent(sessionId) else {
+            Permissions.log("revive: \(sessionId.prefix(8)) tapped again while the first "
+                + "tap is still reopening it; nothing started, nothing announced")
+            hud.showReceipt(.reviving(name))
+            return
+        }
         hud.showReceipt(.reviving(name))
         Task.detached {
+            defer { ResumeGuard.endIntent(sessionId) }
             let fresh = SessionDiscovery.discover(ttl: 0).sessions
                 .first { $0.sessionId == sessionId }
             // BRANCH ON THE HARNESS, never on absence.
@@ -2199,9 +2223,25 @@ extension AppDelegate {
                         //
                         // Registration already failed. That is the finding.
                         // Show the pane and quote it, whatever is on it.
-                        let screen = SessionLauncher.paneTail(pane: revivedPane)
+                        //
+                        // And NAME the question when the adapter knows it,
+                        // and carry the pid, because a card that says "needs
+                        // you" with no door and no question is the card
+                        // Robert got three times on 21 Sep: "needs me what?"
+                        // The pid is on the pane's own tty; registration is
+                        // what failed, not the process. With it the card
+                        // grows GO TO AGENT, and `goToSession` accepts an
+                        // unregistered-but-alive pane for the same reason.
+                        let asked = SessionLauncher.paneQuestion(pane: revivedPane,
+                                                                 adapter: launch.adapter)
+                        let screen = asked.tail
+                        let pid = ProcessProbe.pid(onTty: revivedPane.paneTty,
+                                                   containing: sessionId)
                         Permissions.log("revive: \(sessionId.prefix(8)) launched but never "
-                            + "registered. Opening a window. Its screen says: "
+                            + "registered (pid \(pid.map(String.init) ?? "unknown")). "
+                            + (asked.says.map { "It is on a question this app knows: \($0) " }
+                               ?? "")
+                            + "Opening a window. Its screen says: "
                             + (screen.isEmpty ? "(nothing readable)" : screen))
                         let opened = SessionLauncher.showPane(
                             pane: revivedPane,
@@ -2219,14 +2259,62 @@ extension AppDelegate {
                                     sessionId: sessionId, directory: command.cwd, launch: launch),
                                 forType: .string)
                         }
+                        // The card states what was MEASURED and shows what
+                        // was seen. Not "is asking you a question": the
+                        // measurement is a live process that never started
+                        // and stopped redrawing, which is also what an auth
+                        // screen, an update prompt, or a hang looks like. A
+                        // recognised needle names the screen in the log; the
+                        // card carries the screen itself, which is true for
+                        // every harness and every dialog nobody has named
+                        // yet (ruled 21 Sep: "how is that gonna work for
+                        // every kind of question"). No pid means the process
+                        // is gone, which is the other card entirely.
                         self.hud.showResult(
-                            "\(name) is waiting for you"
-                            + (screen.isEmpty ? "" : ". It says: " + screen)
-                            + (opened
-                               ? ". I opened its terminal."
-                               : ". I couldn't open its terminal, so the manual revival "
-                                 + "command is on your clipboard."))
+                            (pid == nil
+                             ? "\(name) didn't start; its process is gone."
+                             : "\(name) is up but hasn't started. It's waiting on this:")
+                            + (screen.isEmpty ? "" : " " + screen)
+                            + (opened || pid == nil ? ""
+                               : " I couldn't open its terminal; the manual revival "
+                                 + "command is on your clipboard."),
+                            about: (sessionId: sessionId, pid: pid, label: name))
                     }
+                }
+            case .failure(let error) where error.duplicateResume:
+                // The other tap owns it and will report; see `beginIntent`
+                // above for why this is nearly unreachable now. Not a
+                // failure, not a clipboard.
+                Permissions.log("revive: \(sessionId.prefix(8)) — \(error.message)")
+                await MainActor.run { [weak self] in self?.hud.showReceipt(.reviving(name)) }
+            case .failure(let error) where !error.alreadyRunning.isEmpty:
+                // The guard's refusal is the OPPOSITE of a launch failure:
+                // the session is up, in a pane, one keypress from whatever
+                // it is waiting on. Until 21 Sep this took the branch below
+                // and told Robert to paste a command, twice, over pid 31293
+                // sitting on a dialog. The reader is sent to the session
+                // that exists, which is what the guard's own doc says the
+                // caller's job is, and the card carries the pid so GO TO
+                // AGENT is there for the next time.
+                let holders = error.alreadyRunning
+                let pane = ResumeGuard.routablePane(among: holders)
+                let asked = pane.map { SessionLauncher.paneQuestion(pane: $0, adapter: launch.adapter) }
+                    ?? (says: nil, tail: "")
+                let opened = pane.map {
+                    SessionLauncher.showPane(pane: $0, why: "a revive found it already running")
+                } ?? false
+                Permissions.log("revive: \(sessionId.prefix(8)) is already running as pid "
+                    + "\(holders[0].pid)"
+                    + (pane.map { " at \($0.paneTty)" } ?? ", in no pane this app can raise")
+                    + (asked.says.map { ". It is on a question: \($0)" } ?? "")
+                    + (asked.tail.isEmpty ? "" : ". Its screen says: \(asked.tail)"))
+                await MainActor.run { [weak self] in
+                    guard let self else { return }
+                    self.hud.showResult(
+                        "\(name) is already running"
+                        + (asked.tail.isEmpty ? "." : " and its screen shows this: \(asked.tail)")
+                        + (pane == nil ? " I can't find its terminal to open." : ""),
+                        about: (sessionId: sessionId, pid: holders[0].pid, label: name))
                 }
             case .failure(let error):
                 // The cause is a log line, not a card: an exit status means
