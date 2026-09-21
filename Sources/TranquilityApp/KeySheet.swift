@@ -45,7 +45,9 @@ enum KeySheet {
         if key.consoleURL != nil { alert.addButton(withTitle: "Get a key") }
         alert.window.initialFirstResponder = field
 
-        switch alert.runModal() {
+        // The person opened this from the menu: never withheld. `nil` cannot
+        // happen ungated, and the default arm already means Cancel.
+        switch Alerts.runModal(alert, key: "key.prompt.\(key.provider)", gated: false) ?? .cancel {
         case .alertFirstButtonReturn:
             // Sanitized, not just trimmed. A single control character anywhere
             // inside the value makes an illegal HTTP header, which Anthropic
@@ -131,7 +133,10 @@ enum KeySheet {
             """
         alert.addButton(withTitle: "Try again")
         alert.addButton(withTitle: "Leave it")
-        if alert.runModal() == .alertFirstButtonReturn {
+        // Follows a key the person just typed, so it is answered every time;
+        // the record carries the provider's verdict, never the key.
+        if Alerts.runModal(alert, key: "key.rejected.\(key.provider)", gated: false)
+            == .alertFirstButtonReturn {
             prompt(for: key, onStatus: onStatus)
         }
     }

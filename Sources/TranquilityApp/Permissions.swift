@@ -938,7 +938,11 @@ final class PermissionOnboarding {
         alert.addButton(withTitle: "Open \(kind.title) Settings")
         alert.addButton(withTitle: "Skip for now")
 
-        if alert.runModal() == .alertFirstButtonReturn {
+        // Raised by the app at every launch the permission is still missing,
+        // so it is gated: once per window, and a withheld repeat reads as
+        // "Skip for now". The record lands every time.
+        if Alerts.runModal(alert, key: "permission.\(kind)", kind: .permissions)
+            == .alertFirstButtonReturn {
             Permissions.openSettings(for: kind)
             await waitForGrant(kind)
         }

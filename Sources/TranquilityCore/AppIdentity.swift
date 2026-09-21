@@ -27,8 +27,25 @@ public enum AppIdentity {
     }
 
     public static var updatesEnabled: Bool {
+        // No feed, no updater. A bare `.build/debug/TranquilityApp` (faces.sh,
+        // `--pose-shot`) has no Info.plist at all, so the fallback below read
+        // it as an old published bundle, Sparkle started with nothing to
+        // check, and its own "Unable to Check For Updates … latest version of
+        // debug" dialog landed on the screen ten times in fourteen minutes
+        // (19 Sep). A published bundle always carries `SUFeedURL`
+        // (`scripts/audit-release.sh` asserts it), so this costs them nothing.
+        guard Bundle.main.object(forInfoDictionaryKey: "SUFeedURL") != nil else { return false }
         // Old published bundles predate the key and must retain their updater.
-        (Bundle.main.object(forInfoDictionaryKey: "TBUpdatesEnabled") as? Bool) ?? true
+        return (Bundle.main.object(forInfoDictionaryKey: "TBUpdatesEnabled") as? Bool) ?? true
+    }
+
+    /// Why `updatesEnabled` is false, for the log line: the bundle said so,
+    /// or there is no bundle to speak of.
+    public static var updatesDisabledReason: String {
+        if Bundle.main.object(forInfoDictionaryKey: "SUFeedURL") == nil {
+            return "no SUFeedURL in Info.plist (not a published bundle)"
+        }
+        return "\(channel.rawValue) identity"
     }
 
     public static var databaseSchemaVersion: Int {

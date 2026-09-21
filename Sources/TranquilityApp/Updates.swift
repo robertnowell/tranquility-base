@@ -73,21 +73,46 @@ final class Updates: NSObject {
     /// could not say whether a check had happened at all.
     func start() {
         guard isEnabled else {
-            log("updates: disabled for \(AppIdentity.channel.rawValue) identity")
+            log("updates: disabled, \(AppIdentity.updatesDisabledReason)")
             return
         }
         guard controller == nil else { return }
-        controller = SPUStandardUpdaterController(
-            startingUpdater: true, updaterDelegate: self, userDriverDelegate: nil)
+        // `startingUpdater: false`, then start it HERE. With `true`, a start
+        // that fails (no feed, no signing key, a misconfigured bundle) is
+        // handled by Sparkle's controller: it logs to Console and puts
+        // "Unable to Check For Updates … contact the app developer" in front
+        // of the person, and tells this delegate nothing. That dialog is not
+        // actionable by anyone but us, and it reached nobody but them (ruled
+        // 19 Sep: if the person cannot act on it, do not show it; record it,
+        // and the record reaches Slack). Owning the start turns the same
+        // failure into a log line, an event and a Failure, and no dialog.
+        let controller = SPUStandardUpdaterController(
+            startingUpdater: false, updaterDelegate: self, userDriverDelegate: nil)
         let feed = Bundle.main.object(forInfoDictionaryKey: "SUFeedURL") as? String
         log("updates: feed \(feed ?? "<absent>")")
+        do {
+            try controller.updater.start()
+        } catch {
+            let ns = error as NSError
+            let why = ns.localizedDescription
+            let chain = UpdateReadiness.chain(ns)
+            log("updates: updater failed to start, \(why) [\(chain)]")
+            Track.record("update_check_result", [
+                "result": "failed_to_start", "detail": .prose(why), "via": "launch",
+                "domain": Track.token(from: ns.domain), "code": .int(ns.code),
+                "chain": .prose(chain)])
+            Failures.report(.updateFailed,
+                            reason: "updater failed to start: \(why) [\(chain)]")
+            return
+        }
+        self.controller = controller
         // Hourly, not daily (ruled 09 Sep). The plist carries the same value
         // for a fresh install; this line is for the copies already out there,
         // whose Sparkle defaults were written on first launch under the old
         // key and would otherwise keep the old cadence for their lifetime.
         // Sparkle persists it, so this is idempotent.
-        if let updater = controller?.updater,
-           updater.updateCheckInterval != UpdateReadiness.checkInterval {
+        let updater = controller.updater
+        if updater.updateCheckInterval != UpdateReadiness.checkInterval {
             updater.updateCheckInterval = UpdateReadiness.checkInterval
             log("updates: check interval set to \(Int(UpdateReadiness.checkInterval / 60)) min")
         }

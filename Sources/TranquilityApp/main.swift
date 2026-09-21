@@ -579,10 +579,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         StreamedUtterance.trace = { Permissions.log("stream: \($0)") }
         CodexThreadNames.trace = { Permissions.log($0) }
 
-        // Self-update. Started here, after the traces, so anything it logs lands
-        // in the same app.log as everything else from this launch.
-        updates.start()
-
         do {
             let store = try QueueStore()
             self.store = store
@@ -962,6 +958,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
+        // Self-update. After the traces, so anything it logs lands in the same
+        // app.log as everything else from this launch; and after the two
+        // screenshot exits above, because a tool that renders one face and
+        // quits has no business asking the appcast for anything (19 Sep, the
+        // same ruling as the hotkey: nothing above this line is needed to
+        // draw a face, and the updater used to start before it).
+        updates.start()
 
         hotkey = HotkeyMonitor { [weak self] transition in
             if case .pauseToggled = transition {

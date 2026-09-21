@@ -140,7 +140,8 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
                 + "Tranquility Base can announce a turn and then has nowhere to "
                 + "put your answer. The row has the command, one paste."
             alert.addButton(withTitle: "OK")
-            alert.beginSheetModal(for: sender) { _ in }
+            // Answers a click, so never withheld; recorded every time.
+            Alerts.beginSheet(alert, on: sender, key: "onboarding.tmux-missing", gated: false)
             return false
         }
         if Permissions.allActive { return true }
@@ -154,7 +155,8 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
             + "hotkeys until the required rows are green, so this stays up until "
             + "they are. It takes about a minute."
         alert.addButton(withTitle: "OK")
-        alert.beginSheetModal(for: sender) { _ in }
+        Alerts.beginSheet(alert, on: sender, key: "onboarding.required-unfinished",
+                          kind: .permissions, gated: false)
         return false
     }
 

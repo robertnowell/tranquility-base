@@ -46,6 +46,12 @@ python3 scripts/check-key-names.sh
 echo "→ house copy"
 python3 scripts/check-house-copy.sh
 
+# Same shape: every NSAlert goes through Alerts, which records it (so it
+# reaches Slack) and withholds repeats. Added 19 Sep after five dialogs were
+# found with no record and one landed ten times in fourteen minutes.
+echo "→ alerts"
+python3 scripts/check-alerts.sh
+
 # Same shape again, but this one guards memory rather than prose. An AEDesc
 # borrowed from NSAppleEventDescriptor that we copy and dispose ourselves is a
 # double free, and a double free does not crash where it is written: the Aug 26
