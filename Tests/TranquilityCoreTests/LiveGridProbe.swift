@@ -55,6 +55,7 @@ final class LiveGridProbe: XCTestCase {
             evidence: { _, _ in nil }, isHeadless: { _ in false },
             family: { [$0] }, supersedesWaiting: { _, _ in false },
             isInFlight: { _ in false },
+            recordedTurns: (try? store.sessionsWithARecordedTurn()) ?? [],
             remote: .init(agents: snapshot.agents, requests: snapshot.requests,
                           unread: [], unreachable: snapshot.unreachable)))
 

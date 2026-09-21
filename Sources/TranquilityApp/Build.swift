@@ -642,12 +642,17 @@ extension StatusHUD {
         // should go to terminal on click. It shouldn't open the card. This
         // means it needs you."* The 19 Aug ruling above is untouched for the
         // rows it was about: green and quiet still pick up and open the card.
-        pastList.onPick = { [weak self] id, revivable, lamp in
+        pastList.onPick = { [weak self] row, revivable in
             guard let self else { return }
+            let id = row.id, lamp = row.lamp
             let name = pastListName(id)
             onBreadcrumbHome?()
             guard !revivable else { onRevive?(id, name); return }
-            if lamp == .fault {
+            // The door for amber, and for a row that has never finished a
+            // turn (21 Sep): the same two cases the grid sends to the agent,
+            // through the same fact. A card for a session with nothing
+            // recorded found nothing and returned to the grid in silence.
+            if lamp == .fault || !row.hasRecordedTurn {
                 Track.record("row_clicked", ["action": "gotoagent", "agent_id": Track.hash(id),
                                              "lamp": .token(lamp.trackName), "face": "past_agents"])
                 onGoToSession?(id)

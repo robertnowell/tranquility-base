@@ -72,7 +72,7 @@ final class PastAgentsList: NSView {
     /// The tap. Carries the row's lamp because the verb depends on it (ruled
     /// 15 Sep): an amber row's tap is Go to Agent, a green or quiet row's tap
     /// picks it up, a dead row's tap revives it.
-    var onPick: ((_ id: String, _ revivable: Bool, _ lamp: Lamp) -> Void)?
+    var onPick: ((_ row: SessionRow, _ revivable: Bool) -> Void)?
     /// A click on the LAMP COLUMN, which is the session's power switch and
     /// never navigation — see `SessionRow.lampAction(for:)`. The whole row is
     /// handed over rather than an id, because the switch's verb is a function
@@ -386,7 +386,7 @@ final class PastAgentsList: NSView {
     @objc private func rowTapped(_ sender: NSControl) {
         guard let id = sender.identifier?.rawValue,
               let item = shown.first(where: { $0.row.id == id }) else { return }
-        onPick?(id, item.revivable, item.row.lamp)
+        onPick?(item.row, item.revivable)
     }
 
     @objc private func goToPicked(_ sender: NSMenuItem) {
@@ -625,10 +625,12 @@ final class PastRowView: NSControl {
     /// that stopped being set from it.
     var verbForTesting: String { verbLabel.stringValue }
 
-    /// The row names its verb, and amber's is the terminal (ruled 15 Sep).
+    /// The row names its verb, and amber's is the terminal (ruled 15 Sep),
+    /// as is a row with no finished turn to open (21 Sep): the label and the
+    /// tap read the same two facts, so the promise and the verb cannot drift.
     static func verb(for item: PastAgentsList.Item) -> String {
         if item.revivable { return "REVIVE ›" }
-        return item.row.lamp == .fault ? "GO TO ›" : "OPEN ›"
+        return item.row.lamp == .fault || !item.row.hasRecordedTurn ? "GO TO ›" : "OPEN ›"
     }
     var auxWidthForTesting: CGFloat { idLabel.frame.width }
     private let highlight = NSView()

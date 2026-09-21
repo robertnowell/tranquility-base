@@ -13,6 +13,7 @@ final class GridRowsTests: XCTestCase {
     private let A = "8f14e45f-ceea-467a-9eef-2b9c1b2dc9f0"
     private let B = "c4ca4238-a0b9-4382-8dcc-509a6f75849b"
     private let C = "45c48cce-2e2d-4fa8-8aec-0eb4779d1ba9"
+    private let D = "d3d94468-02a4-4359-9d7c-3b9b6c3a5c1e"
 
     private func waiting(_ id: String, latestId: Int64 = 5, heardThrough: Int64? = nil,
                          path: String? = "/t.jsonl", callsign: String? = nil) -> WaitingSession {
@@ -56,6 +57,7 @@ final class GridRowsTests: XCTestCase {
         supersedes: @escaping (String, Int64) -> Bool = { _, _ in false },
         isInFlight: @escaping (String) -> Bool = { _ in false },
         callsigns: [String: String] = [:],
+        recordedTurns: Set<String> = [],
         remote: GridAssembler.RowInputs.RemoteAgents = .init(),
         livenessKnown: Bool = true
     ) -> GridAssembler.RowInputs {
@@ -64,7 +66,8 @@ final class GridRowsTests: XCTestCase {
             boundaries: [:], switchedOff: switchedOff, switchedOn: switchedOn,
             evidence: evidence, isHeadless: isHeadless, family: family,
             supersedesWaiting: supersedes, isInFlight: isInFlight,
-            closedCallsigns: callsigns, remote: remote, livenessKnown: livenessKnown)
+            closedCallsigns: callsigns, recordedTurns: recordedTurns,
+            remote: remote, livenessKnown: livenessKnown)
     }
 
     // MARK: - An empty machine is empty, not unknown
@@ -235,6 +238,47 @@ final class GridRowsTests: XCTestCase {
     func testALiveSessionWithNoStoredEventsStillGetsARow() {
         let rows = GridAssembler.rows(inputs(live: [A: live(A)])).rows
         XCTAssertEqual(rows.map(\.id), [A])
+    }
+
+    // MARK: - Answered is not unspoken (21 Sep 2026)
+
+    /// The row Robert tapped: a session he had replied to. The delivered reply
+    /// took it out of the waiting list, so it is drawn by the quiet band with
+    /// `read == .none`, working on the reply (blue), and its turn is still in
+    /// the store. The tap must open the card; the door is for a session that
+    /// has never finished a turn, which the quiet band also draws, with the
+    /// same read state. So the read state cannot be the routing fact, and the
+    /// row carries the store's answer instead, in every band.
+    func testAnAnsweredBlueRowInTheQuietBandOpensItsCard() {
+        let answered = A, unspoken = B
+        let rows = GridAssembler.rows(
+            inputs(known: [waiting(answered)],
+                   live: [answered: live(answered, status: "busy"),
+                          unspoken: live(unspoken, status: "busy")],
+                   isInFlight: { _ in true },
+                   recordedTurns: [answered])).rows
+        let a = rows.first { $0.id == answered }, u = rows.first { $0.id == unspoken }
+        XCTAssertEqual(a?.lamp, .working)
+        XCTAssertEqual(a?.read, ReadState.none, "answered: no longer waiting on you")
+        XCTAssertEqual(a?.hasRecordedTurn, true)
+        XCTAssertEqual(a.map { SessionRow.action(for: $0) }, .announce, "the card, with its Go to Agent")
+        XCTAssertEqual(u?.lamp, .working)
+        XCTAssertEqual(u?.read, ReadState.none, "same read state, different fact")
+        XCTAssertEqual(u?.hasRecordedTurn, false)
+        XCTAssertEqual(u.map { SessionRow.action(for: $0) }, .goToAgent, "nothing to read yet: the door")
+    }
+
+    /// Every band states the fact from the one set, so the answer does not
+    /// depend on which band happened to draw the row.
+    func testEveryBandCarriesTheRecordedTurnFact() {
+        let rows = GridAssembler.rows(
+            inputs(waiting: [waiting(A)], known: [waiting(B)],
+                   discovered: [found(C)],
+                   live: [A: live(A), B: live(B), D: live(D)],
+                   recordedTurns: [A, B, C, D])).rows
+        for id in [A, B, C, D] {
+            XCTAssertEqual(rows.first { $0.id == id }?.hasRecordedTurn, true, id)
+        }
     }
 
     /// One row per session, whichever band saw it first.
