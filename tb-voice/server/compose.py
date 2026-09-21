@@ -35,6 +35,13 @@ CANCEL = ("never mind", "nevermind", "scrap that", "scrap it", "forget it", "can
           "cancel the message", "drop it", "discard")
 
 
+_TRAILING = re.compile(
+    r"(?:(?:[,.;:!?]\s*(?:(?:and|so|okay|ok|then|yeah)[, ]+)*|\s+(?:and|so|then)\s+)(?:"
+    + "|".join(re.escape(p) for p in sorted(SEND, key=len, reverse=True))
+    + r")[.!]*\s*)+$",
+    re.IGNORECASE)
+
+
 def _norm(text: str) -> str:
     return re.sub(r"[^a-z' ]+", " ", text.lower()).strip()
 
@@ -43,36 +50,47 @@ def _short(text: str) -> bool:
     return len(text.split()) <= SHORT_TURN_WORDS
 
 
-def classify(text: str) -> tuple[str, str]:
+FILLERS = {"um", "uh", "mm", "hmm", "mm-hmm", "mhm", "yeah", "yep", "okay", "ok", "so", "like", "right", "well", "er", "ah"}
+
+
+def filler_only(text: str) -> bool:
+    """A fragment the segmenter cut out of a breath: "Um," "Yeah." "Mm-hmm."
+    Nothing a message wants; an answer to the read-back is judged before this."""
+    words = _norm(text).replace("-", " ").split()
+    return bool(words) and all(w in FILLERS for w in words)
+
+
+def continues(previous: str) -> bool:
+    """The previous fragment was cut mid-sentence: whatever comes next is its
+    continuation and can never be a verdict on its own. 16:15:53: "I'm not sure
+    where" / "ready to send." / "Quite yet." sent the message."""
+    return bool(previous) and not previous.rstrip().endswith((".", "?", "!"))
+
+
+def classify(text: str, previous: str = "") -> tuple[str, str]:
     """The certain path. Returns (verdict, remainder): verdict is one of
     send / hold / cancel / retarget / content; remainder is the content part of
     a turn that ends in a send phrase ("...and that's it, send it")."""
+    if continues(previous):
+        return "content", text
     n = _norm(text)
     if _short(n):
         cue = any(p in n for p in ("instead", "not that one", "the other one", "wrong agent", "wrong one"))
         if cue or (n.startswith("send") and " to " in n):
             return "retarget", text  # "send this to X instead" names a place, not an end
-        if any(n == p or n.startswith(p + " ") or n.endswith(" " + p) or n == p.rstrip(".") for p in SEND):
+        # A send phrase counts when it IS the turn or opens it; "whether to send
+        # it" and "ready to send" are talk about sending, not the word.
+        if any(n == p or n.startswith(p + " ") for p in SEND):
             return "send", ""
         if any(n == p or n.startswith(p) for p in CANCEL):
             return "cancel", ""
         if any(n == p for p in HOLD) or n in ("no", "nope", "not yet"):
             return "hold", ""
-    # A long turn that closes with a send phrase: the words before it are content.
-    words = text.split()
-    nwords = n.split()
-    stripped = False
-    while nwords:
-        hit = next((p for p in sorted(SEND, key=len, reverse=True)
-                    if nwords[-len(p.split()):] == p.split()), None)
-        if not hit:
-            break
-        k = len(hit.split())
-        words, nwords, stripped = words[:-k], nwords[:-k], True
-    if stripped:
-        while nwords and nwords[-1] in ("and", "so", "okay", "ok", "then", "yeah"):
-            words, nwords = words[:-1], nwords[:-1]
-        return "send", " ".join(words).rstrip(" ,.;:")
+    # A long turn that closes with a send phrase after a clause break: the words
+    # before the break are content. "…, send it." yes; "whether to send it" no.
+    m = _TRAILING.search(text)
+    if m:
+        return "send", text[: m.start()].rstrip(" ,.;:")
     return "content", text
 
 

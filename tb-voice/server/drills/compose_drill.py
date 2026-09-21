@@ -109,9 +109,40 @@ async def main():
     print("compose drill: PASS", {"said": len(said), "sent": len(sent), "cues": cues, "enrolled": len(enrolled)})
 
 
+def classifier():
+    """The certain path, on the fragments that have actually gone wrong."""
+    from compose import classify, continues, filler_only
+    cases = {
+        ("ready to send.", "I'm not sure where"): "content",   # 16:15:53, a cut sentence's tail
+        ("ready to send.", ""): "content",
+        ("I'm not sure whether to send it", ""): "content",
+        ("Send it.", ""): "send", ("send it now please", ""): "send",
+        ("Message complete.", ""): "send", ("Yes, send it.", ""): "send",
+        ("Quite yet.", ""): "content",
+        ("Send it.", "I'm not sure where"): "content",          # a continuation is never a verdict
+        ("Send it.", "That is the whole plan."): "send",
+        ("we want to send it to production next week", ""): "content",
+        ("I think that is what we should send it for", ""): "content",
+        ("never mind", ""): "cancel", ("not yet", ""): "hold", ("No.", ""): "hold",
+        ("send this to the planning agent instead", ""): "retarget",
+    }
+    for (t, prev), want in cases.items():
+        assert classify(t, previous=prev)[0] == want, (t, prev, classify(t, previous=prev))
+    for t, tail in [("and check the logs for the send path, and that's it, send it.", "send path"),
+                    ("Investigate our recent logs to figure out why sends fail. Message complete.", "sends fail"),
+                    ("Look at the crash reports from Friday and that's it, send it.", "Friday"),
+                    ("Fix the retry counter. Send it.", "counter")]:
+        v, r = classify(t)
+        assert v == "send" and r.endswith(tail), (t, v, r)
+    assert filler_only("Um,") and filler_only("Mm-hmm.") and filler_only("Yeah.") and not filler_only("Yeah, the logs.")
+    assert continues("I'm not sure where") and not continues("Done.") and not continues("")
+    print("classifier: PASS", len(cases) + 4, "cases")
+
+
 async def _noop_emit(*a, **k):
     pass
 
 
 if __name__ == "__main__":
+    classifier()
     asyncio.run(main())

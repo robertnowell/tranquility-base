@@ -26,7 +26,7 @@ from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
 from calls import record
 from events import emit
-from compose import READBACK_SECS, OpenMessage, classify
+from compose import READBACK_SECS, OpenMessage, classify, continues, filler_only
 from mute import EXTERNAL_UNTIL
 from spoken import spoken
 from tools import _json_or_text, _run
@@ -775,21 +775,25 @@ class Manager(FrameProcessor):
         m = self.open
         if not m:
             return
-        verdict, remainder = classify(text)
-        if verdict == "content" and m.asked:
+        verdict, remainder = classify(text, previous=m.last)
+        if verdict == "content" and continues(m.last):
+            pass  # a continuation is content, whatever it sounds like alone
+        elif verdict == "content" and m.asked:
             # After the read-back, a short reply is an answer to "send?".
             ans = _chosen(await self._jev.confirm(text, f"Send to {m.name}?")) if len(text.split()) <= 6 else "other"
             verdict = {"yes": "send", "no": "hold"}.get(ans, "content")
             if verdict != "content":
                 remainder = ""  # the answer is not part of the message
-        if verdict == "content" and len(text.split()) <= 12:
-            # Short and not a known phrase: let Jev say whether it is about the message.
+        if verdict == "content" and not continues(m.last) and len(text.split()) <= 12:
+            # Short, complete, and not a known phrase: let Jev say whether it is about the message.
             k = await self._jev.compose(text, m.text[-600:], m.name)
             if float(k.get("confidence", 0)) >= 0.85 and _chosen(k) in ("send", "cancel", "retarget", "hold"):
                 verdict, remainder = _chosen(k), ""
         await emit(self, "listening" if verdict == "content" else "addressed",
                    p=1.0, intent=f"compose:{verdict}", ms=0, text=text[:120])
         if verdict == "content":
+            if filler_only(text):
+                return  # a breath the segmenter cut out; not part of the message
             if m.append(text):
                 note("you", text, "dictated")
                 await self._show_draft()
