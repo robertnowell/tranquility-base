@@ -601,6 +601,41 @@ class HookTests(unittest.TestCase):
             self.hook.resolve_pr("$PR", module.REPOSITORY, "/unused")
         self.assertEqual(self.hook.merge_target("echo 'gh pr merge 42'"), (False, None, None))
 
+    def test_guard_blocks_product_direct_and_native_merge_paths(self):
+        for flags in ("--auto --squash", "--squash", "--admin --squash"):
+            event = {"tool_input": {"command": "gh pr merge 42 --repo robertnowell/tranquility-base " + flags}}
+            self.assertIn("delivery.py admit", self.hook.guard_decision(event))
+        self.assertIsNone(self.hook.guard_decision({"tool_input": {"command": "gh pr merge 42 --repo other/repo --auto"}}))
+        self.assertIsNone(self.hook.guard_decision({"tool_input": {"command": "gh pr merge 42 --repo robertnowell/tranquility-base --disable-auto"}}))
+        self.assertIsNone(self.hook.guard_decision({"tool_input": {"command": "gh pr view 42"}}))
+
+    def test_guard_checks_later_commands_and_does_not_read_body_as_options(self):
+        prefix = "gh pr merge 42 --repo robertnowell/tranquility-base "
+        for command in (prefix + "--squash --body '--disable-auto'",
+                        prefix + "--disable-auto && " + prefix + "--auto",
+                        "gh pr merge 9 --repo other/repo --auto; " + prefix + "--auto"):
+            self.assertIsNotNone(self.hook.guard_decision({"tool_input": {"command": command}}))
+
+    def test_guard_resolves_literal_cd_without_evaluating_shell(self):
+        seen = []
+        def run(args, **kwargs):
+            seen.append(str(kwargs["cwd"]))
+            return subprocess.CompletedProcess(args, 0, f"https://github.com/{module.REPOSITORY}.git")
+        event = {"cwd": "/elsewhere", "tool_input": {"command": "cd /product/repo && gh pr merge 42 --auto"}}
+        self.assertIsNotNone(self.hook.guard_decision(event, run=run))
+        self.assertEqual(seen, ["/product/repo"])
+        self.assertEqual(str(self.hook.literal_cwd(["cd", "$(unsafe)", "&&"], 3, "/original")), "/original")
+
+    def test_guard_json_is_a_machine_denial_not_a_user_approval_question(self):
+        from unittest.mock import patch
+        import io
+        event = {"tool_input": {"command": "gh pr merge 42 --repo robertnowell/tranquility-base --auto"}}
+        output = io.StringIO()
+        with patch.object(sys, "argv", ["merge-delivery.py", "--guard"]), \
+             patch.object(sys, "stdin", io.StringIO(json.dumps(event))), patch.object(sys, "stdout", output):
+            self.assertEqual(self.hook.main(), 0)
+        self.assertEqual(json.loads(output.getvalue())["hookSpecificOutput"]["permissionDecision"], "deny")
+
     def test_body_text_is_not_mistaken_for_target(self):
         self.assertEqual(self.hook.merge_target("gh pr merge 42 --squash --body 'a change for 99'"), (True, "42", None))
 

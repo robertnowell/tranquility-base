@@ -5,7 +5,7 @@ admission, merge completion, and running software have separate evidence.
 
 ## The operator's path
 
-For the supervised queue pilot, use `delivery.py admit --pr NUMBER --owner
+For every new authorized shipment, use `delivery.py admit --pr NUMBER --owner
 SESSION --head FULL_PR_HEAD_SHA` before any label-only admission. It persists
 delivery intent before requesting the queue. See [merge-queue.md](merge-queue.md)
 for cutover, coordinator ownership, explicit holds and conflict re-admission.
@@ -31,7 +31,7 @@ python3 scripts/delivery.py resume --owner session-01a0a703 --wait
 
 `resume` explicitly takes retry responsibility for unfinished requests. After
 sleep, session loss, or a hook timeout, the next supervisor uses it. Record the
-named owner in the workstream issue while the pilot is supervised.
+named owner in the workstream issue.
 
 ## Durable delivery worker
 
@@ -73,7 +73,7 @@ rollback; keep durable requests and the guarded foreground commands.
 | --- | --- |
 | `requested` | Intent and retry owner persisted before a network call. |
 | `awaiting_merge` | PR is open; no queue admission was observed. |
-| `queued` | GitHub auto-merge or the configured `merge-queue` label was observed. |
+| `queued` | The configured `merge-queue` label was observed without an active competing merge mechanism, hold or conflict. |
 | `merged` | GitHub returned the actual squash merge SHA and merge time. |
 | `deployment_pending` | Main contains that merge; a full target is retained for activation. |
 | `failed` | Deployment exited unsuccessfully or lacked verified runtime evidence. |
@@ -174,3 +174,45 @@ leased artifacts, activation rechecks and bounded archive diagnostics. Use
 `python3 scripts/update-deployment-tooling.py` to update the stable checkout
 under both locks. A preview can defer activation while a merged build is
 prepared and retained for its later handoff.
+
+## Owned admission and recovery (#554)
+
+`admit` is the supported merge-request entry point. `watch` remains an observer
+and installer after merge; it never converts arbitrary native auto-merge into
+queue admission. To hand off a previously authorized native request, use:
+
+```
+python3 scripts/delivery.py admit --pr NUMBER --owner SESSION --head FULL_REVIEWED_SHA --handoff-auto-merge
+```
+
+Authorization is persisted before disabling native auto-merge. The head, open
+state, main target and holds are re-read before adding admission. The worker
+resumes only this recorded authorization after a session exit or timeout. It
+never restores native auto-merge. A changed head, conflict or hold requires
+explicit review. If adding the label times out, the worker can recognize a
+label that is present, but will not blindly re-add an absent/withdrawn label.
+
+`merge_mode` distinguishes `none`, `github_auto_merge`, `kodiak`, and
+`competing`. `queue_state` distinguishes `native_auto_merge`, `queued`,
+`handoff_blocked`, holds/conflicts/removal, and unavailable observations.
+`queue_action`, the stable `request_owner`/`queue_owner`, and
+`queue_observed_at` explain the next action and freshness. Failed remote reads
+retain the last evidence and explicitly mark it unavailable. Status reads
+older than five minutes are marked stale.
+
+An open, non-draft native-auto-merge PR that is behind main, outside the queue,
+and has a successful Source audit becomes `queue_attention` after five minutes
+from the later observed audit completion/auto-merge request (or from first
+observation when timestamps are missing). This is a diagnostic threshold, not
+a merge guarantee. Missing/failed/pending checks are not counted as passing.
+An edited head resets the observation. Holds and conflicts remain separate.
+The 30-second worker reports `awaiting_merge` or `attention`, not idle, for
+these recorded pending requests; sleep/network outages can delay observation.
+
+The optional shell PreToolUse guard is the same hook with `--guard`. Install
+it on the Bash matcher from the current merged deployment checkout. It rejects
+literal `gh pr merge` product-repository submissions with an actionable admit
+command; it allows `--disable-auto` for handoff and leaves other repos alone.
+This guards the supported shell path, not every possible API client. Fresh
+GitHub observations still expose alternate paths. PostToolUse stays observation
+only. Keep all unrelated hooks intact and never install a feature-branch hook.
