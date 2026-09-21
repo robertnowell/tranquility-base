@@ -88,4 +88,16 @@ final class SessionRegistryTests: XCTestCase {
         XCTAssertTrue(SessionRegistry.all(
             in: URL(fileURLWithPath: "/nonexistent/sessions")).isEmpty)
     }
+
+    func testProcStartAndWaitingForAreRead() throws {
+        // A 2.1.273 file, verbatim shape, parked at a permission prompt (16 Sep).
+        let json = #"{"pid":22739,"sessionId":"5cbc0ab3-a7ca-4958-9d12-536222d4599a","cwd":"/tmp","startedAt":1789605786000,"procStart":"Thu Sep 17 00:43:06 2026","kind":"interactive","status":"waiting","waitingFor":"permission prompt"}"#
+        let entry = try XCTUnwrap(SessionRegistry.decode(Data(json.utf8)))
+        XCTAssertEqual(entry.waitingFor, "permission prompt")
+        XCTAssertEqual(entry.procStart?.timeIntervalSince1970, 1_789_605_786, "ctime text is UTC")
+        // ctime pads a single-digit day with a second space.
+        XCTAssertEqual(SessionRegistry.parseProcStart("Sat Sep  6 01:02:03 2026")?.timeIntervalSince1970,
+                       1_788_656_523)
+        XCTAssertNil(SessionRegistry.parseProcStart("yesterday"))
+    }
 }
