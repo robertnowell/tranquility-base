@@ -1434,7 +1434,7 @@ public enum SessionLauncher {
         let says = adapter.trustPrompt.flatMap {
             TrustPromptWatcher.recognisedQuestion(on: text, spec: $0)
         }
-        return (says, TrustPromptWatcher.meaningfulTail(text))
+        return (says, TrustPromptWatcher.questionTail(text))
     }
 
     public static func paneState(pane: TmuxPaneAddress,

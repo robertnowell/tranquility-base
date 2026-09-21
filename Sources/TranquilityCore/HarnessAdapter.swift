@@ -886,6 +886,33 @@ public enum TrustPromptWatcher {
         return kept.count > width ? String(kept.prefix(width)) + "…" : kept
     }
 
+    /// The bottom of the pane, starting from its question when it has one.
+    ///
+    /// `meaningfulTail` keeps the last six lines, which for a dialog is the
+    /// options and the footer. The line that says what is being asked sits
+    /// ABOVE them: "Allow external CLAUDE.md file imports?" was line one of
+    /// ten on 21 Sep, and the card showed "External imports: /Users/…" and
+    /// two options with no question over them ("needs me what?"). So look
+    /// back a bounded distance for the last line that ends in a question
+    /// mark and start there. Bounded, because a `claude --resume` reprints
+    /// the conversation above the prompt and a question mark from an hour
+    /// ago is not this screen's question; if none is found within the
+    /// window, this is exactly `meaningfulTail`. Display only: nothing
+    /// decides a state from this.
+    static func questionTail(_ screen: String, window: Int = 14, minimum: Int = 6,
+                             width: Int = 500) -> String {
+        let all = screen
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        let recent = Array(all.suffix(window))
+        let start = recent.lastIndex(where: { $0.hasSuffix("?") })
+            .map { min($0, max(0, recent.count - minimum)) }
+            ?? max(0, recent.count - minimum)
+        let kept = recent[start...].joined(separator: " ⏎ ")
+        return kept.count > width ? String(kept.prefix(width)) + "…" : kept
+    }
+
     /// Whether a screen has anything on it worth calling a stop.
     ///
     /// Four characters of actual word, which is the ONE part of the deleted

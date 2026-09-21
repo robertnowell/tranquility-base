@@ -86,6 +86,22 @@ final class ExternalImportsPromptTests: XCTestCase {
         }
     }
 
+    /// The card quotes the question, not only the options under it.
+    func testTheQuotedTailStartsAtTheQuestion() {
+        let quoted = TrustPromptWatcher.questionTail(Self.liveScreen)
+        XCTAssertTrue(quoted.hasPrefix("Allow external CLAUDE.md file imports?"), quoted)
+        XCTAssertTrue(quoted.contains("Yes, allow external imports"), quoted)
+        // A question mark from the scrollback is not this screen's question.
+        let scrollback = (1...30).map { "old line \($0) said what?" }.joined(separator: "\n")
+            + "\n" + Self.liveScreen
+        XCTAssertTrue(TrustPromptWatcher.questionTail(scrollback)
+                        .hasPrefix("Allow external CLAUDE.md file imports?"))
+        // No question in the window: exactly the plain tail.
+        let banner = "Claude Code v2.1\n❯\n? for shortcuts"
+        XCTAssertEqual(TrustPromptWatcher.questionTail(banner),
+                       TrustPromptWatcher.meaningfulTail(banner))
+    }
+
     /// Why `paneQuestion` recognises on the whole capture: the headline is
     /// the needle, and the six-line tail the card quotes never carries it.
     func testTheNeedleIsAboveTheTail() {
