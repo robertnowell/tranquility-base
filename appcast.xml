@@ -6,6 +6,14 @@
     <description>Updates for Tranquility Base.</description>
     <language>en</language>
     <item>
+      <title>Version 0.3.1284</title>
+      <sparkle:version>1284</sparkle:version>
+      <sparkle:shortVersionString>0.3.1284</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <pubDate>Mon, 21 Sep 2026 18:59:42 +0000</pubDate>
+      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1284-5b0e9af13/TranquilityBase-0.3.1284.dmg" type="application/octet-stream" length="16380017" sparkle:edSignature="PDSIhpDVBPyxFpo/5biZ3nL+H9m9sCt7zZFujWXeWgogNTU83npgT+OnsxQ3+f3JOFXETeKYvy7rOyoOSg9bDQ==" />
+    </item>
+    <item>
       <title>Version 0.3.1283</title>
       <sparkle:version>1283</sparkle:version>
       <sparkle:shortVersionString>0.3.1283</sparkle:shortVersionString>
@@ -77,16 +85,8 @@
       <pubDate>Sat, 19 Sep 2026 21:08:54 +0000</pubDate>
       <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1274-391f33abf/TranquilityBase-0.3.1274.dmg" type="application/octet-stream" length="16344090" sparkle:edSignature="uhS7dIensMcA8V5aOUNXzzj+M3+Y4SPUWi94BxDo40X+6hfzPxCrFxhz6Ig74F9wpflqdMQScRzwyN0VU3M6AA==" />
     </item>
-    <item>
-      <title>Version 0.3.1273</title>
-      <sparkle:version>1273</sparkle:version>
-      <sparkle:shortVersionString>0.3.1273</sparkle:shortVersionString>
-      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <pubDate>Fri, 18 Sep 2026 21:17:15 +0000</pubDate>
-      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1273-03bbd17eb/TranquilityBase-0.3.1273.dmg" type="application/octet-stream" length="16342237" sparkle:edSignature="diezUfpVhL7egVZgg/6NDZ+ogxStu6VMcc2kOJRzmePO64KVvtJtlZVvxC+h+KfDWY2NfTZa1nvSLn6oBcdfCw==" />
-    </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: 9vURKg0LkXSHq+n3y5AW2nZB3MnOnkYJ3wzvsdWYP3np61JiJ075ZyTyuwDo29LozMhIyxKjQeM3lBBsKk+qAQ==
+edSignature: Gl9wE7SkodsxKYyNSXf2dEtKZAeJRDePmSjcpdERhmvU0a3OwyOf26mIW0QGVREaLf5d6o0eXLlG94A34a1ECg==
 length: 6457
 -->
