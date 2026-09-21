@@ -194,6 +194,23 @@ public struct TrustPromptSpec: Sendable {
     /// since the last review, not the common first-run case.
     public var neverAutoAcceptNeedles: [RecognizedPrompt]
 
+    /// A screen carrying one of these is a DIALOG, whatever else is on it,
+    /// and never counts toward `settledThreshold`.
+    ///
+    /// The settled needle is a word, and for Claude Code that word is
+    /// "Claude", which every dialog it draws contains (`paneState`'s own doc
+    /// comment lists three). So a screen nobody had named was read as a
+    /// settled banner two polls running and the watcher went home: 21 Sep,
+    /// "Allow external CLAUDE.md file imports?" logged as "started with no
+    /// trust prompt; watcher done" four seconds after launch, while the pane
+    /// sat on that question for forty minutes. The footer Claude Code puts
+    /// under every select menu ("Enter to confirm · Esc to cancel") is the
+    /// one line those screens share and a running agent never shows, so it
+    /// is the line that keeps the stuck-screen branch reachable: a dialog
+    /// this build has not named still ends as "stopped on a screen this app
+    /// does not recognise", with its text, rather than as "started".
+    public var neverSettledNeedles: [String]
+
     /// A screen this launcher recognises, and the sentence a person reads.
     ///
     /// **The sentence is written, never lifted.** It used to be lifted, by
@@ -304,8 +321,10 @@ public struct TrustPromptSpec: Sendable {
                acceptOptionNeedles: [String] = [],
                trustPromptSays: String = "It is asking whether you trust this folder.",
                selectionGlyph: String = "❯",
-               resumeDepthNeedle: String? = nil) {
+               resumeDepthNeedle: String? = nil,
+               neverSettledNeedles: [String] = []) {
         self.promptNeedles = promptNeedles
+        self.neverSettledNeedles = neverSettledNeedles.filter { !$0.isEmpty }
         self.trustPromptSays = trustPromptSays
         self.startedWithNoPromptNeedle = startedWithNoPromptNeedle
         self.settledBannerNeedle = settledBannerNeedle
@@ -385,7 +404,17 @@ public struct ClaudeCodeAdapter: HarnessAdapter {
                 TrustPromptSpec.RecognizedPrompt("Resuming the full session will consume",
                                                  says: "It is asking whether to resume the full session "
                                      + "or start from a summary. That spends your usage "
-                                     + "limits either way, so it is your call.")],
+                                     + "limits either way, so it is your call."),
+                // Shown when a CLAUDE.md on the path to the cwd `@`-imports
+                // a file outside the cwd (measured 21 Sep: tb-voice/CLAUDE.md
+                // is `@AGENTS.md`, the session's cwd was tb-voice/server).
+                // Claude Code's own copy says "Never allow this for
+                // third-party repositories": a security grant, so it stays
+                // with the human, same bar as the resume-depth question.
+                TrustPromptSpec.RecognizedPrompt("Allow external CLAUDE.md file imports",
+                                                 says: "It is asking whether CLAUDE.md may import "
+                                     + "a file from outside the folder. That is a trust "
+                                     + "decision, so it is your call.")],
             // Both wordings, for the same reason `promptNeedles` carries
             // both: the numbered v2.1 row ("1. Yes, I trust this folder")
             // and the current unnumbered one are the same substring from
@@ -399,7 +428,11 @@ public struct ClaudeCodeAdapter: HarnessAdapter {
             // agent brought back after a restart comes up running rather than
             // locked. Kristen's whole afternoon of "agents won't stay open"
             // was a mass re-resume, every one of them stuck here. Ruled 10 Sep.
-            resumeDepthNeedle: "Resuming the full session will consume")
+            resumeDepthNeedle: "Resuming the full session will consume",
+            // The footer under every Claude Code select menu. See
+            // `TrustPromptSpec.neverSettledNeedles` for the dialog this
+            // build read as a settled banner.
+            neverSettledNeedles: ["Enter to confirm · Esc to cancel"])
     }
 
     public var capabilities: HarnessCapabilities {
@@ -747,7 +780,15 @@ public enum TrustPromptWatcher {
             if let noPrompt = spec.startedWithNoPromptNeedle, text.contains(noPrompt) {
                 return
             }
-            if text.contains(spec.settledBannerNeedle) { settled += 1 } else { settled = 0 }
+            // A dialog footer vetoes the banner word: the word is on every
+            // dialog too, and a screen that carries the footer is a question,
+            // not a settled TUI (`neverSettledNeedles`).
+            if text.contains(spec.settledBannerNeedle),
+               !spec.neverSettledNeedles.contains(where: { text.contains($0) }) {
+                settled += 1
+            } else {
+                settled = 0
+            }
             if settled >= spec.settledThreshold {
                 trace?("newSession: started with no trust prompt in \(label); watcher done")
                 return
@@ -820,6 +861,21 @@ public enum TrustPromptWatcher {
     /// menu, the error), while the top is the banner that is identical on
     /// every launch. Bounded, because this goes in a log line, and a log line
     /// nobody can scan is the same problem one layer along.
+    /// The written sentence for a screen this spec recognises, or nil.
+    ///
+    /// The same needles the watcher loop matches, in the same order, asked
+    /// once against a screen somebody already captured: for the card that
+    /// has to say what a pane is waiting on after the loop has gone home.
+    public static func recognisedQuestion(on screen: String, spec: TrustPromptSpec) -> String? {
+        if let blocking = spec.neverAutoAcceptNeedles.first(where: { screen.contains($0.needle) }) {
+            return blocking.says
+        }
+        if spec.promptNeedles.contains(where: { screen.contains($0) }) {
+            return spec.trustPromptSays
+        }
+        return nil
+    }
+
     static func meaningfulTail(_ screen: String, lines: Int = 6, width: Int = 400) -> String {
         let kept = screen
             .split(separator: "\n", omittingEmptySubsequences: false)

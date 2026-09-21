@@ -240,3 +240,58 @@ extension ResumeGuardTests {
                        "a competing writer must be seen while the session is still alive")
     }
 }
+
+/// The two refusals that are not "another process holds it", and the
+/// sentence each one reaches the reader with.
+extension ResumeGuardTests {
+
+    /// 21 Sep: a second tap inside the first tap's claim was told "the
+    /// process table could not be read". It had been read fine.
+    func testAnInFlightRefusalSaysSoRatherThanBlamingTheProcessTable() {
+        let id = "inflight-test-\(UUID().uuidString)"
+        guard case .success(let first) = ResumeGuard.claim(sessionId: id) else {
+            return XCTFail("the first claim on a fresh id must succeed")
+        }
+        defer { first.release() }
+        guard case .failure(let verdict) = ResumeGuard.claim(sessionId: id) else {
+            return XCTFail("the second claim must be refused while the first is held")
+        }
+        XCTAssertEqual(verdict, .inFlight)
+        let msg = ResumeGuard.refusal(sessionId: id, verdict: verdict)
+        XCTAssertTrue(msg.contains("already being reopened"), msg)
+        XCTAssertFalse(msg.contains("could not be read"), msg)
+        XCTAssertFalse(msg.contains("\u{2014}"), "refusal copy must not carry an em dash")
+    }
+
+    /// The door's claim, taken at the tap: one owner, released on exit, and
+    /// visible to `isInFlight` alongside the guard's own claim.
+    func testTheDoorClaimsBeforeTheGuardDoes() {
+        let id = "intent-test-\(UUID().uuidString)"
+        XCTAssertFalse(ResumeGuard.isInFlight(id))
+        XCTAssertTrue(ResumeGuard.beginIntent(id), "the first tap owns the revive")
+        XCTAssertFalse(ResumeGuard.beginIntent(id), "the second tap does not")
+        XCTAssertTrue(ResumeGuard.isInFlight(id))
+        // The guard's claim is still available to the owner: the intent is
+        // a door-level claim, not a second process scan.
+        guard case .success(let claim) = ResumeGuard.claim(sessionId: id) else {
+            return XCTFail("the owning tap's own resume must not be refused by its intent")
+        }
+        claim.release()
+        ResumeGuard.endIntent(id)
+        XCTAssertFalse(ResumeGuard.isInFlight(id))
+        XCTAssertTrue(ResumeGuard.beginIntent(id), "released, the next tap owns it again")
+        ResumeGuard.endIntent(id)
+    }
+
+    /// A guard refusal travels with its holders, so the caller can raise
+    /// the pane instead of offering a clipboard.
+    func testAHolderRefusalCarriesItsHolders() {
+        let holder = ResumeGuard.Holder(pid: 31293, command: "claude --resume x")
+        let err = ScriptError(message: "already running", worthRetrying: false,
+                              alreadyRunning: [holder])
+        XCTAssertEqual(err.alreadyRunning, [holder])
+        XCTAssertFalse(err.duplicateResume)
+        XCTAssertTrue(ScriptError(message: "x").alreadyRunning.isEmpty,
+                      "every other failure carries no holders")
+    }
+}
