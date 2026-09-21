@@ -34,7 +34,8 @@ class SourceAuditTests(unittest.TestCase):
         shutil.copy2(SOURCE / "scripts/preflight.sh", self.repo / "scripts/preflight.sh")
         for name in (
             "check-key-names.sh", "check-house-copy.sh", "check-borrowed-descriptors.sh",
-            "check-compat-comments.sh", "check-row-dates.sh", "tests/test_source_audit.py",
+            "check-compat-comments.sh", "check-row-dates.sh", "check-posed-rows.sh",
+            "tests/test_source_audit.py",
             "tests/test_deployment_state.py",
             "tests/test_delivery.py",
             "tests/test_queue_measurements.py",
