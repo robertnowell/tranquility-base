@@ -192,8 +192,11 @@ sending. Silence is a backstop (Claude Code 15 s / 2 min, Apple 30 s, Wispr 20 m
    deterministically (`_do_start_agent`), and opens the message to it: "Started Claude
    Code. What would you like to say?" "Tell the U Vape agent…" picks the session by name
    and says "For U Vape report. Go ahead." A wrong pick costs one clause ("no, the other
-   one"); no list of eleven is ever read. "Take a note" opens to the notes file and the
-   clipboard.
+   one"); no list of eleven is ever read. "Take a note" opens to the Notes agent: a session
+   like any other, its id kept in `notes-session.txt` while it is live, started and
+   seeded once when it is not, writing notes.md and notes.html in its own hub directory.
+   No writer, no format, no new door; an Obsidian connector later is a tool given to that
+   one agent.
 2. *The read-back only asks one thing.* While open, every word is the message: no intent,
    no action, no speech; overlapping finals are dropped. After 30 s of silence, once:
    "I heard: <20 words>. Send to Claude Code?" Yes sends; no or "wait" holds without a
@@ -210,6 +213,16 @@ stays for one-clause instructions to the stage.
 line) until the app grows a `composing` kind; `quiet` closes it. The chord exits
 (⌥ tap, ⌃⌥ commit) are the app's gestures and need the app to write a line to the child:
 not built yet, the phrase and the read-back are.
+
+**Enrolment.** The app enrols a session the first time you reply to it (your confirmed
+send is the consent); `tbase send` refuses anything unenrolled, and `tbase new` does not
+enrol. Naming a destination by voice is the same consent, so the door (and a retarget)
+enrols, idempotently. Found 21 Sep: the first live note was refused "not enrolled".
+
+**`tbase new --wait-live` never worked.** The CLI took the first argument that was not
+`--codex` as the directory, cd'd into "--wait-live" and died in a second; every
+start_agent since 19 Sep failed this way. Fixed in main.swift (flags are not
+directories); the bot leaves the flag off, registration is the proof it needs.
 
 **Drill.** `TB_READBACK_SECS=0.3 uv run python drills/compose_drill.py` runs open,
 overlap, hold, read-back, yes, phrase, trailing phrase, cancel and retarget with the

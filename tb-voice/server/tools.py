@@ -80,7 +80,6 @@ async def start_agent(params):
         argv.append(a["directory"])
     if a.get("harness") == "codex":
         argv.append("--codex")
-    argv.append("--wait-live")
     code, out = await _run(*argv, timeout=60)
     reg = next((ln.split(":", 1)[1].strip() for ln in out.splitlines() if ln.startswith("registered:")), None)
     # The id is for tools, never for speech: the model gets "started" and the project.

@@ -46,6 +46,12 @@ async def main():
     async def targets(): return [{"sessionId": "abc12345", "name": "Planning", "project": "p"}]
     m._say, m._send, m._earcon, m._targets = say, send, earcon, targets
     manager.emit = _noop_emit
+    enrolled = []
+
+    async def run(*argv, timeout=45.0):  # the enrol door, recorded instead of executed
+        enrolled.append(argv[1:])
+        return 0, "enrolled"
+    manager._run = run
 
     await m._open({"kind": "agent", "sessionId": "abc12345", "name": "Claude Code"},
                   line="Started Claude Code. What would you like to say?")
@@ -99,7 +105,8 @@ async def main():
     await m._compose_turn("Hello there.", None, None)
     await m._compose_turn("Send it.", None, None)
     assert sent[-1] == ("abc12345", "Hello there.")
-    print("compose drill: PASS", {"said": len(said), "sent": len(sent), "cues": cues})
+    assert all(a[0] == "enroll" for a in enrolled) and len(enrolled) == 6, enrolled
+    print("compose drill: PASS", {"said": len(said), "sent": len(sent), "cues": cues, "enrolled": len(enrolled)})
 
 
 async def _noop_emit(*a, **k):

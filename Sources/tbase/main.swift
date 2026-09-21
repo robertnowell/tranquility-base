@@ -908,7 +908,9 @@ case "reconcile":
         // instead, which Codex writes to immediately.
         let useCodex = args.contains("--codex")
         let adapter: any HarnessAdapter = useCodex ? CodexAdapter() : ClaudeCodeAdapter()
-        let dirArg = args.first(where: { $0 != "--codex" && $0 != "new" })
+        // Flags are not directories: `tbase new --wait-live` once cd'd into a
+        // directory named "--wait-live" and died in a second (21 Sep).
+        let dirArg = args.first(where: { !$0.hasPrefix("--") && $0 != "new" })
         let dir = dirArg.map { ($0 as NSString).expandingTildeInPath }
             ?? AgentDefaults.directory(for: adapter.id)
         let command = AgentDefaults.load(for: adapter.id)

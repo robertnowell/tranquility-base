@@ -192,6 +192,14 @@ class JevClient:
 
 
 TRANSCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "transcript.md")
+NOTES_STATE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "notes-session.txt")
+NOTES_SEED = (
+    "You are the Notes keeper for Tranquility Base. Every message you receive from now on is "
+    "a note dictated by voice. For each one: append it verbatim under a timestamp heading to "
+    "notes.md in your own agent directory (~/Documents/agents/<your session id>/), and keep "
+    "notes.html there current as one readable page of all notes, newest first, titled Notes. "
+    "Reply with one short sentence confirming the note. Never ask questions."
+)
 
 
 # The conversation before the text being judged: who said it, what, and whether it
@@ -665,12 +673,16 @@ class Manager(FrameProcessor):
         now, deterministically, so no breath can cancel it. Then the door opens
         and the brief is dictated to it."""
         harness = "codex" if "codex" in text.lower() else "claude"
-        argv = [TBASE, "new"] + (["--codex"] if harness == "codex" else []) + ["--wait-live"]
+        # Registration is the proof we need; the first send waits for liveness on
+        # its own (tbase send defers). --wait-live is left off: until 21 Sep the
+        # CLI read it as a directory and every start died in a second.
+        argv = [TBASE, "new"] + (["--codex"] if harness == "codex" else [])
         await emit(self, "tool", argv=["tbase", "new"] + argv[2:])
         code, out = await _run(*argv, timeout=75)
         reg = next((ln.split(":", 1)[1].strip() for ln in out.splitlines() if ln.startswith("registered:")), None)
         if code != 0 or not reg:
-            await emit(self, "tool", argv=["tbase", "new"], exit=code, meaning="failed")
+            await emit(self, "tool", argv=["tbase", "new"], exit=code, meaning="failed", text=out[-200:])
+            logger.error(f"tbase new failed ({code}): {out[-400:]}")
             await self._say("I couldn't start the agent.")
             return
         name = "Codex" if harness == "codex" else "Claude Code"
@@ -680,12 +692,47 @@ class Manager(FrameProcessor):
                          line=f"Started {name}. What would you like to say?")
 
     async def _do_take_note(self, text, frame, direction):
-        await self._open({"kind": "note", "name": "your notes"}, line="Noting. Go ahead.")
+        """Notes are a destination like any agent: a session named Notes that
+        keeps notes.md and notes.html in its own hub directory. Found by the id
+        in notes-session.txt while it is live; started (and seeded once) when
+        it is not. No writer, no file format, no new door."""
+        dest = await self._notes_session()
+        if not dest:
+            await self._say("I couldn't start the notes agent.")
+            return
+        await self._open(dest, line="Noting. Go ahead.")
+
+    async def _notes_session(self) -> dict | None:
+        live = {t["sessionId"] for t in await self._targets()}
+        try:
+            sid = open(NOTES_STATE).read().strip()
+        except FileNotFoundError:
+            sid = ""
+        if sid and sid in live:
+            return {"kind": "agent", "sessionId": sid, "name": "Notes"}
+        await self._say("Starting a notes agent.")
+        await emit(self, "tool", argv=["tbase", "new"])
+        code, out = await _run(TBASE, "new", timeout=75)
+        reg = next((ln.split(":", 1)[1].strip() for ln in out.splitlines() if ln.startswith("registered:")), None)
+        if code != 0 or not reg:
+            logger.error(f"notes agent: tbase new failed ({code}): {out[-400:]}")
+            return None
+        with open(NOTES_STATE, "w") as f:
+            f.write(reg + "\n")
+        await _run(TBASE, "enroll", reg, timeout=10)
+        await self._send(reg, NOTES_SEED, quiet=True)
+        return {"kind": "agent", "sessionId": reg, "name": "Notes"}
 
     # -- the open message ------------------------------------------------------------
 
     async def _open(self, destination: dict, line: str | None = None, seed: str = ""):
         self.pending = None
+        if destination.get("sessionId"):
+            # The app enrols a session the first time you reply to it: your
+            # confirmed send is the consent. Naming it as a destination by voice
+            # is the same consent, so the door enrols (idempotent). Without it a
+            # fresh `tbase new` session refuses every send: "not enrolled".
+            await _run(TBASE, "enroll", destination["sessionId"], timeout=10)
         self.open = OpenMessage(destination)
         if seed and len(seed.split()) > 2:
             self.open.append(seed)
@@ -768,6 +815,7 @@ class Manager(FrameProcessor):
                     self.stage = c
                     m.destination = {"kind": "agent", "sessionId": c["sessionId"],
                                      "name": c.get("name") or c.get("project") or "the agent"}
+                    await _run(TBASE, "enroll", c["sessionId"], timeout=10)  # same consent as the door
                     await self._say(f"For {m.name}. Go ahead.")
                     await self._show_draft()
                     self._arm_readback()
@@ -788,24 +836,8 @@ class Manager(FrameProcessor):
             return
         text, dest = m.text.strip(), m.destination
         await self._close()
-        if dest["kind"] == "agent":
-            note("Tranquility", f"(typing into {dest.get('name')}) {text}", "acted")
-            await self._send(dest["sessionId"], text)
-            return
-        # note: clipboard and a file; the writer is one line, swap it freely
-        path = os.path.expanduser(os.getenv("TB_NOTES_FILE", "~/Documents/Tranquility Notes.md"))
-        try:
-            with open(path, "a") as f:
-                f.write(f"\n## {time.strftime('%Y-%m-%d %H:%M')}\n{text}\n")
-            p = await asyncio.create_subprocess_exec("pbcopy", stdin=asyncio.subprocess.PIPE)
-            await p.communicate(text.encode())
-        except Exception as e:
-            logger.error(f"note failed: {e}")
-            await self._say("I couldn't save the note.")
-            return
-        note("Tranquility", f"(noted) {text}", "acted")
-        await self._earcon("dispatched")
-        await self._say("Noted. What's next?")
+        note("Tranquility", f"(typing into {dest.get('name')}) {text}", "acted")
+        await self._send(dest["sessionId"], text)
 
     async def _close(self):
         if self._readback_task:
@@ -841,10 +873,14 @@ class Manager(FrameProcessor):
             self.pending = None
             await self._turn(text, frame, direction)
 
-    async def _send(self, session_id: str, text: str):
+    async def _send(self, session_id: str, text: str, quiet: bool = False):
         code, out = await _run(TBASE, "send", session_id, text)
         meaning = {0: "sent", 2: "not dispatched", 3: "deferred", 4: "ambiguous", 5: "failed"}.get(code, "unknown")
         await emit(self, "tool", argv=["tbase", "send", session_id[:8]], exit=code, meaning=meaning)
+        if quiet:
+            if code != 0:
+                logger.error(f"quiet send to {session_id[:8]} refused: {meaning}: {out[-200:]}")
+            return
         if code == 0:
             await self._earcon("dispatched")
             await self._say(os.getenv("TB_SENT_LINE", "I've sent your message. What's next?"))
