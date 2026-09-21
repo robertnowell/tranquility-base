@@ -66,6 +66,20 @@ def resolve_pr(target, repository, cwd, run=subprocess.run):
     return int(json.loads(result.stdout)["number"])
 
 
+def literal_cwd(words, before, cwd):
+    """Follow literal cd prefixes only; never expand variables or run shell code."""
+    current = Path(cwd)
+    for i in range(before - 1):
+        if words[i] != "cd" or (i > 0 and words[i - 1] not in ("&&", ";", "\n")):
+            continue
+        target = words[i + 1]
+        if any(c in target for c in "$`()") or target.startswith("-"):
+            continue
+        path = Path(target).expanduser()
+        current = path if path.is_absolute() else current / path
+    return current
+
+
 def guard_decision(event, run=subprocess.run):
     """Guard literal product merge commands, including compound shell calls."""
     command = event.get("tool_input", {}).get("command", "")
@@ -94,7 +108,7 @@ def guard_decision(event, run=subprocess.run):
             continue  # The owned handoff can turn off the alternate mechanism.
         _, target, repository = merge_target(shlex.join(segment))
         try:
-            pr = resolve_pr(target, repository, event.get("cwd") or ROOT, run=run)
+            pr = resolve_pr(target, repository, literal_cwd(words, i, event.get("cwd") or ROOT), run=run)
         except (ValueError, OSError, subprocess.SubprocessError):
             if repository != REPOSITORY:
                 continue

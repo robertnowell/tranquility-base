@@ -491,6 +491,16 @@ class HookTests(unittest.TestCase):
                         "gh pr merge 9 --repo other/repo --auto; " + prefix + "--auto"):
             self.assertIsNotNone(self.hook.guard_decision({"tool_input": {"command": command}}))
 
+    def test_guard_resolves_literal_cd_without_evaluating_shell(self):
+        seen = []
+        def run(args, **kwargs):
+            seen.append(str(kwargs["cwd"]))
+            return subprocess.CompletedProcess(args, 0, f"https://github.com/{module.REPOSITORY}.git")
+        event = {"cwd": "/elsewhere", "tool_input": {"command": "cd /product/repo && gh pr merge 42 --auto"}}
+        self.assertIsNotNone(self.hook.guard_decision(event, run=run))
+        self.assertEqual(seen, ["/product/repo"])
+        self.assertEqual(str(self.hook.literal_cwd(["cd", "$(unsafe)", "&&"], 3, "/original")), "/original")
+
     def test_guard_json_is_a_machine_denial_not_a_user_approval_question(self):
         from unittest.mock import patch
         import io
