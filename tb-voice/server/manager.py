@@ -27,9 +27,9 @@ from pipecat.frames.frames import (
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
 from calls import record
-from events import emit
+from events import emit, line
 from compose import READBACK_SECS, OpenMessage, classify, continues, filler_only
-from mute import BOT_VOICE, EXTERNAL_UNTIL
+import session
 from spoken import spoken
 from tools import _json_or_text, _run
 
@@ -142,7 +142,7 @@ class JevClient:
         state = {
             "context": ctx,
             "conversation_before": [
-                {"who": e["who"], "status": e["status"], "text": e["text"]} for e in EXCHANGE[-8:]
+                {"who": e["who"], "status": e["status"], "text": e["text"]} for e in session.current().exchange[-8:]
             ],
             "agent_on_stage": (stage or {}).get("goal"),
             "text_to_judge": utterance,
@@ -228,39 +228,48 @@ NOTES_SEED = (
 )
 
 
-# The conversation before the text being judged: who said it, what, and whether it
-# was already handled. Every earlier turn is context and only context; a request
-# that was acted on is marked so it is never replayed.
-EXCHANGE: list[dict] = []
-
-
 def note(who: str, text: str, status: str = "said"):
     """What was said, by whom, for a person to read later and for the models to
-    see as context. Seeded from the transcript on start so a restart forgets nothing."""
-    EXCHANGE.append({"who": who, "text": text.strip(), "status": status})
-    del EXCHANGE[:-12]
+    see as context. The exchange (the models' tail) and the count are this
+    session's own; see session.py. Every line also goes out whole as a `said`
+    event, numbered, so the app holds the full record: every other event that
+    carries the user's words is cut to 120 characters, and hosted there is no
+    transcript on disk at all (hf-20)."""
+    s = session.current()
+    text = text.strip()
+    s.exchange.append({"who": who, "text": text, "status": status})
+    del s.exchange[:-session.EXCHANGE_KEEP]
+    s.said += 1
+    rec = line("said", n=s.said, who=who, status=status, text=text)
     if os.getenv("TB_HOSTED"):
-        return  # no transcript on disk where the bot is hosted; the app keeps its own
+        from wire import outbox
+        outbox().put_nowait(rec)
+        return  # no transcript on disk where the bot is hosted; the app keeps the `said` lines
     with open(TRANSCRIPT, "a") as f:
-        f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')}  {who} [{status}]: {text.strip()}\n")
+        f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')}  {who} [{status}]: {text}\n")
 
 
 def seed_exchange():
+    """Local only: a restart picks up where the transcript left off. Hosted there
+    is no transcript, and a new session must start empty."""
+    if os.getenv("TB_HOSTED"):
+        return
+    s = session.current()
     try:
         with open(TRANSCRIPT) as f:
-            for raw in f.readlines()[-12:]:
+            for raw in f.readlines()[-session.EXCHANGE_KEEP:]:
                 parts = raw.rstrip("\n").split("  ", 1)
                 if len(parts) != 2 or ": " not in parts[1]:
                     continue
                 head, text = parts[1].split(": ", 1)
                 who, _, status = head.partition(" [")
-                EXCHANGE.append({"who": who, "text": text, "status": status.rstrip("]") or "said"})
+                s.exchange.append({"who": who, "text": text, "status": status.rstrip("]") or "said"})
     except FileNotFoundError:
         pass
 
 
 def exchange_lines(n: int = 8) -> list[str]:
-    return [f"{e['who']} ({e['status']}): {e['text']}" for e in EXCHANGE[-n:]]
+    return [f"{e['who']} ({e['status']}): {e['text']}" for e in session.current().exchange[-n:]]
 
 
 def _chosen(choice: dict) -> str:
@@ -477,10 +486,11 @@ class Manager(FrameProcessor):
             # The pipeline is running and the mic is open: now it is listening.
             await emit(None, "ready")
         if isinstance(frame, BotStartedSpeakingFrame):
-            BOT_VOICE["speaking"] = True  # the echo gate reads this
+            session.current().bot_voice["speaking"] = True  # the echo gate reads this
         if isinstance(frame, BotStoppedSpeakingFrame):
-            BOT_VOICE["speaking"] = False
-            BOT_VOICE["stopped_at"] = time.monotonic()
+            voice = session.current().bot_voice
+            voice["speaking"] = False
+            voice["stopped_at"] = time.monotonic()
             self._bot_stopped.set()
             await emit(None, "quiet")  # the manager's voice stopped; the orb goes back to rest
         if not isinstance(frame, LLMContextFrame):
@@ -823,10 +833,16 @@ class Manager(FrameProcessor):
 
     async def _notes_session(self) -> dict | None:
         live = {t["sessionId"] for t in await self._targets()}
-        try:
-            sid = open(NOTES_STATE).read().strip()
-        except FileNotFoundError:
-            sid = ""
+        hosted = bool(os.getenv("TB_HOSTED"))
+        if hosted:
+            # Never a file where the bot is hosted: the container is shared, and
+            # one account's Notes agent is not another's (session.py).
+            sid = session.current().notes_sid or ""
+        else:
+            try:
+                sid = open(NOTES_STATE).read().strip()
+            except FileNotFoundError:
+                sid = ""
         if sid and sid in live:
             return {"kind": "agent", "sessionId": sid, "name": "Notes"}
         await self._say("Starting a notes agent.")
@@ -836,8 +852,11 @@ class Manager(FrameProcessor):
         if code != 0 or not reg:
             logger.error(f"notes agent: tbase new failed ({code}): {out[-400:]}")
             return None
-        with open(NOTES_STATE, "w") as f:
-            f.write(reg + "\n")
+        if hosted:
+            session.current().notes_sid = reg
+        else:
+            with open(NOTES_STATE, "w") as f:
+                f.write(reg + "\n")
         await _run(TBASE, "enroll", reg, timeout=10)
         await self._send(reg, NOTES_SEED, quiet=True)
         return {"kind": "agent", "sessionId": reg, "name": "Notes"}
@@ -1049,7 +1068,7 @@ class Manager(FrameProcessor):
         for the line's estimated length: the app's voice is echo to this mic."""
         secs = min(20.0, 1.2 + 0.42 * len(text.split()))
         async with self._voice:
-            EXTERNAL_UNTIL["t"] = time.monotonic() + secs
+            session.current().external_until["t"] = time.monotonic() + secs
             await _run("open", url)
             await asyncio.sleep(secs)
 
