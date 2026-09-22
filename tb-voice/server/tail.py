@@ -13,7 +13,9 @@ import socketserver
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-EVENTS = os.path.join(HERE, "events.jsonl")
+# Hosted, the bot keeps nothing on disk; the app writes the stream it receives
+# to manager-events.jsonl in its support directory. TB_EVENTS_FILE points here.
+EVENTS = os.getenv("TB_EVENTS_FILE") or os.path.join(HERE, "events.jsonl")
 CALLS = os.path.join(HERE, "calls.jsonl")
 TRANSCRIPT = os.path.join(HERE, "transcript.md")
 LOG = os.path.join(HERE, "bot.log")
