@@ -38,6 +38,9 @@ public struct ManagerEvent: Codable, Equatable, Sendable {
         case error
         /// Hosted: nobody spoke for `secs`; the bot is ending the session itself.
         case idle
+        /// Hosted: the session's life (`secs`) is up; the bot ends it with
+        /// nothing open, and the app opens a fresh one.
+        case rotate
     }
     public var event: Kind
     public var t: Double?
