@@ -22,12 +22,18 @@ from mute import BOT_VOICE, EXTERNAL_UNTIL
 
 
 class EchoGate(FrameProcessor):
-    def __init__(self, tail_secs: float = 0.6, **kwargs):
+    def __init__(self, tail_secs: float = 0.6, passthrough: bool = False, **kwargs):
         super().__init__(**kwargs)
         self._tail = tail_secs
         self._was_gated = False
+        # A client whose microphone already has our voice subtracted from it
+        # needs no gate, and a gate would make it impossible to interrupt the
+        # manager: while it speaks, nothing said would ever be transcribed.
+        self._passthrough = passthrough
 
     def gated(self) -> bool:
+        if self._passthrough:
+            return False
         now = time.monotonic()
         return (BOT_VOICE["speaking"] or (now - BOT_VOICE["stopped_at"]) < self._tail
                 or now < EXTERNAL_UNTIL["t"])
