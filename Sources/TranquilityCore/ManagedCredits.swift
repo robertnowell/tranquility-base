@@ -80,6 +80,11 @@ public enum ManagedCredits {
             return resolved.signer
         } catch {
             log("credits: no device key: \(error)")
+            // Without a key this Mac can never spend credits, and the person
+            // cannot fix it. Local, not network: it reaches diagnostics with
+            // its own reason instead of as a vague "service unavailable".
+            let ns = error as NSError
+            Failures.report(.creditsService, reason: "no device key: \(type(of: error)) \(ns.domain) \(ns.code)")
             return nil
         }
     }
@@ -94,7 +99,7 @@ public enum ManagedCredits {
         outboxURL: URL = QueueStore.supportDirectory.appendingPathComponent("managed-outbox.sqlite"),
         log: @escaping @Sendable (String) -> Void = { _ in }
     ) -> ManagedCreditSession {
-        ManagedCreditSession(identity: identity, outboxURL: outboxURL) { current, valid in
+        ManagedCreditSession(identity: identity, outboxURL: outboxURL, connect: { current, valid in
             guard let signer = deviceSigner(log: log) else {
                 throw ManagedSummaryFailure.refused(code: "service_unavailable", operationId: nil)
             }
@@ -111,6 +116,6 @@ public enum ManagedCredits {
             }
             log("credits: managed session at \(gatewayURL.host ?? "?") as \(signer.storage)")
             return .init(transport: transport, invalidate: { await authority.clear() })
-        }
+        }, log: log)
     }
 }

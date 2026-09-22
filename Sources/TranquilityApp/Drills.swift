@@ -247,6 +247,58 @@ extension StatusHUD {
         ])
     }
 
+    /// Every writer of the grid's placard clears the chevron and the gear.
+    ///
+    /// 22 Sep: the credits line painted its warning glyph under the collapse
+    /// chevron, and a grid notice did the same, because each writer indented
+    /// its own string and only the title remembered. The pass now lives at
+    /// the end of render; this holds it for the writers that exist and for
+    /// the next one. Measured in window space, like placardClearsChevron.
+    func placardClearsControlsDrill() {
+        showIdle(rows: [SessionRow(id: "p1", name: "p1", aux: "p1", lamp: .ready)])
+        let priorStanding = creditStanding
+        func clears() -> Bool {
+            panel?.contentView?.layoutSubtreeIfNeeded()
+            let text = stateLabel.attributedStringValue
+            guard text.length > 0, let chevron = collapseButton, !chevron.isHidden,
+                  let gear = gearButton, !gear.isHidden else { return false }
+            let style = text.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
+            let label = stateLabel.convert(stateLabel.bounds, to: nil)
+            let textMinX = label.minX + (style?.firstLineHeadIndent ?? 0)
+            let tail = style?.tailIndent ?? 0
+            let textMaxX = tail < 0 ? label.maxX + tail : label.maxX
+            let chevronInkMaxX = chevron.convert(chevron.bounds, to: nil).maxX
+                - chevron.inkOverhang.trailing
+            let gearInkMinX = gear.convert(gear.bounds, to: nil).minX + gear.inkOverhang.leading
+            return textMinX >= chevronInkMaxX && textMaxX <= gearInkMinX
+        }
+        let title = clears()
+        let priorOffline = isOffline
+        setCreditStanding(nil)
+        setOffline(true)
+        let offline = clears()
+        // Offline is a state, not a fault: chrome ink, not amber, no door.
+        let offlineIsQuiet = stateLabel.attributedStringValue.string == StateLegend.offlinePlacard
+            && !stateLabel.isADoor
+        setCreditStanding("Add credits")
+        // Something to act on outranks a state with nothing to do.
+        let creditsOutrankOffline = stateLabel.attributedStringValue.string.contains("Add credits")
+        let credits = clears()
+        flashNotice(StateLegend.noWordsNotice)
+        let notice = clears()
+        clearNoticeForDrill()
+        setOffline(priorOffline)
+        setCreditStanding(priorStanding)
+        SelfTest.report("placardClearsControls", [
+            ("titleClears", title),
+            ("offlineClears", offline),
+            ("offlineIsQuiet", offlineIsQuiet),
+            ("creditsOutrankOffline", creditsOutrankOffline),
+            ("creditsLineClears", credits),
+            ("noticeClears", notice),
+        ])
+    }
+
     /// Quiet rows sink, and the active band keeps the order it arrived in.
     ///
     /// The ordering itself is a pure function on an array, so the interesting

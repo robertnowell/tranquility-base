@@ -33,20 +33,23 @@ final class CreditStandingTests: XCTestCase {
             CreditStanding.from(receipt: nil, failure: .refused(code: code, operationId: nil), provider: "deterministic-fallback", now: now)
         }
         XCTAssertEqual(standing("insufficient_credit"), .floored(.outOfCredits, at: now))
-        XCTAssertEqual(standing("insufficient_credit")?.line, "Out of credits")
+        XCTAssertEqual(standing("insufficient_credit")?.line, "Add credits")
         XCTAssertEqual(standing("connection_rejected"), .floored(.connectAgain, at: now))
         XCTAssertEqual(standing("auth_required"), .floored(.connectAgain, at: now))
-        XCTAssertEqual(standing("provider_failed"), .floored(.summaryFailed, at: now))
-        XCTAssertEqual(standing("service_unavailable"), .floored(.serviceUnavailable, at: now))
-        XCTAssertEqual(standing("something_new"), .floored(.serviceUnavailable, at: now))
+        // Not answers about the account (ruled 22 Sep): a provider fault, an
+        // unreachable service and a code this build does not know leave the
+        // last standing where it was.
+        XCTAssertNil(standing("provider_failed"))
+        XCTAssertNil(standing("service_unavailable"))
+        XCTAssertNil(standing("something_new"))
         // Not on credits at all: the chain went on to the person's own key,
         // so this is not a floor. It is still a line, because the fix is theirs.
         XCTAssertEqual(standing("rebinding_required"), .notOnCredits(connectAgain: true))
-        XCTAssertEqual(standing("rebinding_required")?.line, "Connect this Mac again for credits")
+        XCTAssertEqual(standing("rebinding_required")?.line, "Sign in for credits")
         XCTAssertEqual(standing("not_connected"), .notOnCredits(connectAgain: false))
         XCTAssertNil(standing("not_connected")?.line)
-        XCTAssertEqual(CreditStanding.from(receipt: nil, failure: .outcomeUnknown(operationId: "o"), provider: "deterministic-fallback", now: now),
-                       .floored(.serviceUnavailable, at: now))
+        XCTAssertNil(CreditStanding.from(receipt: nil, failure: .outcomeUnknown(operationId: "o"), provider: "deterministic-fallback", now: now))
+        XCTAssertNil(CreditStanding.from(receipt: nil, failure: .invalidResponse, provider: "deterministic-fallback", now: now))
     }
 
     func testASummaryThatNeverWentNearCreditsSaysNothing() {
@@ -76,7 +79,7 @@ final class CreditStandingTests: XCTestCase {
         XCTAssertFalse(fresh.satisfied); XCTAssertFalse(fresh.attention, "a stored token is not verified readiness")
         let out = row(.floored(.outOfCredits, at: now))
         XCTAssertFalse(out.satisfied); XCTAssertTrue(out.attention)
-        XCTAssertTrue(out.detail.hasPrefix("out of credits"))
+        XCTAssertTrue(out.detail.hasPrefix("starting credits used"))
         let quiet = row(.notOnCredits(connectAgain: false))
         XCTAssertFalse(quiet.satisfied); XCTAssertFalse(quiet.attention, "a Mac never on credits is quiet")
         XCTAssertEqual(Prerequisites.Item.credits.fixLabel, "Sign in")
@@ -90,17 +93,32 @@ final class CreditStandingTests: XCTestCase {
     /// and the row wants attention.
     func testOutOfCreditsIsOnlyAmberWhenThereIsNothingToFallTo() {
         let out = CreditStanding.floored(.outOfCredits, at: now)
-        XCTAssertEqual(out.line(ownKey: false), "Out of credits")
+        XCTAssertEqual(out.line(ownKey: false), "Add credits")
         XCTAssertNil(out.line(ownKey: true))
         XCTAssertTrue(out.needsAttention(ownKey: false))
         XCTAssertFalse(out.needsAttention(ownKey: true))
         XCTAssertTrue(out.detail(ownKey: true).contains("your own Anthropic key"))
         // Every other standing is indifferent to the key.
-        let down = CreditStanding.floored(.serviceUnavailable, at: now)
+        let down = CreditStanding.floored(.connectAgain, at: now)
         XCTAssertEqual(down.line(ownKey: true), down.line(ownKey: false))
         let probes = Prerequisites.Probes(tmuxPath: { nil }, hooksProblem: { _ in nil },
                                           hasSecret: { $0 == .anthropicAPIKey }, creditStanding: { out })
         let row = Prerequisites.snapshot(probes).first { $0.item == .credits }!
         XCTAssertFalse(row.attention, "a key on the row below means nothing is owed here")
+    }
+
+    /// Every amber line is something to do, never a fault (ruled 22 Sep).
+    func testEveryLineNamesAnAction() {
+        let lines = [CreditStanding.floored(.outOfCredits, at: now), .floored(.connectAgain, at: now),
+                     .notOnCredits(connectAgain: true)].compactMap(\.line)
+        XCTAssertEqual(lines, ["Add credits", "Sign in for credits", "Sign in for credits"])
+        for line in lines {
+            XCTAssertTrue(line.hasPrefix("Add") || line.hasPrefix("Sign in"), line)
+        }
+    }
+
+    func testTheTelemetryTokenNeverCarriesTheBalance() {
+        XCTAssertEqual(CreditStanding.good(availableMicros: "9480000", at: now).token, "on_credits")
+        XCTAssertEqual(CreditStanding.floored(.outOfCredits, at: now).token, "out_of_credits")
     }
 }

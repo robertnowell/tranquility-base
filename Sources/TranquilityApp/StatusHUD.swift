@@ -1234,6 +1234,45 @@ final class StatusHUD: NSObject {
         render()
     }
 
+    /// Keep whatever the placard says clear of the controls sharing its row.
+    ///
+    /// The label spans the row; the chevron sits on its left and the gear on
+    /// its right. Each writer used to indent its own string, so only the ones
+    /// that remembered did: the grid title and PAST AGENTS cleared the
+    /// chevron, and the credits line and grid notices painted under it
+    /// (22 Sep, "we should never have messages overlap"). One pass at the end
+    /// of render, over whatever was written, so the next writer inherits it.
+    /// Text too long for the space left truncates instead of running under
+    /// the gear.
+    private func clearPlacardOfControls() {
+        let text = stateLabel.attributedStringValue
+        guard text.length > 0 else { return }
+        var lead: CGFloat = 0
+        if collapseButton?.isHidden == false { lead = 24 }
+        if pastBackButton?.isHidden == false { lead = 30 }
+        let tail: CGFloat = gearButton?.isHidden == false ? 30 : 0
+        let existing = text.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
+        let style = (existing?.mutableCopy() as? NSMutableParagraphStyle) ?? NSMutableParagraphStyle()
+        style.firstLineHeadIndent = max(style.firstLineHeadIndent, lead)
+        style.headIndent = max(style.headIndent, lead)
+        if tail > 0 { style.tailIndent = -tail }
+        style.lineBreakMode = .byTruncatingTail
+        let fitted = NSMutableAttributedString(attributedString: text)
+        fitted.addAttribute(.paragraphStyle, value: style, range: NSRange(location: 0, length: fitted.length))
+        stateLabel.attributedStringValue = fitted
+    }
+
+    /// This Mac has had no network for longer than a blip. Set by the app
+    /// from `Connectivity.observeOffline`; written nowhere else.
+    private(set) var isOffline = false
+
+    func setOffline(_ offline: Bool) {
+        guard offline != isOffline else { return }
+        isOffline = offline
+        Permissions.log("connectivity: \(offline ? "offline" : "online")")
+        render()
+    }
+
     @objc nonisolated func breadcrumbClicked() {
         MainActor.assumeIsolated {
             // Same altitude rule as ⌃⌥: home from a card. Speaking covers the
@@ -2717,11 +2756,23 @@ final class StatusHUD: NSObject {
         // The credits standing takes the grid's placard, in amber, for as
         // long as it holds; a transient notice below still wins for its five
         // seconds, because it is newer.
+        // Offline takes the grid's placard in chrome grey: a state, not a
+        // fault, with nothing to press. An actionable credits line below
+        // outranks it, and a notice outranks both, because it is newer.
+        if notice == nil, state.name == "idle", isOffline, creditStanding == nil {
+            stateLabel.isHidden = false
+            stateLabel.textColor = StateLegend.Lens.chrome.color
+            stateLabel.attributedStringValue = Widgets.placardText(
+                StateLegend.offlinePlacard, color: StateLegend.Lens.chrome.color)
+            stateLabel.isADoor = false
+        }
         if notice == nil, state.name == "idle", let creditStanding {
             stateLabel.isHidden = false
             stateLabel.textColor = StateLegend.Lens.fault.color
             stateLabel.attributedStringValue = Widgets.placardText(
-                "\(StateLegend.Glyph.needsYou) \(creditStanding) · Settings ›",
+                // No warning mark (ruled 22 Sep): the line is an action,
+                // not an alarm, and the amber ink already says it is yours.
+                "\(creditStanding) · Settings ›",
                 color: StateLegend.Lens.fault.color)
             stateLabel.isADoor = true
         }
@@ -2738,6 +2789,7 @@ final class StatusHUD: NSObject {
                 stateLabel.attributedStringValue = Widgets.placardText(notice, color: noticeLens.color)
             }
         }
+        clearPlacardOfControls()
 
         // The message tray's chips, derived rather than stored: whatever Core
         // has staged for the session THIS panel would send to. One resolution

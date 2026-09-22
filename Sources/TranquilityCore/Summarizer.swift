@@ -95,12 +95,16 @@ public protocol SummaryProvider: Sendable {
     var name: String { get }
     var isConfigured: Bool { get }
     var usesManagedCredits: Bool { get }
+    /// Whether this provider needs the network. Offline, the chain skips
+    /// every provider that does and goes straight to the floor.
+    var usesNetwork: Bool { get }
     func brief(for request: SummaryRequest) async throws -> SessionBrief
     func delivery(for request: SummaryRequest) async throws -> SummaryDelivery
 }
 
 public extension SummaryProvider {
     var usesManagedCredits: Bool { false }
+    var usesNetwork: Bool { true }
     func delivery(for request: SummaryRequest) async throws -> SummaryDelivery {
         SummaryDelivery(brief: try await brief(for: request))
     }
@@ -121,6 +125,7 @@ public enum SummaryError: Error, Sendable {
 public struct DeterministicSummarizer: SummaryProvider {
     public let name = "deterministic"
     public let isConfigured = true
+    public var usesNetwork: Bool { false }
     public init() {}
 
     public func brief(for request: SummaryRequest) async throws -> SessionBrief {
@@ -648,7 +653,13 @@ public struct SummarizerChain: Sendable {
                 produced = (floor, "empty-source")
             }
         } else {
-            for provider in providers where provider.isConfigured {
+            // Offline, a network provider can only fail, and a managed one
+            // would be recorded as a credits failure it is not. Skip them.
+            let reachable = Connectivity.isReachable
+            if !reachable {
+                SummarizerChain.trace?("summarize: offline; network providers skipped for \(request.projectLabel)")
+            }
+            for provider in providers where provider.isConfigured && (reachable || !provider.usesNetwork) {
                 do {
                     let delivery = try await provider.delivery(for: request)
                     let grounded = await groundDigits(delivery.brief, request: request, provider: provider)
@@ -725,6 +736,19 @@ public struct SummarizerChain: Sendable {
             brief.proposal = SpokenTextSanitizer.clamp(
                 proposal, maxWords: SpokenTextSanitizer.proposalWords)
         }
+
+        // Which rung produced this brief, and why the ones above it did not.
+        // With the amber fallback lines retired (22 Sep), a brief that fell
+        // to the floor is invisible to the person by design, so it must not
+        // be invisible to us: provider, offline, and the managed code, never
+        // the text.
+        var props: [String: TrackValue] = [
+            "provider": Track.token(from: providerName),
+            "offline": .bool(!Connectivity.isReachable),
+            "latency_ms": .int(Int(Date().timeIntervalSince(start) * 1000)),
+        ]
+        if let managedFailure { props["managed_failure"] = Track.token(from: ManagedCreditSession.describe(managedFailure)) }
+        Track.record("summary", props)
 
         // Standing belongs to ManagedCreditSession. This chain preserves an
         // operation's receipt for history but cannot promote it to balance.

@@ -2107,6 +2107,7 @@ extension StatusHUD {
         launchQuestionDrill()
         terminateDrill()
         pastAgentsDrill()
+        placardClearsControlsDrill()
         launchSettingsDrill()
         dropTrayDrill()
         trayTeardownChurnDrill()

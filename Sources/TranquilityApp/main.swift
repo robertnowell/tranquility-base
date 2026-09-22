@@ -620,7 +620,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let managed = ManagedCredits.session(log: { Permissions.log($0) })
             self.managedCredits = managed
             creditIdentityObserver = ManagedCredits.observeIdentityChanges(managed)
-            Task { await managed.refresh() }
+            // A login launch can beat Wi-Fi by seconds; the check waits for a
+            // network instead of failing, and runs again whenever it returns.
+            let connectivity = Connectivity.start()
+            connectivity.onReconnect { Task { await managed.refresh() } }
+            Task {
+                await connectivity.waitUntilReachable()
+                await managed.refresh()
+            }
             self.coordinator = Coordinator(
                 store: store,
                 summarizer: SummarizerChain(providers: [managed, AnthropicSummaryProvider(), DeterministicSummarizer()]),
@@ -1498,6 +1505,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Out of credits with a pasted key is not amber: the key carries on.
             let ownKey = Secrets.read(.anthropicAPIKey) != nil
             DispatchQueue.main.async { self?.hud.setCreditStanding(CreditStanding.current.line(ownKey: ownKey)) }
+        }
+        // Offline, as its own quiet line: grey, not amber, and only after ten
+        // seconds without a network, so a blip shows nothing. Ruled 22 Sep:
+        // offline is not a credits state and has nothing for the person to do.
+        Connectivity.start().observeOffline { [weak self] offline in
+            DispatchQueue.main.async { self?.hud.setOffline(offline) }
         }
         // One door per pane. The panel asks for a tab; the host assembles that
         // tab's data and shows it. Nothing re-renders a pane it has not fed.
