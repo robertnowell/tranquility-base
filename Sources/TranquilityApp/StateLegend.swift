@@ -732,6 +732,8 @@ enum StateLegend {
     /// Manager mode's placard (19 Sep): the hands-free manager on the grid.
     static let managerOnTitle = "HANDS-FREE"
     static let managerOffTitle = "STOP HANDS-FREE"
+    /// No manager on this Mac: neither hosted nor local is configured.
+    static let managerUnsetTitle = "SET UP HANDS-FREE"
 
     /// The empty room has no sentence of its own any more (ruled 14 Sep
     /// 2026). It used to replace the grid, ten seconds in, with "Control +

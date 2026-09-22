@@ -1036,6 +1036,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hud.onPickWaiting = { [weak self] id in self?.announceNext(only: id) }
         hud.onNewSession = { [weak self] in self?.newSession() }
         hud.onManagerToggle = { [weak self] in self?.toggleManagerMode() }
+        hud.managerAvailable = ManagerConfig.availability() != .unset
         hud.onContinueWork = { [weak self] id, name in
             self?.continueWork(from: id, name: name)
         }

@@ -96,3 +96,26 @@ final class ManagerEventIdleTests: XCTestCase {
         XCTAssertEqual(e?.secs, 1200)
     }
 }
+
+final class ManagerAvailabilityTests: XCTestCase {
+    private func config(_ json: String) throws -> URL {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("hq-\(UUID().uuidString).json")
+        try Data(json.utf8).write(to: url)
+        return url
+    }
+
+    /// The three states HANDS-FREE can be in before it is pressed: a local
+    /// command wins over hosted, hosted over the default checkout, and with
+    /// none of them the placard reads SET UP HANDS-FREE.
+    func testThreeStates() throws {
+        let local = try config(#"{"manager":{"command":["/x/run.sh"],"hosted":{"start":"https://h/start","key":"pk"}}}"#)
+        XCTAssertEqual(ManagerConfig.availability(config: local, fileExists: { _ in false }), .local)
+        let hosted = try config(#"{"manager":{"hosted":{"start":"https://h/start","key":"pk"}}}"#)
+        XCTAssertEqual(ManagerConfig.availability(config: hosted, fileExists: { _ in true }), .hosted)
+        let none = try config(#"{"manager":{}}"#)
+        XCTAssertEqual(ManagerConfig.availability(config: none, fileExists: { _ in true }), .local, "the default checkout on disk is a local manager")
+        XCTAssertEqual(ManagerConfig.availability(config: none, fileExists: { _ in false }), .unset)
+        let halfHosted = try config(#"{"manager":{"hosted":{"start":"https://h/start"}}}"#)
+        XCTAssertEqual(ManagerConfig.availability(config: halfHosted, fileExists: { _ in false }), .unset, "a hosted block without a key is not configured")
+    }
+}
