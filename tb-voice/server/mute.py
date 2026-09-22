@@ -19,18 +19,15 @@ import time
 from pipecat.frames.frames import BotStartedSpeakingFrame, BotStoppedSpeakingFrame, Frame
 from pipecat.turns.user_mute.base_user_mute_strategy import BaseUserMuteStrategy
 
-# The manager sets this when it hands the app a line to speak in a session's
-# voice; the app's audio is echo too, and the bot never sees its frames.
-EXTERNAL_UNTIL = {"t": 0.0}
+import session
 
-# Whether the manager's own voice is playing, and when it last stopped. The
-# Manager writes it, the echo gate reads it. The gate used to key on
-# BotStartedSpeakingFrame and BotStoppedSpeakingFrame directly, but the
+# The echo state (the manager's voice, the app's lines in a session's voice)
+# lives on the session, never here: see session.py for why. The gate used to key
+# on BotStartedSpeakingFrame and BotStoppedSpeakingFrame directly, but the
 # upstream copy of the stop never reached it: on 22 Sep the gate closed for the
 # first answer and stayed closed, so the transcriber heard zeros for every turn
 # after it and the panel froze on the first line. The Manager sees both frames
-# (it emits `quiet` from the stop), so it is the one that knows.
-BOT_VOICE = {"speaking": False, "stopped_at": 0.0}
+# (it emits `quiet` from the stop), so it is the one that writes the state.
 
 
 class WhileBotSpeaksMuteStrategy(BaseUserMuteStrategy):
@@ -48,4 +45,4 @@ class WhileBotSpeaksMuteStrategy(BaseUserMuteStrategy):
             self._speaking = False
             self._stopped_at = time.monotonic()
         return (self._speaking or (time.monotonic() - self._stopped_at) < self._tail
-                or time.monotonic() < EXTERNAL_UNTIL["t"])
+                or time.monotonic() < session.current().external_until["t"])
