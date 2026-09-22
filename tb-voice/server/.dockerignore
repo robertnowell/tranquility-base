@@ -1,0 +1,8 @@
+.venv
+*.log
+*.jsonl
+*.md
+notes-session.txt
+drills
+__pycache__
+.env

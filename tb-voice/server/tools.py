@@ -11,7 +11,9 @@ from loguru import logger
 from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.frames.frames import FunctionCallResultProperties, TTSSpeakFrame
 
+import wire
 from events import line
+from wire import HOSTED
 
 TBASE = os.getenv("TBASE_BIN", "tbase")
 SCHEME = os.getenv("TB_URL_SCHEME", "tranquilitybase")
@@ -21,6 +23,11 @@ SILENT = FunctionCallResultProperties(run_llm=False)
 async def _run(*argv: str, timeout: float = 45.0) -> tuple[int, str]:
     logger.info("exec " + " ".join(argv))
     line("tool", argv=list(argv))
+    if HOSTED:
+        # No tbase and no deep links where the bot runs: the app does it and replies.
+        name = "tbase" if argv[0] == TBASE else argv[0]
+        r = await wire.request("run", timeout=timeout, argv=[name, *argv[1:]])
+        return int(r.get("code", 1)), str(r.get("out", ""))
     p = await asyncio.create_subprocess_exec(
         *argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT
     )

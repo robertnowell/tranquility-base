@@ -26,7 +26,7 @@ from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair,
     LLMUserAggregatorParams,
 )
-from pipecat.runner.types import RunnerArguments
+from pipecat.runner.types import RunnerArguments, WebSocketRunnerArguments
 from pipecat.runner.utils import create_transport
 from pipecat.services.assemblyai.stt import AssemblyAISTTService
 from pipecat.services.openai.llm import OpenAILLMService
@@ -193,6 +193,29 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
 
 
 async def bot(runner_args: RunnerArguments):
+    if isinstance(runner_args, WebSocketRunnerArguments):
+        # Hosted (Pipecat Cloud or our own machine): the app is on the other end of
+        # one WebSocket. Audio both ways as PCM16, events and door requests as JSON
+        # lines; see wire.py. TB_HOSTED is set in the deployed image's environment.
+        from pipecat.transports.websocket.fastapi import (
+            FastAPIWebsocketParams,
+            FastAPIWebsocketTransport,
+        )
+        from wire import TBSerializer
+
+        transport = FastAPIWebsocketTransport(
+            websocket=runner_args.websocket,
+            params=FastAPIWebsocketParams(
+                audio_in_enabled=True,
+                audio_out_enabled=True,
+                audio_in_sample_rate=16000,
+                audio_out_sample_rate=24000,
+                serializer=TBSerializer(),
+                session_timeout=int(os.getenv("TB_SESSION_TIMEOUT", "14400")),
+            ),
+        )
+        await run_bot(transport, runner_args)
+        return
     transport_params = {
         "webrtc": lambda: TransportParams(
             audio_in_enabled=True,

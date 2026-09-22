@@ -213,6 +213,8 @@ def note(who: str, text: str, status: str = "said"):
     see as context. Seeded from the transcript on start so a restart forgets nothing."""
     EXCHANGE.append({"who": who, "text": text.strip(), "status": status})
     del EXCHANGE[:-12]
+    if os.getenv("TB_HOSTED"):
+        return  # no transcript on disk where the bot is hosted; the app keeps its own
     with open(TRANSCRIPT, "a") as f:
         f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')}  {who} [{status}]: {text.strip()}\n")
 
@@ -366,6 +368,7 @@ class Manager(FrameProcessor):
         self.stage: dict | None = None
         self.pending: dict | None = None  # a confirmation waiting for yes/no
         self.open: OpenMessage | None = None  # dictation with a destination (compose.py)
+        self._wire_task = None  # hosted: drains wire.outbox into transport messages
         self._readback_task: asyncio.Task | None = None
         self.heard = 0
         self.addressed = 0
@@ -377,6 +380,16 @@ class Manager(FrameProcessor):
     async def _say_and_wait(self, text: str, timeout: float = 8.0):
         await self._say(text)  # _say already waits for its own voice to stop
 
+    async def _drain_wire(self):
+        """Hosted: every event line and door request becomes a text frame on the
+        socket, pushed from inside the pipeline so ordering holds."""
+        from pipecat.frames.frames import OutputTransportMessageUrgentFrame
+        from wire import outbox
+        q = outbox()
+        while True:
+            msg = await q.get()
+            await self.push_frame(OutputTransportMessageUrgentFrame(message=msg))
+
     async def hearing(self):
         """The user started speaking: the orb shows it before any verdict."""
         await emit(self, "hearing")
@@ -386,6 +399,8 @@ class Manager(FrameProcessor):
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
         if isinstance(frame, StartFrame):
+            if os.getenv("TB_HOSTED") and self._wire_task is None:
+                self._wire_task = self.create_task(self._drain_wire())
             # The pipeline is running and the mic is open: now it is listening.
             await emit(None, "ready")
         if isinstance(frame, BotStoppedSpeakingFrame):
@@ -936,7 +951,7 @@ class Manager(FrameProcessor):
 
     async def _earcon(self, name: str):
         await emit(self, "earcon", name=name)
-        if SOUNDS and os.getenv("TB_HOST") != "app":  # hosted by the app, the app plays it
+        if SOUNDS and os.getenv("TB_HOST") != "app" and not os.getenv("TB_HOSTED"):  # the app plays it
             wav = os.path.join(SOUNDS, f"{'needs-you' if name == 'needsYou' else name}.wav")
             asyncio.create_task(_run("afplay", wav))
 

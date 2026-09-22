@@ -45,6 +45,8 @@ def line(event: str, **fields) -> dict:
         _sink = sys.stderr
     # And always to events.jsonl beside the log, so `tail -f` shows the stream
     # whether the app, the playground, or nobody is listening.
+    if os.getenv("TB_HOSTED"):
+        return rec  # nothing on disk where the bot is hosted
     if _file is None:
         _file = open(os.path.join(os.path.dirname(__file__), "events.jsonl"), "a", buffering=1)
     _file.write(text)
@@ -52,8 +54,12 @@ def line(event: str, **fields) -> dict:
 
 
 async def emit(processor, event: str, **fields):
-    """Write the line and, if a processor is given, mirror it to the playground."""
+    """Write the line and, if a processor is given, mirror it to the playground.
+    Hosted, the line also goes on the wire for the app (wire.outbox)."""
     rec = line(event, **fields)
-    if processor is not None:
+    if os.getenv("TB_HOSTED"):
+        from wire import outbox
+        await outbox().put(rec)
+    elif processor is not None:
         await processor.push_frame(RTVIServerMessageFrame(data={"tb": rec}))
     return rec
