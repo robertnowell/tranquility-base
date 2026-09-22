@@ -109,13 +109,23 @@ final class ManagerAvailabilityTests: XCTestCase {
     /// none of them the placard reads SET UP HANDS-FREE.
     func testThreeStates() throws {
         let local = try config(#"{"manager":{"command":["/x/run.sh"],"hosted":{"start":"https://h/start","key":"pk"}}}"#)
-        XCTAssertEqual(ManagerConfig.availability(config: local, fileExists: { _ in false }), .local)
+        XCTAssertEqual(ManagerConfig.availability(config: local, fileExists: { _ in false }, signedIn: { true }), .local,
+                       "a command in hq.json is the developer's own bot and wins over everything")
         let hosted = try config(#"{"manager":{"hosted":{"start":"https://h/start","key":"pk"}}}"#)
-        XCTAssertEqual(ManagerConfig.availability(config: hosted, fileExists: { _ in true }), .hosted)
+        XCTAssertEqual(ManagerConfig.availability(config: hosted, fileExists: { _ in true }, signedIn: { false }), .hosted)
         let none = try config(#"{"manager":{}}"#)
-        XCTAssertEqual(ManagerConfig.availability(config: none, fileExists: { _ in true }), .local, "the default checkout on disk is a local manager")
-        XCTAssertEqual(ManagerConfig.availability(config: none, fileExists: { _ in false }), .unset)
+        XCTAssertEqual(ManagerConfig.availability(config: none, fileExists: { _ in true }, signedIn: { false }), .local, "the default checkout on disk is a local manager")
+        XCTAssertEqual(ManagerConfig.availability(config: none, fileExists: { _ in false }, signedIn: { false }), .unset)
         let halfHosted = try config(#"{"manager":{"hosted":{"start":"https://h/start"}}}"#)
-        XCTAssertEqual(ManagerConfig.availability(config: halfHosted, fileExists: { _ in false }), .unset, "a hosted block without a key is not configured")
+        XCTAssertEqual(ManagerConfig.availability(config: halfHosted, fileExists: { _ in false }, signedIn: { false }), .unset, "a hosted block without a key is not configured")
+    }
+
+    /// Signed in, the session is bought from the Gateway: that is the path
+    /// every user has, and it beats the dev shim and the local checkout.
+    func testSignedInBuysFromTheGateway() throws {
+        let shim = try config(#"{"manager":{"hosted":{"start":"https://h/start","key":"pk"}}}"#)
+        XCTAssertEqual(ManagerConfig.availability(config: shim, fileExists: { _ in true }, signedIn: { true }), .managed)
+        let bare = try config(#"{"manager":{}}"#)
+        XCTAssertEqual(ManagerConfig.availability(config: bare, fileExists: { _ in false }, signedIn: { true }), .managed)
     }
 }
