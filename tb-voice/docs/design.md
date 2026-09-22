@@ -252,6 +252,25 @@ does not move: measure and deduct accurately. Reserve a block at start, extend o
 renewal, settle by the host's measured seconds at end; a session the host cannot
 report goes to `reconciling` and is never re-executed or re-charged.
 
+**The session's life (built 22 Sep).** One WebSocket is one session, and the session
+owns its wire: `wire.Wire` (the outbox and the reply table) is bound per session in
+`bot()` through a context variable, never at module level. Pipecat Cloud keeps a warm
+process and runs sessions through it back to back, and a module-level queue outlived
+its session: three sessions in, three drain tasks were taking turns on one queue and
+two of every three lines went to a closed socket, silently (02:59, 22 Sep; the
+45-second `tbase status` stalls were the same drop, 45 s being the request timeout).
+
+A session ends three ways, and the app tells them apart. The chord: the app closes
+the socket and does nothing more. Idle: nobody has spoken for `TB_IDLE_SECS` (20 min)
+and there is no open message and no pending question, so the bot emits `idle`, waits
+half a second for the line to leave, and pushes `EndWorkerFrame`; the app reads the
+line, says "paused after 20 quiet minutes", and does not reconnect, since reconnecting
+would just bill. Anything else (the network, Cloud's 4 h cap): the app opens a fresh
+session with 1, 2, 4 s backoff and gives up on the fourth with a line. A little before
+the cap, at a quiet microphone level report, the app closes the socket itself so the
+rotation lands between sentences. Not carried yet: an open message across a reconnect;
+the bot holds it, and a drop mid-dictation loses the draft.
+
 ## 9. Repository layout
 
 `tb-voice/` at the top level of the fork, beside `tools/` (the existing Python precedent),
