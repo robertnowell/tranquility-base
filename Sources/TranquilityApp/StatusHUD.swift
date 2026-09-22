@@ -3237,9 +3237,12 @@ final class StatusHUD: NSObject {
         newRow.widthAnchor.constraint(equalToConstant: Self.gridWidth).isActive = true
         waitingRows.addArrangedSubview(hairline(StateLegend.Palette.hairlineSoft))
         // The manager's door (19 Sep): one placard row, both halves toggle it.
+        // With no manager configured it reads SET UP HANDS-FREE (22 Sep); the
+        // press still goes to the toggle, which says what is missing.
         let managerRow = PlacardRowView(
             width: Self.gridWidth, target: self,
-            title: StateLegend.managerOnTitle, glyph: "◯", action: #selector(managerRowTapped))
+            title: managerAvailable ? StateLegend.managerOnTitle : StateLegend.managerUnsetTitle,
+            glyph: managerAvailable ? "◯" : "◌", action: #selector(managerRowTapped))
         waitingRows.addArrangedSubview(managerRow)
         managerRow.widthAnchor.constraint(equalToConstant: Self.gridWidth).isActive = true
         // The key line's top rule; the hint label follows in the outer stack.
@@ -3276,6 +3279,9 @@ final class StatusHUD: NSObject {
     /// Whether the orb is on the grid. Flipped by the app when the child
     /// starts or ends; the grid repaints on the next idle render.
     var managerOn = false
+    /// False when neither a hosted nor a local manager is configured; the
+    /// placard then reads SET UP HANDS-FREE. Set by the app before the first render.
+    var managerAvailable = true
     /// One globe, always. The dotted sphere is the manager's face; only its
     /// colour changes (green while you talk, amber while something speaks).
     static let orbState = "composing"

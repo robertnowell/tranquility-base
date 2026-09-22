@@ -91,6 +91,31 @@ public enum ManagerConfig {
         return "\(home)/Projects/voice-controlled-coding-agents/.build/arm64-apple-macosx/debug/tbase"
     }
 
+    /// What HANDS-FREE would do if pressed. `hosted` when `manager.hosted` is
+    /// configured and no local command is; `local` when a command is configured
+    /// or the default checkout's `run.sh` is on disk; `unset` otherwise, in
+    /// which case the placard reads SET UP HANDS-FREE and a press says why.
+    /// The managed path (a session from the Gateway for a signed-in account)
+    /// takes the `unset` slot when its route lands.
+    public enum Availability: Equatable, Sendable { case local, hosted, unset }
+
+    public static func availability(config: URL = HubApp.configPath,
+                                    fileExists: (String) -> Bool = { FileManager.default.isExecutableFile(atPath: $0) }) -> Availability {
+        if explicitCommand(config: config) != nil { return .local }
+        if hostedIsConfigured(config: config) { return .hosted }
+        return fileExists(command(config: config)[0]) ? .local : .unset
+    }
+
+    static func hostedIsConfigured(config: URL) -> Bool {
+        guard let data = try? Data(contentsOf: config),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let manager = obj["manager"] as? [String: Any],
+              let hosted = manager["hosted"] as? [String: Any],
+              let start = hosted["start"] as? String, !start.isEmpty,
+              let key = hosted["key"] as? String, !key.isEmpty else { return false }
+        return true
+    }
+
     public static func command(config: URL = HubApp.configPath) -> [String] {
         if let data = try? Data(contentsOf: config),
            let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],

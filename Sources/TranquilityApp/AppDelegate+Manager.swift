@@ -87,9 +87,18 @@ extension AppDelegate {
         // A hosted manager when configured and no local command is: the same
         // event lines arrive over a socket instead of a pipe, and the bot asks
         // this process for its doors (ManagerSocket.swift).
-        if ManagerConfig.explicitCommand() == nil, let hosted = ManagerSessionStarter.hosted() {
-            startHostedManager(hosted)
+        switch ManagerConfig.availability() {
+        case .hosted:
+            if let hosted = ManagerSessionStarter.hosted() { startHostedManager(hosted) }
             return
+        case .unset:
+            // Nothing to start. The managed path (a session issued by the
+            // Gateway to a signed-in account) fills this slot when it lands.
+            hud.showResult("Hands-free is not set up on this Mac: no manager is configured.")
+            Permissions.log("manager: not configured (no manager.hosted, no manager.command, no local checkout)")
+            return
+        case .local:
+            break
         }
         let argv = ManagerConfig.command()
         let cwd = (argv[0] as NSString).deletingLastPathComponent
