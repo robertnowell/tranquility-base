@@ -171,7 +171,18 @@ extension AppDelegate {
                 Permissions.log(String(format: "manager mic: rms %.4f, %d bytes sent", level, bytes))
             }
             Permissions.log("manager: hosted session \(session.sessionId ?? "?") (start \(Int(Date().timeIntervalSince(started) * 1000)) ms)")
+            // Hosted, the bot keeps nothing on disk; the app keeps the stream
+            // here so the viewer (tb-voice/server/tail.py) can read it.
+            let eventsFile = QueueStore.supportDirectory.appendingPathComponent("manager-events.jsonl")
+            let eventsHandle: FileHandle? = {
+                if !FileManager.default.fileExists(atPath: eventsFile.path) {
+                    FileManager.default.createFile(atPath: eventsFile.path, contents: nil)
+                }
+                let h = try? FileHandle(forWritingTo: eventsFile); h?.seekToEndOfFile(); return h
+            }()
+            defer { try? eventsHandle?.close() }
             for await line in socket.lines() {
+                eventsHandle?.write(line + Data([0x0A]))
                 guard let event = ManagerEvent.parse(line) else { continue }
                 if event.event == .ready {
                     Permissions.log("manager: ready \(Int(Date().timeIntervalSince(started) * 1000)) ms after start")
