@@ -1381,6 +1381,17 @@ public final class QueueStore: Sendable {
                 system = system ?? stored
                 cloud = nil
             }
+            // The system half is sticky only while it is still APPROVED. Unlike
+            // the cloud voice, which stays put when the roster is edited, a
+            // system voice off the roster is re-picked: ruled 22 Sep after
+            // three agents were read in Bad News, Bahh and Albert, voices that
+            // were never checked. Reading an agent in an unapproved voice is
+            // the failure; changing its fallback voice is not.
+            if let stored = system, !systemRoster.contains(stored) {
+                Self.trace?("voice: \(stored) is off the system roster;"
+                            + " re-picking for \(sessionId.prefix(8))")
+                system = nil
+            }
             if cloud != nil, system != nil { return (cloud, system) }
 
             // Backfill whichever half is missing — the system one for a session
@@ -1398,6 +1409,10 @@ public final class QueueStore: Sendable {
                 arguments: [sessionId]) ?? 0
             if cloud == nil, !roster.isEmpty { cloud = roster[slot % roster.count] }
             if system == nil, !systemRoster.isEmpty { system = systemRoster[slot % systemRoster.count] }
+            if cloud == (row["voiceId"] as String?).flatMap({ $0.isEmpty ? nil : $0 }),
+               system == row["systemVoiceId"] as String? {
+                return (cloud, system)
+            }
             try db.execute(
                 sql: "UPDATE session_voice SET voiceId = ?, systemVoiceId = ? WHERE sessionId = ?",
                 arguments: [cloud ?? "", system, sessionId])
