@@ -277,6 +277,19 @@ final class ManagedCreditSessionTests: XCTestCase {
         XCTAssertFalse(display.current.detail.contains("floor"), display.current.detail)
     }
 
+    func testAnUnreachableBalanceCheckAtLaunchIsNotAFloor() async throws {
+        let identity = Identity(), display = Display(), gateway = Gateway(a)
+        identity.set("A")
+        let session = make(identity, display, gateway)
+        await gateway.failBalance()
+        await session.refresh()
+        // 22 Sep: launched before the network was up, the one check failed,
+        // and "Credits unavailable right now" sat on the grid for ninety
+        // minutes with credits fine. No summary ran, so nothing fell back.
+        XCTAssertNil(display.current.line, "\(display.current)")
+        XCTAssertEqual(display.current, .onCredits)
+    }
+
     func testStoredTokenAloneDoesNotWaiveTheDirectKeyRequirement() {
         let probes = Prerequisites.Probes(tmuxPath: { "/fixture/tmux" }, hooksProblem: { _ in nil },
             hasSecret: { _ in false }, hubStatus: { .init(connected: true, detail: "signed in") }, creditStanding: { .onCredits })

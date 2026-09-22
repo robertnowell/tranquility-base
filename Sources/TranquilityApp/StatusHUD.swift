@@ -1234,6 +1234,34 @@ final class StatusHUD: NSObject {
         render()
     }
 
+    /// Keep whatever the placard says clear of the controls sharing its row.
+    ///
+    /// The label spans the row; the chevron sits on its left and the gear on
+    /// its right. Each writer used to indent its own string, so only the ones
+    /// that remembered did: the grid title and PAST AGENTS cleared the
+    /// chevron, and the credits line and grid notices painted under it
+    /// (22 Sep, "we should never have messages overlap"). One pass at the end
+    /// of render, over whatever was written, so the next writer inherits it.
+    /// Text too long for the space left truncates instead of running under
+    /// the gear.
+    private func clearPlacardOfControls() {
+        let text = stateLabel.attributedStringValue
+        guard text.length > 0 else { return }
+        var lead: CGFloat = 0
+        if collapseButton?.isHidden == false { lead = 24 }
+        if pastBackButton?.isHidden == false { lead = 30 }
+        let tail: CGFloat = gearButton?.isHidden == false ? 30 : 0
+        let existing = text.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
+        let style = (existing?.mutableCopy() as? NSMutableParagraphStyle) ?? NSMutableParagraphStyle()
+        style.firstLineHeadIndent = max(style.firstLineHeadIndent, lead)
+        style.headIndent = max(style.headIndent, lead)
+        if tail > 0 { style.tailIndent = -tail }
+        style.lineBreakMode = .byTruncatingTail
+        let fitted = NSMutableAttributedString(attributedString: text)
+        fitted.addAttribute(.paragraphStyle, value: style, range: NSRange(location: 0, length: fitted.length))
+        stateLabel.attributedStringValue = fitted
+    }
+
     @objc nonisolated func breadcrumbClicked() {
         MainActor.assumeIsolated {
             // Same altitude rule as ⌃⌥: home from a card. Speaking covers the
@@ -2738,6 +2766,7 @@ final class StatusHUD: NSObject {
                 stateLabel.attributedStringValue = Widgets.placardText(notice, color: noticeLens.color)
             }
         }
+        clearPlacardOfControls()
 
         // The message tray's chips, derived rather than stored: whatever Core
         // has staged for the session THIS panel would send to. One resolution

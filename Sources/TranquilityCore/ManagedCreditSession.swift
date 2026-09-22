@@ -68,8 +68,55 @@ public actor ManagedCreditSession: SummaryProvider {
             do {
                 let client = try await client(ctx)
                 try await updateBalance(client, context: ctx, ticket: ticket, mayRecover: true)
-            } catch { record(error, context: ctx, ticket: ticket) }
-        } catch { recordPreparation(error) }
+                refreshAttempt = 0
+            } catch {
+                // A balance check is not a summary. When it cannot reach the
+                // service, nothing fell back and nothing is owed, so it does
+                // not get to say "credits unavailable". 22 Sep: launched while
+                // the network was still coming up, one check failed, nothing
+                // retried, and the amber line sat on the grid for ninety
+                // minutes while credits were fine. Stay "checking" and try
+                // again; a refusal that names a resolution still lands.
+                if Self.isUnreachable(error) { scheduleRefreshRetry(); return }
+                record(error, context: ctx, ticket: ticket)
+            }
+        } catch {
+            if Self.isUnreachable(error) { scheduleRefreshRetry(); return }
+            recordPreparation(error)
+        }
+    }
+
+    /// Retries after an unreachable balance check: soon, then less often,
+    /// then left to the next summary, which checks anyway.
+    static let refreshRetryDelays: [Duration] = [.seconds(15), .seconds(60), .seconds(300)]
+    private var refreshAttempt = 0
+    private var refreshRetry: Task<Void, Never>?
+
+    private func scheduleRefreshRetry() {
+        guard refreshRetry == nil, refreshAttempt < Self.refreshRetryDelays.count else { return }
+        let delay = Self.refreshRetryDelays[refreshAttempt]
+        refreshAttempt += 1
+        refreshRetry = Task { [weak self] in
+            try? await Task.sleep(for: delay)
+            guard !Task.isCancelled else { return }
+            await self?.retryRefresh()
+        }
+    }
+
+    private func retryRefresh() async {
+        refreshRetry = nil
+        await refresh()
+    }
+
+    /// Whether a failure only says the service could not be reached, as
+    /// opposed to a refusal that names something to do.
+    static func isUnreachable(_ error: Error) -> Bool {
+        guard !(error is CancellationError) else { return false }
+        let failure = (error as? ManagedSummaryFailure)
+            ?? .refused(code: "service_unavailable", operationId: nil)
+        return CreditStanding.from(receipt: nil, failure: failure, provider: "tranquility-gateway",
+                                   now: .distantPast)
+            == .floored(.serviceUnavailable, at: .distantPast)
     }
 
     public func brief(for request: SummaryRequest) async throws -> SessionBrief {

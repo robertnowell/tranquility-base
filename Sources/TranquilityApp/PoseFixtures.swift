@@ -314,6 +314,14 @@ extension StatusHUD {
             noticeExpiry = nil
             return true
 
+        // The credits line on the grid, the second writer of that strip. It
+        // painted under the collapse chevron on 22 Sep because nothing could
+        // photograph it.
+        case "grid-credits":
+            _ = pose("grid")
+            setCreditStanding("Credits unavailable right now")
+            return true
+
         case "collapsed":
             setCollapsed(true)
             showIdle(rows: [
