@@ -25,7 +25,11 @@ RULES = [
     (re.compile(r"\*\*([^*]+)\*\*"), r"\1"),
     (re.compile(r"(?:^|\s)#{1,6}\s+"), " "),
 ]
-MAX_WORDS = 30
+# Brevity is the prompt's job, not this function's. A thirty-word cut here
+# took the last sentence off the manager's own capabilities line ("Say start an
+# agent." was never spoken, 22 Sep) while the panel displayed it in full, so
+# what was heard and what was shown disagreed. Ruled 09 Aug and again today:
+# nothing truncates speech that is also displayed.
 
 
 def spoken(text: str) -> str:
@@ -33,9 +37,4 @@ def spoken(text: str) -> str:
     for rx, rep in RULES:
         out = rx.sub(rep, out)
     out = re.sub(r"\s+,", ",", re.sub(r"\s+", " ", out)).strip()
-    words = out.split()
-    if len(words) > MAX_WORDS:
-        cut = " ".join(words[:MAX_WORDS])
-        dot = max(cut.rfind(". "), cut.rfind("? "), cut.rfind("! "))
-        out = cut[: dot + 1] if dot > 40 else cut.rstrip(",;:") + "."
     return out
