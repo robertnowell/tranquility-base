@@ -137,6 +137,12 @@ public final class ManagerSocket: @unchecked Sendable {
     /// 20 ms of 16 kHz PCM16: the frame size the bot's VAD likes.
     private let chunk = 640
     public private(set) var closeReason: String?
+    /// Microphone level, once every two seconds of audio sent: the proof that
+    /// the room reaches the wire. 02:15, 22 Sep: 106 s of audio arrived at the
+    /// STT and transcribed to nothing, and the log could not say whether that
+    /// was silence in the room or silence on the wire.
+    public var onLevel: (@Sendable (Float, Int) -> Void)?
+    private var levelAccum: (sumSquares: Double, samples: Int, sentBytes: Int) = (0, 0, 0)
 
     public init(session: ManagerSession, audio: ManagerAudioSource, player: PCMPlayer? = PCMPlayer(),
                 onRequest: @escaping RequestHandler) {
@@ -193,6 +199,16 @@ public final class ManagerSocket: @unchecked Sendable {
 
     private func send(_ pcm16: Data) {
         lock.lock()
+        pcm16.withUnsafeBytes { raw in
+            for v in raw.bindMemory(to: Int16.self) { let f = Double(v) / 32768; levelAccum.sumSquares += f * f }
+        }
+        levelAccum.samples += pcm16.count / 2
+        levelAccum.sentBytes += pcm16.count
+        var report: (Float, Int)?
+        if levelAccum.samples >= 32_000 {
+            report = (Float((levelAccum.sumSquares / Double(levelAccum.samples)).squareRoot()), levelAccum.sentBytes)
+            levelAccum = (0, 0, levelAccum.sentBytes)
+        }
         outgoing.append(pcm16)
         var frames: [Data] = []
         while outgoing.count >= chunk {
@@ -201,6 +217,7 @@ public final class ManagerSocket: @unchecked Sendable {
         }
         let task = self.task
         lock.unlock()
+        if let report { onLevel?(report.0, report.1) }
         guard let task else { return }
         for frame in frames {
             task.send(.data(frame)) { _ in }
@@ -275,17 +292,27 @@ public enum ManagerSessionStarter {
     }
 
     /// `POST /start` with `transport: websocket`: the bot starts when we connect.
-    public static func start(_ hosted: Hosted) async throws -> ManagerSession {
+    /// `keyterms` ride in the session body (the fleet's names, so the STT can
+    /// spell them); the service hands the body back encoded and it is appended
+    /// to the socket URL, which is how Pipecat Cloud carries it.
+    public static func start(_ hosted: Hosted, keyterms: [String] = []) async throws -> ManagerSession {
         var request = URLRequest(url: hosted.start)
         request.httpMethod = "POST"
         request.setValue("Bearer \(hosted.key)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONSerialization.data(withJSONObject: ["transport": "websocket"])
+        var payload: [String: Any] = ["transport": "websocket"]
+        if !keyterms.isEmpty { payload["body"] = ["keyterms": Array(keyterms.prefix(80))] }
+        request.httpBody = try JSONSerialization.data(withJSONObject: payload)
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let ws = (obj["wsUrl"] as? String).flatMap(URL.init(string:)) else {
+              var ws = (obj["wsUrl"] as? String).flatMap(URL.init(string:)) else {
             throw ManagerSocketError.closed
+        }
+        if let encoded = obj["body"] as? String, !encoded.isEmpty,
+           var parts = URLComponents(url: ws, resolvingAgainstBaseURL: false) {
+            parts.queryItems = (parts.queryItems ?? []) + [URLQueryItem(name: "body", value: encoded)]
+            if let u = parts.url { ws = u }
         }
         return ManagerSession(url: ws, token: obj["token"] as? String, sessionId: obj["sessionId"] as? String)
     }

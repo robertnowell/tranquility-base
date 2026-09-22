@@ -144,8 +144,13 @@ extension AppDelegate {
         Permissions.log("manager: hosted, starting a session at \(hosted.start.host ?? "?")")
         managerTask = Task { @MainActor [weak self] in
             guard let self else { return }
+            // The fleet's names go with the start so the transcriber can spell
+            // them; a read at the bot's end would wait on a pipeline that does
+            // not exist yet (5 s, every start, 22 Sep).
+            let names = await Self.fleetNames()
+            let started = Date()
             let session: ManagerSession
-            do { session = try await ManagerSessionStarter.start(hosted) } catch {
+            do { session = try await ManagerSessionStarter.start(hosted, keyterms: names) } catch {
                 self.hud.showResult("Hands-free could not start a session: \(error.localizedDescription)")
                 Permissions.log("manager: hosted start failed \(error)")
                 self.hud.setManager(on: false)
@@ -161,9 +166,15 @@ extension AppDelegate {
                 return
             }
             self.managerSocket = socket
-            Permissions.log("manager: hosted session \(session.sessionId ?? "?")")
+            socket.onLevel = { level, bytes in
+                Permissions.log(String(format: "manager mic: rms %.4f, %d bytes sent", level, bytes))
+            }
+            Permissions.log("manager: hosted session \(session.sessionId ?? "?") (start \(Int(Date().timeIntervalSince(started) * 1000)) ms)")
             for await line in socket.lines() {
                 guard let event = ManagerEvent.parse(line) else { continue }
+                if event.event == .ready {
+                    Permissions.log("manager: ready \(Int(Date().timeIntervalSince(started) * 1000)) ms after start")
+                }
                 self.handle(event)
             }
             guard self.managerSocket === socket else { return }
@@ -172,6 +183,14 @@ extension AppDelegate {
             self.hud.setManager(on: false)
             self.rebuildMenu()
         }
+    }
+
+    /// The grid's display names, for the transcriber's key terms.
+    static func fleetNames() async -> [String] {
+        let (code, out) = await answerManagerRequest(["tbase", "targets", "--json"])
+        guard code == 0, let data = out.data(using: .utf8),
+              let rows = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return [] }
+        return rows.compactMap { ($0["name"] as? String)?.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
     }
 
     /// The bot's doors, done here. `tbase …` runs the CLI this Mac has;
