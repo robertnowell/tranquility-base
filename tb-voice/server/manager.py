@@ -38,6 +38,9 @@ NAME = os.getenv("TB_MANAGER_NAME", "Tranquility")
 THRESHOLD = float(os.getenv("TB_ADDRESSED_THRESHOLD", "0.5"))
 HOLD_SECS = float(os.getenv("TB_HOLD_SECS", "1.2"))
 HOLD_NAMED_SECS = float(os.getenv("TB_HOLD_NAMED_SECS", "2.5"))
+# The same command twice inside this window is one sentence heard as two, not a
+# person asking twice. A person who means it says it again after the answer.
+REPEAT_SECS = float(os.getenv("TB_REPEAT_SECS", "2.5"))
 # Hosted: a session nobody has spoken to for this long ends itself. Every
 # minute a session is up is a billed minute (Cloud, the transcriber), and
 # hands-free left on overnight would otherwise run to the 4 h cap. The app
@@ -76,6 +79,16 @@ INTENTS = {
 # starts like one of these, at the start of a turn, is the name; the gate does
 # not get to disagree with the person saying it.
 NAME_SOUNDS = ("tranq", "trank", "drink", "tranc", "trinq", "tranguil", "tranqu")
+
+
+def only_the_name(text: str) -> bool:
+    """The whole fragment is the manager's name and nothing else. 13:09, 22 Sep:
+    "Tranquility." arrived as its own final, was judged alone, and then "Can you
+    tell me about your capabilities?" was judged again a second later: two
+    verdicts, two answers, from one sentence. A name on its own is never a
+    command, whatever punctuation the transcriber put after it."""
+    words = [w.strip(",.!?;:").lower() for w in text.split()]
+    return len(words) == 1 and words[0].startswith(NAME_SOUNDS)
 
 
 def names_the_manager(text: str) -> bool:
@@ -383,6 +396,8 @@ class Manager(FrameProcessor):
         self._brain = Brain()
         seed_exchange()
         self._recent: list[str] = []
+        self._last_intent: str | None = None
+        self._last_intent_at = 0.0
         self.stage: dict | None = None
         self.pending: dict | None = None  # a confirmation waiting for yes/no
         self.open: OpenMessage | None = None  # dictation with a destination (compose.py)
@@ -496,9 +511,13 @@ class Manager(FrameProcessor):
             text = (self._held + " " + text).strip()
             self._held = None
             logger.info(f"joined turn: {text[:80]}")
-        if not text.rstrip().endswith((".", "?", "!")):
+        # A fragment waits for its rest when it was cut mid-sentence, and also
+        # when it is only the manager's name: the transcriber ends a final
+        # after the vocative often enough that judging it alone costs a
+        # duplicate answer every time.
+        if not text.rstrip().endswith((".", "?", "!")) or only_the_name(text):
             self._held = text
-            wait = HOLD_NAMED_SECS if names_the_manager(text) else HOLD_SECS
+            wait = HOLD_NAMED_SECS if names_the_manager(text) or only_the_name(text) else HOLD_SECS
             self._held_task = asyncio.create_task(self._release_held(frame, direction, wait))
             return
         self.heard += 1
@@ -571,6 +590,16 @@ class Manager(FrameProcessor):
                    p=round(p, 2), intent=intent if speak else None, ms=ms, text=text[:120])
         if not speak:
             return
+        # One sentence, one action. 02:58, 22 Sep: "Okay, can you invite the
+        # next" and "agent to speak, please?" arrived half a second apart, both
+        # were judged invite_next, and two agents were invited. The hold joins
+        # what it can; this catches what it cannot.
+        now = time.monotonic()
+        if intent == self._last_intent and now - self._last_intent_at < REPEAT_SECS:
+            logger.info(f"dropping a second {intent} {now - self._last_intent_at:.1f}s after the first")
+            await emit(self, "listening", p=round(p, 2), ms=ms, text=text[:120])
+            return
+        self._last_intent, self._last_intent_at = intent, now
         self.addressed += 1
         # The activation cue covers latency you would otherwise fill by repeating
         # yourself. An invite or a rung speaks within a second; a cue there lands
