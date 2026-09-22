@@ -175,6 +175,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var announceTask: Task<Void, Never>?
     /// Manager mode (19 Sep): the stdio child, its reader, and its lamp.
     var managerTransport: ACPProcessTransport?
+    /// Hosted manager (21 Sep): the socket to the bot we host, when
+    /// `manager.hosted` is configured and no local command is.
+    var managerSocket: ManagerSocket?
     var managerTask: Task<Void, Never>?
     var managerLastLine = "listening"
     /// Where the ⌃⌥ walk over an all-opened stack has got to. Nil means start

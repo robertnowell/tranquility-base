@@ -75,7 +75,7 @@ extension AppDelegate {
 
 extension AppDelegate {
 
-    var managerIsOn: Bool { managerTransport != nil }
+    var managerIsOn: Bool { managerTransport != nil || managerSocket != nil }
 
     @objc func toggleManagerMode() {
         if managerIsOn { stopManager() } else { startManager() }
@@ -84,6 +84,13 @@ extension AppDelegate {
 
     @MainActor
     func startManager() {
+        // A hosted manager when configured and no local command is: the same
+        // event lines arrive over a socket instead of a pipe, and the bot asks
+        // this process for its doors (ManagerSocket.swift).
+        if ManagerConfig.explicitCommand() == nil, let hosted = ManagerSessionStarter.hosted() {
+            startHostedManager(hosted)
+            return
+        }
         let argv = ManagerConfig.command()
         let cwd = (argv[0] as NSString).deletingLastPathComponent
         let transport = ACPProcessTransport(command: argv, cwd: cwd,
@@ -125,8 +132,76 @@ extension AppDelegate {
         managerTask = nil
         if let transport = managerTransport { Task { await transport.close() } }
         managerTransport = nil
+        if let socket = managerSocket { Task { await socket.close() } }
+        managerSocket = nil
         hud.setManager(on: false)
         Permissions.log("manager: stopped")
+    }
+
+    @MainActor
+    private func startHostedManager(_ hosted: ManagerSessionStarter.Hosted) {
+        hud.setManager(on: true)  // breathing until the bot says ready
+        Permissions.log("manager: hosted, starting a session at \(hosted.start.host ?? "?")")
+        managerTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            let session: ManagerSession
+            do { session = try await ManagerSessionStarter.start(hosted) } catch {
+                self.hud.showResult("Hands-free could not start a session: \(error.localizedDescription)")
+                Permissions.log("manager: hosted start failed \(error)")
+                self.hud.setManager(on: false)
+                return
+            }
+            let socket = ManagerSocket(session: session, audio: ManagerMicrophone()) { argv in
+                await AppDelegate.answerManagerRequest(argv)
+            }
+            do { try socket.start() } catch {
+                self.hud.showResult("Hands-free could not open the microphone: \(error.localizedDescription)")
+                Permissions.log("manager: hosted mic failed \(error)")
+                self.hud.setManager(on: false)
+                return
+            }
+            self.managerSocket = socket
+            Permissions.log("manager: hosted session \(session.sessionId ?? "?")")
+            for await line in socket.lines() {
+                guard let event = ManagerEvent.parse(line) else { continue }
+                self.handle(event)
+            }
+            guard self.managerSocket === socket else { return }
+            Permissions.log("manager: hosted socket ended (\(socket.closeReason ?? "closed"))")
+            self.managerSocket = nil
+            self.hud.setManager(on: false)
+            self.rebuildMenu()
+        }
+    }
+
+    /// The bot's doors, done here. `tbase …` runs the CLI this Mac has;
+    /// `open <scheme>://…` is handed to the app's own deep-link handler, so
+    /// the scheme the bot wrote does not matter. Anything else is refused.
+    static func answerManagerRequest(_ argv: [String]) async -> (code: Int, out: String) {
+        switch argv.first {
+        case "tbase":
+            // The exit status is the answer (send maps 0/2/3/4/5), so this is a
+            // plain Process rather than Subprocess.run, which folds status into a message.
+            return await Task.detached { () -> (code: Int, out: String) in
+                let p = Process()
+                p.executableURL = URL(fileURLWithPath: ManagerConfig.tbasePath())
+                p.arguments = Array(argv.dropFirst())
+                let pipe = Pipe()
+                p.standardOutput = pipe; p.standardError = pipe
+                do { try p.run() } catch { return (127, "\(error)") }
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                p.waitUntilExit()
+                return (Int(p.terminationStatus), String(decoding: data, as: UTF8.self))
+            }.value
+        case "open":
+            guard argv.count > 1, let url = URL(string: argv[1]) else { return (2, "no url") }
+            await MainActor.run {
+                (NSApp.delegate as? AppDelegate)?.application(NSApp, open: [url])
+            }
+            return (0, "")
+        default:
+            return (2, "refused: \(argv.first ?? "")")
+        }
     }
 
     @MainActor
