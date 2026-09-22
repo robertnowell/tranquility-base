@@ -42,6 +42,12 @@ HOLD_NAMED_SECS = float(os.getenv("TB_HOLD_NAMED_SECS", "2.5"))
 # hands-free left on overnight would otherwise run to the 4 h cap. The app
 # hears the `idle` line and says so; a chord starts a fresh session.
 IDLE_SECS = float(os.getenv("TB_IDLE_SECS", "1200"))
+# Hosted: Cloud caps a session at four hours. A little before that, at a
+# moment with nothing open, the bot ends the session with a `rotate` line and
+# the app opens a fresh one. The bot decides because only it knows whether a
+# message is open; the app's microphone level cannot tell a pause between
+# sentences from silence.
+SESSION_LIFE_SECS = float(os.getenv("TB_SESSION_LIFE_SECS", str(3 * 3600 + 55 * 60)))
 SCHEME = os.getenv("TB_URL_SCHEME", "tranquilitybase")
 SOUNDS = os.getenv("TB_SOUNDS", "")
 TBASE = os.getenv("TBASE_BIN", "tbase")
@@ -405,16 +411,26 @@ class Manager(FrameProcessor):
             await self.push_frame(OutputTransportMessageUrgentFrame(message=msg))
 
     async def _end_when_idle(self):
+        started = time.monotonic()
         while True:
-            left = IDLE_SECS - (time.monotonic() - self._last_heard)
-            if left > 0:
-                await asyncio.sleep(min(left, 30))
+            now = time.monotonic()
+            idle_in = IDLE_SECS - (now - self._last_heard)
+            rotate_in = SESSION_LIFE_SECS - (now - started)
+            if idle_in > 0 and rotate_in > 0:
+                await asyncio.sleep(min(idle_in, rotate_in, 30))
                 continue
-            if self.open is not None or self.pending:  # mid-message or mid-question: not idle
-                self._last_heard = time.monotonic()
+            busy = self.open is not None or self.pending or self._user_speaking
+            if busy:  # mid-message, mid-question or mid-sentence: look again shortly
+                if idle_in <= 0:
+                    self._last_heard = now
+                await asyncio.sleep(5)
                 continue
-            logger.info(f"idle for {IDLE_SECS:.0f}s: ending the session")
-            await emit(None, "idle", secs=int(IDLE_SECS))
+            if idle_in <= 0:
+                logger.info(f"idle for {IDLE_SECS:.0f}s: ending the session")
+                await emit(None, "idle", secs=int(IDLE_SECS))
+            else:
+                logger.info(f"session life {SESSION_LIFE_SECS:.0f}s reached: rotating")
+                await emit(None, "rotate", secs=int(SESSION_LIFE_SECS))
             await asyncio.sleep(0.5)  # the line leaves before the socket closes
             await self.push_frame(EndWorkerFrame())
             return
