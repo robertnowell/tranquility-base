@@ -77,9 +77,15 @@ async def main(url: str, wav: str, token: str | None = None):
     ok = True
     for i, events in enumerate(turns):
         heard = "addressed" in events or "listening" in events
+        answered = events.count("speaking")
         print(f"turn {i + 1}: {events}")
         if not heard:
             print(f"FAIL: turn {i + 1} was never transcribed or judged")
+            ok = False
+        # One sentence, one answer. A transcriber that ends a final after the
+        # vocative used to buy two (13:09, 22 Sep).
+        if answered > 1:
+            print(f"FAIL: turn {i + 1} was answered {answered} times for one sentence")
             ok = False
     print("second turn drill:", "PASS" if ok else "FAIL")
     sys.exit(0 if ok else 1)
