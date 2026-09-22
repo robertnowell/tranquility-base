@@ -228,6 +228,30 @@ directories); the bot leaves the flag off, registration is the proof it needs.
 overlap, hold, read-back, yes, phrase, trailing phrase, cancel and retarget with the
 doors stubbed.
 
+## 8c. Hosting and credits (ruled 21 Sep)
+
+**Shape.** The bot is hosted, unchanged, as a container; the app streams audio and the
+JSON event lines over one WebSocket; local mode (`--local`, `manager.command` in
+`hq.json`, your own keys) stays the developer and BYOK door. Pipecat Cloud first; a
+`VoiceHost` interface in the Gateway is the only seam that switches to our own machines.
+No Python runtime is ever shipped inside the app or bootstrapped on a user's Mac.
+Research: 2026-09-21-voice-agent-runtime-shape; audit: hosting-build-vs-buy; plan:
+hands-free-execution-plan.
+
+**Identity and money.** A hosted voice session is a managed-credits operation on the
+Gateway: the same sign-in, the same DPoP bearer with one more scope (`voice:session`),
+the same personal account, the same credit-standing state when the balance runs out.
+The bot never holds a bearer, an account, or a user's keys.
+
+**The grant and the price.** Hands-free draws from the same launch grant as summaries.
+The voice-minute price is a server-owned pricebook constant, versioned like
+`summaryMicros`: a session locks the pricebook version at admission, and a new version
+changes the price for sessions started after it, never for one in flight. Tweaking the
+value over time is a pricebook release, not a client release. The requirement that
+does not move: measure and deduct accurately. Reserve a block at start, extend on
+renewal, settle by the host's measured seconds at end; a session the host cannot
+report goes to `reconciling` and is never re-executed or re-charged.
+
 ## 9. Repository layout
 
 `tb-voice/` at the top level of the fork, beside `tools/` (the existing Python precedent),
