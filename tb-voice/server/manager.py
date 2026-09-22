@@ -17,6 +17,7 @@ import httpx
 from loguru import logger
 from pipecat.frames.frames import (
     BotStoppedSpeakingFrame,
+    EndWorkerFrame,
     Frame,
     LLMContextFrame,
     StartFrame,
@@ -36,6 +37,11 @@ NAME = os.getenv("TB_MANAGER_NAME", "Tranquility")
 THRESHOLD = float(os.getenv("TB_ADDRESSED_THRESHOLD", "0.5"))
 HOLD_SECS = float(os.getenv("TB_HOLD_SECS", "1.2"))
 HOLD_NAMED_SECS = float(os.getenv("TB_HOLD_NAMED_SECS", "2.5"))
+# Hosted: a session nobody has spoken to for this long ends itself. Every
+# minute a session is up is a billed minute (Cloud, the transcriber), and
+# hands-free left on overnight would otherwise run to the 4 h cap. The app
+# hears the `idle` line and says so; a chord starts a fresh session.
+IDLE_SECS = float(os.getenv("TB_IDLE_SECS", "1200"))
 SCHEME = os.getenv("TB_URL_SCHEME", "tranquilitybase")
 SOUNDS = os.getenv("TB_SOUNDS", "")
 TBASE = os.getenv("TBASE_BIN", "tbase")
@@ -374,6 +380,8 @@ class Manager(FrameProcessor):
         self.pending: dict | None = None  # a confirmation waiting for yes/no
         self.open: OpenMessage | None = None  # dictation with a destination (compose.py)
         self._wire_task = None  # hosted: drains wire.outbox into transport messages
+        self._idle_task = None  # hosted: ends the session after IDLE_SECS without speech
+        self._last_heard = time.monotonic()
         self._readback_task: asyncio.Task | None = None
         self.heard = 0
         self.addressed = 0
@@ -396,15 +404,33 @@ class Manager(FrameProcessor):
             msg = await q.get()
             await self.push_frame(OutputTransportMessageUrgentFrame(message=msg))
 
+    async def _end_when_idle(self):
+        while True:
+            left = IDLE_SECS - (time.monotonic() - self._last_heard)
+            if left > 0:
+                await asyncio.sleep(min(left, 30))
+                continue
+            if self.open is not None or self.pending:  # mid-message or mid-question: not idle
+                self._last_heard = time.monotonic()
+                continue
+            logger.info(f"idle for {IDLE_SECS:.0f}s: ending the session")
+            await emit(None, "idle", secs=int(IDLE_SECS))
+            await asyncio.sleep(0.5)  # the line leaves before the socket closes
+            await self.push_frame(EndWorkerFrame())
+            return
+
     async def cleanup(self):
-        if self._wire_task:
-            await self.cancel_task(self._wire_task)
-            self._wire_task = None
+        for name in ("_wire_task", "_idle_task"):
+            task = getattr(self, name)
+            if task:
+                await self.cancel_task(task)
+                setattr(self, name, None)
         await super().cleanup()
 
     async def hearing(self):
         """The user started speaking: the orb shows it before any verdict."""
         self._user_speaking = True
+        self._last_heard = time.monotonic()
         await emit(self, "hearing")
 
     # -- pipeline entry ------------------------------------------------------------
@@ -414,6 +440,8 @@ class Manager(FrameProcessor):
         if isinstance(frame, StartFrame):
             if os.getenv("TB_HOSTED") and self._wire_task is None:
                 self._wire_task = self.create_task(self._drain_wire())
+                self._last_heard = time.monotonic()
+                self._idle_task = self.create_task(self._end_when_idle())
             # The pipeline is running and the mic is open: now it is listening.
             await emit(None, "ready")
         if isinstance(frame, BotStoppedSpeakingFrame):
