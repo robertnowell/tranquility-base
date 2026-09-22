@@ -1,5 +1,5 @@
 # The hosted image: no local audio (PortAudio), no playground, the WebSocket transport.
-pipecat-ai[assemblyai,elevenlabs,openai,runner,silero,websocket]==1.11.0
+pipecat-ai[assemblyai,elevenlabs,openai,runner,silero,webrtc,websocket]==1.11.0
 httpx>=0.28.1
 loguru
 python-dotenv

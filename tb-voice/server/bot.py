@@ -28,7 +28,11 @@ from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair,
     LLMUserAggregatorParams,
 )
-from pipecat.runner.types import RunnerArguments, WebSocketRunnerArguments
+from pipecat.runner.types import (
+    RunnerArguments,
+    SmallWebRTCRunnerArguments,
+    WebSocketRunnerArguments,
+)
 from pipecat.runner.utils import create_transport
 from pipecat.services.assemblyai.stt import AssemblyAISTTService
 from pipecat.services.openai.llm import OpenAILLMService
@@ -153,7 +157,11 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
     # voice-processing unit, so what reaches us has the manager's own voice
     # removed already. Nothing else may assume it (22 Sep).
     body = session_body(runner_args)
-    cancels_echo = bool(isinstance(body, dict) and body.get("aec"))
+    # WebRTC clients cancel echo in the engine itself, so the gate is open for
+    # them without being asked. A WebSocket client has to say so (`aec`).
+    cancels_echo = isinstance(runner_args, SmallWebRTCRunnerArguments) or bool(
+        isinstance(body, dict) and body.get("aec")
+    )
     if cancels_echo:
         logger.info("client cancels its own echo: the gate is open and the manager can be interrupted")
 
@@ -254,7 +262,51 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
     await runner.run()
 
 
+# A WebRTC session on Pipecat Cloud arrives in two parts: the platform starts
+# the session first (PipecatSessionArguments, no transport yet) and the client's
+# offer comes later, over the HTTP route the image already serves, which calls
+# bot() again with a connection. The first call must not return, because the
+# platform ends the session when it does; it waits for the second to finish.
+_RTC_SESSION_OVER = asyncio.Event()
+
+
 async def bot(runner_args: RunnerArguments):
+    if type(runner_args).__name__ == "PipecatSessionArguments":
+        logger.info("session started; waiting for the client's offer on /api/offer")
+        _RTC_SESSION_OVER.clear()
+        try:
+            await asyncio.wait_for(
+                _RTC_SESSION_OVER.wait(), float(os.getenv("TB_SESSION_TIMEOUT", "14400"))
+            )
+        except TimeoutError:
+            logger.info("no offer within the session's life; ending")
+        return
+    if isinstance(runner_args, SmallWebRTCRunnerArguments):
+        # The media path the framework prescribes for a device client: WebRTC
+        # brings echo cancellation, noise suppression, a jitter buffer and
+        # interruption that works, none of which a raw WebSocket has. The door
+        # requests ride the data channel as the same JSON they always were
+        # (wire.py); only the carriage changes.
+        from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
+
+        import wire
+
+        wire.bind()
+        transport = SmallWebRTCTransport(
+            webrtc_connection=runner_args.webrtc_connection,
+            params=TransportParams(
+                audio_in_enabled=True,
+                audio_out_enabled=True,
+                audio_in_sample_rate=16000,
+                audio_out_sample_rate=24000,
+                vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=0.2)),
+            ),
+        )
+        try:
+            await run_bot(transport, runner_args)
+        finally:
+            _RTC_SESSION_OVER.set()  # release the platform's session call
+        return
     if isinstance(runner_args, WebSocketRunnerArguments):
         # Hosted (Pipecat Cloud or our own machine): the app is on the other end of
         # one WebSocket. Audio both ways as PCM16, events and door requests as JSON
