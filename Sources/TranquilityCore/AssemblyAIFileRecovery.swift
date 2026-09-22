@@ -75,9 +75,24 @@ public struct AssemblyAIFileRecovery: RecoveryTranscriptionProvider {
         }
     }
 
+    /// Compress before uploading, when it can be done. Off by default only in
+    /// tests that want to assert on the exact bytes they handed in.
+    var compress: @Sendable (URL) -> URL? = { CompressedAudio.m4a(from: $0) }
+
     public func transcribe(fileAt url: URL) async throws -> TranscriptionResult {
         guard let key = keySource() else { throw TranscriptionFailure.notConfigured }
-        guard let audio = try? Data(contentsOf: url) else { throw TranscriptionFailure.fileUnreadable }
+        // The upload is most of this rung's latency, and the recording is raw
+        // PCM16. Sending AAC instead is the single biggest thing that makes a
+        // long recovery quick. A nil here is not a failure: it means send what
+        // we have, which is what this rung did for its whole life so far.
+        let compressed = compress(url)
+        defer { if let compressed { try? FileManager.default.removeItem(at: compressed) } }
+        guard let audio = try? Data(contentsOf: compressed ?? url) else {
+            throw TranscriptionFailure.fileUnreadable
+        }
+        if let compressed, let raw = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize {
+            Self.trace?("compressed \(raw) bytes to \(audio.count) (\(compressed.pathExtension))")
+        }
 
         // 1. Upload — the whole file, no slicing. Transport errors map into
         //    the failure taxonomy so the chain's backoff applies, same lesson
