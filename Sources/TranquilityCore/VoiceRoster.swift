@@ -42,9 +42,31 @@ public enum VoiceRoster {
     /// order. Machine-dependent by construction, unlike the ElevenLabs seed —
     /// there is no fixed list to hardcode, because what is installed differs per
     /// machine and per macOS version.
+    ///
+    /// Drawn from the voices the settings pane OFFERS, never from everything
+    /// installed. Found live, 22 Sep: this Mac has five premium voices, so the
+    /// top eight of the raw ranking were those five plus Albert, Bad News and
+    /// Bahh, the first compact voices by name. The pane has no row for a novelty
+    /// voice, so all three were in rotation with no checkbox to show it, and
+    /// three agents that day were read in Bad News. A voice you cannot see
+    /// checked is a voice you did not approve.
     public static var systemSeed: [String] {
-        SystemVoiceCatalog.voices(matching: "en")
-            .prefix(systemSeedCount).map(\.identifier)
+        Array(SystemVoiceCatalog.asCatalogueVoices(language: "en")
+            .map(\.id).filter(SystemVoiceCatalog.isSystemVoice)
+            .prefix(systemSeedCount))
+    }
+
+    /// The system voices an agent may be read in: the checked roster, less any
+    /// id the pane has no row for.
+    ///
+    /// The second half matters for files saved before the seed was fixed: the
+    /// pane's toggle rewrites `loadSystem()` whole, so checking one voice once
+    /// persisted the three hidden novelty voices beside it. They have no row, so
+    /// nobody could uncheck them. Approval is "has a tick you can see", and
+    /// this is where that is enforced for assignment.
+    public static func approvedSystem() -> [String] {
+        let offered = Set(SystemVoiceCatalog.asCatalogueVoices(language: "en").map(\.id))
+        return loadSystem().filter(offered.contains)
     }
 
     /// Overridable for tests; the app always uses the support directory.

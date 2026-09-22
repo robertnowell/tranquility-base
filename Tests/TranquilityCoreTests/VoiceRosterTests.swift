@@ -60,6 +60,31 @@ final class VoiceRosterTests: XCTestCase {
                        "an Apple id is not a cloud voice, whatever the file says")
     }
 
+    /// The seed is drawn from the voices the pane offers. Found live, 22 Sep:
+    /// with five premium voices installed, "top eight installed" filled the
+    /// last three slots with Albert, Bad News and Bahh, which the pane shows no
+    /// row for, and agents were read in them.
+    func testTheSystemSeedIsOnlyVoicesThePaneOffers() {
+        let offered = Set(SystemVoiceCatalog.asCatalogueVoices(language: "en").map(\.id))
+        for id in VoiceRoster.systemSeed {
+            XCTAssertTrue(offered.contains(id), "\(id) is seeded but has no row to uncheck")
+        }
+        XCTAssertFalse(VoiceRoster.systemSeed.contains("com.apple.speech.synthesis.voice.BadNews"))
+    }
+
+    /// A file saved before that fix carries the hidden voices, because the
+    /// toggle rewrites the loaded roster whole. Assignment must not use them.
+    func testAHiddenVoiceOnTheSavedRosterIsNotApproved() throws {
+        let hidden = ["com.apple.speech.synthesis.voice.Albert",
+                      "com.apple.speech.synthesis.voice.BadNews",
+                      "com.apple.speech.synthesis.voice.Bahh"]
+        let offered = SystemVoiceCatalog.asCatalogueVoices(language: "en").map(\.id)
+            .filter(SystemVoiceCatalog.isSystemVoice)
+        try JSONEncoder().encode(Array(offered.prefix(2)) + hidden)
+            .write(to: VoiceRoster.systemFileURL)
+        XCTAssertEqual(VoiceRoster.approvedSystem(), Array(offered.prefix(2)))
+    }
+
     /// And the mirror: the system roster never yields a cloud id, so the
     /// fallback cannot be handed something `AVSpeechSynthesizer` has never heard of.
     func testACloudVoiceOnDiskIsNeverReturnedAsASystemVoice() throws {

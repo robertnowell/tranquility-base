@@ -348,7 +348,7 @@ extension Coordinator {
     /// made every falling-back session the same person.
     public func voices(for sessionId: String) -> (cloud: String?, system: String?) {
         (try? store.voices(for: sessionId, roster: VoiceRoster.load(),
-                           systemRoster: VoiceRoster.loadSystem())) ?? (nil, nil)
+                           systemRoster: VoiceRoster.approvedSystem())) ?? (nil, nil)
     }
 
     private func resolveSummary(for event: WaitingSession) async -> Summary {
