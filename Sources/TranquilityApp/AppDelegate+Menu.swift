@@ -101,6 +101,18 @@ extension AppDelegate {
         newSession.image = icon
         menu.addItem(newSession)
 
+        // Manager mode (19 Sep): the hands-free manager, a stdio child that
+        // listens all day and speaks only when addressed. A checkmark, not a
+        // gesture: starting a microphone that never closes is a click you make.
+        let manager = NSMenuItem(title: "Manager mode",
+                                 action: #selector(toggleManagerMode), keyEquivalent: "")
+        manager.target = self
+        manager.state = managerIsOn ? .on : .off
+        let orbIcon = NSImage(systemSymbolName: "circle.circle", accessibilityDescription: nil)
+        orbIcon?.isTemplate = true
+        manager.image = orbIcon
+        menu.addItem(manager)
+
         // Picking a voice plays it immediately. A name in a list tells you nothing
         // about what it sounds like, and the whole point of choosing is hearing.
         // Free voices belong here too. This submenu listed ElevenLabs voices only and

@@ -147,6 +147,17 @@ public actor ManagedCreditSession: SummaryProvider {
         return ctx
     }
 
+    /// The voice client for the account this Mac is signed in as, or a named
+    /// refusal. Hands-free asks once per session and holds it for that
+    /// session's life; an account change invalidates the context underneath,
+    /// and the next call gets a fresh client rather than the old account's.
+    public func voice() async throws -> ManagedVoiceClient {
+        let ctx = try currentContext()
+        let account = try await ctx.account.id()
+        try requireCurrent(ctx)
+        return ManagedVoiceClient(accountId: account, transport: ctx.connection.transport)
+    }
+
     private func isCurrent(_ ctx: Context) -> Bool {
         context?.id == ctx.id && identity() == ctx.identity
     }

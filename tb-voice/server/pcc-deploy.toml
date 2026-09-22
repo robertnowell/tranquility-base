@@ -1,0 +1,8 @@
+agent_name = "tranquility-manager"
+secret_set = "tranquility-manager-secrets"
+agent_profile = "agent-1x"
+region = "us-west"
+websocket_auth = "token"
+
+[scaling]
+min_agents = 1

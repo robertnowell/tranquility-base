@@ -193,7 +193,10 @@ final class ControlsNoteView: NSView {
         onRow?(index)
     }
 
-    init() {
+    let entries: [(chord: String, meaning: String)]
+
+    init(entries: [(chord: String, meaning: String)] = StateLegend.controlsNote) {
+        self.entries = entries
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
         wantsLayer = true
@@ -210,7 +213,7 @@ final class ControlsNoteView: NSView {
         // callsign column already follows. Per-line widths would start every
         // meaning at its own x, and a three-line rag is what made the old
         // single-line key line read as a run-on.
-        let chordWidth = StateLegend.controlsNote
+        let chordWidth = entries
             .map { ceil(($0.chord as NSString)
                 .size(withAttributes: [.font: font]).width) }
             .max() ?? 0
@@ -221,7 +224,7 @@ final class ControlsNoteView: NSView {
         rows.spacing = 4
         rows.translatesAutoresizingMaskIntoConstraints = false
 
-        for entry in StateLegend.controlsNote {
+        for entry in entries {
             // Through the composer: these rows are nothing BUT marks beside
             // words — "⌃ Ctrl + ⌥ Option" — which makes them the last place
             // that should be setting a plain string.
