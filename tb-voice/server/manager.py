@@ -27,6 +27,7 @@ from pipecat.frames.frames import (
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
 from calls import record
+import build_stamp
 from events import emit, line
 from compose import READBACK_SECS, OpenMessage, classify, continues, filler_only
 import session
@@ -484,7 +485,7 @@ class Manager(FrameProcessor):
                 self._last_heard = time.monotonic()
                 self._idle_task = self.create_task(self._end_when_idle())
             # The pipeline is running and the mic is open: now it is listening.
-            await emit(None, "ready")
+            await emit(None, "ready", build=build_stamp.stamp()["sha"])
         if isinstance(frame, BotStartedSpeakingFrame):
             session.current().bot_voice["speaking"] = True  # the echo gate reads this
         if isinstance(frame, BotStoppedSpeakingFrame):

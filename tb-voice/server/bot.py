@@ -51,6 +51,7 @@ from llm import RecordedLLMService
 from manager import JevClient, Manager
 from prompt import SYSTEM
 from tools import SCHEMAS
+import build_stamp
 from tts import SpokenTTSService
 
 
@@ -113,7 +114,10 @@ async def keyterms(body: dict | None = None) -> list[str]:
 
 
 async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> None:
-    logger.info("Starting tb-voice")
+    # Which commit is answering. Nothing recorded this, so a report from the
+    # room could not be tied to a build (hf-15). The deploy writes the stamp;
+    # a local run reads the working tree.
+    logger.info(f"Starting tb-voice · build {build_stamp.line()}")
     t_start = time.monotonic()
     # This session's memory, before any task exists so every task inherits it.
     # A warm Pipecat Cloud instance runs the next session in this same process.
