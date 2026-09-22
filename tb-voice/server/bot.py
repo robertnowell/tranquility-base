@@ -46,6 +46,7 @@ from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from pipecat.workers.runner import WorkerRunner
 
 from echo import EchoGate
+import session
 from llm import RecordedLLMService
 from manager import JevClient, Manager
 from prompt import SYSTEM
@@ -114,6 +115,9 @@ async def keyterms(body: dict | None = None) -> list[str]:
 async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> None:
     logger.info("Starting tb-voice")
     t_start = time.monotonic()
+    # This session's memory, before any task exists so every task inherits it.
+    # A warm Pipecat Cloud instance runs the next session in this same process.
+    session.bind()
 
     # Key terms steer the transcriber toward the names it will hear: the
     # manager's own, the sponsors', and every session on the grid. Gradium heard

@@ -18,7 +18,7 @@ from loguru import logger
 from pipecat.frames.frames import Frame, InputAudioRawFrame
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
-from mute import BOT_VOICE, EXTERNAL_UNTIL
+import session
 
 
 class EchoGate(FrameProcessor):
@@ -35,8 +35,9 @@ class EchoGate(FrameProcessor):
         if self._passthrough:
             return False
         now = time.monotonic()
-        return (BOT_VOICE["speaking"] or (now - BOT_VOICE["stopped_at"]) < self._tail
-                or now < EXTERNAL_UNTIL["t"])
+        s = session.current()
+        return (s.bot_voice["speaking"] or (now - s.bot_voice["stopped_at"]) < self._tail
+                or now < s.external_until["t"])
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
