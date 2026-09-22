@@ -33,7 +33,7 @@ final class CreditStandingTests: XCTestCase {
             CreditStanding.from(receipt: nil, failure: .refused(code: code, operationId: nil), provider: "deterministic-fallback", now: now)
         }
         XCTAssertEqual(standing("insufficient_credit"), .floored(.outOfCredits, at: now))
-        XCTAssertEqual(standing("insufficient_credit")?.line, "Add an Anthropic key")
+        XCTAssertEqual(standing("insufficient_credit")?.line, "Add credits")
         XCTAssertEqual(standing("connection_rejected"), .floored(.connectAgain, at: now))
         XCTAssertEqual(standing("auth_required"), .floored(.connectAgain, at: now))
         // Not answers about the account (ruled 22 Sep): a provider fault, an
@@ -93,7 +93,7 @@ final class CreditStandingTests: XCTestCase {
     /// and the row wants attention.
     func testOutOfCreditsIsOnlyAmberWhenThereIsNothingToFallTo() {
         let out = CreditStanding.floored(.outOfCredits, at: now)
-        XCTAssertEqual(out.line(ownKey: false), "Add an Anthropic key")
+        XCTAssertEqual(out.line(ownKey: false), "Add credits")
         XCTAssertNil(out.line(ownKey: true))
         XCTAssertTrue(out.needsAttention(ownKey: false))
         XCTAssertFalse(out.needsAttention(ownKey: true))
@@ -111,7 +111,7 @@ final class CreditStandingTests: XCTestCase {
     func testEveryLineNamesAnAction() {
         let lines = [CreditStanding.floored(.outOfCredits, at: now), .floored(.connectAgain, at: now),
                      .notOnCredits(connectAgain: true)].compactMap(\.line)
-        XCTAssertEqual(lines, ["Add an Anthropic key", "Sign in for credits", "Sign in for credits"])
+        XCTAssertEqual(lines, ["Add credits", "Sign in for credits", "Sign in for credits"])
         for line in lines {
             XCTAssertTrue(line.hasPrefix("Add") || line.hasPrefix("Sign in"), line)
         }

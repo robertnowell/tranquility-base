@@ -59,11 +59,12 @@ public enum CreditStanding: Sendable, Equatable {
         case .floored(.outOfCredits, _) where ownKey: return nil
         // Each line names the thing to do, not the thing that went wrong
         // (ruled 22 Sep: "positive, not error-focused"). Out of credits
-        // points at a key, not at buying credits, because nothing sells
-        // credits yet and a door to nowhere is worse than no door.
+        // reads "Add credits" by Robert's ruling the same day, although
+        // nothing sells credits yet: the door opens Settings, whose detail
+        // says buying is coming and a key keeps summaries going meanwhile.
         case .notOnCredits(connectAgain: true): return "Sign in for credits"
         case .notOnCredits, .onCredits, .good, .balanceUnknown: return nil
-        case .floored(.outOfCredits, _): return "Add an Anthropic key"
+        case .floored(.outOfCredits, _): return "Add credits"
         case .floored(.connectAgain, _): return "Sign in for credits"
         }
     }
@@ -86,7 +87,7 @@ public enum CreditStanding: Sendable, Equatable {
         case .balanceUnknown:
             return "summaries use credits · the last one was paid for; the balance could not be refreshed and will be at the next"
         case .floored(.outOfCredits, _):
-            return "starting credits used. Add your own Anthropic key and summaries keep going; buying more credits is coming"
+            return "starting credits used. Buying credits is coming; until then your own Anthropic key keeps summaries going"
         }
     }
 

@@ -197,10 +197,10 @@ final class ManagedCreditSessionTests: XCTestCase {
         await session.waitForBalanceUpdates()
         await gateway.refuse("insufficient_credit")
         do { _ = try await session.delivery(for: request("two")); XCTFail("expected refusal") } catch {}
-        XCTAssertEqual(display.current.line, "Add an Anthropic key")
+        XCTAssertEqual(display.current.line, "Add credits")
         _ = try await session.delivery(for: request())
         await session.waitForBalanceUpdates()
-        XCTAssertEqual(display.current.line, "Add an Anthropic key")
+        XCTAssertEqual(display.current.line, "Add credits")
         await gateway.refuse(nil)
         _ = try await session.delivery(for: request("three"))
         await session.waitForBalanceUpdates()

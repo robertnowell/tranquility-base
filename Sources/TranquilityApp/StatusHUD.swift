@@ -2770,7 +2770,9 @@ final class StatusHUD: NSObject {
             stateLabel.isHidden = false
             stateLabel.textColor = StateLegend.Lens.fault.color
             stateLabel.attributedStringValue = Widgets.placardText(
-                "\(StateLegend.Glyph.needsYou) \(creditStanding) · Settings ›",
+                // No warning mark (ruled 22 Sep): the line is an action,
+                // not an alarm, and the amber ink already says it is yours.
+                "\(creditStanding) · Settings ›",
                 color: StateLegend.Lens.fault.color)
             stateLabel.isADoor = true
         }
