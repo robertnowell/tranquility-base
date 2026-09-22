@@ -129,4 +129,29 @@ final class ManagedAudioTests: XCTestCase {
         streaming.tokenSource = audio.streamingToken()
         XCTAssertTrue(streaming.isConfigured)
     }
+
+    /// A transcript refused for credit is an answer about the account: the
+    /// standing becomes out of credits, so the top bar can say "Add credits".
+    /// 22 Sep: the refusals reached only app.log and nothing on screen changed.
+    func testARefusedTranscriptBecomesTheStanding() async throws {
+        let refused = Transport([(402, json(["error": ["code": "insufficient_credit"]]))])
+        let published = Published()
+        let session = ManagedCreditSession(
+            identity: { .init(hub: URL(string: "https://fixture.invalid")!, token: "A") },
+            outboxURL: FileManager.default.temporaryDirectory.appendingPathComponent("audio-\(UUID().uuidString).sqlite"),
+            connect: { _, _ in .init(transport: refused) },
+            publish: { standing, _ in published.set(standing) })
+        await session.noteAudioFailure(ManagedSummaryFailure.refused(code: "insufficient_credit", operationId: nil),
+                                       during: "transcript")
+        guard case .floored(.outOfCredits, _)? = published.value else {
+            return XCTFail("standing was \(String(describing: published.value))")
+        }
+        XCTAssertEqual(published.value?.line(ownKey: true), "Add credits")
+    }
+
+    private final class Published: @unchecked Sendable {
+        private let lock = NSLock(); private var standing: CreditStanding?
+        func set(_ s: CreditStanding) { lock.lock(); standing = s; lock.unlock() }
+        var value: CreditStanding? { lock.lock(); defer { lock.unlock() }; return standing }
+    }
 }
