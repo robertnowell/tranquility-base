@@ -273,14 +273,27 @@ extension StatusHUD {
             return textMinX >= chevronInkMaxX && textMaxX <= gearInkMinX
         }
         let title = clears()
-        setCreditStanding("Credits unavailable right now")
+        let priorOffline = isOffline
+        setCreditStanding(nil)
+        setOffline(true)
+        let offline = clears()
+        // Offline is a state, not a fault: chrome ink, not amber, no door.
+        let offlineIsQuiet = stateLabel.attributedStringValue.string == StateLegend.offlinePlacard
+            && !stateLabel.isADoor
+        setCreditStanding("Out of credits")
+        // Something to act on outranks a state with nothing to do.
+        let creditsOutrankOffline = stateLabel.attributedStringValue.string.contains("Out of credits")
         let credits = clears()
         flashNotice(StateLegend.noWordsNotice)
         let notice = clears()
         clearNoticeForDrill()
+        setOffline(priorOffline)
         setCreditStanding(priorStanding)
         SelfTest.report("placardClearsControls", [
             ("titleClears", title),
+            ("offlineClears", offline),
+            ("offlineIsQuiet", offlineIsQuiet),
+            ("creditsOutrankOffline", creditsOutrankOffline),
             ("creditsLineClears", credits),
             ("noticeClears", notice),
         ])

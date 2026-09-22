@@ -319,7 +319,13 @@ extension StatusHUD {
         // photograph it.
         case "grid-credits":
             _ = pose("grid")
-            setCreditStanding("Credits unavailable right now")
+            setCreditStanding("Out of credits")
+            return true
+
+        // Offline, its own state since 22 Sep: grey, no door, nothing amber.
+        case "grid-offline":
+            _ = pose("grid")
+            setOffline(true)
             return true
 
         case "collapsed":

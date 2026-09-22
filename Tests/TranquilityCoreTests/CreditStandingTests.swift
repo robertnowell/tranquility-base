@@ -36,17 +36,20 @@ final class CreditStandingTests: XCTestCase {
         XCTAssertEqual(standing("insufficient_credit")?.line, "Out of credits")
         XCTAssertEqual(standing("connection_rejected"), .floored(.connectAgain, at: now))
         XCTAssertEqual(standing("auth_required"), .floored(.connectAgain, at: now))
-        XCTAssertEqual(standing("provider_failed"), .floored(.summaryFailed, at: now))
-        XCTAssertEqual(standing("service_unavailable"), .floored(.serviceUnavailable, at: now))
-        XCTAssertEqual(standing("something_new"), .floored(.serviceUnavailable, at: now))
+        // Not answers about the account (ruled 22 Sep): a provider fault, an
+        // unreachable service and a code this build does not know leave the
+        // last standing where it was.
+        XCTAssertNil(standing("provider_failed"))
+        XCTAssertNil(standing("service_unavailable"))
+        XCTAssertNil(standing("something_new"))
         // Not on credits at all: the chain went on to the person's own key,
         // so this is not a floor. It is still a line, because the fix is theirs.
         XCTAssertEqual(standing("rebinding_required"), .notOnCredits(connectAgain: true))
         XCTAssertEqual(standing("rebinding_required")?.line, "Connect this Mac again for credits")
         XCTAssertEqual(standing("not_connected"), .notOnCredits(connectAgain: false))
         XCTAssertNil(standing("not_connected")?.line)
-        XCTAssertEqual(CreditStanding.from(receipt: nil, failure: .outcomeUnknown(operationId: "o"), provider: "deterministic-fallback", now: now),
-                       .floored(.serviceUnavailable, at: now))
+        XCTAssertNil(CreditStanding.from(receipt: nil, failure: .outcomeUnknown(operationId: "o"), provider: "deterministic-fallback", now: now))
+        XCTAssertNil(CreditStanding.from(receipt: nil, failure: .invalidResponse, provider: "deterministic-fallback", now: now))
     }
 
     func testASummaryThatNeverWentNearCreditsSaysNothing() {
@@ -96,7 +99,7 @@ final class CreditStandingTests: XCTestCase {
         XCTAssertFalse(out.needsAttention(ownKey: true))
         XCTAssertTrue(out.detail(ownKey: true).contains("your own Anthropic key"))
         // Every other standing is indifferent to the key.
-        let down = CreditStanding.floored(.serviceUnavailable, at: now)
+        let down = CreditStanding.floored(.connectAgain, at: now)
         XCTAssertEqual(down.line(ownKey: true), down.line(ownKey: false))
         let probes = Prerequisites.Probes(tmuxPath: { nil }, hooksProblem: { _ in nil },
                                           hasSecret: { $0 == .anthropicAPIKey }, creditStanding: { out })

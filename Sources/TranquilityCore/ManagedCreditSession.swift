@@ -60,9 +60,10 @@ public actor ManagedCreditSession: SummaryProvider {
         self.connect = connect; self.publish = publish ?? { CreditStanding.set($0, isCurrent: $1) }
     }
 
-    /// Called at launch and after pairing/sign-out. No provider call, no debit.
-    /// Also exercised on every summary, so an external credential replacement
-    /// cannot leave this process using a cached account.
+    /// Called at launch, after pairing/sign-out, and when the network comes
+    /// back. No provider call, no debit. Also exercised on every summary, so
+    /// an external credential replacement cannot leave this process using a
+    /// cached account.
     public func refresh() async {
         let ticket = ticket()
         do {
@@ -72,28 +73,22 @@ public actor ManagedCreditSession: SummaryProvider {
                 try await updateBalance(client, context: ctx, ticket: ticket, mayRecover: true)
                 refreshAttempt = 0
             } catch {
-                // A balance check is not a summary. When it cannot reach the
-                // service, nothing fell back and nothing is owed, so it does
-                // not get to say "credits unavailable". 22 Sep: launched while
-                // the network was still coming up, one check failed, nothing
-                // retried, and the amber line sat on the grid for ninety
-                // minutes while credits were fine. Stay "checking" and try
-                // again; a refusal that names a resolution still lands.
-                // The reason goes in the log: on 22 Sep the only trace of
-                // this failure was the amber line it caused.
+                // The reason goes in the log: on 22 Sep the only trace of a
+                // failed check was the amber line it caused.
                 log("credits: balance check failed: \(error)")
-                if Self.isUnreachable(error) { scheduleRefreshRetry(); return }
                 record(error, context: ctx, ticket: ticket)
+                if Self.saysNothingAboutTheAccount(error) { scheduleRefreshRetry() }
             }
         } catch {
             log("credits: session could not be prepared: \(error)")
-            if Self.isUnreachable(error) { scheduleRefreshRetry(); return }
             recordPreparation(error)
+            if Self.saysNothingAboutTheAccount(error) { scheduleRefreshRetry() }
         }
     }
 
-    /// Retries after an unreachable balance check: soon, then less often,
-    /// then left to the next summary, which checks anyway.
+    /// Retries after a check that got no answer about the account: soon,
+    /// then less often, then left to the next summary or the next time the
+    /// network comes back, both of which check anyway.
     static let refreshRetryDelays: [Duration] = [.seconds(15), .seconds(60), .seconds(300)]
     private var refreshAttempt = 0
     private var refreshRetry: Task<Void, Never>?
@@ -114,15 +109,13 @@ public actor ManagedCreditSession: SummaryProvider {
         await refresh()
     }
 
-    /// Whether a failure only says the service could not be reached, as
-    /// opposed to a refusal that names something to do.
-    static func isUnreachable(_ error: Error) -> Bool {
+    /// A failure that is not an answer about the account: unreachable,
+    /// timed out, a gateway or provider fault. It keeps the last standing.
+    static func saysNothingAboutTheAccount(_ error: Error) -> Bool {
         guard !(error is CancellationError) else { return false }
         let failure = (error as? ManagedSummaryFailure)
             ?? .refused(code: "service_unavailable", operationId: nil)
-        return CreditStanding.from(receipt: nil, failure: failure, provider: "tranquility-gateway",
-                                   now: .distantPast)
-            == .floored(.serviceUnavailable, at: .distantPast)
+        return CreditStanding.from(receipt: nil, failure: failure, provider: "tranquility-gateway") == nil
     }
 
     public func brief(for request: SummaryRequest) async throws -> SessionBrief {
@@ -255,8 +248,9 @@ public actor ManagedCreditSession: SummaryProvider {
         let current = identity()
         let failure = (error as? ManagedSummaryFailure)
             ?? .refused(code: "service_unavailable", operationId: nil)
-        standing = CreditStanding.from(receipt: nil, failure: failure, provider: name)
-            ?? .floored(.serviceUnavailable, at: Date())
+        // Not an answer about the account: the last standing holds.
+        guard let next = CreditStanding.from(receipt: nil, failure: failure, provider: name) else { return }
+        standing = next
         publish(standing, { [identity] in identity() == current })
     }
     private func emit(_ ctx: Context) {

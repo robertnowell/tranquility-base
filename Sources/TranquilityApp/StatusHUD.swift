@@ -1262,6 +1262,17 @@ final class StatusHUD: NSObject {
         stateLabel.attributedStringValue = fitted
     }
 
+    /// This Mac has had no network for longer than a blip. Set by the app
+    /// from `Connectivity.observeOffline`; written nowhere else.
+    private(set) var isOffline = false
+
+    func setOffline(_ offline: Bool) {
+        guard offline != isOffline else { return }
+        isOffline = offline
+        Permissions.log("connectivity: \(offline ? "offline" : "online")")
+        render()
+    }
+
     @objc nonisolated func breadcrumbClicked() {
         MainActor.assumeIsolated {
             // Same altitude rule as ⌃⌥: home from a card. Speaking covers the
@@ -2745,6 +2756,16 @@ final class StatusHUD: NSObject {
         // The credits standing takes the grid's placard, in amber, for as
         // long as it holds; a transient notice below still wins for its five
         // seconds, because it is newer.
+        // Offline takes the grid's placard in chrome grey: a state, not a
+        // fault, with nothing to press. An actionable credits line below
+        // outranks it, and a notice outranks both, because it is newer.
+        if notice == nil, state.name == "idle", isOffline, creditStanding == nil {
+            stateLabel.isHidden = false
+            stateLabel.textColor = StateLegend.Lens.chrome.color
+            stateLabel.attributedStringValue = Widgets.placardText(
+                StateLegend.offlinePlacard, color: StateLegend.Lens.chrome.color)
+            stateLabel.isADoor = false
+        }
         if notice == nil, state.name == "idle", let creditStanding {
             stateLabel.isHidden = false
             stateLabel.textColor = StateLegend.Lens.fault.color

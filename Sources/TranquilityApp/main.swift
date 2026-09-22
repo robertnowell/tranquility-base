@@ -31,7 +31,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var pastAgentPreparation: Task<Void, Never>?
     var coordinator: Coordinator?
     var managedCredits: ManagedCreditSession?
-    var networkPath: NetworkPath?
     private var creditIdentityObserver: NSObjectProtocol?
     /// The providers this build can drive, kept so New Agent can start one.
     /// The same instance the coordinator and the poller share, by the rule at
@@ -623,10 +622,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             creditIdentityObserver = ManagedCredits.observeIdentityChanges(managed)
             // A login launch can beat Wi-Fi by seconds; the check waits for a
             // network instead of failing, and runs again whenever it returns.
-            let network = NetworkPath(onReconnect: { Task { await managed.refresh() } })
-            self.networkPath = network
+            let connectivity = Connectivity.start()
+            connectivity.onReconnect { Task { await managed.refresh() } }
             Task {
-                await network.waitUntilOnline()
+                await connectivity.waitUntilReachable()
                 await managed.refresh()
             }
             self.coordinator = Coordinator(
@@ -1506,6 +1505,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Out of credits with a pasted key is not amber: the key carries on.
             let ownKey = Secrets.read(.anthropicAPIKey) != nil
             DispatchQueue.main.async { self?.hud.setCreditStanding(CreditStanding.current.line(ownKey: ownKey)) }
+        }
+        // Offline, as its own quiet line: grey, not amber, and only after ten
+        // seconds without a network, so a blip shows nothing. Ruled 22 Sep:
+        // offline is not a credits state and has nothing for the person to do.
+        Connectivity.start().observeOffline { [weak self] offline in
+            DispatchQueue.main.async { self?.hud.setOffline(offline) }
         }
         // One door per pane. The panel asks for a tab; the host assembles that
         // tab's data and shows it. Nothing re-renders a pane it has not fed.

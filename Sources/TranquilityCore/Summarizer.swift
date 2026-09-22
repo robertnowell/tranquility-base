@@ -95,12 +95,16 @@ public protocol SummaryProvider: Sendable {
     var name: String { get }
     var isConfigured: Bool { get }
     var usesManagedCredits: Bool { get }
+    /// Whether this provider needs the network. Offline, the chain skips
+    /// every provider that does and goes straight to the floor.
+    var usesNetwork: Bool { get }
     func brief(for request: SummaryRequest) async throws -> SessionBrief
     func delivery(for request: SummaryRequest) async throws -> SummaryDelivery
 }
 
 public extension SummaryProvider {
     var usesManagedCredits: Bool { false }
+    var usesNetwork: Bool { true }
     func delivery(for request: SummaryRequest) async throws -> SummaryDelivery {
         SummaryDelivery(brief: try await brief(for: request))
     }
@@ -121,6 +125,7 @@ public enum SummaryError: Error, Sendable {
 public struct DeterministicSummarizer: SummaryProvider {
     public let name = "deterministic"
     public let isConfigured = true
+    public var usesNetwork: Bool { false }
     public init() {}
 
     public func brief(for request: SummaryRequest) async throws -> SessionBrief {
@@ -648,7 +653,13 @@ public struct SummarizerChain: Sendable {
                 produced = (floor, "empty-source")
             }
         } else {
-            for provider in providers where provider.isConfigured {
+            // Offline, a network provider can only fail, and a managed one
+            // would be recorded as a credits failure it is not. Skip them.
+            let reachable = Connectivity.isReachable
+            if !reachable {
+                SummarizerChain.trace?("summarize: offline; network providers skipped for \(request.projectLabel)")
+            }
+            for provider in providers where provider.isConfigured && (reachable || !provider.usesNetwork) {
                 do {
                     let delivery = try await provider.delivery(for: request)
                     let grounded = await groundDigits(delivery.brief, request: request, provider: provider)
