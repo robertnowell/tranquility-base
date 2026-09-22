@@ -341,6 +341,7 @@ public final class ElevenLabsSpeechProvider: NSObject, SpeechProvider, @unchecke
     }
 
     public var isConfigured: Bool {
+        if render != nil { return true }
         let key = Secrets.read(.elevenLabsAPIKey)
         if key == nil {
             ElevenLabsSpeechProvider.trace?("isConfigured=false: no key readable")
@@ -362,9 +363,21 @@ public final class ElevenLabsSpeechProvider: NSObject, SpeechProvider, @unchecke
     /// voice became unreachable on the slow links it was written for (measured:
     /// an eleven-second ladder fetch that never once fell back). A wall-clock
     /// race is the only thing that bounds it.
+    /// Where a clip comes from, when it is not this Mac's own ElevenLabs key.
+    ///
+    /// A Mac signed in to managed credits buys its voice through the Gateway,
+    /// which holds the vendor key and charges the account by the character
+    /// (SPEECH.md). Everything else here — the cache, the deadline, playback,
+    /// the alignment, the fall to the system voice — is the same either way,
+    /// so the managed path is one closure and not a second provider.
+    /// Nil from the closure means "this Mac is not on credits": the key path
+    /// below runs, which is the same rule summaries follow.
+    public nonisolated(unsafe) var render: (@Sendable (SanitizedSpokenText, String?, TimeInterval) async throws -> SpokenClip?)?
+
     public func synthesize(
         _ text: SanitizedSpokenText, voice: String?, deadline: TimeInterval
     ) async throws -> SpokenClip {
+        if let render, let clip = try await render(text, voice, deadline) { return clip }
         guard let key = Secrets.read(.elevenLabsAPIKey) else { throw SpeechError.notConfigured }
         let model = self.model
 

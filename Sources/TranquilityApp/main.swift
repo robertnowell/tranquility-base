@@ -31,6 +31,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var pastAgentPreparation: Task<Void, Never>?
     var coordinator: Coordinator?
     var managedCredits: ManagedCreditSession?
+    /// The voice and the transcript, bought on the account. Held so the
+    /// transcription session can be ended when the microphone closes.
+    var managedAudio: ManagedAudio?
     private var creditIdentityObserver: NSObjectProtocol?
     /// The providers this build can drive, kept so New Agent can start one.
     /// The same instance the coordinator and the poller share, by the rule at
@@ -604,10 +607,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Live transcription: one stream per utterance, keyterms from the
             // shared lexicon. Any stream failure returns nil at finish() and the
             // saved file recovers exactly as before — speed only, never risk.
+            // Present before pairing. The session changes accounts; the
+            // coordinator and its immutable provider chain do not need replacing.
+            let managed = ManagedCredits.session(log: { Permissions.log($0) })
+            self.managedCredits = managed
+            // Hearing and speaking on the account, when this Mac is on
+            // credits. Both closures answer nil when it is not, and the
+            // providers then use a key of the person's own exactly as before.
+            let managedAudio = ManagedCredits.audio(managed, log: { Permissions.log($0) })
+            self.managedAudio = managedAudio
             recorder.streamFactory = { [weak self] in
                 guard let store = self?.store else { return nil }
                 let terms = (try? Lexicon.harvest(store: store).terms) ?? []
-                return StreamedUtterance(provider: AssemblyAIStreaming(), lexicon: terms)
+                var streaming = AssemblyAIStreaming()
+                streaming.tokenSource = managedAudio.streamingToken(keyterms: { terms })
+                return StreamedUtterance(provider: streaming, lexicon: terms)
             }
             // The registry is built ONCE and shared: the coordinator answers
             // through it and the poller watches through it, so a reply can
@@ -615,10 +629,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let registry = AgentProviders.registry()
             self.providerRegistry = registry
             let poller = registry.configured().isEmpty ? nil : AgentPoller(registry: registry)
-            // Present before pairing. The session changes accounts; the
-            // coordinator and its immutable provider chain do not need replacing.
-            let managed = ManagedCredits.session(log: { Permissions.log($0) })
-            self.managedCredits = managed
             creditIdentityObserver = ManagedCredits.observeIdentityChanges(managed)
             // A login launch can beat Wi-Fi by seconds; the check waits for a
             // network instead of failing, and runs again whenever it returns.
@@ -628,10 +638,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 await connectivity.waitUntilReachable()
                 await managed.refresh()
             }
+            let premiumVoice = ElevenLabsSpeechProvider()
+            premiumVoice.render = managedAudio.clip()
             self.coordinator = Coordinator(
                 store: store,
                 summarizer: SummarizerChain(providers: [managed, AnthropicSummaryProvider(), DeterministicSummarizer()]),
                 localSummaryOriginId: ManagedCredits.originId(),
+                speech: SpeechChain(preferred: premiumVoice),
                 remoteTransport: poller.map { p in
                     RemoteDispatchTransport(
                         registry: registry,
