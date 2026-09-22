@@ -602,7 +602,13 @@ public final class HubMirror: @unchecked Sendable {
         func put(_ k: String, _ v: String?) { if let v, !v.isEmpty { json[k] = v } }
         put("headline", b.headline); put("deck", b.deck); put("happened", b.happened)
         put("findings", b.findings); put("solution", b.solution); put("rationale", b.rationale)
-        put("next_step", b.nextStep); put("question", b.question); put("risk", b.risk)
+        // Since 14 Sep the prompt says the next action once, as `proposal`
+        // (spoken, ending in a question), and no longer fills `nextStep`; the
+        // hub column kept its old name and went null on every new turn, which
+        // starves anything reading open loops out of the archive. The moved
+        // field stands in. `risk` lives inside `rationale` now and is not split
+        // back out.
+        put("next_step", b.nextStep ?? b.proposal); put("question", b.question); put("risk", b.risk)
         put("branch", b.branch)
         // The turn itself, under the summary of it: what the person asked and
         // what the agent said in prose, copied from the transcript. No model
