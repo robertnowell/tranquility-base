@@ -132,9 +132,9 @@ final class ManagedAudioTests: XCTestCase {
     }
 }
 
-/// The transport's size cap, measured through the real `GatewayHTTPTransport`
+/// The transport returns what it received, measured through the real `GatewayHTTPTransport`
 /// against a loopback server rather than a fake: the fake transports in this
-/// file never applied the cap, which is how a limit that discarded every
+/// file never applied the old 256 KB cap, which is how a limit that discarded every
 /// ordinary voice clip shipped with green tests (22 Sep).
 final class GatewayResponseLimitTests: XCTestCase {
 
@@ -173,13 +173,13 @@ final class GatewayResponseLimitTests: XCTestCase {
         XCTAssertEqual(response.body.count, body.count)
     }
 
-    /// Every other route keeps the tight cap.
-    func testAnOversizedBriefIsStillRefused() async throws {
+    /// And a summary, which the old cap was written for, is not size-checked
+    /// either: the check guarded nothing, since the body was already read.
+    func testALargeSummaryResponseIsReturnedToBeValidated() async throws {
         let (listener, base) = try serve(Data(repeating: UInt8(ascii: "a"), count: 400_000))
         defer { listener.cancel() }
-        do {
-            _ = try await transport(base).request(method: "GET", path: "/v1/accounts/a/summaries/b", body: nil)
-            XCTFail("a 400 KB summary must be refused")
-        } catch { XCTAssertEqual(error as? ManagedSummaryFailure, .invalidResponse) }
+        let response = try await transport(base).request(
+            method: "GET", path: "/v1/accounts/a/summaries/b", body: nil)
+        XCTAssertEqual(response.body.count, 400_000)
     }
 }

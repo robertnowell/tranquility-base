@@ -39,20 +39,6 @@ public final class GatewayHTTPTransport: GatewayTransport, Sendable {
         session = URLSession(configuration: config, delegate: GatewayRedirectGuard(), delegateQueue: nil)
     }
     deinit { session.invalidateAndCancel() }
-
-    /// The largest body a route may answer with.
-    ///
-    /// 256 KB suits a brief or a receipt and was applied to everything, which
-    /// included the voice. A clip is MP3 in base64, about 21 KB a second of
-    /// speech, so any line longer than about twelve seconds was thrown away
-    /// here AFTER the Gateway had charged for it, and the retry got the
-    /// receipt with no audio (it does not store clips). Found live, 22 Sep:
-    /// every ordinary recap fell to the system voice. The Gateway caps a line
-    /// at 2,000 characters, about two minutes and 2.7 MB; 4 MB covers that
-    /// with its timings.
-    static func responseLimit(path: String) -> Int {
-        path.contains("/speech/") ? 4 * 1024 * 1024 : 262_144
-    }
     public func request(method: String, path: String, body: Data?) async throws -> (status: Int, body: Data) {
         guard path.hasPrefix("/v1/"), !path.contains(".."), !path.contains("?"), !path.contains("#"),
               let url = URL(string: path, relativeTo: base)?.absoluteURL,
@@ -77,7 +63,13 @@ public final class GatewayHTTPTransport: GatewayTransport, Sendable {
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         if body != nil { request.setValue("application/json", forHTTPHeaderField: "Content-Type") }
         let (data, response) = try await session.data(for: request)
-        guard data.count <= Self.responseLimit(path: path), let http = response as? HTTPURLResponse
+        // No size limit. There was one, 256 KB, and it protected nothing: it ran
+        // after the whole body was already in memory, on a response from our own
+        // Gateway over authenticated TLS with a 45 s resource timeout. When the
+        // voice moved onto this transport (#571) it discarded every clip over
+        // about twelve seconds AFTER the Gateway had charged for it, and the
+        // retry got a receipt with no audio. Found live, 22 Sep.
+        guard let http = response as? HTTPURLResponse
         else { throw ManagedSummaryFailure.invalidResponse }
         return (http.statusCode, data)
     }
