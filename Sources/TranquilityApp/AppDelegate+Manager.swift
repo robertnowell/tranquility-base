@@ -149,11 +149,6 @@ extension AppDelegate {
         Permissions.log("manager: stopped")
     }
 
-    /// Cloud caps a session at four hours. A little before that, at a quiet
-    /// moment, the app closes the socket itself and the reconnect path opens
-    /// a fresh session; you hear nothing.
-    nonisolated static let hostedSessionLife: TimeInterval = 3 * 3600 + 55 * 60
-
     @MainActor
     private func startHostedManager(_ hosted: ManagerSessionStarter.Hosted) {
         hud.setManager(on: true)  // breathing until the bot says ready
@@ -184,14 +179,8 @@ extension AppDelegate {
             }
             self.managerSocket = socket
             socket.onTrace = { line in Permissions.log("manager wire: \(line)") }
-            socket.onLevel = { [weak socket] level, bytes in
+            socket.onLevel = { level, bytes in
                 Permissions.log(String(format: "manager mic: rms %.4f, %d bytes sent", level, bytes))
-                // Past the session's life and the room is quiet: rotate now.
-                // The mic stops with the socket, so this fires once.
-                if level < 0.01, Date().timeIntervalSince(started) > Self.hostedSessionLife, let socket {
-                    Permissions.log("manager: session life reached at a quiet moment; rotating")
-                    Task { await socket.close() }
-                }
             }
             Permissions.log("manager: hosted session \(session.sessionId ?? "?") (start \(Int(Date().timeIntervalSince(started) * 1000)) ms)")
             // Hosted, the bot keeps nothing on disk; the app keeps the stream
@@ -223,8 +212,9 @@ extension AppDelegate {
                 self.rebuildMenu()
                 return
             }
-            // Anything else (the network, the 4 h cap, the rotation above) is
-            // a fresh session with backoff: 1, 2, 4 s, then give up and say so.
+            // Anything else (the network, the 4 h cap, the bot's own rotation
+            // before it) is a fresh session with backoff: 1, 2, 4 s, then give
+            // up and say so.
             self.managerReconnects += 1
             guard self.managerReconnects <= 3 else {
                 Permissions.log("manager: hosted reconnect gave up after 3 tries")
@@ -320,6 +310,10 @@ extension AppDelegate {
         case .idle:
             managerEndedByIdle = true
             hud.setManagerState(StatusHUD.orbState, line: "paused after \((e.secs ?? 0) / 60) quiet minutes")
+        case .rotate:
+            // The bot is ending the session before Cloud's cap, at a moment
+            // with nothing open; the socket's end reconnects. Say nothing.
+            break
         }
     }
 
