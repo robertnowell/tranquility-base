@@ -241,6 +241,25 @@ public actor ManagedCreditSession: SummaryProvider {
         return ManagedVoiceClient(accountId: account, transport: ctx.connection.transport)
     }
 
+    /// The voice this account speaks in, and the transcript it is heard with.
+    ///
+    /// Both are bound to the identity that is signed in now, exactly as
+    /// summaries are: an account change invalidates the context underneath
+    /// and the next call gets the new account's, never the old one's.
+    public func speech() async throws -> ManagedSpeechClient {
+        let ctx = try currentContext()
+        let account = try await ctx.account.id()
+        try requireCurrent(ctx)
+        return ManagedSpeechClient(accountId: account, transport: ctx.connection.transport)
+    }
+
+    public func transcription() async throws -> ManagedTranscriptionSession {
+        let ctx = try currentContext()
+        let account = try await ctx.account.id()
+        try requireCurrent(ctx)
+        return ManagedTranscriptionSession(accountId: account, transport: ctx.connection.transport)
+    }
+
     private func isCurrent(_ ctx: Context) -> Bool {
         context?.id == ctx.id && identity() == ctx.identity
     }

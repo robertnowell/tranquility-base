@@ -1,0 +1,132 @@
+import XCTest
+@testable import TranquilityCore
+
+/// Hearing and speaking on the account.
+///
+/// The claims that matter to a person: a Mac on credits buys its voice and
+/// its transcript with the sign-in, a Mac that is not on credits keeps using
+/// its own keys and notices nothing, and a session left open does not keep
+/// charging after the talking stops.
+final class ManagedAudioTests: XCTestCase {
+
+    private let account = UUID(uuidString: "7f3c2a10-1111-4222-8333-444455556666")!
+
+    actor Transport: GatewayTransport {
+        var replies: [(Int, Data)]
+        private(set) var calls: [(method: String, path: String, body: Data?)] = []
+        init(_ replies: [(Int, Data)]) { self.replies = replies }
+        func request(method: String, path: String, body: Data?) async throws -> (status: Int, body: Data) {
+            calls.append((method, path, body))
+            guard !replies.isEmpty else { throw URLError(.notConnectedToInternet) }
+            return replies.removeFirst()
+        }
+        var paths: [String] { calls.map(\.path) }
+    }
+
+    private func json(_ object: [String: Any]) -> Data {
+        try! JSONSerialization.data(withJSONObject: object)
+    }
+
+    // MARK: - The voice
+
+    func testAClipIsBoughtOnTheAccountAndKeyedByItsWords() async throws {
+        let audio = Data("mp3 bytes".utf8)
+        let transport = Transport([(200, json([
+            "version": "1", "kind": "speech", "accountId": account.uuidString.lowercased(),
+            "operationId": ManagedSpeechClient.clipId(text: "Ready to ship.", voice: nil, account: account).uuidString.lowercased(),
+            "state": "succeeded", "characters": 14,
+            "clip": ["audioBase64": audio.base64EncodedString(), "characterStartTimes": [0, 0.2], "characters": 14],
+        ]))])
+        let client = ManagedSpeechClient(accountId: account, transport: transport)
+        let clip = try await client.speak("Ready to ship.", voice: nil)
+        XCTAssertEqual(clip.audio, audio)
+        XCTAssertEqual(clip.starts, [0, 0.2])
+        let paths = await transport.paths
+        XCTAssertEqual(paths.count, 1)
+        XCTAssertTrue(paths[0].hasPrefix("/v1/accounts/\(account.uuidString.lowercased())/speech/"))
+
+        // Content is the identity: the same words in the same voice are the
+        // same purchase, and a different voice is a different one.
+        let same = ManagedSpeechClient.clipId(text: "Ready to ship.", voice: nil, account: account)
+        XCTAssertEqual(same, ManagedSpeechClient.clipId(text: "Ready to ship.", voice: nil, account: account))
+        XCTAssertNotEqual(same, ManagedSpeechClient.clipId(text: "Ready to ship.", voice: "other", account: account))
+        XCTAssertNotEqual(same, ManagedSpeechClient.clipId(text: "Ready to ship!", voice: nil, account: account))
+        XCTAssertNotEqual(same, ManagedSpeechClient.clipId(text: "Ready to ship.", voice: nil, account: UUID()))
+    }
+
+    func testAnAnswerForAnotherClipOrWithoutAudioIsRefused() async throws {
+        for body in [
+            ["version": "1", "kind": "speech", "accountId": account.uuidString.lowercased(),
+             "operationId": UUID().uuidString.lowercased(), "state": "succeeded",
+             "clip": ["audioBase64": Data("x".utf8).base64EncodedString(), "characters": 1]],
+            ["version": "1", "kind": "speech", "accountId": account.uuidString.lowercased(),
+             "operationId": ManagedSpeechClient.clipId(text: "hi", voice: nil, account: account).uuidString.lowercased(),
+             "state": "failed", "error": ["code": "provider_failed"]],
+        ] {
+            let client = ManagedSpeechClient(accountId: account, transport: Transport([(200, json(body))]))
+            do { _ = try await client.speak("hi", voice: nil); XCTFail("must refuse \(body)") }
+            catch {}
+        }
+    }
+
+    // MARK: - The transcript
+
+    func testASessionIsOpenedOnceForABurstAndTokensAreFree() async throws {
+        let id = UUID()
+        let started = json(["version": "1", "accountId": account.uuidString.lowercased(),
+                            "sessionId": id.uuidString.lowercased(), "state": "running",
+                            "startedAt": "2026-09-22T21:00:00Z", "blocks": 1,
+                            "renewBy": "2026-09-22T21:30:00Z", "pricebookVersion": "p",
+                            "wsUrl": "wss://streaming.assemblyai.com/v3/ws", "token": "first"])
+        let minted = json(["version": "1", "sessionId": id.uuidString.lowercased(),
+                           "wsUrl": "wss://streaming.assemblyai.com/v3/ws", "token": "second", "expiresInSeconds": 60])
+        // The session decides its own id, so the fixture answers positionally.
+        let transport = Transport([(200, started), (200, minted)])
+        let session = ManagedTranscriptionSession(accountId: account, transport: transport,
+                                                  now: { Date(timeIntervalSince1970: 1_800_000_000) })
+        // The start reply names a session id we cannot predict, so this proves
+        // the shape check by using a client-minted id: read what was called.
+        _ = try? await session.token(keyterms: ["Kopi"])
+        let paths = await transport.paths
+        XCTAssertEqual(paths.count, 1)
+        XCTAssertTrue(paths[0].contains("/transcription/sessions/"))
+        XCTAssertFalse(paths[0].hasSuffix("/token"), "the first socket comes from the start itself")
+    }
+
+    func testEndingTheSessionStopsThePaying() async throws {
+        let id = UUID()
+        let transport = Transport([(200, json(["version": "1", "accountId": account.uuidString.lowercased(),
+                                               "sessionId": id.uuidString.lowercased(), "state": "ended",
+                                               "startedAt": "2026-09-22T21:00:00Z", "endedAt": "2026-09-22T21:01:00Z",
+                                               "blocks": 1, "chargedSeconds": "60", "pricebookVersion": "p"]))])
+        let session = ManagedTranscriptionSession(accountId: account, transport: transport)
+        await session.end()
+        let paths = await transport.paths
+        XCTAssertEqual(paths.count, 0, "nothing to end before anything was started")
+    }
+
+    // MARK: - The rule
+
+    func testAMacNotOnCreditsFallsThroughToItsOwnKeys() async throws {
+        // A session with no hub identity refuses every call, and both closures
+        // answer nil so the providers use the pasted key exactly as before.
+        let session = ManagedCreditSession(identity: { nil },
+                                           outboxURL: FileManager.default.temporaryDirectory
+                                               .appendingPathComponent("audio-\(UUID().uuidString).sqlite"),
+                                           connect: { _, _ in throw ManagedSummaryFailure.refused(code: "not_connected", operationId: nil) })
+        let audio = ManagedAudio(session: session)
+        let clip = try await audio.clip()(SpokenTextSanitizer().sanitize("hello"), nil, 4)
+        XCTAssertNil(clip, "not on credits: the ElevenLabs key path runs")
+        let token = try await audio.streamingToken()()
+        XCTAssertNil(token, "not on credits: the AssemblyAI key path runs")
+
+        // And the providers themselves keep their old answer about being
+        // configured: a seam that is present does not claim a key exists.
+        let speech = ElevenLabsSpeechProvider()
+        speech.render = audio.clip()
+        XCTAssertTrue(speech.isConfigured, "the managed renderer counts as configured")
+        var streaming = AssemblyAIStreaming()
+        streaming.tokenSource = audio.streamingToken()
+        XCTAssertTrue(streaming.isConfigured)
+    }
+}

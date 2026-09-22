@@ -74,6 +74,14 @@ public struct AssemblyAIStreaming: LiveTranscriptionProvider {
     /// nor mutate the machine's real credential file), and a socket factory
     /// instead of a real connection. Production uses neither.
     var keySource: @Sendable () -> String? = { Secrets.read(.assemblyAIAPIKey) }
+    /// How this Mac is allowed to open a stream, when it is not with a key of
+    /// its own. A Mac on managed credits asks the Gateway, which holds the
+    /// vendor key and answers with a token good for one socket and no longer
+    /// than the minutes it reserved (TRANSCRIPTION.md). The audio still goes
+    /// straight to the vendor: nothing of ours is in the path.
+    /// Nil from the closure means "this Mac is not on credits": the key
+    /// below is used instead, which is the same rule summaries follow.
+    public nonisolated(unsafe) var tokenSource: (@Sendable () async throws -> String?)?
     var socketFactory: (@Sendable (URLRequest) -> any StreamingSocket)?
 
     /// Overridable only so a probe can drive a DIFFERENT model through the
@@ -96,7 +104,7 @@ public struct AssemblyAIStreaming: LiveTranscriptionProvider {
         self.socketFactory = socketFactory
     }
 
-    public var isConfigured: Bool { keySource() != nil }
+    public var isConfigured: Bool { tokenSource != nil || keySource() != nil }
 
     /// v3 keyterms limits: at most 100 terms, each at most 50 characters.
     /// The lexicon is priority-ordered (callsigns and labels first), so
@@ -151,7 +159,16 @@ public struct AssemblyAIStreaming: LiveTranscriptionProvider {
         onFinal: @escaping @Sendable (TranscriptionResult) -> Void,
         onFailure: @escaping @Sendable (TranscriptionFailure) -> Void
     ) async throws -> any LiveTranscriptionSession {
-        guard let key = keySource() else {
+        // The Gateway first when this Mac is on credits, a key of its own
+        // otherwise. A Gateway that cannot answer is not a reason to fall back
+        // to a key the person may not have: it is the credits path failing,
+        // and the caller hears about it.
+        var token: String?
+        if let tokenSource {
+            token = try await tokenSource()
+        }
+        let key = keySource()
+        guard token != nil || key != nil else {
             throw TranscriptionFailure.notConfigured
         }
 
@@ -172,9 +189,17 @@ public struct AssemblyAIStreaming: LiveTranscriptionProvider {
         }
         components.queryItems = query
 
+        // A Gateway token rides in the query, a key of our own in the header:
+        // the v3 contract's two ways in, and the only difference between a
+        // Mac on credits and a Mac with its own AssemblyAI account.
+        if let token {
+            components.queryItems = (components.queryItems ?? []) + [URLQueryItem(name: "token", value: token)]
+        }
         var request = URLRequest(url: components.url!)
-        // Raw key, no "Bearer" prefix — that is the v3 contract.
-        request.setValue(key, forHTTPHeaderField: "Authorization")
+        if token == nil {
+            // Raw key, no "Bearer" prefix — that is the v3 contract.
+            request.setValue(key, forHTTPHeaderField: "Authorization")
+        }
 
         let socket = socketFactory?(request) ?? URLSessionStreamingSocket(request: request)
         Self.trace?("session open: model=\(speechModel), sample_rate=\(sampleRate), "

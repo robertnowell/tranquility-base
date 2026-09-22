@@ -91,6 +91,20 @@ public enum ManagedCredits {
 
     /// Created even before sign-in. Each operation resolves the current app
     /// session; pairing never requires replacing the Coordinator or restarting.
+    /// Hearing and speaking through the account, when this Mac is on credits.
+    ///
+    /// Returns nil from both closures when it is not, which is what makes the
+    /// providers fall through to a key of the person's own: the same rule
+    /// summaries follow, and the reason a BYOK Mac notices nothing.
+    ///
+    /// The transcription session is held for as long as the microphone is
+    /// open and ended by `stopListening`, because the Gateway charges
+    /// wall-clock: a session left open is a session being paid for.
+    public static func audio(_ session: ManagedCreditSession,
+                             log: @escaping @Sendable (String) -> Void = { _ in }) -> ManagedAudio {
+        ManagedAudio(session: session, log: log)
+    }
+
     public static func session(
         identity: @escaping ManagedCreditSession.IdentitySource = {
             guard let hub = HubApp.baseURL, let token = Secrets.read(.hubToken), !token.isEmpty else { return nil }
