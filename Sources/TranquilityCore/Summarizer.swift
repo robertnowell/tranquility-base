@@ -737,6 +737,19 @@ public struct SummarizerChain: Sendable {
                 proposal, maxWords: SpokenTextSanitizer.proposalWords)
         }
 
+        // Which rung produced this brief, and why the ones above it did not.
+        // With the amber fallback lines retired (22 Sep), a brief that fell
+        // to the floor is invisible to the person by design, so it must not
+        // be invisible to us: provider, offline, and the managed code, never
+        // the text.
+        var props: [String: TrackValue] = [
+            "provider": Track.token(from: providerName),
+            "offline": .bool(!Connectivity.isReachable),
+            "latency_ms": .int(Int(Date().timeIntervalSince(start) * 1000)),
+        ]
+        if let managedFailure { props["managed_failure"] = Track.token(from: ManagedCreditSession.describe(managedFailure)) }
+        Track.record("summary", props)
+
         // Standing belongs to ManagedCreditSession. This chain preserves an
         // operation's receipt for history but cannot promote it to balance.
         return Summary(

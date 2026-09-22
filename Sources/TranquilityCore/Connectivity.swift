@@ -135,9 +135,21 @@ public final class Connectivity: @unchecked Sendable {
         }
     }
 
+    private var offlineSince: Date?
+
     private func setOffline(_ value: Bool) {
         guard offline != value else { return }
         offline = value
+        // Each outage the person saw, and how long it lasted. Blips never
+        // reach here, so this counts real outages, not flaps.
+        if value {
+            offlineSince = Date()
+            Track.record("connectivity", ["state": "offline"])
+        } else {
+            let seconds = offlineSince.map { Int(Date().timeIntervalSince($0)) } ?? 0
+            offlineSince = nil
+            Track.record("connectivity", ["state": "online", "offline_s": .int(seconds)])
+        }
         let listeners = Array(offlineListeners.values)
         delivery.async { listeners.forEach { $0(value) } }
     }

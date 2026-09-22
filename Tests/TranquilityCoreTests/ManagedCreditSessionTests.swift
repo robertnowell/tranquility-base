@@ -197,10 +197,10 @@ final class ManagedCreditSessionTests: XCTestCase {
         await session.waitForBalanceUpdates()
         await gateway.refuse("insufficient_credit")
         do { _ = try await session.delivery(for: request("two")); XCTFail("expected refusal") } catch {}
-        XCTAssertEqual(display.current.line, "Out of credits")
+        XCTAssertEqual(display.current.line, "Add an Anthropic key")
         _ = try await session.delivery(for: request())
         await session.waitForBalanceUpdates()
-        XCTAssertEqual(display.current.line, "Out of credits")
+        XCTAssertEqual(display.current.line, "Add an Anthropic key")
         await gateway.refuse(nil)
         _ = try await session.delivery(for: request("three"))
         await session.waitForBalanceUpdates()
@@ -288,6 +288,39 @@ final class ManagedCreditSessionTests: XCTestCase {
         // minutes with credits fine. No summary ran, so nothing fell back.
         XCTAssertNil(display.current.line, "\(display.current)")
         XCTAssertEqual(display.current, .onCredits)
+    }
+
+    private func failureRecords(in dir: URL) -> [FailureEvent] {
+        Failures.flush()
+        guard let text = try? String(contentsOf: dir.appendingPathComponent("failures.jsonl"), encoding: .utf8)
+        else { return [] }
+        let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
+        return text.split(separator: "\n").compactMap { try? decoder.decode(FailureEvent.self, from: Data($0.utf8)) }
+    }
+
+    /// Online, a gateway that gives no answer is our fault: it reaches
+    /// diagnostics with a reason, and the reason never carries the account.
+    /// Offline it is not a fault and records nothing (ruled 22 Sep).
+    func testAServiceFaultOnlineIsReportedAndOfflineIsNot() async throws {
+        Failures.resetForTesting(); defer { Failures.resetForTesting(); Connectivity.installForTesting(nil) }
+        let dir = directory.appendingPathComponent("failures")
+        Failures.configure(directory: dir)
+        let identity = Identity(), display = Display(), gateway = Gateway(a)
+        identity.set("A")
+        let session = make(identity, display, gateway)
+        await gateway.failBalance()
+
+        let offline = Connectivity(debounce: 10); offline.ingest(false)
+        Connectivity.installForTesting(offline)
+        await session.refresh()
+        XCTAssertTrue(failureRecords(in: dir).isEmpty, "offline is not a fault")
+
+        Connectivity.installForTesting(nil)
+        await session.refresh()
+        let records = failureRecords(in: dir).filter { $0.kind == .creditsService }
+        XCTAssertEqual(records.count, 1)
+        XCTAssertTrue(records.first?.reason.hasPrefix("balance check:") == true, records.first?.reason ?? "")
+        XCTAssertFalse(records.first?.reason.contains(a) == true, "the account id never leaves")
     }
 
     func testStoredTokenAloneDoesNotWaiveTheDirectKeyRequirement() {

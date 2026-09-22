@@ -319,7 +319,7 @@ extension StatusHUD {
         // photograph it.
         case "grid-credits":
             _ = pose("grid")
-            setCreditStanding("Out of credits")
+            setCreditStanding("Add an Anthropic key")
             return true
 
         // Offline, its own state since 22 Sep: grey, no door, nothing amber.

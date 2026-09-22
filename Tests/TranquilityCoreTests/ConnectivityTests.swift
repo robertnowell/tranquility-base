@@ -83,4 +83,21 @@ final class ConnectivityTests: XCTestCase {
         XCTAssertEqual(called.get, 0)
         XCTAssertEqual(summary.provider, "deterministic")
     }
+
+    /// Every brief says which rung made it and whether we were offline, so a
+    /// fallback the person no longer sees is still visible to us.
+    func testEverySummaryRecordsItsProviderAndOfflineness() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("summary-track-\(UUID())")
+        Track.resetForTesting(); defer { Track.detach(); Track.resetForTesting() }
+        Track.configure(directory: dir, installId: "install-x")
+        let seen = Box<[TrackEvent]>([])
+        Track.attach { e in if e.name == "summary" { seen.update { $0.append(e) } } }
+        let c = Connectivity(debounce: 10); c.ingest(false)
+        Connectivity.installForTesting(c)
+        _ = await SummarizerChain(providers: [DeterministicSummarizer()]).summarize(
+            SummaryRequest(lastAssistantMessage: "The work is ready.", projectLabel: "Fixture", hookEvent: .stop))
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(seen.get.first?.properties["provider"], .token("deterministic"))
+        XCTAssertEqual(seen.get.first?.properties["offline"], .bool(true))
+    }
 }

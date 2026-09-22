@@ -75,12 +75,14 @@ public actor ManagedCreditSession: SummaryProvider {
             } catch {
                 // The reason goes in the log: on 22 Sep the only trace of a
                 // failed check was the amber line it caused.
-                log("credits: balance check failed: \(error)")
+                log("credits: balance check failed: \(Self.describe(error))")
+                reportFault(error, during: "balance check")
                 record(error, context: ctx, ticket: ticket)
                 if Self.saysNothingAboutTheAccount(error) { scheduleRefreshRetry() }
             }
         } catch {
-            log("credits: session could not be prepared: \(error)")
+            log("credits: session could not be prepared: \(Self.describe(error))")
+            reportFault(error, during: "session preparation")
             recordPreparation(error)
             if Self.saysNothingAboutTheAccount(error) { scheduleRefreshRetry() }
         }
@@ -109,6 +111,40 @@ public actor ManagedCreditSession: SummaryProvider {
         await refresh()
     }
 
+    /// Online, and no answer about the account: that is our fault to fix, so
+    /// it goes to diagnostics with its reason. Offline it is not a fault at
+    /// all, and a cancellation is nobody's.
+    private func reportFault(_ error: Error, during phase: String,
+                             file: StaticString = #fileID, line: UInt = #line) {
+        guard Self.saysNothingAboutTheAccount(error), Connectivity.isReachable else { return }
+        Failures.report(.creditsService, reason: "\(phase): \(Self.describe(error))",
+                        file: file, line: line)
+    }
+
+    /// The failure in words safe to send: the kind and code, never a URL
+    /// (gateway paths carry the account id), a token, or an operation id.
+    static func describe(_ error: Error) -> String {
+        switch error {
+        case let failure as ManagedSummaryFailure:
+            switch failure {
+            case let .refused(code, _): return "refused \(code)"
+            case let .pending(_, state): return "still pending (\(state))"
+            case .outcomeUnknown: return "outcome unknown"
+            case .invalidResponse: return "invalid response"
+            case .missingSourceIdentity: return "missing source identity"
+            case .sourceIdentityConflict: return "source identity conflict"
+            case .correctiveRetryNotAllowed: return "corrective retry not allowed"
+            }
+        case let failure as GatewayAuthority.Failure:
+            return "authority \(failure.code)"
+        case let failure as URLError:
+            return "URLError \(failure.code.rawValue): \(failure.localizedDescription)"
+        default:
+            let ns = error as NSError
+            return "\(type(of: error)) \(ns.domain) \(ns.code)"
+        }
+    }
+
     /// A failure that is not an answer about the account: unreachable,
     /// timed out, a gateway or provider fault. It keeps the last standing.
     static func saysNothingAboutTheAccount(_ error: Error) -> Bool {
@@ -126,7 +162,7 @@ public actor ManagedCreditSession: SummaryProvider {
         let ticket = ticket()
         let ctx: Context
         do { ctx = try currentContext() }
-        catch { recordPreparation(error); throw error }
+        catch { reportFault(error, during: "summary preparation"); recordPreparation(error); throw error }
         do {
             let client = try await client(ctx)
             let result = try await ManagedSummaryProvider(client: client).delivery(for: request)
@@ -137,6 +173,7 @@ public actor ManagedCreditSession: SummaryProvider {
             return result
         } catch {
             guard isCurrent(ctx) else { throw CancellationError() }
+            reportFault(error, during: "summary")
             record(error, context: ctx, ticket: ticket)
             throw error
         }

@@ -57,10 +57,14 @@ public enum CreditStanding: Sendable, Equatable {
     public func line(ownKey: Bool) -> String? {
         switch self {
         case .floored(.outOfCredits, _) where ownKey: return nil
-        case .notOnCredits(connectAgain: true): return "Connect this Mac again for credits"
+        // Each line names the thing to do, not the thing that went wrong
+        // (ruled 22 Sep: "positive, not error-focused"). Out of credits
+        // points at a key, not at buying credits, because nothing sells
+        // credits yet and a door to nowhere is worse than no door.
+        case .notOnCredits(connectAgain: true): return "Sign in for credits"
         case .notOnCredits, .onCredits, .good, .balanceUnknown: return nil
-        case .floored(.outOfCredits, _): return "Out of credits"
-        case .floored(.connectAgain, _): return "Connect this Mac again for credits"
+        case .floored(.outOfCredits, _): return "Add an Anthropic key"
+        case .floored(.connectAgain, _): return "Sign in for credits"
         }
     }
 
@@ -70,11 +74,11 @@ public enum CreditStanding: Sendable, Equatable {
     public func detail(ownKey: Bool) -> String {
         switch self {
         case .floored(.outOfCredits, _) where ownKey:
-            return "out of credits · summaries use your own Anthropic key. Top-ups are coming"
+            return "starting credits used · summaries run on your own Anthropic key. Buying more credits is coming"
         case .notOnCredits(connectAgain: false):
             return "sign in to your hub and summaries run on us, ten dollars to start"
         case .notOnCredits(connectAgain: true), .floored(.connectAgain, _):
-            return "this Mac needs to sign in again for credits; use the same hub sign-in"
+            return "sign in with your hub account and summaries run on credits"
         case .onCredits:
             return "signed in · checking credits"
         case let .good(micros, _):
@@ -82,7 +86,7 @@ public enum CreditStanding: Sendable, Equatable {
         case .balanceUnknown:
             return "summaries use credits · the last one was paid for; the balance could not be refreshed and will be at the next"
         case .floored(.outOfCredits, _):
-            return "out of credits. Top-ups are coming; until then your own Anthropic key keeps summaries going"
+            return "starting credits used. Add your own Anthropic key and summaries keep going; buying more credits is coming"
         }
     }
 
@@ -104,6 +108,19 @@ public enum CreditStanding: Sendable, Equatable {
         case .floored(.outOfCredits, _) where ownKey: return false
         case .notOnCredits(connectAgain: true), .floored(.outOfCredits, _), .floored(.connectAgain, _): return true
         case .notOnCredits, .onCredits, .good, .balanceUnknown: return false
+        }
+    }
+
+    /// The standing's name for telemetry. Never carries the balance.
+    public var token: String {
+        switch self {
+        case .notOnCredits(connectAgain: true): return "sign_in_needed"
+        case .notOnCredits: return "not_on_credits"
+        case .onCredits: return "checking"
+        case .good: return "on_credits"
+        case .balanceUnknown: return "balance_unknown"
+        case .floored(.outOfCredits, _): return "out_of_credits"
+        case .floored(.connectAgain, _): return "sign_in_needed"
         }
     }
 
@@ -160,6 +177,10 @@ public enum CreditStanding: Sendable, Equatable {
         let listeners = Array(observers.values)
         lock.unlock()
         guard changed else { return }
+        // The product stream sees every change of standing, as a token: no
+        // amounts, no account. Before 22 Sep a Mac could sit out of credits
+        // or signed out and nothing off the machine knew.
+        Track.record("credit_standing", ["standing": .token(standing.token)])
         for listener in listeners { listener(standing) }
     }
 

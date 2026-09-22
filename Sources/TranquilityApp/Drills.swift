@@ -280,9 +280,9 @@ extension StatusHUD {
         // Offline is a state, not a fault: chrome ink, not amber, no door.
         let offlineIsQuiet = stateLabel.attributedStringValue.string == StateLegend.offlinePlacard
             && !stateLabel.isADoor
-        setCreditStanding("Out of credits")
+        setCreditStanding("Add an Anthropic key")
         // Something to act on outranks a state with nothing to do.
-        let creditsOutrankOffline = stateLabel.attributedStringValue.string.contains("Out of credits")
+        let creditsOutrankOffline = stateLabel.attributedStringValue.string.contains("Add an Anthropic key")
         let credits = clears()
         flashNotice(StateLegend.noWordsNotice)
         let notice = clears()

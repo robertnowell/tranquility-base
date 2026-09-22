@@ -80,6 +80,11 @@ public enum ManagedCredits {
             return resolved.signer
         } catch {
             log("credits: no device key: \(error)")
+            // Without a key this Mac can never spend credits, and the person
+            // cannot fix it. Local, not network: it reaches diagnostics with
+            // its own reason instead of as a vague "service unavailable".
+            let ns = error as NSError
+            Failures.report(.creditsService, reason: "no device key: \(type(of: error)) \(ns.domain) \(ns.code)")
             return nil
         }
     }
