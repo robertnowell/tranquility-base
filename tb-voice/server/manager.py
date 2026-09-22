@@ -250,7 +250,12 @@ class Brain:
     def __init__(self):
         self._client = httpx.AsyncClient(
             base_url=os.getenv("GC_BASE_URL", "https://api.generalcompute.com/v1"),
-            headers={"Authorization": f"Bearer {os.environ.get('GC_API_KEY', '')}"}, timeout=20.0)
+            headers={"Authorization": f"Bearer {os.environ.get('GC_API_KEY', '')}"},
+            # 03:30:26: a capabilities question waited the full 20 s on a hung
+            # completion with the orb on "explaining", then fell back to the
+            # fixed line anyway. A spoken answer that is not there in 8 s is
+            # not coming; the fallbacks are written for that.
+            timeout=8.0)
         self.model = os.getenv("GC_MODEL", "minimax-m2.7")
 
     @staticmethod
@@ -637,7 +642,8 @@ class Manager(FrameProcessor):
             line += f" First waiting: {who}." if waiting else f" First: {who}."
             await self._say(line + " Say what's next to hear it.")
             return
-        if any(w in low for w in ("control", "what can you", "how do i", "commands", "what do you do")):
+        if any(w in low for w in ("control", "what can you", "how do i", "commands", "what do you do",
+                                  "capabilit", "who are you", "what are you", "about you")):
             await self._say(self.CAPABILITIES)
             return
         try:
