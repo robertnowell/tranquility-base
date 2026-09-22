@@ -5,4 +5,4 @@ region = "us-west"
 websocket_auth = "token"
 
 [scaling]
-min_agents = 0
+min_agents = 1
