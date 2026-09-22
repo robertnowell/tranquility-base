@@ -9,6 +9,7 @@ Run with keys injected from the Keychain: ./run.sh
 import asyncio
 import json
 import os
+import time
 
 from dotenv import load_dotenv
 
@@ -58,11 +59,20 @@ KEYTERMS = [
 ]
 
 
-async def keyterms() -> list[str]:
-    """The fixed names plus every session's display name, best effort."""
-    from tools import TBASE, _run  # tbase targets --json; a failed read costs nothing
+async def keyterms(body: dict | None = None) -> list[str]:
+    """The fixed names plus every session's display name. Hosted, the app sends
+    them in the session body (wire.py); a fleet read over the wire at startup
+    could only wait for a pipeline that does not exist yet, and did, for its
+    whole 5 s timeout, on every start (02:15:41, 22 Sep). Local, tbase reads."""
+    from tools import TBASE, _run
 
     names = list(KEYTERMS)
+    extra = (body or {}).get("keyterms") if isinstance(body, dict) else None
+    if isinstance(extra, list):
+        names += [str(n).strip() for n in extra if str(n).strip() and str(n).strip() not in names]
+        return names[:100]
+    if os.getenv("TB_HOSTED"):
+        return names
     try:
         code, out = await _run(TBASE, "targets", "--json", timeout=5.0)
         if code == 0:
@@ -77,6 +87,7 @@ async def keyterms() -> list[str]:
 
 async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> None:
     logger.info("Starting tb-voice")
+    t_start = time.monotonic()
 
     # Key terms steer the transcriber toward the names it will hear: the
     # manager's own, the sponsors', and every session on the grid. Gradium heard
@@ -84,7 +95,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
     # name the gate cannot match.
     stt = AssemblyAISTTService(
         api_key=os.environ["ASSEMBLYAI_API_KEY"],
-        settings=AssemblyAISTTService.Settings(keyterms_prompt=await keyterms()),
+        settings=AssemblyAISTTService.Settings(keyterms_prompt=await keyterms(getattr(runner_args, "body", None))),
     )
     # ElevenLabs is asked for pcm_24000 explicitly; the transport runs at the
     # device's native 48 kHz and Pipecat's SOXR resampler bridges the two. A
@@ -142,6 +153,8 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
     )
 
     gate = Manager(JevClient(os.environ["JEV_API_KEY"]))
+
+    logger.info(f"pipeline built in {time.monotonic() - t_start:.2f}s")
 
     @user_aggregator.event_handler("on_user_turn_started")
     async def on_user_turn_started(aggregator, *args):
