@@ -134,13 +134,21 @@ extension AppDelegate {
         managerTransport = nil
         if let socket = managerSocket { Task { await socket.close() } }
         managerSocket = nil
+        managerReconnects = 0
+        managerEndedByIdle = false
         hud.setManager(on: false)
         Permissions.log("manager: stopped")
     }
 
+    /// Cloud caps a session at four hours. A little before that, at a quiet
+    /// moment, the app closes the socket itself and the reconnect path opens
+    /// a fresh session; you hear nothing.
+    nonisolated static let hostedSessionLife: TimeInterval = 3 * 3600 + 55 * 60
+
     @MainActor
     private func startHostedManager(_ hosted: ManagerSessionStarter.Hosted) {
         hud.setManager(on: true)  // breathing until the bot says ready
+        managerEndedByIdle = false
         Permissions.log("manager: hosted, starting a session at \(hosted.start.host ?? "?")")
         managerTask = Task { @MainActor [weak self] in
             guard let self else { return }
@@ -167,8 +175,14 @@ extension AppDelegate {
             }
             self.managerSocket = socket
             socket.onTrace = { line in Permissions.log("manager wire: \(line)") }
-            socket.onLevel = { level, bytes in
+            socket.onLevel = { [weak socket] level, bytes in
                 Permissions.log(String(format: "manager mic: rms %.4f, %d bytes sent", level, bytes))
+                // Past the session's life and the room is quiet: rotate now.
+                // The mic stops with the socket, so this fires once.
+                if level < 0.01, Date().timeIntervalSince(started) > Self.hostedSessionLife, let socket {
+                    Permissions.log("manager: session life reached at a quiet moment; rotating")
+                    Task { await socket.close() }
+                }
             }
             Permissions.log("manager: hosted session \(session.sessionId ?? "?") (start \(Int(Date().timeIntervalSince(started) * 1000)) ms)")
             // Hosted, the bot keeps nothing on disk; the app keeps the stream
@@ -189,11 +203,34 @@ extension AppDelegate {
                 }
                 self.handle(event)
             }
-            guard self.managerSocket === socket else { return }
+            guard self.managerSocket === socket else { return }  // stopped by the chord
             Permissions.log("manager: hosted socket ended (\(socket.closeReason ?? "closed"))")
             self.managerSocket = nil
-            self.hud.setManager(on: false)
-            self.rebuildMenu()
+            if self.managerEndedByIdle {
+                // The bot ended it on purpose and the orb already says so; a
+                // chord starts a fresh session. Reconnecting would just bill.
+                self.managerEndedByIdle = false
+                self.hud.setManager(on: false)
+                self.rebuildMenu()
+                return
+            }
+            // Anything else (the network, the 4 h cap, the rotation above) is
+            // a fresh session with backoff: 1, 2, 4 s, then give up and say so.
+            self.managerReconnects += 1
+            guard self.managerReconnects <= 3 else {
+                Permissions.log("manager: hosted reconnect gave up after 3 tries")
+                self.hud.showResult("Hands-free lost its connection three times; press the chord to try again.")
+                self.managerReconnects = 0
+                self.hud.setManager(on: false)
+                self.rebuildMenu()
+                return
+            }
+            let wait = UInt64(1 << (self.managerReconnects - 1)) * 1_000_000_000
+            self.hud.setManagerState(StatusHUD.orbState, line: "reconnecting")
+            Permissions.log("manager: hosted reconnect \(self.managerReconnects) in \(wait / 1_000_000_000) s")
+            try? await Task.sleep(nanoseconds: wait)
+            guard self.managerSocket == nil, self.managerTask != nil else { return }  // stopped meanwhile
+            self.startHostedManager(hosted)
         }
     }
 
@@ -247,6 +284,7 @@ extension AppDelegate {
         case .ready:
             // The mic-open cue plays now, when it is true: the pipeline is up.
             Earcons.acknowledge(.listening)
+            managerReconnects = 0
             hud.setManagerState(StatusHUD.orbState, line: "listening")
         case .hearing:
             hud.setManagerState(StatusHUD.orbState, line: "hearing you", mood: "hearing")
@@ -270,6 +308,9 @@ extension AppDelegate {
             hud.setManagerState(StatusHUD.orbState, line: e.meaning.map { "sent: \($0)" } ?? "working")
         case .error:
             hud.setManagerState(StatusHUD.orbState, line: "something failed; check the log")
+        case .idle:
+            managerEndedByIdle = true
+            hud.setManagerState(StatusHUD.orbState, line: "paused after \((e.secs ?? 0) / 60) quiet minutes")
         }
     }
 

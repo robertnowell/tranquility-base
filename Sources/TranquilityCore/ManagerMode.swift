@@ -36,6 +36,8 @@ public struct ManagerEvent: Codable, Equatable, Sendable {
         case tool
         /// Something failed, with its reason; the manager said a fixed line.
         case error
+        /// Hosted: nobody spoke for `secs`; the bot is ending the session itself.
+        case idle
     }
     public var event: Kind
     public var t: Double?
@@ -51,6 +53,7 @@ public struct ManagerEvent: Codable, Equatable, Sendable {
     public var ms: Int?
     public var meaning: String?
     public var reason: String?
+    public var secs: Int?
 
     public static func parse(_ line: Data) -> ManagerEvent? {
         try? JSONDecoder().decode(ManagerEvent.self, from: line)

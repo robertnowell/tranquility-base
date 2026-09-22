@@ -85,3 +85,14 @@ final class AnsweredLog: @unchecked Sendable {
     var value: [[String]] { lock.lock(); defer { lock.unlock() }; return v }
     func add(_ argv: [String]) { lock.lock(); v.append(argv); lock.unlock() }
 }
+
+final class ManagerEventIdleTests: XCTestCase {
+    /// The hosted bot's `idle` line parses with its seconds; the app reads
+    /// it to stop rather than reconnect.
+    func testIdleLineParses() {
+        let line = Data(#"{"event":"idle","t":1790046000.0,"secs":1200}"#.utf8)
+        let e = ManagerEvent.parse(line)
+        XCTAssertEqual(e?.event, .idle)
+        XCTAssertEqual(e?.secs, 1200)
+    }
+}
