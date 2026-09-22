@@ -13,36 +13,32 @@ closes the turn cleanly.
 
 import time
 
-from pipecat.frames.frames import (
-    BotStartedSpeakingFrame,
-    BotStoppedSpeakingFrame,
-    Frame,
-    InputAudioRawFrame,
-)
+from loguru import logger
+
+from pipecat.frames.frames import Frame, InputAudioRawFrame
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
-from mute import EXTERNAL_UNTIL
+from mute import BOT_VOICE, EXTERNAL_UNTIL
 
 
 class EchoGate(FrameProcessor):
     def __init__(self, tail_secs: float = 0.6, **kwargs):
         super().__init__(**kwargs)
-        self._speaking = False
-        self._stopped_at = 0.0
         self._tail = tail_secs
+        self._was_gated = False
 
     def gated(self) -> bool:
         now = time.monotonic()
-        return (self._speaking or (now - self._stopped_at) < self._tail
+        return (BOT_VOICE["speaking"] or (now - BOT_VOICE["stopped_at"]) < self._tail
                 or now < EXTERNAL_UNTIL["t"])
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
-        if isinstance(frame, BotStartedSpeakingFrame):
-            self._speaking = True
-        elif isinstance(frame, BotStoppedSpeakingFrame):
-            self._speaking = False
-            self._stopped_at = time.monotonic()
-        elif isinstance(frame, InputAudioRawFrame) and self.gated():
-            frame.audio = bytes(len(frame.audio))
+        if isinstance(frame, InputAudioRawFrame):
+            gated = self.gated()
+            if gated != self._was_gated:
+                self._was_gated = gated
+                logger.info(f"echo gate {'closed' if gated else 'open'}")
+            if gated:
+                frame.audio = bytes(len(frame.audio))
         await self.push_frame(frame, direction)

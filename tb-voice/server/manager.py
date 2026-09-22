@@ -16,6 +16,7 @@ import time
 import httpx
 from loguru import logger
 from pipecat.frames.frames import (
+    BotStartedSpeakingFrame,
     BotStoppedSpeakingFrame,
     EndWorkerFrame,
     Frame,
@@ -28,7 +29,7 @@ from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from calls import record
 from events import emit
 from compose import READBACK_SECS, OpenMessage, classify, continues, filler_only
-from mute import EXTERNAL_UNTIL
+from mute import BOT_VOICE, EXTERNAL_UNTIL
 from spoken import spoken
 from tools import _json_or_text, _run
 
@@ -460,7 +461,11 @@ class Manager(FrameProcessor):
                 self._idle_task = self.create_task(self._end_when_idle())
             # The pipeline is running and the mic is open: now it is listening.
             await emit(None, "ready")
+        if isinstance(frame, BotStartedSpeakingFrame):
+            BOT_VOICE["speaking"] = True  # the echo gate reads this
         if isinstance(frame, BotStoppedSpeakingFrame):
+            BOT_VOICE["speaking"] = False
+            BOT_VOICE["stopped_at"] = time.monotonic()
             self._bot_stopped.set()
             await emit(None, "quiet")  # the manager's voice stopped; the orb goes back to rest
         if not isinstance(frame, LLMContextFrame):
@@ -602,7 +607,7 @@ class Manager(FrameProcessor):
         await asyncio.sleep(0.2)  # a breath between the manager's voice and the agent's
         brief = await self._brief(nxt["sessionId"])
         spoken = " ".join(x for x in ((brief or {}).get("recap"), (brief or {}).get("proposal")) if x)
-        await emit(self, "speaking", voice="agent", session=nxt["sessionId"], text=spoken[:200])
+        await emit(self, "speaking", voice="agent", session=nxt["sessionId"], text=spoken)
         note(nxt.get("name") or nxt.get("goal") or nxt["sessionId"][:8], spoken or "(no brief stored)", "spoken")
         await self._app_speaks(f"{SCHEME}://hear?session={nxt['sessionId']}", spoken or "x " * 20)
 
@@ -624,7 +629,7 @@ class Manager(FrameProcessor):
             return
         # The session speaks its own rung: a speak-only deep link into the app.
         await emit(self, "speaking", voice="agent", session=self.stage["sessionId"],
-                   rung=kind, text=rung["spoken"][:160])
+                   rung=kind, text=rung["spoken"])
         note(self.stage.get("name") or self.stage.get("goal") or self.stage["sessionId"][:8], rung["spoken"], "spoken")
         await self._app_speaks(f"{SCHEME}://rung?session={self.stage['sessionId']}&kind={kind}", rung["spoken"])
 
@@ -1000,7 +1005,7 @@ class Manager(FrameProcessor):
         """The manager's voice. Holds the voice lock until its own speech stops,
         so nothing else can start talking over it."""
         async with self._voice:
-            await emit(self, "speaking", voice=voice, session=session, text=text[:160])
+            await emit(self, "speaking", voice=voice, session=session, text=text)
             self._bot_stopped.clear()
             # The synthesizer notes the line when it speaks it (tts.py), so every
             # path the manager's voice takes lands in the transcript exactly once.

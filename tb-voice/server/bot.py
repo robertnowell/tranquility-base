@@ -47,7 +47,6 @@ from pipecat.workers.runner import WorkerRunner
 from echo import EchoGate
 from llm import RecordedLLMService
 from manager import JevClient, Manager
-from mute import WhileBotSpeaksMuteStrategy
 from prompt import SYSTEM
 from tools import SCHEMAS
 from tts import SpokenTTSService
@@ -124,7 +123,12 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
         context,
         user_params=LLMUserAggregatorParams(
             vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=0.2)),
-            user_mute_strategies=[WhileBotSpeaksMuteStrategy()],
+            # No mute strategy: a strategy is asked only when a frame reaches
+            # the aggregator, and while it is muted the transcriptions that
+            # would bring one are what it drops, so it can stay muted for as
+            # long as nothing else happens (thirty seconds, in a drill on
+            # 22 Sep). EchoGate feeds the transcriber zeros while the manager
+            # speaks, which is asked on every audio frame and cannot stick.
             # A turn starts on words, not on VAD: in a loud room VAD fired 300 ms into
             # every answer and cancelled it before TTS. Two words of transcript start a
             # turn; noise and one-word backchannels do not.
