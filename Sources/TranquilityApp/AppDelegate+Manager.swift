@@ -88,8 +88,15 @@ extension AppDelegate {
         // event lines arrive over a socket instead of a pipe, and the bot asks
         // this process for its doors (ManagerSocket.swift).
         switch ManagerConfig.availability() {
+        case .managed:
+            // Signed in: the Gateway sells the session, starts the bot, and
+            // settles by the second. No key on this Mac (VOICE.md).
+            if let credits = managedCredits { startHostedManager(.managed(credits)); return }
+            if let hosted = ManagerSessionStarter.hosted() { startHostedManager(.hosted(hosted)); return }
+            hud.showResult("Hands-free could not reach your account.")
+            return
         case .hosted:
-            if let hosted = ManagerSessionStarter.hosted() { startHostedManager(hosted) }
+            if let hosted = ManagerSessionStarter.hosted() { startHostedManager(.hosted(hosted)) }
             return
         case .unset:
             // Nothing to start. The managed path (a session issued by the
@@ -143,17 +150,30 @@ extension AppDelegate {
         managerTransport = nil
         if let socket = managerSocket { Task { await socket.close() } }
         managerSocket = nil
+        endManagerLease()
         managerReconnects = 0
         managerEndedByIdle = false
         hud.setManager(on: false)
         Permissions.log("manager: stopped")
     }
 
+    /// Where a hosted session comes from: bought from the Gateway for a
+    /// signed-in account, or started directly with the dev shim's key.
+    enum ManagerSource {
+        case managed(ManagedCreditSession)
+        case hosted(ManagerSessionStarter.Hosted)
+    }
+
+    /// The Gateway's session, while it is ours to renew and end.
+    struct ManagedVoiceLease {
+        let client: ManagedVoiceClient
+        let id: UUID
+    }
+
     @MainActor
-    private func startHostedManager(_ hosted: ManagerSessionStarter.Hosted) {
+    private func startHostedManager(_ source: ManagerSource) {
         hud.setManager(on: true)  // breathing until the bot says ready
         managerEndedByIdle = false
-        Permissions.log("manager: hosted, starting a session at \(hosted.start.host ?? "?")")
         managerTask = Task { @MainActor [weak self] in
             guard let self else { return }
             // The fleet's names go with the start so the transcriber can spell
@@ -162,8 +182,27 @@ extension AppDelegate {
             let names = await Self.fleetNames()
             let started = Date()
             let session: ManagerSession
-            do { session = try await ManagerSessionStarter.start(hosted, keyterms: names) } catch {
-                self.hud.showResult("Hands-free could not start a session: \(error.localizedDescription)")
+            var lease: ManagedVoiceLease?
+            do {
+                switch source {
+                case .managed(let credits):
+                    Permissions.log("manager: managed, buying a session from the Gateway")
+                    let client = try await credits.voice()
+                    let id = UUID()
+                    let bought = try await client.start(id: id, keyterms: names)
+                    guard let url = bought.wsUrl.flatMap(URL.init(string:)) else {
+                        throw ManagedSummaryFailure.invalidResponse
+                    }
+                    session = ManagerSession(url: url, token: bought.token, sessionId: id.uuidString.lowercased())
+                    lease = ManagedVoiceLease(client: client, id: id)
+                    self.managerLease = lease
+                    self.scheduleManagerRenewal(lease!, renewBy: bought.renewByDate)
+                case .hosted(let hosted):
+                    Permissions.log("manager: hosted, starting a session at \(hosted.start.host ?? "?")")
+                    session = try await ManagerSessionStarter.start(hosted, keyterms: names)
+                }
+            } catch {
+                self.hud.showResult(Self.managerStartMessage(for: error))
                 Permissions.log("manager: hosted start failed \(error)")
                 self.hud.setManager(on: false)
                 return
@@ -204,6 +243,9 @@ extension AppDelegate {
             guard self.managerSocket === socket else { return }  // stopped by the chord
             Permissions.log("manager: hosted socket ended (\(socket.closeReason ?? "closed"))")
             self.managerSocket = nil
+            // The socket is the session's life: end it so the Gateway settles
+            // by the seconds we actually used rather than the block we held.
+            self.endManagerLease()
             if self.managerEndedByIdle {
                 // The bot ended it on purpose and the orb already says so; a
                 // chord starts a fresh session. Reconnecting would just bill.
@@ -229,7 +271,65 @@ extension AppDelegate {
             Permissions.log("manager: hosted reconnect \(self.managerReconnects) in \(wait / 1_000_000_000) s")
             try? await Task.sleep(nanoseconds: wait)
             guard self.managerSocket == nil, self.managerTask != nil else { return }  // stopped meanwhile
-            self.startHostedManager(hosted)
+            self.startHostedManager(source)
+        }
+    }
+
+    /// What a refused start says out loud. A 402 is the credit standing the
+    /// panel already shows, and a 503 is the host being down: neither is a
+    /// sign-out, and neither says "error" at somebody who just pressed a key.
+    static func managerStartMessage(for error: Error) -> String {
+        guard case let .refused(code, _)? = error as? ManagedSummaryFailure else {
+            return "Hands-free could not start a session: \(error.localizedDescription)"
+        }
+        switch code {
+        case "insufficient_credit": return "Hands-free needs credit: your balance is spent."
+        case "service_unavailable", "not_connected": return "Hands-free is unavailable right now."
+        default: return "Hands-free could not start a session (\(code))."
+        }
+    }
+
+    /// Renew a few minutes before the block runs out. A renewal opens the next
+    /// window where this one ends, so an early one costs nothing; a missed one
+    /// ends the session, which the socket then reports as any other drop.
+    @MainActor
+    private func scheduleManagerRenewal(_ lease: ManagedVoiceLease, renewBy: Date?) {
+        managerRenewal?.cancel()
+        guard let renewBy else { return }
+        managerRenewal = Task { @MainActor [weak self] in
+            var next = renewBy
+            while !Task.isCancelled {
+                let wait = max(30, next.timeIntervalSinceNow - 180)
+                try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
+                guard !Task.isCancelled, let self, self.managerLease?.id == lease.id else { return }
+                do {
+                    let renewed = try await lease.client.renew(id: lease.id)
+                    guard let by = renewed.renewByDate else { return }
+                    Permissions.log("manager: renewed, block \(renewed.blocks), next by \(by)")
+                    next = by
+                } catch {
+                    Permissions.log("manager: renewal failed \(error)")
+                    return  // the socket's end is the thing that reconnects
+                }
+            }
+        }
+    }
+
+    /// End the Gateway session, once. Settling twice changes nothing, but the
+    /// call is not free, so the lease is cleared before it is made.
+    @MainActor
+    func endManagerLease() {
+        guard let lease = managerLease else { return }
+        managerLease = nil
+        managerRenewal?.cancel()
+        managerRenewal = nil
+        Task {
+            do {
+                let ended = try await lease.client.end(id: lease.id)
+                Permissions.log("manager: session ended, charged \(ended.chargedSeconds ?? "?") s")
+            } catch {
+                Permissions.log("manager: end failed \(error)")
+            }
         }
     }
 

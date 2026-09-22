@@ -94,17 +94,24 @@ public enum ManagerConfig {
         return "\(home)/Projects/voice-controlled-coding-agents/.build/arm64-apple-macosx/debug/tbase"
     }
 
-    /// What HANDS-FREE would do if pressed. `hosted` when `manager.hosted` is
-    /// configured and no local command is; `local` when a command is configured
-    /// or the default checkout's `run.sh` is on disk; `unset` otherwise, in
-    /// which case the placard reads SET UP HANDS-FREE and a press says why.
-    /// The managed path (a session from the Gateway for a signed-in account)
-    /// takes the `unset` slot when its route lands.
-    public enum Availability: Equatable, Sendable { case local, hosted, unset }
+    /// What HANDS-FREE would do if pressed.
+    ///
+    /// In order: a `manager.command` in hq.json is the developer's own bot and
+    /// always wins; a signed-in Mac buys a session from the Gateway, which is
+    /// the path every other user has; `manager.hosted` is the dev shim that
+    /// starts a Cloud session with a public key on this Mac and goes when
+    /// nobody needs it; the default checkout's `run.sh` on disk is a local
+    /// manager; and with none of them the placard reads SET UP HANDS-FREE and
+    /// a press says why.
+    public enum Availability: Equatable, Sendable { case local, managed, hosted, unset }
 
-    public static func availability(config: URL = HubApp.configPath,
-                                    fileExists: (String) -> Bool = { FileManager.default.isExecutableFile(atPath: $0) }) -> Availability {
+    public static func availability(
+        config: URL = HubApp.configPath,
+        fileExists: (String) -> Bool = { FileManager.default.isExecutableFile(atPath: $0) },
+        signedIn: () -> Bool = { HubApp.baseURL != nil && !(Secrets.read(.hubToken) ?? "").isEmpty }
+    ) -> Availability {
         if explicitCommand(config: config) != nil { return .local }
+        if signedIn() { return .managed }
         if hostedIsConfigured(config: config) { return .hosted }
         return fileExists(command(config: config)[0]) ? .local : .unset
     }
