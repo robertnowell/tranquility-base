@@ -207,7 +207,13 @@ extension AppDelegate {
                 self.hud.setManager(on: false)
                 return
             }
-            let socket = ManagerSocket(session: session, audio: ManagerMicrophone()) { argv in
+            // With echo cancellation on, the microphone and the manager's
+            // voice share one voice-processing unit, which is what makes
+            // talking over the manager possible: a canceller removes what it
+            // renders, so its voice has to go through it. If the unit will
+            // not start, hands-free carries on exactly as before.
+            let (microphone, voice) = Self.managerAudio()
+            let socket = ManagerSocket(session: session, audio: microphone, player: voice) { argv in
                 await AppDelegate.answerManagerRequest(argv)
             }
             do { try socket.start() } catch {
@@ -331,6 +337,22 @@ extension AppDelegate {
                 Permissions.log("manager: end failed \(error)")
             }
         }
+    }
+
+    /// The microphone and the player hands-free will use: one voice-processing
+    /// unit when it is asked for and this Mac will give us one, the pinned
+    /// capture unit and a separate player otherwise. The pair has to come from
+    /// here together, because the whole point is that they are the same unit.
+    @MainActor
+    static func managerAudio() -> (ManagerAudioSource, PCMPlayer) {
+        guard ManagerConfig.echoCancellation() else { return (ManagerMicrophone(), PCMPlayer()) }
+        guard VoiceProcessingAudio.isAvailable() else {
+            Permissions.log("manager: echo cancellation asked for, but no voice-processing unit; using the pinned capture unit")
+            return (ManagerMicrophone(), PCMPlayer())
+        }
+        let processing = VoiceProcessingAudio()
+        Permissions.log("manager: echo cancellation on; the manager can be interrupted while it speaks")
+        return (processing, processing.player)
     }
 
     /// The grid's display names, for the transcriber's key terms.

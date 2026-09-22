@@ -129,3 +129,49 @@ final class ManagerAvailabilityTests: XCTestCase {
         XCTAssertEqual(ManagerConfig.availability(config: bare, fileExists: { _ in false }, signedIn: { true }), .managed)
     }
 }
+
+/// Voice processing is a preference with a fallback, and the fallback is the
+/// whole safety story: a Mac that will not give us the unit must still have
+/// hands-free, exactly as it did before.
+final class VoiceProcessingTests: XCTestCase {
+    private func config(_ json: String) throws -> URL {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("hq-\(UUID().uuidString).json")
+        try Data(json.utf8).write(to: url)
+        return url
+    }
+
+    func testOffUnlessAskedFor() throws {
+        XCTAssertFalse(ManagerConfig.echoCancellation(config: try config(#"{"manager":{}}"#)))
+        XCTAssertFalse(ManagerConfig.echoCancellation(config: try config(#"{}"#)))
+        XCTAssertTrue(ManagerConfig.echoCancellation(config: try config(#"{"manager":{"echo_cancellation":true}}"#)))
+    }
+
+    /// The manager's voice has to be resampled from the wire's 24 kHz to
+    /// whatever the unit runs at, or it plays at the wrong pitch and the
+    /// canceller is subtracting a signal that does not match what was heard.
+    func testResamplingKeepsTheLengthAndTheShape() {
+        let tone = (0..<2400).map { sinf(2 * .pi * 200 * Float($0) / 24_000) }   // 100 ms at 24 kHz
+        let up = VoiceProcessingAudio.resample(tone, from: 24_000, to: 48_000)
+        XCTAssertEqual(up.count, 4800, "100 ms is 100 ms")
+        XCTAssertEqual(Double(up.map { abs($0) }.max() ?? 0), 1.0, accuracy: 0.05, "and it is still a full-scale tone")
+        let same = VoiceProcessingAudio.resample(tone, from: 24_000, to: 24_000)
+        XCTAssertEqual(same, tone)
+    }
+
+    /// A line that is cut off has to stop now: flush drops what has not been
+    /// rendered, which is what an interruption sounds like.
+    func testFlushDropsTheRestOfTheLine() {
+        let outgoing = VoiceProcessingAudio.Outgoing()
+        outgoing.append([Float](repeating: 0.5, count: 1000))
+        var buffer = [Float](repeating: 99, count: 10)
+        buffer.withUnsafeMutableBufferPointer { out in
+            outgoing.take(10, into: out.baseAddress!, stride: 1)
+        }
+        XCTAssertEqual(buffer.first, 0.5, "it was playing")
+        outgoing.clear()
+        buffer.withUnsafeMutableBufferPointer { out in
+            outgoing.take(10, into: out.baseAddress!, stride: 1)
+        }
+        XCTAssertEqual(buffer, [Float](repeating: 0, count: 10), "and now it is silent, mid-line")
+    }
+}

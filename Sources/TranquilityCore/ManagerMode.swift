@@ -126,6 +126,18 @@ public enum ManagerConfig {
         return true
     }
 
+    /// Hands-free through the system's voice-processing unit, so the manager
+    /// can be interrupted while it speaks. Off by default until it has been
+    /// watched through a day of device changes: `manager.echo_cancellation`
+    /// in hq.json. When it is on and the unit will not start, hands-free
+    /// falls back to the pinned capture unit and says so in the log.
+    public static func echoCancellation(config: URL = HubApp.configPath) -> Bool {
+        guard let data = try? Data(contentsOf: config),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let manager = obj["manager"] as? [String: Any] else { return false }
+        return manager["echo_cancellation"] as? Bool ?? false
+    }
+
     public static func command(config: URL = HubApp.configPath) -> [String] {
         if let data = try? Data(contentsOf: config),
            let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
