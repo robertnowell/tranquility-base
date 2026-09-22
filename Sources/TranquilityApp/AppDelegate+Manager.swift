@@ -180,6 +180,10 @@ extension AppDelegate {
             // them; a read at the bot's end would wait on a pipeline that does
             // not exist yet (5 s, every start, 22 Sep).
             let names = await Self.fleetNames()
+            // One flag, both halves: the app captures through the canceller
+            // and the bot leaves its gate open. Either alone leaves the
+            // manager uninterruptible.
+            let cancelsEcho = ManagerConfig.echoCancellation() && VoiceProcessingAudio.isAvailable()
             let started = Date()
             let session: ManagerSession
             var lease: ManagedVoiceLease?
@@ -189,7 +193,7 @@ extension AppDelegate {
                     Permissions.log("manager: managed, buying a session from the Gateway")
                     let client = try await credits.voice()
                     let id = UUID()
-                    let bought = try await client.start(id: id, keyterms: names)
+                    let bought = try await client.start(id: id, keyterms: names, cancelsEcho: cancelsEcho)
                     guard let url = bought.wsUrl.flatMap(URL.init(string:)) else {
                         throw ManagedSummaryFailure.invalidResponse
                     }
@@ -199,7 +203,7 @@ extension AppDelegate {
                     self.scheduleManagerRenewal(lease!, renewBy: bought.renewByDate)
                 case .hosted(let hosted):
                     Permissions.log("manager: hosted, starting a session at \(hosted.start.host ?? "?")")
-                    session = try await ManagerSessionStarter.start(hosted, keyterms: names)
+                    session = try await ManagerSessionStarter.start(hosted, keyterms: names, cancelsEcho: cancelsEcho)
                 }
             } catch {
                 self.hud.showResult(Self.managerStartMessage(for: error))
@@ -212,7 +216,7 @@ extension AppDelegate {
             // talking over the manager possible: a canceller removes what it
             // renders, so its voice has to go through it. If the unit will
             // not start, hands-free carries on exactly as before.
-            let (microphone, voice) = Self.managerAudio()
+            let (microphone, voice) = Self.managerAudio(processing: cancelsEcho)
             let socket = ManagerSocket(session: session, audio: microphone, player: voice) { argv in
                 await AppDelegate.answerManagerRequest(argv)
             }
@@ -344,15 +348,16 @@ extension AppDelegate {
     /// capture unit and a separate player otherwise. The pair has to come from
     /// here together, because the whole point is that they are the same unit.
     @MainActor
-    static func managerAudio() -> (ManagerAudioSource, PCMPlayer) {
-        guard ManagerConfig.echoCancellation() else { return (ManagerMicrophone(), PCMPlayer()) }
-        guard VoiceProcessingAudio.isAvailable() else {
-            Permissions.log("manager: echo cancellation asked for, but no voice-processing unit; using the pinned capture unit")
+    static func managerAudio(processing: Bool) -> (ManagerAudioSource, PCMPlayer) {
+        guard processing else {
+            if ManagerConfig.echoCancellation() {
+                Permissions.log("manager: echo cancellation asked for, but no voice-processing unit; using the pinned capture unit")
+            }
             return (ManagerMicrophone(), PCMPlayer())
         }
-        let processing = VoiceProcessingAudio()
+        let unit = VoiceProcessingAudio()
         Permissions.log("manager: echo cancellation on; the manager can be interrupted while it speaks")
-        return (processing, processing.player)
+        return (unit, unit.player)
     }
 
     /// The grid's display names, for the transcriber's key terms.

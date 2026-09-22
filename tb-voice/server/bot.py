@@ -7,6 +7,7 @@ Run with keys injected from the Keychain: ./run.sh
 """
 
 import asyncio
+import base64
 import json
 import os
 import time
@@ -58,6 +59,32 @@ KEYTERMS = [
 ]
 
 
+def session_body(runner_args) -> dict | None:
+    """What the client sent with the session. Pipecat Cloud hands it over as
+    `body`; the local dev runner's plain-WebSocket route does not, and leaves
+    it on the socket's query string, which is how the app appends it anyway.
+    Reading both is what lets a drill on this machine exercise what the cloud
+    will do (22 Sep: the aec flag was set, ignored locally, and the drill
+    measured the harness rather than the bot)."""
+    body = getattr(runner_args, "body", None)
+    if isinstance(body, dict) and body:
+        return body
+    websocket = getattr(runner_args, "websocket", None)
+    encoded = None
+    try:
+        encoded = websocket.query_params.get("body") if websocket else None
+    except Exception:
+        encoded = None
+    if not encoded:
+        return body if isinstance(body, dict) else None
+    try:
+        pad = "=" * (-len(encoded) % 4)
+        return json.loads(base64.b64decode(encoded + pad).decode())
+    except Exception:
+        logger.warning("session body on the query string is not base64 JSON")
+        return None
+
+
 async def keyterms(body: dict | None = None) -> list[str]:
     """The fixed names plus every session's display name. Hosted, the app sends
     them in the session body (wire.py); a fleet read over the wire at startup
@@ -94,7 +121,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
     # name the gate cannot match.
     stt = AssemblyAISTTService(
         api_key=os.environ["ASSEMBLYAI_API_KEY"],
-        settings=AssemblyAISTTService.Settings(keyterms_prompt=await keyterms(getattr(runner_args, "body", None))),
+        settings=AssemblyAISTTService.Settings(keyterms_prompt=await keyterms(session_body(runner_args))),
     )
     # ElevenLabs is asked for pcm_24000 explicitly; the transport runs at the
     # device's native 48 kHz and Pipecat's SOXR resampler bridges the two. A
@@ -117,6 +144,14 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
             max_tokens=200,
         ),
     )
+
+    # `aec` in the session body: the app captures through the system's
+    # voice-processing unit, so what reaches us has the manager's own voice
+    # removed already. Nothing else may assume it (22 Sep).
+    body = session_body(runner_args)
+    cancels_echo = bool(isinstance(body, dict) and body.get("aec"))
+    if cancels_echo:
+        logger.info("client cancels its own echo: the gate is open and the manager can be interrupted")
 
     context = LLMContext(tools=SCHEMAS)
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
@@ -167,7 +202,13 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
     pipeline = Pipeline(
         [
             transport.input(),
-            EchoGate(),
+            # The client says whether its microphone is already free of the
+            # manager's voice. When it is, the gate passes everything through
+            # and the user can talk over the manager: their words reach the
+            # transcriber while it is still speaking, which is what an
+            # interruption is made of. When it is not, the gate is the only
+            # defence and stays.
+            EchoGate(passthrough=cancels_echo),
             stt,
             user_aggregator,
             gate,

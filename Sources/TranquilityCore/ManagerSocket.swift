@@ -307,13 +307,22 @@ public enum ManagerSessionStarter {
     /// `keyterms` ride in the session body (the fleet's names, so the STT can
     /// spell them); the service hands the body back encoded and it is appended
     /// to the socket URL, which is how Pipecat Cloud carries it.
-    public static func start(_ hosted: Hosted, keyterms: [String] = []) async throws -> ManagerSession {
+    /// `cancelsEcho` tells the bot its gate can stay open, because this Mac
+    /// captures through the system's voice-processing unit and the manager's
+    /// own voice is already subtracted. Without it the bot feeds the
+    /// transcriber silence while it speaks and nothing said then is ever
+    /// heard, which is why interrupting did not work (22 Sep).
+    public static func start(_ hosted: Hosted, keyterms: [String] = [],
+                             cancelsEcho: Bool = false) async throws -> ManagerSession {
         var request = URLRequest(url: hosted.start)
         request.httpMethod = "POST"
         request.setValue("Bearer \(hosted.key)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         var payload: [String: Any] = ["transport": "websocket"]
-        if !keyterms.isEmpty { payload["body"] = ["keyterms": Array(keyterms.prefix(80))] }
+        var body: [String: Any] = [:]
+        if !keyterms.isEmpty { body["keyterms"] = Array(keyterms.prefix(80)) }
+        if cancelsEcho { body["aec"] = true }
+        if !body.isEmpty { payload["body"] = body }
         request.httpBody = try JSONSerialization.data(withJSONObject: payload)
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
