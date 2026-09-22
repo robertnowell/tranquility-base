@@ -75,7 +75,7 @@ extension AppDelegate {
 
 extension AppDelegate {
 
-    var managerIsOn: Bool { managerTransport != nil }
+    var managerIsOn: Bool { managerTransport != nil || managerSocket != nil }
 
     @objc func toggleManagerMode() {
         if managerIsOn { stopManager() } else { startManager() }
@@ -84,6 +84,13 @@ extension AppDelegate {
 
     @MainActor
     func startManager() {
+        // A hosted manager when configured and no local command is: the same
+        // event lines arrive over a socket instead of a pipe, and the bot asks
+        // this process for its doors (ManagerSocket.swift).
+        if ManagerConfig.explicitCommand() == nil, let hosted = ManagerSessionStarter.hosted() {
+            startHostedManager(hosted)
+            return
+        }
         let argv = ManagerConfig.command()
         let cwd = (argv[0] as NSString).deletingLastPathComponent
         let transport = ACPProcessTransport(command: argv, cwd: cwd,
@@ -125,8 +132,144 @@ extension AppDelegate {
         managerTask = nil
         if let transport = managerTransport { Task { await transport.close() } }
         managerTransport = nil
+        if let socket = managerSocket { Task { await socket.close() } }
+        managerSocket = nil
+        managerReconnects = 0
+        managerEndedByIdle = false
         hud.setManager(on: false)
         Permissions.log("manager: stopped")
+    }
+
+    /// Cloud caps a session at four hours. A little before that, at a quiet
+    /// moment, the app closes the socket itself and the reconnect path opens
+    /// a fresh session; you hear nothing.
+    nonisolated static let hostedSessionLife: TimeInterval = 3 * 3600 + 55 * 60
+
+    @MainActor
+    private func startHostedManager(_ hosted: ManagerSessionStarter.Hosted) {
+        hud.setManager(on: true)  // breathing until the bot says ready
+        managerEndedByIdle = false
+        Permissions.log("manager: hosted, starting a session at \(hosted.start.host ?? "?")")
+        managerTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            // The fleet's names go with the start so the transcriber can spell
+            // them; a read at the bot's end would wait on a pipeline that does
+            // not exist yet (5 s, every start, 22 Sep).
+            let names = await Self.fleetNames()
+            let started = Date()
+            let session: ManagerSession
+            do { session = try await ManagerSessionStarter.start(hosted, keyterms: names) } catch {
+                self.hud.showResult("Hands-free could not start a session: \(error.localizedDescription)")
+                Permissions.log("manager: hosted start failed \(error)")
+                self.hud.setManager(on: false)
+                return
+            }
+            let socket = ManagerSocket(session: session, audio: ManagerMicrophone()) { argv in
+                await AppDelegate.answerManagerRequest(argv)
+            }
+            do { try socket.start() } catch {
+                self.hud.showResult("Hands-free could not open the microphone: \(error.localizedDescription)")
+                Permissions.log("manager: hosted mic failed \(error)")
+                self.hud.setManager(on: false)
+                return
+            }
+            self.managerSocket = socket
+            socket.onTrace = { line in Permissions.log("manager wire: \(line)") }
+            socket.onLevel = { [weak socket] level, bytes in
+                Permissions.log(String(format: "manager mic: rms %.4f, %d bytes sent", level, bytes))
+                // Past the session's life and the room is quiet: rotate now.
+                // The mic stops with the socket, so this fires once.
+                if level < 0.01, Date().timeIntervalSince(started) > Self.hostedSessionLife, let socket {
+                    Permissions.log("manager: session life reached at a quiet moment; rotating")
+                    Task { await socket.close() }
+                }
+            }
+            Permissions.log("manager: hosted session \(session.sessionId ?? "?") (start \(Int(Date().timeIntervalSince(started) * 1000)) ms)")
+            // Hosted, the bot keeps nothing on disk; the app keeps the stream
+            // here so the viewer (tb-voice/server/tail.py) can read it.
+            let eventsFile = QueueStore.supportDirectory.appendingPathComponent("manager-events.jsonl")
+            let eventsHandle: FileHandle? = {
+                if !FileManager.default.fileExists(atPath: eventsFile.path) {
+                    FileManager.default.createFile(atPath: eventsFile.path, contents: nil)
+                }
+                let h = try? FileHandle(forWritingTo: eventsFile); h?.seekToEndOfFile(); return h
+            }()
+            defer { try? eventsHandle?.close() }
+            for await line in socket.lines() {
+                eventsHandle?.write(line + Data([0x0A]))
+                guard let event = ManagerEvent.parse(line) else { continue }
+                if event.event == .ready {
+                    Permissions.log("manager: ready \(Int(Date().timeIntervalSince(started) * 1000)) ms after start")
+                }
+                self.handle(event)
+            }
+            guard self.managerSocket === socket else { return }  // stopped by the chord
+            Permissions.log("manager: hosted socket ended (\(socket.closeReason ?? "closed"))")
+            self.managerSocket = nil
+            if self.managerEndedByIdle {
+                // The bot ended it on purpose and the orb already says so; a
+                // chord starts a fresh session. Reconnecting would just bill.
+                self.managerEndedByIdle = false
+                self.hud.setManager(on: false)
+                self.rebuildMenu()
+                return
+            }
+            // Anything else (the network, the 4 h cap, the rotation above) is
+            // a fresh session with backoff: 1, 2, 4 s, then give up and say so.
+            self.managerReconnects += 1
+            guard self.managerReconnects <= 3 else {
+                Permissions.log("manager: hosted reconnect gave up after 3 tries")
+                self.hud.showResult("Hands-free lost its connection three times; press the chord to try again.")
+                self.managerReconnects = 0
+                self.hud.setManager(on: false)
+                self.rebuildMenu()
+                return
+            }
+            let wait = UInt64(1 << (self.managerReconnects - 1)) * 1_000_000_000
+            self.hud.setManagerState(StatusHUD.orbState, line: "reconnecting")
+            Permissions.log("manager: hosted reconnect \(self.managerReconnects) in \(wait / 1_000_000_000) s")
+            try? await Task.sleep(nanoseconds: wait)
+            guard self.managerSocket == nil, self.managerTask != nil else { return }  // stopped meanwhile
+            self.startHostedManager(hosted)
+        }
+    }
+
+    /// The grid's display names, for the transcriber's key terms.
+    static func fleetNames() async -> [String] {
+        let (code, out) = await answerManagerRequest(["tbase", "targets", "--json"])
+        guard code == 0, let data = out.data(using: .utf8),
+              let rows = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return [] }
+        return rows.compactMap { ($0["name"] as? String)?.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+    }
+
+    /// The bot's doors, done here. `tbase …` runs the CLI this Mac has;
+    /// `open <scheme>://…` is handed to the app's own deep-link handler, so
+    /// the scheme the bot wrote does not matter. Anything else is refused.
+    static func answerManagerRequest(_ argv: [String]) async -> (code: Int, out: String) {
+        switch argv.first {
+        case "tbase":
+            // The exit status is the answer (send maps 0/2/3/4/5), so this is a
+            // plain Process rather than Subprocess.run, which folds status into a message.
+            return await Task.detached { () -> (code: Int, out: String) in
+                let p = Process()
+                p.executableURL = URL(fileURLWithPath: ManagerConfig.tbasePath())
+                p.arguments = Array(argv.dropFirst())
+                let pipe = Pipe()
+                p.standardOutput = pipe; p.standardError = pipe
+                do { try p.run() } catch { return (127, "\(error)") }
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                p.waitUntilExit()
+                return (Int(p.terminationStatus), String(decoding: data, as: UTF8.self))
+            }.value
+        case "open":
+            guard argv.count > 1, let url = URL(string: argv[1]) else { return (2, "no url") }
+            await MainActor.run {
+                (NSApp.delegate as? AppDelegate)?.application(NSApp, open: [url])
+            }
+            return (0, "")
+        default:
+            return (2, "refused: \(argv.first ?? "")")
+        }
     }
 
     @MainActor
@@ -141,6 +284,7 @@ extension AppDelegate {
         case .ready:
             // The mic-open cue plays now, when it is true: the pipeline is up.
             Earcons.acknowledge(.listening)
+            managerReconnects = 0
             hud.setManagerState(StatusHUD.orbState, line: "listening")
         case .hearing:
             hud.setManagerState(StatusHUD.orbState, line: "hearing you", mood: "hearing")
@@ -164,6 +308,9 @@ extension AppDelegate {
             hud.setManagerState(StatusHUD.orbState, line: e.meaning.map { "sent: \($0)" } ?? "working")
         case .error:
             hud.setManagerState(StatusHUD.orbState, line: "something failed; check the log")
+        case .idle:
+            managerEndedByIdle = true
+            hud.setManagerState(StatusHUD.orbState, line: "paused after \((e.secs ?? 0) / 60) quiet minutes")
         }
     }
 

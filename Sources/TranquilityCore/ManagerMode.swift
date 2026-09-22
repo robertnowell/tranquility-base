@@ -36,6 +36,8 @@ public struct ManagerEvent: Codable, Equatable, Sendable {
         case tool
         /// Something failed, with its reason; the manager said a fixed line.
         case error
+        /// Hosted: nobody spoke for `secs`; the bot is ending the session itself.
+        case idle
     }
     public var event: Kind
     public var t: Double?
@@ -51,6 +53,7 @@ public struct ManagerEvent: Codable, Equatable, Sendable {
     public var ms: Int?
     public var meaning: String?
     public var reason: String?
+    public var secs: Int?
 
     public static func parse(_ line: Data) -> ManagerEvent? {
         try? JSONDecoder().decode(ManagerEvent.self, from: line)
@@ -62,6 +65,32 @@ public enum ManagerConfig {
     /// (`manager.command`, an argv array) or the default checkout beside the
     /// app's own. A path in config is a path the user typed; nothing here
     /// invents one.
+    /// A command the user typed into `hq.json`, or nil. Distinct from
+    /// `command()`, which falls back to the default checkout: a hosted
+    /// manager is chosen only when nothing local was asked for.
+    public static func explicitCommand(config: URL = HubApp.configPath) -> [String]? {
+        if let data = try? Data(contentsOf: config),
+           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let manager = obj["manager"] as? [String: Any],
+           let argv = manager["command"] as? [String], !argv.isEmpty {
+            return argv
+        }
+        return nil
+    }
+
+    /// The `tbase` a hosted bot's door requests run: `manager.tbase` in
+    /// `hq.json`, else the default checkout's debug build beside the app's own.
+    public static func tbasePath(config: URL = HubApp.configPath) -> String {
+        if let data = try? Data(contentsOf: config),
+           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let manager = obj["manager"] as? [String: Any],
+           let path = manager["tbase"] as? String, !path.isEmpty {
+            return (path as NSString).expandingTildeInPath
+        }
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        return "\(home)/Projects/voice-controlled-coding-agents/.build/arm64-apple-macosx/debug/tbase"
+    }
+
     public static func command(config: URL = HubApp.configPath) -> [String] {
         if let data = try? Data(contentsOf: config),
            let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],

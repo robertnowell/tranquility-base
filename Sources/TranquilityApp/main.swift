@@ -175,8 +175,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var announceTask: Task<Void, Never>?
     /// Manager mode (19 Sep): the stdio child, its reader, and its lamp.
     var managerTransport: ACPProcessTransport?
+    /// Hosted manager (21 Sep): the socket to the bot we host, when
+    /// `manager.hosted` is configured and no local command is.
+    var managerSocket: ManagerSocket?
     var managerTask: Task<Void, Never>?
     var managerLastLine = "listening"
+    /// Hosted: how many times in a row the socket ended without anyone asking.
+    var managerReconnects = 0
+    /// Hosted: the bot ended the session itself (an `idle` line); do not reconnect.
+    var managerEndedByIdle = false
     /// Where the ⌃⌥ walk over an all-opened stack has got to. Nil means start
     /// at the top. In memory only, and reset by any fresh or named
     /// announcement — a walk is a gesture in progress, not durable state.
