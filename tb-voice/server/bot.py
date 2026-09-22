@@ -214,7 +214,10 @@ async def bot(runner_args: RunnerArguments):
             FastAPIWebsocketParams,
             FastAPIWebsocketTransport,
         )
+        import wire
         from wire import TBSerializer
+
+        w = wire.bind()  # this session's queue and reply table; see Wire
 
         transport = FastAPIWebsocketTransport(
             websocket=runner_args.websocket,
@@ -223,7 +226,7 @@ async def bot(runner_args: RunnerArguments):
                 audio_out_enabled=True,
                 audio_in_sample_rate=16000,
                 audio_out_sample_rate=24000,
-                serializer=TBSerializer(),
+                serializer=TBSerializer(w),
                 session_timeout=int(os.getenv("TB_SESSION_TIMEOUT", "14400")),
             ),
         )

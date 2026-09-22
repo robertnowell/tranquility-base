@@ -375,6 +375,7 @@ class Manager(FrameProcessor):
         self._bot_stopped = asyncio.Event()
         self._voice = asyncio.Lock()        # one voice at a time, manager or agent
         self._held: str | None = None       # a turn that ended mid-sentence, waiting for its rest
+        self._user_speaking = False         # between on_user_turn_started and the next context frame
         self._held_task: asyncio.Task | None = None
 
     async def _say_and_wait(self, text: str, timeout: float = 8.0):
@@ -390,8 +391,15 @@ class Manager(FrameProcessor):
             msg = await q.get()
             await self.push_frame(OutputTransportMessageUrgentFrame(message=msg))
 
+    async def cleanup(self):
+        if self._wire_task:
+            await self.cancel_task(self._wire_task)
+            self._wire_task = None
+        await super().cleanup()
+
     async def hearing(self):
         """The user started speaking: the orb shows it before any verdict."""
+        self._user_speaking = True
         await emit(self, "hearing")
 
     # -- pipeline entry ------------------------------------------------------------
@@ -412,6 +420,7 @@ class Manager(FrameProcessor):
         if frame.speculation:
             return
         text = _last_user_text(frame)
+        self._user_speaking = False
         if not text:
             await self.push_frame(frame, direction)
             return
@@ -447,6 +456,17 @@ class Manager(FrameProcessor):
 
     async def _release_held(self, frame, direction, wait: float):
         await asyncio.sleep(wait)
+        # The rest is on its way: the user started again before the hold ran
+        # out. 02:58:03: "Okay, can you invite the next" was released at 1.2 s
+        # while "agent to speak, please?" was still being said, both were
+        # judged invite_next, and two agents were invited. The turn that ends
+        # this speech joins the held text on arrival and clears it.
+        # Capped: a VAD false start with no words behind it would otherwise
+        # hold the fragment until the next thing said.
+        for _ in range(80):
+            if not (self._user_speaking and self._held is not None):
+                break
+            await asyncio.sleep(0.1)
         text, self._held = self._held, None
         if text:
             self.heard += 1

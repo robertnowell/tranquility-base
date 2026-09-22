@@ -16,6 +16,7 @@ through here when TB_HOSTED is set (see tools._run).
 """
 
 import asyncio
+import contextvars
 import json
 import os
 import uuid
@@ -33,37 +34,65 @@ from pipecat.serializers.base_serializer import FrameSerializer
 HOSTED = bool(os.getenv("TB_HOSTED"))
 IN_RATE = 16000
 
-_replies: dict[str, asyncio.Future] = {}
-_outbox: asyncio.Queue | None = None
+class Wire:
+    """One session's side of the socket: the lines it wants sent and the
+    replies it is waiting for. Per session, never per process: Pipecat Cloud
+    keeps a warm process and runs sessions through it back to back, and a
+    module-level queue outlived its session. 02:59:42: three sessions' drain
+    tasks were all waiting on one queue, so two of every three lines went to a
+    dead socket, silently, and a `tbase status` the app never saw timed out
+    into "Nobody is waiting"."""
+
+    def __init__(self):
+        self.outbox: asyncio.Queue = asyncio.Queue()
+        self.replies: dict[str, asyncio.Future] = {}
+
+
+_current: contextvars.ContextVar[Wire | None] = contextvars.ContextVar("tb_wire", default=None)
+
+
+def bind() -> Wire:
+    """A fresh wire for this session. Called once in bot(); every task the
+    pipeline starts inherits it."""
+    w = Wire()
+    _current.set(w)
+    return w
+
+
+def current() -> Wire:
+    w = _current.get()
+    if w is None:
+        w = bind()
+    return w
 
 
 def outbox() -> asyncio.Queue:
     """Lines the bot wants on the wire; the Manager drains this into frames."""
-    global _outbox
-    if _outbox is None:
-        _outbox = asyncio.Queue()
-    return _outbox
+    return current().outbox
 
 
 async def request(kind: str, timeout: float = 45.0, **fields) -> dict:
     """Ask the app to do something and wait for its reply."""
+    w = current()
     rid = uuid.uuid4().hex[:8]
     fut = asyncio.get_running_loop().create_future()
-    _replies[rid] = fut
-    await outbox().put({"request": kind, "id": rid, **fields})
+    w.replies[rid] = fut
+    await w.outbox.put({"request": kind, "id": rid, **fields})
     try:
         return await asyncio.wait_for(fut, timeout)
     except asyncio.TimeoutError:
+        logger.warning(f"wire: no reply to {kind} {rid} in {timeout:.0f}s")
         return {"code": 124, "out": "timed out"}
     finally:
-        _replies.pop(rid, None)
+        w.replies.pop(rid, None)
 
 
 class TBSerializer(FrameSerializer):
     """Audio as bytes, lines as text, replies into the request table."""
 
-    def __init__(self):
+    def __init__(self, wire: Wire | None = None):
         super().__init__(FrameSerializer.InputParams(ignore_rtvi_messages=True))
+        self._wire = wire or current()
 
     async def serialize(self, frame: Frame) -> str | bytes | None:
         if isinstance(frame, OutputAudioRawFrame):
@@ -83,6 +112,7 @@ class TBSerializer(FrameSerializer):
             logger.warning(f"wire: not JSON: {data[:80]!r}")
             return None
         rid = obj.get("reply")
-        if rid and rid in _replies and not _replies[rid].done():
-            _replies[rid].set_result(obj)
+        fut = self._wire.replies.get(rid) if rid else None
+        if fut is not None and not fut.done():
+            fut.set_result(obj)
         return None
