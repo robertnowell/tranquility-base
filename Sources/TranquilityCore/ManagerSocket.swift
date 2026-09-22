@@ -142,6 +142,10 @@ public final class ManagerSocket: @unchecked Sendable {
     /// STT and transcribed to nothing, and the log could not say whether that
     /// was silence in the room or silence on the wire.
     public var onLevel: (@Sendable (Float, Int) -> Void)?
+    /// Every text frame's kind and every receive error, for the log. 02:26:51,
+    /// 22 Sep: the bot emitted addressed and a door request after hearing; the
+    /// app saw hearing and nothing else, and could not say why.
+    public var onTrace: (@Sendable (String) -> Void)?
     private var levelAccum: (sumSquares: Double, samples: Int, sentBytes: Int) = (0, 0, 0)
 
     public init(session: ManagerSession, audio: ManagerAudioSource, player: PCMPlayer? = PCMPlayer(),
@@ -205,7 +209,7 @@ public final class ManagerSocket: @unchecked Sendable {
         levelAccum.samples += pcm16.count / 2
         levelAccum.sentBytes += pcm16.count
         var report: (Float, Int)?
-        if levelAccum.samples >= 32_000 {
+        if levelAccum.samples >= 160_000 {
             report = (Float((levelAccum.sumSquares / Double(levelAccum.samples)).squareRoot()), levelAccum.sentBytes)
             levelAccum = (0, 0, levelAccum.sentBytes)
         }
@@ -243,21 +247,29 @@ public final class ManagerSocket: @unchecked Sendable {
                 }
             } catch {
                 closeReason = error.localizedDescription
+                onTrace?("receive failed: \(error)")
                 break
             }
         }
+        onTrace?("receive loop ended (\(closeReason ?? "cancelled"))")
         takeContinuation()?.finish()
     }
 
     private func handle(text: String) async {
         guard let data = text.data(using: .utf8),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            onTrace?("text frame not JSON: \(text.prefix(80))")
+            return
+        }
+        onTrace?("frame \((obj["event"] as? String) ?? (obj["request"] as? String).map { "request:" + $0 } ?? "?") \(text.count)b")
         if let kind = obj["request"] as? String, let id = obj["id"] as? String {
             guard kind == "run", let argv = obj["argv"] as? [String], !argv.isEmpty else {
                 sendText(["reply": id, "code": 2, "out": "unknown request"])
                 return
             }
+            let t0 = Date()
             let (code, out) = await onRequest(argv)
+            onTrace?("answered \(argv.prefix(3).joined(separator: " ")) → \(code) in \(Int(Date().timeIntervalSince(t0) * 1000)) ms")
             sendText(["reply": id, "code": code, "out": out])
             return
         }

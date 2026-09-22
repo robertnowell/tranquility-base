@@ -166,6 +166,7 @@ extension AppDelegate {
                 return
             }
             self.managerSocket = socket
+            socket.onTrace = { line in Permissions.log("manager wire: \(line)") }
             socket.onLevel = { level, bytes in
                 Permissions.log(String(format: "manager mic: rms %.4f, %d bytes sent", level, bytes))
             }
