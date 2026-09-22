@@ -749,6 +749,8 @@ enum StateLegend {
     /// session's condition, and no session's condition changed. The triangle
     /// stays: it is the one mark that earns the amber.
     static let noWordsNotice = "No speech detected"
+    /// The grid placard while this Mac has no network. Chrome ink, no door.
+    static let offlinePlacard = "Offline"
 
     /// What a tap on a row that cannot be reopened says back.
     ///

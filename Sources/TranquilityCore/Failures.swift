@@ -73,6 +73,12 @@ public enum FailureKind: String, Codable, CaseIterable, Sendable {
     /// telemetry instead of only from the user's own app.log (11 Sep).
     case updateFailed = "update_failed"
     case reviveFailed = "revive_failed"
+    /// Online, and the credits service gave no answer about the account: the
+    /// gateway or hub errored, timed out, or replied with something we could
+    /// not read. Never shown to the person (nothing for them to do), which is
+    /// exactly why it must be recorded: before 22 Sep it reached only app.log.
+    /// Offline is not this; that is Connectivity's, and not a fault.
+    case creditsService = "credits_service"
     case persistFailed = "persist_failed"
     case notice = "notice"
 }
@@ -188,6 +194,9 @@ public final class Breadcrumbs: @unchecked Sendable {
         "startup", "hooks", "11labs", "assemblyai", "stream", "chain", "prewarm",
         "selftest", "drop", "permissions", "secrets", "env", "failure", "announce",
         "grid harness", "breadcrumb", "dismissed", "invitation", "homebase",
+        // App words only: standing lines, classified failure reasons, and
+        // online/offline. Added 22 Sep so a credits fault carries its trail.
+        "credits", "connectivity",
     ]
     /// A line that mentions these is about content even under an allowed
     /// category. Belt and braces; the categories above should not produce

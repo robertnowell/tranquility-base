@@ -37,6 +37,7 @@ public actor ManagedCreditSession: SummaryProvider {
     private let connect: Connect
     private let outboxURL: URL
     private let publish: @Sendable (CreditStanding, @escaping @Sendable () -> Bool) -> Void
+    private let log: @Sendable (String) -> Void
     private var context: Context?
     private var standing: CreditStanding = .notOnCredits(connectAgain: false)
     private var sequence: Int64 = -1
@@ -53,14 +54,16 @@ public actor ManagedCreditSession: SummaryProvider {
 
     public init(identity: @escaping IdentitySource, outboxURL: URL,
                 connect: @escaping Connect,
-                publish: (@Sendable (CreditStanding, @escaping @Sendable () -> Bool) -> Void)? = nil) {
-        self.identity = identity; self.outboxURL = outboxURL
+                publish: (@Sendable (CreditStanding, @escaping @Sendable () -> Bool) -> Void)? = nil,
+                log: @escaping @Sendable (String) -> Void = { _ in }) {
+        self.identity = identity; self.outboxURL = outboxURL; self.log = log
         self.connect = connect; self.publish = publish ?? { CreditStanding.set($0, isCurrent: $1) }
     }
 
-    /// Called at launch and after pairing/sign-out. No provider call, no debit.
-    /// Also exercised on every summary, so an external credential replacement
-    /// cannot leave this process using a cached account.
+    /// Called at launch, after pairing/sign-out, and when the network comes
+    /// back. No provider call, no debit. Also exercised on every summary, so
+    /// an external credential replacement cannot leave this process using a
+    /// cached account.
     public func refresh() async {
         let ticket = ticket()
         do {
@@ -68,8 +71,87 @@ public actor ManagedCreditSession: SummaryProvider {
             do {
                 let client = try await client(ctx)
                 try await updateBalance(client, context: ctx, ticket: ticket, mayRecover: true)
-            } catch { record(error, context: ctx, ticket: ticket) }
-        } catch { recordPreparation(error) }
+                refreshAttempt = 0
+            } catch {
+                // The reason goes in the log: on 22 Sep the only trace of a
+                // failed check was the amber line it caused.
+                log("credits: balance check failed: \(Self.describe(error))")
+                reportFault(error, during: "balance check")
+                record(error, context: ctx, ticket: ticket)
+                if Self.saysNothingAboutTheAccount(error) { scheduleRefreshRetry() }
+            }
+        } catch {
+            log("credits: session could not be prepared: \(Self.describe(error))")
+            reportFault(error, during: "session preparation")
+            recordPreparation(error)
+            if Self.saysNothingAboutTheAccount(error) { scheduleRefreshRetry() }
+        }
+    }
+
+    /// Retries after a check that got no answer about the account: soon,
+    /// then less often, then left to the next summary or the next time the
+    /// network comes back, both of which check anyway.
+    static let refreshRetryDelays: [Duration] = [.seconds(15), .seconds(60), .seconds(300)]
+    private var refreshAttempt = 0
+    private var refreshRetry: Task<Void, Never>?
+
+    private func scheduleRefreshRetry() {
+        guard refreshRetry == nil, refreshAttempt < Self.refreshRetryDelays.count else { return }
+        let delay = Self.refreshRetryDelays[refreshAttempt]
+        refreshAttempt += 1
+        refreshRetry = Task { [weak self] in
+            try? await Task.sleep(for: delay)
+            guard !Task.isCancelled else { return }
+            await self?.retryRefresh()
+        }
+    }
+
+    private func retryRefresh() async {
+        refreshRetry = nil
+        await refresh()
+    }
+
+    /// Online, and no answer about the account: that is our fault to fix, so
+    /// it goes to diagnostics with its reason. Offline it is not a fault at
+    /// all, and a cancellation is nobody's.
+    private func reportFault(_ error: Error, during phase: String,
+                             file: StaticString = #fileID, line: UInt = #line) {
+        guard Self.saysNothingAboutTheAccount(error), Connectivity.isReachable else { return }
+        Failures.report(.creditsService, reason: "\(phase): \(Self.describe(error))",
+                        file: file, line: line)
+    }
+
+    /// The failure in words safe to send: the kind and code, never a URL
+    /// (gateway paths carry the account id), a token, or an operation id.
+    static func describe(_ error: Error) -> String {
+        switch error {
+        case let failure as ManagedSummaryFailure:
+            switch failure {
+            case let .refused(code, _): return "refused \(code)"
+            case let .pending(_, state): return "still pending (\(state))"
+            case .outcomeUnknown: return "outcome unknown"
+            case .invalidResponse: return "invalid response"
+            case .missingSourceIdentity: return "missing source identity"
+            case .sourceIdentityConflict: return "source identity conflict"
+            case .correctiveRetryNotAllowed: return "corrective retry not allowed"
+            }
+        case let failure as GatewayAuthority.Failure:
+            return "authority \(failure.code)"
+        case let failure as URLError:
+            return "URLError \(failure.code.rawValue): \(failure.localizedDescription)"
+        default:
+            let ns = error as NSError
+            return "\(type(of: error)) \(ns.domain) \(ns.code)"
+        }
+    }
+
+    /// A failure that is not an answer about the account: unreachable,
+    /// timed out, a gateway or provider fault. It keeps the last standing.
+    static func saysNothingAboutTheAccount(_ error: Error) -> Bool {
+        guard !(error is CancellationError) else { return false }
+        let failure = (error as? ManagedSummaryFailure)
+            ?? .refused(code: "service_unavailable", operationId: nil)
+        return CreditStanding.from(receipt: nil, failure: failure, provider: "tranquility-gateway") == nil
     }
 
     public func brief(for request: SummaryRequest) async throws -> SessionBrief {
@@ -80,7 +162,7 @@ public actor ManagedCreditSession: SummaryProvider {
         let ticket = ticket()
         let ctx: Context
         do { ctx = try currentContext() }
-        catch { recordPreparation(error); throw error }
+        catch { reportFault(error, during: "summary preparation"); recordPreparation(error); throw error }
         do {
             let client = try await client(ctx)
             let result = try await ManagedSummaryProvider(client: client).delivery(for: request)
@@ -91,6 +173,7 @@ public actor ManagedCreditSession: SummaryProvider {
             return result
         } catch {
             guard isCurrent(ctx) else { throw CancellationError() }
+            reportFault(error, during: "summary")
             record(error, context: ctx, ticket: ticket)
             throw error
         }
@@ -202,8 +285,9 @@ public actor ManagedCreditSession: SummaryProvider {
         let current = identity()
         let failure = (error as? ManagedSummaryFailure)
             ?? .refused(code: "service_unavailable", operationId: nil)
-        standing = CreditStanding.from(receipt: nil, failure: failure, provider: name)
-            ?? .floored(.serviceUnavailable, at: Date())
+        // Not an answer about the account: the last standing holds.
+        guard let next = CreditStanding.from(receipt: nil, failure: failure, provider: name) else { return }
+        standing = next
         publish(standing, { [identity] in identity() == current })
     }
     private func emit(_ ctx: Context) {
