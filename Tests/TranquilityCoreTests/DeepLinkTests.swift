@@ -266,4 +266,28 @@ final class DeepLinkTests: XCTestCase {
         let command = DeepLink.openingCommand(base: "claude", prompt: prompt)
         XCTAssertEqual(command, "claude '\(prompt)'")
     }
+
+    // MARK: - The manager's speak-only verbs (19 Sep)
+
+    func testRungCarriesSessionAndKind() {
+        XCTAssertEqual(
+            DeepLink.parse(url("tranquilitybase://rung?session=abc&kind=solution")),
+            .rung(session: "abc", kind: "solution"))
+        XCTAssertEqual(DeepLink.parse(url("tranquilitybase://rung")), .rung(session: nil, kind: nil))
+    }
+
+    func testSayCarriesTextAndCapsIt() {
+        XCTAssertEqual(
+            DeepLink.parse(url("tranquilitybase://say?session=abc&text=Tests%20are%20green")),
+            .say(session: "abc", text: "Tests are green"))
+        let long = String(repeating: "a", count: DeepLink.sayLimit + 50)
+        guard case let .say(_, text) = DeepLink.parse(url("tranquilitybase://say?session=abc&text=\(long)"))
+        else { return XCTFail("expected say") }
+        XCTAssertEqual(text?.count, DeepLink.sayLimit)
+    }
+
+    func testMuteParsesAndCarriesNothing() {
+        XCTAssertEqual(DeepLink.parse(url("tranquilitybase://mute")), .mute)
+        XCTAssertEqual(DeepLink.parse(url("tranquilitybase://mute?session=abc")), .mute)
+    }
 }

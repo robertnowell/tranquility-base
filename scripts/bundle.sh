@@ -148,6 +148,8 @@ fi
 # thing to forget. If these are missing the app still runs; it just goes
 # silent, and Earcons logs "no audio for <cue>".
 cp Resources/Sounds/*.wav "$APP_DIR/Contents/Resources/"
+# The manager orb: a vendored 2D-canvas engine (thinking-orbs, MIT) and its page.
+mkdir -p "$APP_DIR/Contents/Resources/Orb" && cp Resources/Orb/* "$APP_DIR/Contents/Resources/Orb/"
 
 # The Claude Code hooks travel INSIDE the bundle.
 #

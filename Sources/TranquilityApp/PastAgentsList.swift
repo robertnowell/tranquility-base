@@ -858,6 +858,30 @@ final class SplitPlacardRowView: NSView {
     required init?(coder: NSCoder) { fatalError("not used") }
 }
 
+/// One placard across the whole row (19 Sep): the manager's door. The split
+/// row is for two ways of putting an agent on the grid; this is one thing.
+final class PlacardRowView: NSView {
+    static let height: CGFloat = SplitPlacardRowView.height
+
+    init(width: CGFloat, target: AnyObject, title: String, glyph: String, action: Selector) {
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+        let placard = PlacardHalf(title: title, glyph: glyph, alignment: .leading,
+                                  target: target, action: action)
+        addSubview(placard)
+        NSLayoutConstraint.activate([
+            heightAnchor.constraint(equalToConstant: Self.height),
+            placard.leadingAnchor.constraint(equalTo: leadingAnchor),
+            placard.trailingAnchor.constraint(equalTo: trailingAnchor),
+            placard.topAnchor.constraint(equalTo: topAnchor),
+            placard.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("not used") }
+}
+
 private final class PlacardHalf: NSControl {
     private let mark = NSTextField(labelWithString: "")
     private let harnessMark = NSImageView()

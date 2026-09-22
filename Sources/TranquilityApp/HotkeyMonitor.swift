@@ -32,6 +32,9 @@ public final class HotkeyMonitor: @unchecked Sendable {
         /// The monitor stays dumb about timing on purpose — double-tap windows are
         /// policy, and policy lives where it can be logged with the rest.
         case optionTapped
+        /// ⌃⌥⌘ tapped: hands-free on or off (19 Sep). The manager's own chord,
+        /// one more key than "next", because it is the mode that replaces it.
+        case handsFreeToggled
         /// ⌃ tapped twice quickly, on its own. Unlike ⌥, a SINGLE bare-⌃ tap has no
         /// meaning in the app and never will (it is the first key of two chords), so
         /// there is no per-tap policy for the app to arbitrate and the pairing lives
@@ -93,6 +96,7 @@ public final class HotkeyMonitor: @unchecked Sendable {
         /// type nothing anywhere, which is the property the whole gesture set is
         /// built on.
         public var dismiss: CGEventFlags = [.maskControl, .maskShift]
+        public var handsFree: CGEventFlags = [.maskControl, .maskAlternate, .maskCommand]
         public init() {}
     }
 
@@ -233,6 +237,7 @@ public final class HotkeyMonitor: @unchecked Sendable {
             }
         }
         switch flags {
+        case bindings.handsFree: onTransition(.handsFreeToggled)
         case bindings.next: onTransition(.next)
         case bindings.pause: onTransition(.pauseToggled)
         case bindings.dismiss: onTransition(.dismiss)

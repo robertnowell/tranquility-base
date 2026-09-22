@@ -688,6 +688,15 @@ enum StateLegend {
         ("⌃ Ctrl + ⌥ Option", "hear the next agent update"),
         ("hold ⌥ Option", "speak"),
         ("⌃ Ctrl twice", "hear more"),
+        ("⌃ Ctrl + ⌥ Option + ⌘ Cmd", "hands-free on or off"),
+    ]
+
+    /// The same three doors when the manager is on: phrases, not chords. The
+    /// name is what wakes it; everything else it hears is context.
+    static let voiceNote: [(chord: String, meaning: String)] = [
+        ("\u{201C}Tranquility, invite the next agent\u{201D}", "hear the next agent update"),
+        ("\u{201C}tell it to \u{2026}\u{201D}", "send a message to the agent on stage"),
+        ("\u{201C}what\u{2019}s the next step?\u{201D}", "hear more: goal, findings, next step, why"),
     ]
 
     /// The panel signs its own bottom-right corner (ruled 10 Aug: "subtle but
@@ -720,6 +729,9 @@ enum StateLegend {
     /// The other half of the same row: not starting an agent, but bringing one
     /// back. Ruled 12 Aug.
     static let pastAgentsTitle = "PAST AGENTS"
+    /// Manager mode's placard (19 Sep): the hands-free manager on the grid.
+    static let managerOnTitle = "HANDS-FREE"
+    static let managerOffTitle = "STOP HANDS-FREE"
 
     /// The empty room has no sentence of its own any more (ruled 14 Sep
     /// 2026). It used to replace the grid, ten seconds in, with "Control +

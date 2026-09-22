@@ -76,6 +76,8 @@ final class StatusHUD: NSObject {
     /// the grid up and resize the panel on a mouse-over, which is the same
     /// reflow-on-hover the collapsed strip forbids, for the same reason.
     var controlsSticky: ControlsNoteView!
+    /// The note's hands-free twin: the same doors as phrases (19 Sep).
+    var voiceSticky: ControlsNoteView!
     /// The card's copy of the word, in the middle of the action row. The grid's
     /// copy lives in its footer; both drive `setControlsNote(open:above:)`, so
     /// there is one note and one behaviour behind two placements.
@@ -595,17 +597,22 @@ final class StatusHUD: NSObject {
     }
 
     func setControlsNote(open: Bool, above host: NSView? = nil) {
-        guard let controlsSticky else { return }
+        guard let controlsSticky, let voiceSticky else { return }
+        // Hands-free shows phrases; the chords still work, but the note teaches
+        // the mode you are in.
+        let note = managerOn ? voiceSticky : controlsSticky
+        let other = managerOn ? controlsSticky : voiceSticky
+        other.isHidden = true
         if open { controlsNoteClose?.cancel(); controlsNoteClose = nil }
-        if open, let host, let background = controlsSticky.superview {
+        if open, let host, let background = note.superview {
             NSLayoutConstraint.deactivate(stickyPlacement)
             stickyPlacement = [
-                controlsSticky.centerXAnchor.constraint(equalTo: background.centerXAnchor),
-                controlsSticky.bottomAnchor.constraint(equalTo: host.topAnchor, constant: -8),
+                note.centerXAnchor.constraint(equalTo: background.centerXAnchor),
+                note.bottomAnchor.constraint(equalTo: host.topAnchor, constant: -8),
             ]
             NSLayoutConstraint.activate(stickyPlacement)
         }
-        controlsSticky.isHidden = !open
+        note.isHidden = !open
     }
 
     /// Restore exactly the face arming replaced. No-op unless the panel is
@@ -2444,7 +2451,7 @@ final class StatusHUD: NSObject {
         // The footer belongs to the grid alone, and the sticky dies with it: a
         // note left open while the face changes underneath is exactly the
         // residue class render()'s baseline exists to make impossible.
-        gridFooter.isHidden = true; controlsSticky.isHidden = true
+        gridFooter.isHidden = true; controlsSticky.isHidden = true; voiceSticky.isHidden = true
         stripLabel.stringValue = ""
         voiceList.isHidden = true; waitingRows.isHidden = true
         setupChecklist?.isHidden = true; setupScroll?.isHidden = true
@@ -3147,6 +3154,23 @@ final class StatusHUD: NSObject {
 
         // The strip's bottom rule, under "AGENTS ⚙".
         waitingRows.addArrangedSubview(hairline(StateLegend.Palette.hairline))
+        // Manager mode (19 Sep): voice only. The orb takes the grid's place
+        // and the only door left is the one that turns it off; NEW AGENT and
+        // PAST AGENTS are what the voice is for. The fleet is still there,
+        // reached by speaking, and the rows come back when the manager stops.
+        if managerOn {
+            waitingRows.addArrangedSubview(managerOrb)
+            managerOrb.widthAnchor.constraint(equalToConstant: Self.gridWidth).isActive = true
+            waitingRows.addArrangedSubview(hairline(StateLegend.Palette.hairlineSoft))
+            let stopRow = PlacardRowView(
+                width: Self.gridWidth, target: self,
+                title: StateLegend.managerOffTitle, glyph: "■", action: #selector(managerRowTapped))
+            waitingRows.addArrangedSubview(stopRow)
+            stopRow.widthAnchor.constraint(equalToConstant: Self.gridWidth).isActive = true
+            waitingRows.addArrangedSubview(hairline(StateLegend.Palette.hairline))
+            Permissions.log("grid: manager mode, orb in place of \(face.sessionRows.count) rows")
+            return
+        }
         let shown = Self.gridRows(face.sessionRows)
         // ONE callsign column (ruled 05 Aug): sized to the widest callsign on
         // show, capped at 38% of the grid. Per-row widths made every name
@@ -3211,6 +3235,13 @@ final class StatusHUD: NSObject {
             trailing: (StateLegend.pastAgentsTitle, "↺", #selector(pastAgentsRowTapped)))
         waitingRows.addArrangedSubview(newRow)
         newRow.widthAnchor.constraint(equalToConstant: Self.gridWidth).isActive = true
+        waitingRows.addArrangedSubview(hairline(StateLegend.Palette.hairlineSoft))
+        // The manager's door (19 Sep): one placard row, both halves toggle it.
+        let managerRow = PlacardRowView(
+            width: Self.gridWidth, target: self,
+            title: StateLegend.managerOnTitle, glyph: "◯", action: #selector(managerRowTapped))
+        waitingRows.addArrangedSubview(managerRow)
+        managerRow.widthAnchor.constraint(equalToConstant: Self.gridWidth).isActive = true
         // The key line's top rule; the hint label follows in the outer stack.
         waitingRows.addArrangedSubview(hairline(StateLegend.Palette.hairline))
 
@@ -3239,6 +3270,33 @@ final class StatusHUD: NSObject {
 
     /// Wired by the app onto SessionLauncher.launch().
     var onNewSession: (() -> Void)?
+
+    // MARK: Manager mode (19 Sep)
+
+    /// Whether the orb is on the grid. Flipped by the app when the child
+    /// starts or ends; the grid repaints on the next idle render.
+    var managerOn = false
+    /// One globe, always. The dotted sphere is the manager's face; only its
+    /// colour changes (green while you talk, amber while something speaks).
+    static let orbState = "composing"
+    /// While the child connects: the ring, breathing.
+    static let orbConnecting = "breathing"
+    lazy var managerOrb = ManagerOrbView(frame: .zero)
+    var onManagerToggle: (() -> Void)?
+
+    func setManager(on: Bool) {
+        managerOn = on
+        managerOrb.set(on ? Self.orbConnecting : Self.orbState, line: on ? "connecting" : "off")
+        if case .idle = state { render() }
+    }
+
+    func setManagerState(_ orbState: String, line: String, mood: String = "") {
+        managerOrb.set(orbState, line: line, mood: mood)
+    }
+
+    @objc nonisolated private func managerRowTapped() {
+        MainActor.assumeIsolated { onManagerToggle?() }
+    }
 
     /// Wired by the app: build the list and show it.
     var onOpenPastAgents: (() -> Void)?

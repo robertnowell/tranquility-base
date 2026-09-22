@@ -1,0 +1,7 @@
+bot.log
+.env
+events.jsonl
+transcript.md
+calls.jsonl
+calls.html
+notes-session.txt

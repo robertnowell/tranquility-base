@@ -435,6 +435,12 @@ extension StatusHUD {
         gridFooter = GridFooterView(width: Self.gridWidth)
         controlsSticky = ControlsNoteView()
         controlsSticky.isHidden = true
+        voiceSticky = ControlsNoteView(entries: StateLegend.voiceNote)
+        voiceSticky.isHidden = true
+        voiceSticky.onHover = { [weak self] hovering in
+            guard let self else { return }
+            if hovering { controlsNoteClose?.cancel(); controlsNoteClose = nil } else { closeControlsNoteSoon() }
+        }
         // The note opens on hover of the word and, since 14 Sep, STAYS open
         // while the pointer crosses to it and rests on it: its rows are doors
         // now, and a door that closes as you reach for it is no door. The
@@ -727,6 +733,7 @@ extension StatusHUD {
         // nothing to the fitting size resizeToFit() measures — the panel is
         // exactly as tall with the note open as with it shut.
         background.addSubview(controlsSticky, positioned: .above, relativeTo: nil)
+        background.addSubview(voiceSticky, positioned: .above, relativeTo: nil)
         // No placement here: `setControlsNote(open:above:)` hangs it over
         // whichever row owns the word at the moment it is asked for.
 
