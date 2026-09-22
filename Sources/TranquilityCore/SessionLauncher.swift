@@ -280,6 +280,13 @@ public enum SessionLauncher {
         Tmux.run(["set", "-s", "exit-empty", "off"], socket: Tmux.socketName)
         Tmux.run(["set", "-t", name, "window-size", "manual"], socket: Tmux.socketName)
         Tmux.run(["set", "-t", name, "mouse", "on"], socket: Tmux.socketName)
+        // Mouse on means a drag in the window is tmux's, not Terminal's: on
+        // release tmux copies the selection into its own buffer, clears the
+        // highlight, and pipes it to `copy-command`. With no command the text
+        // reaches nothing, and Terminal.app has no OSC 52, so `set-clipboard`
+        // never reaches the Mac clipboard either. Every drag looked like a
+        // failed selection until this was set (21 Sep 2026).
+        Tmux.run(["set", "-s", "copy-command", "pbcopy"], socket: Tmux.socketName)
 
         Self.trace?("newSession: launched `\(command)` in \(directory) "
             + "(tmux \(pane.sessionName), pane \(pane.paneId), tty \(pane.paneTty))")
