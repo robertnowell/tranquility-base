@@ -37,6 +37,7 @@ public actor ManagedCreditSession: SummaryProvider {
     private let connect: Connect
     private let outboxURL: URL
     private let publish: @Sendable (CreditStanding, @escaping @Sendable () -> Bool) -> Void
+    private let log: @Sendable (String) -> Void
     private var context: Context?
     private var standing: CreditStanding = .notOnCredits(connectAgain: false)
     private var sequence: Int64 = -1
@@ -53,8 +54,9 @@ public actor ManagedCreditSession: SummaryProvider {
 
     public init(identity: @escaping IdentitySource, outboxURL: URL,
                 connect: @escaping Connect,
-                publish: (@Sendable (CreditStanding, @escaping @Sendable () -> Bool) -> Void)? = nil) {
-        self.identity = identity; self.outboxURL = outboxURL
+                publish: (@Sendable (CreditStanding, @escaping @Sendable () -> Bool) -> Void)? = nil,
+                log: @escaping @Sendable (String) -> Void = { _ in }) {
+        self.identity = identity; self.outboxURL = outboxURL; self.log = log
         self.connect = connect; self.publish = publish ?? { CreditStanding.set($0, isCurrent: $1) }
     }
 
@@ -77,10 +79,14 @@ public actor ManagedCreditSession: SummaryProvider {
                 // retried, and the amber line sat on the grid for ninety
                 // minutes while credits were fine. Stay "checking" and try
                 // again; a refusal that names a resolution still lands.
+                // The reason goes in the log: on 22 Sep the only trace of
+                // this failure was the amber line it caused.
+                log("credits: balance check failed: \(error)")
                 if Self.isUnreachable(error) { scheduleRefreshRetry(); return }
                 record(error, context: ctx, ticket: ticket)
             }
         } catch {
+            log("credits: session could not be prepared: \(error)")
             if Self.isUnreachable(error) { scheduleRefreshRetry(); return }
             recordPreparation(error)
         }

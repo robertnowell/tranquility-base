@@ -94,7 +94,7 @@ public enum ManagedCredits {
         outboxURL: URL = QueueStore.supportDirectory.appendingPathComponent("managed-outbox.sqlite"),
         log: @escaping @Sendable (String) -> Void = { _ in }
     ) -> ManagedCreditSession {
-        ManagedCreditSession(identity: identity, outboxURL: outboxURL) { current, valid in
+        ManagedCreditSession(identity: identity, outboxURL: outboxURL, connect: { current, valid in
             guard let signer = deviceSigner(log: log) else {
                 throw ManagedSummaryFailure.refused(code: "service_unavailable", operationId: nil)
             }
@@ -111,6 +111,6 @@ public enum ManagedCredits {
             }
             log("credits: managed session at \(gatewayURL.host ?? "?") as \(signer.storage)")
             return .init(transport: transport, invalidate: { await authority.clear() })
-        }
+        }, log: log)
     }
 }

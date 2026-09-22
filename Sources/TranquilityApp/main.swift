@@ -31,6 +31,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var pastAgentPreparation: Task<Void, Never>?
     var coordinator: Coordinator?
     var managedCredits: ManagedCreditSession?
+    var networkPath: NetworkPath?
     private var creditIdentityObserver: NSObjectProtocol?
     /// The providers this build can drive, kept so New Agent can start one.
     /// The same instance the coordinator and the poller share, by the rule at
@@ -620,7 +621,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let managed = ManagedCredits.session(log: { Permissions.log($0) })
             self.managedCredits = managed
             creditIdentityObserver = ManagedCredits.observeIdentityChanges(managed)
-            Task { await managed.refresh() }
+            // A login launch can beat Wi-Fi by seconds; the check waits for a
+            // network instead of failing, and runs again whenever it returns.
+            let network = NetworkPath(onReconnect: { Task { await managed.refresh() } })
+            self.networkPath = network
+            Task {
+                await network.waitUntilOnline()
+                await managed.refresh()
+            }
             self.coordinator = Coordinator(
                 store: store,
                 summarizer: SummarizerChain(providers: [managed, AnthropicSummaryProvider(), DeterministicSummarizer()]),
