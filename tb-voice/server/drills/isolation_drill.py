@@ -27,6 +27,7 @@ import session  # noqa: E402
 import wire  # noqa: E402
 from echo import EchoGate  # noqa: E402
 from manager import exchange_lines, note  # noqa: E402
+from vocab import Line, LineKind, Role  # noqa: E402
 
 LONG = "Tell the Mailchimp agent the Back to School sends look stuck in draft " * 4
 failures: list[str] = []
@@ -47,7 +48,7 @@ async def a_session(name: str, lines: int, hold: asyncio.Event | None = None) ->
 
     async def handler():
         for i in range(lines):
-            note("you", f"{name} line {i}", "silent")
+            note(Line(Role.USER, LineKind.TALK, f"{name} line {i}"))
             if hold is not None:
                 await asyncio.sleep(0)  # interleave with the other session
         s.bot_voice["speaking"] = name == "A"
@@ -83,10 +84,11 @@ async def main():
     # hf-20: the whole utterance reaches the app, not 120 characters of it.
     wire.bind()
     session.bind()
-    note("you", LONG, "dictated")
+    note(Line(Role.USER, LineKind.DICTATION, LONG))
     said = [json.loads(ln) for ln in buf.getvalue().splitlines() if '"event":"said"' in ln]
     last = said[-1] if said else {}
     check(last.get("text") == LONG.strip(), f"`said` carries all {len(LONG.strip())} characters")
+    check(last.get("role") == "user" and last.get("kind") == "dictation", "`said` names its role and kind explicitly")
     queued = wire.outbox().get_nowait() if not wire.outbox().empty() else {}
     check(queued.get("event") == "said" and queued.get("text") == LONG.strip(),
           "hosted, the `said` line is queued for the wire")
@@ -112,13 +114,14 @@ async def main():
     old = wire.bind()
     old.born -= 10  # a session well past its first breath
     t0 = time.monotonic()
-    r = await wire.call("agents")
+    r = await wire.call(wire.Tool.AGENTS)
     check(r is None and time.monotonic() - t0 < 0.1, "no hello: call() falls back at once, not after 1.5 s")
     w = wire.bind()
-    wire.take_reply({"wire": "hello", "protocol": 1, "tools": [{"name": "agents", "version": 1}]}, w)
-    check(w.tools == {"agents"}, "hello records the offered tools")
-    check(await wire.call("rm_rf") is None, "a tool the Mac does not offer falls back")
-    pending = asyncio.create_task(wire.call("agents"))
+    wire.take_reply({"wire": "hello", "protocol": 1,
+                     "tools": [{"name": "agents", "version": 1}, {"name": "rm_rf", "version": 1}]}, w)
+    check(w.tools == {wire.Tool.AGENTS}, "hello records the offered tools as types; an unknown name is dropped")
+    check(await wire.call(wire.Tool.TRANSCRIPT) is None, "a known tool the Mac does not offer falls back")
+    pending = asyncio.create_task(wire.call(wire.Tool.AGENTS))
     frame = await asyncio.wait_for(w.outbox.get(), 1)
     check(frame.get("wire") == "call" and frame.get("tool") == "agents", "call() puts a v1 call on the wire")
     wire.take_reply({"wire": "result", "id": frame["id"], "ok": True, "data": ["x"]}, w)

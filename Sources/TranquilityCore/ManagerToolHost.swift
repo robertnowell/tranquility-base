@@ -15,11 +15,36 @@ import Foundation
 // (ManagerPeer) both hand their `wire` frames to one host and send back what it
 // returns.
 
+/// The `wire` field of a v1 frame. Parsed once; nothing below compares strings.
+public enum ManagerWireKind: String, Sendable {
+    case hello, call, result, cancel, event
+}
+
+/// The tools wire v1 knows. A name outside this list is refused at the door.
+public enum ManagerToolName: String, CaseIterable, Sendable {
+    case agents, waiting, brief, transcript, ledger
+    /// In the spec, not yet offered: it arrives with Coordinator send (hf-12).
+    case send
+}
+
+/// Why a call failed, as the bot reads it (docs/wire-v1.md).
+public enum ManagerToolErrorCode: String, Sendable {
+    case unknownTool = "unknown_tool"
+    case badArgs = "bad_args"
+    case notFound = "not_found"
+    case refused
+    case timeout
+    case cancelled
+    case inProgress = "in_progress"
+    case tooLarge = "too_large"
+    case `internal`
+}
+
 /// One thing the manager may ask this Mac to do.
 public struct ManagerTool: Sendable {
     public enum Keep: Sendable { case newest, oldest }
 
-    public let name: String
+    public let name: ManagerToolName
     public let version: Int
     /// The Mac gives up at this deadline unless the call asks for less.
     public let deadlineMs: Int
@@ -31,7 +56,7 @@ public struct ManagerTool: Sendable {
     public let keep: Keep
     public let run: @Sendable ([String: Any]) async throws -> Any
 
-    public init(name: String, version: Int = 1, deadlineMs: Int, capBytes: Int,
+    public init(name: ManagerToolName, version: Int = 1, deadlineMs: Int, capBytes: Int,
                 effectful: Bool = false, keep: Keep = .oldest,
                 run: @escaping @Sendable ([String: Any]) async throws -> Any) {
         self.name = name; self.version = version; self.deadlineMs = deadlineMs
@@ -41,10 +66,10 @@ public struct ManagerTool: Sendable {
 
 /// A tool's refusal, carried back as a coded error rather than a thrown one.
 public struct ManagerToolFailure: Error, Sendable {
-    public let code: String
+    public let code: ManagerToolErrorCode
     public let message: String
     public let retryable: Bool
-    public init(_ code: String, _ message: String, retryable: Bool = false) {
+    public init(_ code: ManagerToolErrorCode, _ message: String, retryable: Bool = false) {
         self.code = code; self.message = message; self.retryable = retryable
     }
 }
@@ -56,19 +81,19 @@ public actor ManagerToolHost {
     /// A frame larger than this could hold audio behind it on the same socket.
     public static let maxFrameBytes = 64 * 1024
 
-    private let tools: [String: ManagerTool]
-    private let order: [String]
+    private let tools: [ManagerToolName: ManagerTool]
+    private let order: [ManagerToolName]
     private let idem: ManagerIdempotency
     private var reads = 0
     private var readWaiters: [CheckedContinuation<Void, Never>] = []
     private var effectBusy = false
     private var effectWaiters: [CheckedContinuation<Void, Never>] = []
-    private var running: [String: Task<UncheckedBox<[String: Any]>, Never>] = [:]
+    private var running: [String: Task<Outcome, Never>] = [:]
     /// Most reads seen in flight at once (for tests and the log).
     public private(set) var peakReads = 0
 
     public init(tools: [ManagerTool], idempotency: ManagerIdempotency = ManagerIdempotency()) {
-        var map: [String: ManagerTool] = [:]
+        var map: [ManagerToolName: ManagerTool] = [:]
         for t in tools { map[t.name] = t }
         self.tools = map
         self.order = tools.map(\.name)
@@ -77,40 +102,41 @@ public actor ManagerToolHost {
 
     /// The first frame on every connection: what this Mac offers.
     public func hello(appVersion: String) -> Data {
-        Self.encode(["wire": "hello", "protocol": Self.protocolVersion, "app_version": appVersion,
-                     "tools": order.compactMap { tools[$0] }.map { ["name": $0.name, "version": $0.version] }])
+        Self.encode(["wire": ManagerWireKind.hello.rawValue, "protocol": Self.protocolVersion, "app_version": appVersion,
+                     "tools": order.compactMap { tools[$0] }.map { ["name": $0.name.rawValue, "version": $0.version] }])
     }
 
     /// Whether a text frame from the bot is wire v1 (and so belongs here).
     public nonisolated static func isWire(_ json: Data) -> Bool {
-        (try? JSONSerialization.jsonObject(with: json) as? [String: Any])?["wire"] is String
+        (try? JSONSerialization.jsonObject(with: json) as? [String: Any])?["wire"] != nil
     }
 
     /// A `wire` frame from the bot, as JSON. Returns the frame to send back, or nil.
     public func handle(_ json: Data) async -> Data? {
         guard let frame = try? JSONSerialization.jsonObject(with: json) as? [String: Any] else { return nil }
-        switch frame["wire"] as? String {
-        case "call":
-            guard let id = frame["id"] as? String else { return nil }
+        guard let raw = frame["wire"] as? String, let kind = ManagerWireKind(rawValue: raw),
+              let id = frame["id"] as? String else { return nil }
+        switch kind {
+        case .call:
             let box = UncheckedBox(frame)
-            let task = Task { UncheckedBox(await self.call(id: id, frame: box.value)) }
+            let task = Task { await self.call(frame: box.value) }
             running[id] = task
-            let result = await task.value.value
+            let outcome = await task.value
             running[id] = nil
-            return Self.encode(result)
-        case "cancel":
-            if let id = frame["id"] as? String { running[id]?.cancel() }
+            return Self.encode(outcome.frame(id: id))
+        case .cancel:
+            running[id]?.cancel()
             return nil
-        default:
-            return nil
+        case .hello, .result, .event:
+            return nil  // only the bot calls and cancels; these travel the other way
         }
     }
 
     // MARK: - one call
 
-    private func call(id: String, frame: [String: Any]) async -> [String: Any] {
-        guard let name = frame["tool"] as? String, let tool = tools[name] else {
-            return Self.failure(id, ManagerToolFailure("unknown_tool", "no tool \(frame["tool"] ?? "?") on this Mac"))
+    private func call(frame: [String: Any]) async -> Outcome {
+        guard let raw = frame["tool"] as? String, let name = ManagerToolName(rawValue: raw), let tool = tools[name] else {
+            return .failed(ManagerToolFailure(.unknownTool, "no tool \(frame["tool"] ?? "?") on this Mac"))
         }
         let args = frame["args"] as? [String: Any] ?? [:]
         let asked = (frame["deadline_ms"] as? Int) ?? tool.deadlineMs
@@ -118,36 +144,35 @@ public actor ManagerToolHost {
 
         if tool.effectful {
             guard let key = frame["idem"] as? String, !key.isEmpty else {
-                return Self.failure(id, ManagerToolFailure("bad_args", "\(name) changes something; it needs an idem key"))
+                return .failed(ManagerToolFailure(.badArgs, "\(name.rawValue) changes something; it needs an idem key"))
             }
             // Recorded before the work: a repeat, even one that arrives while
             // the first is still running, returns what is known and never runs
             // the tool a second time.
             switch idem.begin(key) {
-            case .done(let data): return ["wire": "result", "id": id, "ok": true, "data": data, "repeat": true]
-            case .started: return Self.failure(id, ManagerToolFailure("in_progress", "\(name) with this idem already started; its outcome is not known yet"))
+            case .done(let data): return .repeated(UncheckedBox(data))
+            case .started:
+                return .failed(ManagerToolFailure(.inProgress, "\(name.rawValue) with this idem already started; its outcome is not known yet"))
             case .fresh: break
             }
             await acquireEffect()
-            let out = await run(tool, args: args, id: id, deadlineMs: deadline)
+            let outcome = await run(tool, args: args, deadlineMs: deadline)
             releaseEffect()
-            if (out["ok"] as? Bool) == true {
-                idem.finish(key, data: out["data"] ?? NSNull())
-            } else if (out["error"] as? [String: Any])?["code"] as? String == "timeout" {
-                // It may have happened. Leave the key started: a repeat says
-                // "not known", never runs it again.
-            } else {
-                idem.forget(key)  // refused before anything happened: a retry is safe
+            switch outcome {
+            case .done(let data, _): idem.finish(key, data: data.value)
+            case .failed(let f) where f.code == .timeout:
+                break  // it may have happened: leave the key started, never run it again
+            case .failed, .repeated: idem.forget(key)  // refused before anything happened: a retry is safe
             }
-            return out
+            return outcome
         }
         await acquireRead()
-        let out = await run(tool, args: args, id: id, deadlineMs: deadline)
+        let outcome = await run(tool, args: args, deadlineMs: deadline)
         releaseRead()
-        return out
+        return outcome
     }
 
-    private func run(_ tool: ManagerTool, args: [String: Any], id: String, deadlineMs: Int) async -> [String: Any] {
+    private func run(_ tool: ManagerTool, args: [String: Any], deadlineMs: Int) async -> Outcome {
         let args = UncheckedBox(args)
         let work = Task.detached { () -> Result<UncheckedBox<Any>, Error> in
             do { return .success(UncheckedBox(try await tool.run(args.value))) } catch { return .failure(error) }
@@ -169,17 +194,17 @@ public actor ManagerToolHost {
         case .success(let box):
             // A tool that finished is reported as finished, even past its
             // deadline: for an effectful one that is the truth about the world.
-            return Self.capped(id: id, data: box.value, tool: tool)
+            return Self.capped(box.value, tool: tool)
         case .failure(let error):
             if fired.value {
-                return Self.failure(id, ManagerToolFailure("timeout", "\(tool.name) passed its \(deadlineMs) ms deadline",
-                                                           retryable: !tool.effectful))
+                return .failed(ManagerToolFailure(.timeout, "\(tool.name.rawValue) passed its \(deadlineMs) ms deadline",
+                                                  retryable: !tool.effectful))
             }
             if Task.isCancelled {
-                return Self.failure(id, ManagerToolFailure("cancelled", "the manager cancelled this call"))
+                return .failed(ManagerToolFailure(.cancelled, "the manager cancelled this call"))
             }
-            if let f = error as? ManagerToolFailure { return Self.failure(id, f) }
-            return Self.failure(id, ManagerToolFailure("internal", "\(error)"))
+            if let f = error as? ManagerToolFailure { return .failed(f) }
+            return .failed(ManagerToolFailure(.internal, "\(error)"))
         }
     }
 
@@ -209,18 +234,36 @@ public actor ManagerToolHost {
 
     // MARK: - shapes
 
-    static func encode(_ obj: [String: Any]) -> Data {
-        (try? JSONSerialization.data(withJSONObject: obj)) ?? Data(#"{"wire":"result","ok":false}"#.utf8)
+    /// What a call came to. Encoded to a `result` frame only at the edge.
+    enum Outcome: Sendable {
+        case done(UncheckedBox<Any>, truncated: Bool)
+        case repeated(UncheckedBox<Any>)
+        case failed(ManagerToolFailure)
+
+        func frame(id: String) -> [String: Any] {
+            var out: [String: Any] = ["wire": ManagerWireKind.result.rawValue, "id": id]
+            switch self {
+            case .done(let data, let truncated):
+                out["ok"] = true; out["data"] = data.value
+                if truncated { out["truncated"] = true }
+            case .repeated(let data):
+                out["ok"] = true; out["data"] = data.value; out["repeat"] = true
+            case .failed(let f):
+                out["ok"] = false
+                out["error"] = ["code": f.code.rawValue, "message": f.message, "retryable": f.retryable]
+            }
+            return out
+        }
     }
 
-    static func failure(_ id: String, _ f: ManagerToolFailure) -> [String: Any] {
-        ["wire": "result", "id": id, "ok": false,
-         "error": ["code": f.code, "message": f.message, "retryable": f.retryable]]
+    static func encode(_ obj: [String: Any]) -> Data {
+        (try? JSONSerialization.data(withJSONObject: obj))
+            ?? Data(#"{"wire":"result","ok":false,"error":{"code":"internal","message":"unencodable result","retryable":false}}"#.utf8)
     }
 
     /// Under the cap as sent, or cut from the end the tool does not keep and
     /// marked `truncated`. Never silently.
-    static func capped(id: String, data: Any, tool: ManagerTool) -> [String: Any] {
+    static func capped(_ data: Any, tool: ManagerTool) -> Outcome {
         let cap = min(tool.capBytes, maxFrameBytes - 512)
         var value = data
         var truncated = false
@@ -234,12 +277,10 @@ public actor ManagerToolHost {
                 value = cut(text, toBytes: max(0, cap - 64), keep: tool.keep)
                 if let s = value as? String, s == text { value = String(text.prefix(text.count / 2)) }
             } else {
-                return failure(id, ManagerToolFailure("too_large", "\(tool.name) result is over \(cap) bytes and cannot be cut"))
+                return .failed(ManagerToolFailure(.tooLarge, "\(tool.name.rawValue) result is over \(cap) bytes and cannot be cut"))
             }
         }
-        var out: [String: Any] = ["wire": "result", "id": id, "ok": true, "data": value]
-        if truncated { out["truncated"] = true }
-        return out
+        return .done(UncheckedBox(value), truncated: truncated)
     }
 
     static func cut(_ text: String, toBytes limit: Int, keep: ManagerTool.Keep) -> String {
