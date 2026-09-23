@@ -131,6 +131,28 @@ public enum ManagerConfig {
     /// watched through a day of device changes: `manager.echo_cancellation`
     /// in hq.json. When it is on and the unit will not start, hands-free
     /// falls back to the pinned capture unit and says so in the log.
+    /// The WebRTC media path, the one that lets the manager be interrupted
+    /// while it speaks. `manager.webrtc` in hq.json, with the offer URL of a
+    /// bot that speaks SmallWebRTC; absent, hands-free uses the WebSocket it
+    /// always has. Nothing else about the panel changes: both transports show
+    /// the same event lines and answer the same doors.
+    public struct WebRTCManager: Sendable, Equatable {
+        /// Where a session is started (`POST /start` on the hosted agent).
+        public let start: URL
+        /// The public key for that agent, until the Gateway issues these too.
+        public let key: String
+    }
+
+    public static func webrtc(config: URL = HubApp.configPath) -> WebRTCManager? {
+        guard let data = try? Data(contentsOf: config),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let manager = obj["manager"] as? [String: Any],
+              let rtc = manager["webrtc"] as? [String: Any],
+              let start = (rtc["start"] as? String).flatMap(URL.init(string:)),
+              let key = rtc["key"] as? String, !key.isEmpty else { return nil }
+        return WebRTCManager(start: start, key: key)
+    }
+
     public static func echoCancellation(config: URL = HubApp.configPath) -> Bool {
         guard let data = try? Data(contentsOf: config),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],

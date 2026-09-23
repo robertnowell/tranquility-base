@@ -104,6 +104,8 @@ BUILD_DIR=$(tb_bundle_dir "$CONFIG")
 
 # shellcheck source=lib/sparkle.sh
 . "$(dirname "$0")/lib/sparkle.sh"
+# shellcheck source=lib/webrtc.sh
+. "$(dirname "$0")/lib/webrtc.sh"
 
 # The update feed, and the key that proves an update came from us.
 #
@@ -181,6 +183,11 @@ chmod +x "$APP_DIR/Contents/Resources/hooks/"*.sh
 # DMG before audit-release.sh refused it for a missing icon. The audit did its
 # job; the warning did not, because a warning nobody reads is not a signal.
 sparkle_embed "$APP_DIR" "$PRODUCTS_DIR"
+
+# WebRTC, for the same two reasons in the same order: the icon step runs the
+# binary, and the signature seals the bundle. Hands-free over WebRTC is what
+# lets the manager be interrupted; without the framework the app cannot start.
+webrtc_embed "$APP_DIR" "$PRODUCTS_DIR"
 
 # The icon renderer executes this copied binary before the bundle receives its
 # final stable signature below. On macOS 26, the SwiftPM ad-hoc signature is not
@@ -403,6 +410,7 @@ if [ -z "$IDENTITY" ]; then
   echo "   scripts/reset-permissions.sh and grant again."
   echo "   Retry the identity with: scripts/make-signing-identity.sh"
   sparkle_sign "$APP_DIR" - --timestamp=none
+  webrtc_sign "$APP_DIR" - --timestamp=none
   codesign --force --sign - --identifier "$BUNDLE_ID" \
     --entitlements TranquilityBase.entitlements \
     --options runtime --timestamp=none "$APP_DIR"
@@ -413,6 +421,7 @@ else
   # Privacy pane — a completely silent failure.
   # Nested first, outer last, never --deep: see scripts/lib/sparkle.sh.
   sparkle_sign "$APP_DIR" "$IDENTITY" --timestamp=none
+  webrtc_sign "$APP_DIR" "$IDENTITY" --timestamp=none
   codesign --force --sign "$IDENTITY" --identifier "$BUNDLE_ID" \
     --entitlements TranquilityBase.entitlements \
     --options runtime --timestamp=none "$APP_DIR"

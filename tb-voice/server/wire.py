@@ -89,6 +89,19 @@ async def request(kind: str, timeout: float = 45.0, **fields) -> dict:
         w.replies.pop(rid, None)
 
 
+def take_reply(obj: dict, wire: "Wire | None" = None) -> bool:
+    """Hand a reply to whoever is waiting for it. The WebSocket serializer and
+    the WebRTC data channel both land here, so the shapes are identical on
+    either transport and only the carriage differs."""
+    w = wire or current()
+    rid = obj.get("reply")
+    fut = w.replies.get(rid) if rid else None
+    if fut is not None and not fut.done():
+        fut.set_result(obj)
+        return True
+    return False
+
+
 class TBSerializer(FrameSerializer):
     """Audio as bytes, lines as text, replies into the request table."""
 
@@ -113,8 +126,5 @@ class TBSerializer(FrameSerializer):
         except ValueError:
             logger.warning(f"wire: not JSON: {data[:80]!r}")
             return None
-        rid = obj.get("reply")
-        fut = self._wire.replies.get(rid) if rid else None
-        if fut is not None and not fut.done():
-            fut.set_result(obj)
+        take_reply(obj, self._wire)
         return None
