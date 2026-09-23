@@ -71,6 +71,71 @@ final class GridAssemblerTests: XCTestCase {
         XCTAssertEqual(result.lamp, .running)
     }
 
+    // MARK: - amber (the failure spine's one question)
+
+    private let dropped = "API Error: Connection lost mid-response. The response above may be incomplete."
+
+    private func amber(activity: SessionActivity?, observedAt: Date? = nil,
+                       live: LiveSession?, pickedUp: Bool = false)
+        -> (verdict: Verdict, fault: SessionRow.Fault?) {
+        let evidence = activity.map {
+            SessionActivity.Evidence(activity: $0, observedAt: observedAt, modifiedAt: nil)
+        }
+        let verdict = GridAssembler.verdict(for: evidence, sessionId: "s", live: live,
+                                            pickedUp: pickedUp, isInFlight: false)
+        return (verdict, GridAssembler.amber(verdict: verdict))
+    }
+
+    func testAnAPIErrorTheFileStatesReportsAsAFaultInTheRowsOwnWords() {
+        let got = amber(activity: .blocked(reason: dropped), live: live(status: "idle"))
+        XCTAssertEqual(got.fault, SessionRow.Fault(kind: .agentFault, reason: dropped))
+    }
+
+    func testAStallWithNoProcessReportsAsAFaultToo() {
+        // Amber is amber: every one reports. The kind says the file inferred it.
+        let got = amber(activity: .stalled(reason: "silent for 2h"), live: nil)
+        XCTAssertEqual(got.verdict.lamp, .fault)
+        XCTAssertEqual(got.fault?.kind, .agentFault)
+        XCTAssertEqual(got.fault?.reason, "silent for 2h")
+    }
+
+    func testAPermissionPromptReportsUnderItsOwnKind() {
+        let got = amber(activity: nil,
+                        live: live(status: "waiting", waitingFor: "permission prompt"))
+        XCTAssertEqual(got.verdict.witness, .process)
+        XCTAssertEqual(got.fault?.kind, .agentWaiting)
+    }
+
+    func testARestartReportsUnderItsOwnKind() {
+        var resumed = live(status: "idle")
+        resumed.startedAt = 1_000_000_000_000
+        let got = amber(activity: .idle, observedAt: Date(timeIntervalSince1970: 999_999_000),
+                        live: resumed)
+        XCTAssertEqual(got.verdict.witness, .restart)
+        XCTAssertEqual(got.fault?.kind, .agentRestarted)
+    }
+
+    func testStandingByIsTheOneAmberThatDoesNotReport() {
+        // The person switched the row on a second ago; nothing is wrong.
+        let got = amber(activity: .idle, live: live(status: "idle"), pickedUp: true)
+        XCTAssertEqual(got.verdict.witness, .user)
+        XCTAssertEqual(got.verdict.lamp, .fault)
+        XCTAssertNil(got.fault)
+    }
+
+    func testAGreenOrBlueRowIsNotAFault() {
+        XCTAssertNil(amber(activity: .working, live: live(status: "busy")).fault)
+        XCTAssertNil(amber(activity: .idle, live: live(status: "idle")).fault)
+    }
+
+    func testTheReasonIsTheHoverNotTheCaption() {
+        // The whole sentence, since the row's clause is cut to a column.
+        let limit = "You've hit your session limit · resets 8pm (America/Los_Angeles). Try later."
+        let got = amber(activity: .blocked(reason: limit), live: live(status: "idle"))
+        XCTAssertEqual(got.fault?.reason, limit)
+        XCTAssertNotEqual(got.fault?.reason, got.verdict.because)
+    }
+
     func testStalledWithNoProcessAtAllStaysFault() {
         let evidence = SessionActivity.Evidence(
             activity: .stalled(reason: "silent"), observedAt: nil, modifiedAt: nil)
