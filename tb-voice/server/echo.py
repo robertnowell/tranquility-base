@@ -35,11 +35,13 @@ class EchoGate(FrameProcessor):
         # here. They go out through the app's own synthesizer rather than the
         # media connection, so they are not in the canceller's reference and
         # nothing subtracts them; on 23 Sep the manager transcribed three of
-        # them back, verbatim, as the developer's speech. The answer to that is
-        # not to close the microphone — the whole point of a canceller is that
-        # the microphone stays open — it is app_echo.is_app_echo(), which drops
-        # the app's own sentence after the fact, and ultimately putting the
-        # app's voice through the same audio engine so the canceller sees it.
+        # them back, verbatim, as the developer's speech. The answer is not to
+        # close the microphone — the whole point of a canceller is that the
+        # microphone stays open — and it is not to compare transcripts against
+        # the line being read either. It is that the app has no second set of
+        # speakers: ManagerAudio renders its voice through the engine the
+        # connection renders through, so the canceller subtracts it like any
+        # other audio we play.
         self._cancels_own_voice = cancels_own_voice
 
     def gated(self) -> bool:

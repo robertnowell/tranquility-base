@@ -151,6 +151,20 @@ public final class SystemSpeechProvider: NSObject, SpeechProvider, @unchecked Se
             "system: speaking as \(chosen ?? "the synthesiser's own default")"
                 + " (\(voiceIdentifier == nil ? "default" : "assigned"))")
 
+        // The same rule the cloud voice follows: while a hands-free session is
+        // up the speakers belong to the connection's engine, so the system
+        // voice is rendered to samples and played there rather than spoken by
+        // the synthesiser onto a second audio path the canceller cannot see.
+        if let sink = SpokenAudioRoute.ready, let rendered = Self.render(utterance) {
+            do {
+                try await sink.play(rendered)
+                onWord?(0..<text.text.count)
+                return
+            } catch {
+                ElevenLabsSpeechProvider.trace?("system: engine playback failed (\(error)), speaking directly")
+            }
+        }
+
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
             lock.lock()
             pending = (utterance, cont)
@@ -158,6 +172,32 @@ public final class SystemSpeechProvider: NSObject, SpeechProvider, @unchecked Se
             lock.unlock()
             synthesizer.speak(utterance)
         }
+    }
+
+    /// The utterance as audio rather than as sound: `write` hands back buffers
+    /// instead of driving the speakers, which is what lets the same line go
+    /// through somebody else's renderer. Its own synthesiser, not the injected
+    /// one, because the seam exists for tests that have no audio at all.
+    private static func render(_ utterance: AVSpeechUtterance) -> Data? {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("tb-system-voice-\(UUID().uuidString).caf")
+        let synth = AVSpeechSynthesizer()
+        var file: AVAudioFile?
+        let done = DispatchSemaphore(value: 0)
+        synth.write(utterance) { buffer in
+            guard let pcm = buffer as? AVAudioPCMBuffer else { return }
+            if pcm.frameLength == 0 { done.signal(); return }
+            if file == nil {
+                file = try? AVAudioFile(forWriting: url, settings: pcm.format.settings)
+            }
+            try? file?.write(from: pcm)
+        }
+        // The callback fires on the synthesiser's own queue and ends with an
+        // empty buffer; a silent failure must not hang the announcement.
+        guard done.wait(timeout: .now() + 10) == .success else { return nil }
+        file = nil
+        defer { try? FileManager.default.removeItem(at: url) }
+        return try? Data(contentsOf: url)
     }
 
     /// Stops whatever is speaking and always settles the waiter.
@@ -493,6 +533,26 @@ public final class ElevenLabsSpeechProvider: NSObject, SpeechProvider, @unchecke
         // Archived at PLAYBACK, not synthesis: the folder is a record of what
         // was heard, and a prefetched clip nobody listened to is not that.
         SpokenAudioArchive.keep(audioData, label: text.text)
+
+        // While a hands-free session is up, the speakers belong to the
+        // connection's audio engine, so this clip renders there instead — in
+        // the canceller's reference, subtracted before the microphone hears it.
+        // Without this the line comes back as the developer's own speech; on
+        // 23 Sep three announcements in a row did, and were judged as commands.
+        // A sink that is not ready, or that cannot decode the clip, falls
+        // through to the speakers below rather than going silent.
+        if let sink = SpokenAudioRoute.ready {
+            do {
+                try await sink.play(audioData)
+                guard mine == currentGeneration() else { throw SpeechError.interrupted }
+                onWord?(0..<text.text.count)
+                return
+            } catch is SpeechError {
+                throw SpeechError.interrupted
+            } catch {
+                ElevenLabsSpeechProvider.trace?("11labs: engine playback failed (\(error)), using the speakers")
+            }
+        }
 
         // Both under the health watchdog: creating the player asks coreaudiod
         // for the default output, and play() starts an IO context on it. On

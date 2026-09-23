@@ -11,6 +11,33 @@ let offerURL = URL(string: CommandLine.arguments.count > 1 ? CommandLine.argumen
 /// wants nothing.
 let bearer: String? = CommandLine.arguments.count > 2 ? CommandLine.arguments[2] : nil
 
+/// The built-in microphone by transport type, not by name or by the default.
+func builtInMicrophoneID() -> AudioDeviceID? {
+    var size = UInt32(0)
+    var address = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDevices,
+                                             mScope: kAudioObjectPropertyScopeGlobal,
+                                             mElement: kAudioObjectPropertyElementMain)
+    guard AudioObjectGetPropertyDataSize(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size) == noErr else { return nil }
+    var ids = [AudioDeviceID](repeating: 0, count: Int(size) / MemoryLayout<AudioDeviceID>.size)
+    guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &ids) == noErr else { return nil }
+    for id in ids {
+        var transport = UInt32(0)
+        var tsize = UInt32(MemoryLayout<UInt32>.size)
+        var taddr = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyTransportType,
+                                               mScope: kAudioObjectPropertyScopeGlobal,
+                                               mElement: kAudioObjectPropertyElementMain)
+        guard AudioObjectGetPropertyData(id, &taddr, 0, nil, &tsize, &transport) == noErr,
+              transport == kAudioDeviceTransportTypeBuiltIn else { continue }
+        var streams = UInt32(0)
+        var saddr = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyStreams,
+                                               mScope: kAudioDevicePropertyScopeInput,
+                                               mElement: kAudioObjectPropertyElementMain)
+        guard AudioObjectGetPropertyDataSize(id, &saddr, 0, nil, &streams) == noErr, streams > 0 else { continue }
+        return id
+    }
+    return nil
+}
+
 func systemDefaultInputName() -> String {
     var id = AudioDeviceID(0)
     var size = UInt32(MemoryLayout<AudioDeviceID>.size)
@@ -42,13 +69,23 @@ final class Spike: NSObject, LKRTCPeerConnectionDelegate {
         // The platform-default module is the one that speaks to the HAL on
         // macOS, and the HAL is where device identity lives. A factory built
         // with no arguments enumerated nothing at all.
+        // TB_ENGINE_ADM switches to the audio-engine module, the one whose
+        // delegate hands us the live AVAudioEngine. That is the only way the
+        // app's own voice can join the render graph the canceller references,
+        // which is the point: a canceller should never have to be told not to
+        // listen. The question this spike answers is whether that module can
+        // still name a microphone, because the platform-default one can and
+        // our device policy depends on it.
+        let engineADM = ProcessInfo.processInfo.environment["TB_ENGINE_ADM"] != nil
+        print("audio device module: \(engineADM ? "audioEngine" : "platformDefault")")
         factory = LKRTCPeerConnectionFactory(
-            audioDeviceModuleType: .platformDefault,
+            audioDeviceModuleType: engineADM ? .audioEngine : .platformDefault,
             bypassVoiceProcessing: false,
             encoderFactory: nil,
             decoderFactory: nil,
             audioProcessingModule: nil)
         super.init()
+        factory.audioDeviceModule.observer = self
     }
 
     /// Question one: can we name the microphone, rather than taking whatever
@@ -241,6 +278,64 @@ final class Spike: NSObject, LKRTCPeerConnectionDelegate {
     func peerConnection(_ pc: LKRTCPeerConnection, didOpen dataChannel: LKRTCDataChannel) {
         print("data channel open: \(dataChannel.label)")
     }
+}
+
+extension Spike: LKRTCAudioDeviceModuleDelegate {
+    func audioDeviceModule(_ m: LKRTCAudioDeviceModule, didReceiveSpeechActivityEvent e: LKRTCSpeechActivityEvent) {}
+    func audioDeviceModule(_ m: LKRTCAudioDeviceModule, didCreateEngine engine: AVAudioEngine) -> Int {
+        print("ADM: didCreateEngine")
+        pinEngineInput(engine)
+        return 0
+    }
+    func audioDeviceModule(_ m: LKRTCAudioDeviceModule, willEnableEngine engine: AVAudioEngine,
+                           isPlayoutEnabled: Bool, isRecordingEnabled: Bool,
+                           isVoiceProcessingEnabled: Bool) -> Int {
+        print("ADM: willEnableEngine playout=\(isPlayoutEnabled) recording=\(isRecordingEnabled) vpio=\(isVoiceProcessingEnabled)")
+        return 0
+    }
+    func audioDeviceModule(_ m: LKRTCAudioDeviceModule, willStartEngine engine: AVAudioEngine,
+                           isPlayoutEnabled: Bool, isRecordingEnabled: Bool) -> Int { 0 }
+    func audioDeviceModule(_ m: LKRTCAudioDeviceModule, didStopEngine engine: AVAudioEngine,
+                           isPlayoutEnabled: Bool, isRecordingEnabled: Bool) -> Int { 0 }
+    func audioDeviceModule(_ m: LKRTCAudioDeviceModule, didDisableEngine engine: AVAudioEngine,
+                           isPlayoutEnabled: Bool, isRecordingEnabled: Bool) -> Int { 0 }
+    func audioDeviceModule(_ m: LKRTCAudioDeviceModule, willReleaseEngine engine: AVAudioEngine) -> Int { 0 }
+    func audioDeviceModule(_ m: LKRTCAudioDeviceModule, engine: AVAudioEngine,
+                           configureInputFromSource src: AVAudioNode?, toDestination dst: AVAudioNode,
+                           format: AVAudioFormat, context: [AnyHashable: Any]) -> Int {
+        print("ADM: configureInput  src=\(src.map { String(describing: type(of: $0)) } ?? "nil") dst=\(type(of: dst))")
+        pinEngineInput(engine)
+        return 0
+    }
+
+    /// The audio-engine module will not take a device through `trySetInputDevice`
+    /// — it returns false and the property reads empty. The engine's own input
+    /// unit will, which is the ordinary macOS way to choose a capture device,
+    /// and this is the hook that hands us the engine.
+    func pinEngineInput(_ engine: AVAudioEngine) {
+        guard let want = builtInMicrophoneID() else { print("   pin: no built-in microphone"); return }
+        let unit = engine.inputNode.auAudioUnit
+        let before = (try? unit.deviceID) ?? 0
+        do {
+            try unit.setDeviceID(want)
+            print("   pin: input unit \(before) -> \(unit.deviceID) (wanted \(want)) \(unit.deviceID == want ? "PINNED" : "NOT PINNED")")
+        } catch {
+            print("   pin: setDeviceID(\(want)) threw \(error)")
+        }
+    }
+    func audioDeviceModule(_ m: LKRTCAudioDeviceModule, engine: AVAudioEngine,
+                           configureOutputFromSource src: AVAudioNode, toDestination dst: AVAudioNode?,
+                           format: AVAudioFormat, context: [AnyHashable: Any]) -> Int {
+        print("ADM: configureOutput src=\(type(of: src)) dst=\(dst.map { String(describing: type(of: $0)) } ?? "nil") format=\(format)")
+        // THE POINT: mix our own player into the graph the canceller references.
+        let player = AVAudioPlayerNode()
+        engine.attach(player)
+        engine.connect(player, to: dst ?? engine.mainMixerNode, format: format)
+        engine.connect(src, to: dst ?? engine.mainMixerNode, format: format)
+        print("ADM: attached a player node beside the connection's own output -> \(dst.map { String(describing: type(of: $0)) } ?? "mainMixer")")
+        return 0
+    }
+    func audioDeviceModuleDidUpdateDevices(_ m: LKRTCAudioDeviceModule) {}
 }
 
 print("system default input: \(systemDefaultInputName())")
