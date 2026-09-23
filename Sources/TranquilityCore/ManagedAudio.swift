@@ -307,20 +307,44 @@ public final class ManagedAudio: @unchecked Sendable {
         self.session = session; self.log = log
     }
 
+    /// Whether a refusal means the key path should run: not on credits, or
+    /// out of them. Ruled 22 Sep: out of credits falls back to the person's
+    /// own ElevenLabs and AssemblyAI keys, the same as summaries fall to their
+    /// Anthropic key. #571 had refused instead, and the transcript went to the
+    /// same AssemblyAI key anyway through file recovery, seven seconds later.
+    static func useOwnKey(_ failure: ManagedSummaryFailure) -> Bool {
+        guard case let .refused(code, _) = failure else { return false }
+        return code == "not_connected" || code == "rebinding_required" || code == "insufficient_credit"
+    }
+
+    /// Out of credits, recorded each time the key path takes over, so the
+    /// fallback is visible off the machine even though it is silent on it.
+    static func recordFallback(_ kind: String, _ failure: ManagedSummaryFailure) {
+        guard case .refused("insufficient_credit", _) = failure else { return }
+        Track.record("audio_fallback", ["kind": .token(kind), "reason": "out_of_credits"])
+    }
+
     /// For `ElevenLabsSpeechProvider.render`: a clip bought on the account, or
-    /// nil when this Mac is not on credits.
+    /// nil when this Mac is not on credits, or out of them.
     public func clip() -> @Sendable (SanitizedSpokenText, String?, TimeInterval) async throws -> SpokenClip? {
         { [session, log] text, voice, _ in
             let client: ManagedSpeechClient
             do { client = try await session.speech() }
-            catch { return nil }                       // not on credits: the key path runs
+            catch let failure as ManagedSummaryFailure {
+                ManagedAudio.recordFallback("voice", failure)
+                return nil                             // not on credits, or out: the key path runs
+            }
+            catch { return nil }
             do { return try await client.speak(text.text, voice: voice) }
             catch let failure as ManagedSummaryFailure {
-                if case let .refused(code, _) = failure,
-                   code == "not_connected" || code == "rebinding_required" { return nil }
+                if ManagedAudio.useOwnKey(failure) {
+                    await session.noteAudioFailure(failure, during: "voice")
+                    ManagedAudio.recordFallback("voice", failure)
+                    return nil
+                }
                 log("credits: the voice could not be bought (\(ManagedCreditSession.describe(failure)))")
                 await session.noteAudioFailure(failure, during: "voice")
-                throw failure                          // a credits failure falls to the system voice, never to a key
+                throw failure                          // a service fault falls to the system voice
             } catch {
                 log("credits: the voice could not be bought (\(ManagedCreditSession.describe(error)))")
                 await session.noteAudioFailure(error, during: "voice")
@@ -338,7 +362,11 @@ public final class ManagedAudio: @unchecked Sendable {
             if let existing = live.current() { open = existing }
             else {
                 do { open = try await session.transcription() }
-                catch { return nil }                   // not on credits: the key path runs
+                catch let failure as ManagedSummaryFailure {
+                    ManagedAudio.recordFallback("transcript", failure)
+                    return nil                         // not on credits, or out: the key path runs
+                }
+                catch { return nil }
                 live.set(open)
             }
             do {
@@ -352,8 +380,11 @@ public final class ManagedAudio: @unchecked Sendable {
             }
             catch let failure as ManagedSummaryFailure {
                 live.set(nil)
-                if case let .refused(code, _) = failure,
-                   code == "not_connected" || code == "rebinding_required" { return nil }
+                if ManagedAudio.useOwnKey(failure) {
+                    await session.noteAudioFailure(failure, during: "transcript")
+                    ManagedAudio.recordFallback("transcript", failure)
+                    return nil
+                }
                 log("credits: the transcript could not be bought (\(ManagedCreditSession.describe(failure)))")
                 await session.noteAudioFailure(failure, during: "transcript")
                 throw failure

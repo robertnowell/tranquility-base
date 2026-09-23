@@ -97,7 +97,7 @@ final class CreditStandingTests: XCTestCase {
         XCTAssertEqual(out.line(ownKey: false), "Add credits")
         XCTAssertEqual(out.line(ownKey: true), "Add credits")
         XCTAssertTrue(out.needsAttention(ownKey: true))
-        XCTAssertTrue(out.detail(ownKey: true).contains("hearing and speaking need credits"))
+        XCTAssertTrue(out.detail(ownKey: true).contains("your own keys carry on"))
         let probes = Prerequisites.Probes(tmuxPath: { nil }, hooksProblem: { _ in nil },
                                           hasSecret: { $0 == .anthropicAPIKey }, creditStanding: { out })
         let row = Prerequisites.snapshot(probes).first { $0.item == .credits }!

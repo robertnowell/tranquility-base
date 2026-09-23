@@ -49,13 +49,13 @@ public enum CreditStanding: Sendable, Equatable {
 
     /// The same, knowing whether the person has a key of their own.
     ///
-    /// The key no longer waives the line. On 19 Sep credits paid only for
-    /// summaries, a pasted Anthropic key covered all of it, and the line was
-    /// hidden for anyone with a key. Since #571 credits also pay for hearing
-    /// and speaking, which that key does not cover and which never fall to a
-    /// pasted key, so out of credits with a key is still something to do.
-    /// 22 Sep: Settings said out of credits, transcripts were refused, and the
-    /// top bar was silent.
+    /// The key does not waive the line. On 19 Sep credits paid only for
+    /// summaries and the line was hidden for anyone with an Anthropic key.
+    /// Since #571 credits also pay for hearing and speaking; out of credits,
+    /// each falls to the person's own key for it where one exists (ruled
+    /// 22 Sep), which one Anthropic key cannot vouch for. And the person
+    /// should know they are spending their own keys. 22 Sep: Settings said
+    /// out of credits and the top bar was silent.
     public func line(ownKey: Bool) -> String? {
         switch self {
         // Each line names the thing to do, not the thing that went wrong
@@ -76,7 +76,7 @@ public enum CreditStanding: Sendable, Equatable {
     public func detail(ownKey: Bool) -> String {
         switch self {
         case .floored(.outOfCredits, _) where ownKey:
-            return "starting credits used · summaries run on your own Anthropic key; hearing and speaking need credits. Buying credits is coming"
+            return "starting credits used · your own keys carry on for summaries, hearing and speaking. Buying credits is coming"
         case .notOnCredits(connectAgain: false):
             return "sign in to your hub and summaries run on us, ten dollars to start"
         case .notOnCredits(connectAgain: true), .floored(.connectAgain, _):
@@ -88,7 +88,7 @@ public enum CreditStanding: Sendable, Equatable {
         case .balanceUnknown:
             return "summaries use credits · the last one was paid for; the balance could not be refreshed and will be at the next"
         case .floored(.outOfCredits, _):
-            return "starting credits used · hearing, speaking and summaries need credits. Buying credits is coming; your own Anthropic key keeps summaries going"
+            return "starting credits used. Buying credits is coming; until then your own keys carry on where you have them"
         }
     }
 
