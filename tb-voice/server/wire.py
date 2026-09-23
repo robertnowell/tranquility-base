@@ -19,6 +19,7 @@ import asyncio
 import contextvars
 import json
 import os
+import time
 import uuid
 
 from loguru import logger
@@ -46,6 +47,14 @@ class Wire:
     def __init__(self):
         self.outbox: asyncio.Queue = asyncio.Queue()
         self.replies: dict[str, asyncio.Future] = {}
+        # Wire v1 (hf-3, docs/wire-v1.md): the tools the Mac said it offers in
+        # its hello, and the calls waiting on a result. None until a hello
+        # arrives; an app that never sends one stays on request:run.
+        self.tools: set[str] | None = None
+        self.hello_seen = asyncio.Event()
+        self.calls: dict[str, asyncio.Future] = {}
+        self.mac_events: asyncio.Queue = asyncio.Queue()
+        self.born = time.monotonic()
 
 
 _current: contextvars.ContextVar[Wire | None] = contextvars.ContextVar("tb_wire", default=None)
@@ -89,11 +98,75 @@ async def request(kind: str, timeout: float = 45.0, **fields) -> dict:
         w.replies.pop(rid, None)
 
 
+# How long each v1 tool may take; the Mac enforces its own and this side gives
+# up half a second after it (docs/wire-v1.md).
+HELLO_GRACE_S = 1.5
+DEADLINES_MS = {"agents": 3000, "waiting": 3000, "brief": 3000, "transcript": 5000}
+
+
+async def call(tool: str, args: dict | None = None, deadline_ms: int | None = None,
+               idem: str | None = None) -> dict | None:
+    """Wire v1: ask the Mac for one named tool. Returns the result frame
+    ({ok, data} or {ok: false, error}), or None when this Mac does not offer
+    the tool, so the caller keeps the request:run path for older apps."""
+    w = current()
+    if w.tools is None:
+        # The hello rides the same socket as the first audio: a call made in
+        # the session's first breath waits for it, up to 1.5 s after the
+        # session began. Later, no hello means an app without v1, and waiting
+        # would only add 1.5 s to every one of its reads.
+        remaining = HELLO_GRACE_S - (time.monotonic() - w.born)
+        if remaining <= 0:
+            return None
+        try:
+            await asyncio.wait_for(w.hello_seen.wait(), remaining)
+        except TimeoutError:
+            return None
+    if tool not in (w.tools or set()):
+        return None
+    cid = uuid.uuid4().hex[:8]
+    deadline_ms = deadline_ms or DEADLINES_MS.get(tool, 5000)
+    fut = asyncio.get_running_loop().create_future()
+    w.calls[cid] = fut
+    frame = {"wire": "call", "id": cid, "tool": tool, "args": args or {}, "deadline_ms": deadline_ms}
+    if idem:
+        frame["idem"] = idem
+    await w.outbox.put(frame)
+    try:
+        return await asyncio.wait_for(fut, deadline_ms / 1000 + 0.5)
+    except TimeoutError:
+        logger.warning(f"wire: no result for {tool} {cid} in {deadline_ms} ms")
+        await w.outbox.put({"wire": "cancel", "id": cid})
+        return {"ok": False, "error": {"code": "timeout", "message": f"{tool} gave no result", "retryable": not idem}}
+    finally:
+        w.calls.pop(cid, None)
+
+
+def _take_wire(obj: dict, w: "Wire") -> bool:
+    kind = obj.get("wire")
+    if kind == "hello":
+        w.tools = {t.get("name") for t in obj.get("tools") or [] if isinstance(t, dict)}
+        w.hello_seen.set()
+        logger.info(f"wire: hello, protocol {obj.get('protocol')}, app {obj.get('app_version')}, tools {sorted(w.tools)}")
+        return True
+    if kind == "result":
+        fut = w.calls.get(obj.get("id"))
+        if fut is not None and not fut.done():
+            fut.set_result(obj)
+        return True
+    if kind == "event":
+        w.mac_events.put_nowait(obj)  # chords and tray changes; read by later work (hf-16, hf-12)
+        return True
+    return False
+
+
 def take_reply(obj: dict, wire: "Wire | None" = None) -> bool:
     """Hand a reply to whoever is waiting for it. The WebSocket serializer and
     the WebRTC data channel both land here, so the shapes are identical on
     either transport and only the carriage differs."""
     w = wire or current()
+    if "wire" in obj:
+        return _take_wire(obj, w)
     rid = obj.get("reply")
     fut = w.replies.get(rid) if rid else None
     if fut is not None and not fut.done():

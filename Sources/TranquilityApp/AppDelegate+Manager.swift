@@ -222,7 +222,8 @@ extension AppDelegate {
             // renders, so its voice has to go through it. If the unit will
             // not start, hands-free carries on exactly as before.
             let (microphone, voice) = Self.managerAudio(processing: cancelsEcho)
-            let socket = ManagerSocket(session: session, audio: microphone, player: voice) { argv in
+            let socket = ManagerSocket(session: session, audio: microphone, player: voice,
+                                       toolHost: Self.managerToolHost, appVersion: Self.managerAppVersion) { argv in
                 await AppDelegate.answerManagerRequest(argv)
             }
             do { try socket.start() } catch {
@@ -369,7 +370,8 @@ extension AppDelegate {
                 self.hud.setManager(on: false)
                 return
             }
-            let peer = ManagerPeer(offerURL: offer, bearer: rtc.key) { argv in
+            let peer = ManagerPeer(offerURL: offer, bearer: rtc.key,
+                                   toolHost: Self.managerToolHost, appVersion: Self.managerAppVersion) { argv in
                 await AppDelegate.answerManagerRequest(argv)
             }
             peer.onTrace = { line in Permissions.log("manager wire: \(line)") }
@@ -480,6 +482,17 @@ extension AppDelegate {
     /// The bot's doors, done here. `tbase …` runs the CLI this Mac has;
     /// `open <scheme>://…` is handed to the app's own deep-link handler, so
     /// the scheme the bot wrote does not matter. Anything else is refused.
+    /// Wire v1's tools, one host for every session and both transports, so
+    /// an idempotency key outlives a reconnect (hf-3). Reads today; effects
+    /// still go through `answerManagerRequest` until send moves to Coordinator.
+    static let managerToolHost = ManagerToolHost(
+        tools: ManagerTools.standard(tbase: ManagerConfig.tbasePath()),
+        idempotency: ManagerIdempotency(url: QueueStore.supportDirectory.appendingPathComponent("manager-idem.json")))
+
+    static var managerAppVersion: String {
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
+    }
+
     static func answerManagerRequest(_ argv: [String]) async -> (code: Int, out: String) {
         switch argv.first {
         case "tbase":

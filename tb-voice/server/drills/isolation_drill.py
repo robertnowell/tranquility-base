@@ -107,6 +107,24 @@ async def main():
         check(True, "an unbound wire read raises in strict mode")
     del os.environ["TB_STRICT_SESSION"]
 
+    # hf-3: wire v1 falls back fast for an app with no hello, and calls by
+    # name once the Mac has said what it offers.
+    old = wire.bind()
+    old.born -= 10  # a session well past its first breath
+    t0 = time.monotonic()
+    r = await wire.call("agents")
+    check(r is None and time.monotonic() - t0 < 0.1, "no hello: call() falls back at once, not after 1.5 s")
+    w = wire.bind()
+    wire.take_reply({"wire": "hello", "protocol": 1, "tools": [{"name": "agents", "version": 1}]}, w)
+    check(w.tools == {"agents"}, "hello records the offered tools")
+    check(await wire.call("rm_rf") is None, "a tool the Mac does not offer falls back")
+    pending = asyncio.create_task(wire.call("agents"))
+    frame = await asyncio.wait_for(w.outbox.get(), 1)
+    check(frame.get("wire") == "call" and frame.get("tool") == "agents", "call() puts a v1 call on the wire")
+    wire.take_reply({"wire": "result", "id": frame["id"], "ok": True, "data": ["x"]}, w)
+    got = await asyncio.wait_for(pending, 1)
+    check(got.get("ok") and got.get("data") == ["x"], "the result reaches the caller by id")
+
     print(f"\n{'FAIL' if failures else 'PASS'}: {len(failures)} failure(s)")
     sys.exit(1 if failures else 0)
 

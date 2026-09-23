@@ -143,6 +143,10 @@ public final class ManagerSocket: ManagerTransport, @unchecked Sendable {
     private let audio: ManagerAudioSource
     private let player: PCMPlayer?
     private let onRequest: RequestHandler
+    /// Wire v1: the tools this Mac offers, announced with `hello` on connect
+    /// (hf-3). Nil keeps the connection on `request:run` only.
+    private let toolHost: ManagerToolHost?
+    private let appVersion: String
     private let urlSession: URLSession
     private var task: URLSessionWebSocketTask?
     private var receiver: Task<Void, Never>?
@@ -164,10 +168,13 @@ public final class ManagerSocket: ManagerTransport, @unchecked Sendable {
     private var levelAccum: (sumSquares: Double, samples: Int, sentBytes: Int) = (0, 0, 0)
 
     public init(session: ManagerSession, audio: ManagerAudioSource, player: PCMPlayer? = PCMPlayer(),
+                toolHost: ManagerToolHost? = nil, appVersion: String = "",
                 onRequest: @escaping RequestHandler) {
         self.session = session
         self.audio = audio
         self.player = player
+        self.toolHost = toolHost
+        self.appVersion = appVersion
         self.onRequest = onRequest
         let config = URLSessionConfiguration.default
         config.waitsForConnectivity = false
@@ -183,6 +190,14 @@ public final class ManagerSocket: ManagerTransport, @unchecked Sendable {
         self.task = task
         task.resume()
         receiver = Task { [weak self] in await self?.receiveLoop(task) }
+        if let toolHost {
+            let version = appVersion
+            Task { [weak self] in
+                let hello = await toolHost.hello(appVersion: version)
+                self?.sendData(hello)
+                self?.onTrace?("hello sent (\(hello.count)b)")
+            }
+        }
         try audio.start { [weak self] pcm in self?.send(pcm) }
     }
 
@@ -243,6 +258,11 @@ public final class ManagerSocket: ManagerTransport, @unchecked Sendable {
         }
     }
 
+    private func sendData(_ json: Data) {
+        guard let task, let text = String(data: json, encoding: .utf8) else { return }
+        task.send(.string(text)) { _ in }
+    }
+
     private func sendText(_ object: [String: Any]) {
         guard let task, let data = try? JSONSerialization.data(withJSONObject: object),
               let text = String(data: data, encoding: .utf8) else { return }
@@ -276,16 +296,33 @@ public final class ManagerSocket: ManagerTransport, @unchecked Sendable {
             onTrace?("text frame not JSON: \(text.prefix(80))")
             return
         }
-        onTrace?("frame \((obj["event"] as? String) ?? (obj["request"] as? String).map { "request:" + $0 } ?? "?") \(text.count)b")
+        onTrace?("frame \((obj["event"] as? String) ?? (obj["wire"] as? String).map { "wire:" + $0 } ?? (obj["request"] as? String).map { "request:" + $0 } ?? "?") \(text.count)b")
+        // Calls and requests are answered off this loop. They used to be
+        // awaited here, so while a `tbase` ran nothing else was read: no other
+        // request, and no audio queued behind it (hf-3).
+        if obj["wire"] is String {
+            guard let toolHost else { return }
+            let t0 = Date()
+            let tool = obj["tool"] as? String ?? (obj["wire"] as? String ?? "?")
+            Task { [weak self] in
+                guard let reply = await toolHost.handle(data) else { return }
+                self?.onTrace?("called \(tool) → \(reply.count)b in \(Int(Date().timeIntervalSince(t0) * 1000)) ms")
+                self?.sendData(reply)
+            }
+            return
+        }
         if let kind = obj["request"] as? String, let id = obj["id"] as? String {
             guard kind == "run", let argv = obj["argv"] as? [String], !argv.isEmpty else {
                 sendText(["reply": id, "code": 2, "out": "unknown request"])
                 return
             }
-            let t0 = Date()
-            let (code, out) = await onRequest(argv)
-            onTrace?("answered \(argv.prefix(3).joined(separator: " ")) → \(code) in \(Int(Date().timeIntervalSince(t0) * 1000)) ms")
-            sendText(["reply": id, "code": code, "out": out])
+            let handler = onRequest
+            Task { [weak self] in
+                let t0 = Date()
+                let (code, out) = await handler(argv)
+                self?.onTrace?("answered \(argv.prefix(3).joined(separator: " ")) → \(code) in \(Int(Date().timeIntervalSince(t0) * 1000)) ms")
+                self?.sendText(["reply": id, "code": code, "out": out])
+            }
             return
         }
         // An event line. Interruptions are the manager going quiet: drop what

@@ -30,6 +30,11 @@ final class ManagerPeer: NSObject, ManagerTransport, @unchecked Sendable {
     private let offerURL: URL
     private let bearer: String?
     private let onRequest: RequestHandler
+    /// Wire v1 (hf-3): announced with `hello` once a data channel is open.
+    private let toolHost: ManagerToolHost?
+    private let appVersion: String
+    /// The channel `hello` last went out on; a new current channel gets its own.
+    private weak var helloChannel: LKRTCDataChannel?
     private let factory: LKRTCPeerConnectionFactory
     private var connection: LKRTCPeerConnection?
     private var channel: LKRTCDataChannel?
@@ -40,9 +45,12 @@ final class ManagerPeer: NSObject, ManagerTransport, @unchecked Sendable {
 
     var onTrace: (@Sendable (String) -> Void)?
 
-    init(offerURL: URL, bearer: String?, onRequest: @escaping RequestHandler) {
+    init(offerURL: URL, bearer: String?, toolHost: ManagerToolHost? = nil, appVersion: String = "",
+         onRequest: @escaping RequestHandler) {
         self.offerURL = offerURL
         self.bearer = bearer
+        self.toolHost = toolHost
+        self.appVersion = appVersion
         self.onRequest = onRequest
         LKRTCInitializeSSL()
         factory = LKRTCPeerConnectionFactory(
@@ -190,11 +198,39 @@ final class ManagerPeer: NSObject, ManagerTransport, @unchecked Sendable {
 extension ManagerPeer: LKRTCDataChannelDelegate {
     func dataChannelDidChangeState(_ dataChannel: LKRTCDataChannel) {
         onTrace?("data channel \(dataChannel.label): \(dataChannel.readyState.rawValue)")
+        if dataChannel.readyState == .open { sendHello(on: dataChannel) }
+    }
+
+    /// `hello` (what this Mac offers) on each channel that is current and
+    /// open. Ours can open before the bot opens its own and becomes the one
+    /// we send on; the bot keeps the latest hello, so a second is harmless and
+    /// a missing one would leave it on `request:run`.
+    private func sendHello(on dataChannel: LKRTCDataChannel) {
+        lock.lock()
+        let due = toolHost != nil && dataChannel === channel && helloChannel !== dataChannel
+        if due { helloChannel = dataChannel }
+        lock.unlock()
+        guard due, let toolHost else { return }
+        let version = appVersion
+        Task { [weak self] in
+            let hello = await toolHost.hello(appVersion: version)
+            self?.send(hello)
+            self?.onTrace?("hello sent (\(hello.count)b)")
+        }
     }
 
     func dataChannel(_ dataChannel: LKRTCDataChannel, didReceiveMessageWith buffer: LKRTCDataBuffer) {
         let data = buffer.data
         guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
+        if obj["wire"] is String {
+            guard let toolHost else { return }
+            onTrace?("frame wire:\(obj["wire"] as? String ?? "?") \(data.count)b")
+            Task { [weak self] in
+                guard let reply = await toolHost.handle(data) else { return }
+                self?.send(reply)
+            }
+            return
+        }
         if obj["request"] as? String == "run", let id = obj["id"] as? String,
            let argv = obj["argv"] as? [String] {
             onTrace?("frame request:run \(data.count)b")
@@ -225,6 +261,7 @@ extension ManagerPeer: LKRTCPeerConnectionDelegate {
         onTrace?("bot opened the data channel: \(dataChannel.label)")
         channel = dataChannel
         dataChannel.delegate = self
+        if dataChannel.readyState == .open { sendHello(on: dataChannel) }
     }
     func peerConnectionShouldNegotiate(_ pc: LKRTCPeerConnection) {}
     func peerConnection(_ pc: LKRTCPeerConnection, didChange stateChanged: LKRTCSignalingState) {}
