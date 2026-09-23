@@ -63,6 +63,9 @@ protocol SpeechSynthesizing: AnyObject {
     var isSpeaking: Bool { get }
     func speak(_ utterance: AVSpeechUtterance)
     @discardableResult func stopSpeaking(at boundary: AVSpeechBoundary) -> Bool
+    var isPaused: Bool { get }
+    @discardableResult func pauseSpeaking(at boundary: AVSpeechBoundary) -> Bool
+    @discardableResult func continueSpeaking() -> Bool
 }
 
 extension AVSpeechSynthesizer: SpeechSynthesizing {}
@@ -115,6 +118,14 @@ public final class SystemSpeechProvider: NSObject, SpeechProvider, @unchecked Se
     }
 
     public var isSpeaking: Bool { synthesizer.isSpeaking }
+
+    /// Pause, which this provider never had: it took the protocol's no-op
+    /// default, so ⇧ did nothing whenever the system voice was talking. Found
+    /// 22 Sep, the day every recap fell to the system voice. `.word`, so a
+    /// resumed sentence starts on a whole word rather than half of one.
+    public var isPaused: Bool { synthesizer.isPaused }
+    public func pause() { synthesizer.pauseSpeaking(at: .word) }
+    public func resume() { synthesizer.continueSpeaking() }
 
     public func speak(_ text: SanitizedSpokenText, onWord: (@Sendable (Range<Int>) -> Void)?) async throws {
         stop()

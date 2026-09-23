@@ -246,6 +246,21 @@ public actor ManagedCreditSession: SummaryProvider {
     /// Both are bound to the identity that is signed in now, exactly as
     /// summaries are: an account change invalidates the context underneath
     /// and the next call gets the new account's, never the old one's.
+    /// A voice or transcript purchase failed. The same two consequences a
+    /// summary's failure has: an account answer becomes the standing, so a
+    /// refused transcript can say "Add credits"; anything else online is a
+    /// fault for diagnostics. Before 22 Sep audio refusals reached only
+    /// app.log, and out of credits on the microphone changed nothing on screen.
+    public func noteAudioFailure(_ error: Error, during phase: String) {
+        guard !(error is CancellationError) else { return }
+        reportFault(error, during: phase)
+        let failure = (error as? ManagedSummaryFailure) ?? .refused(code: "service_unavailable", operationId: nil)
+        guard let next = CreditStanding.from(receipt: nil, failure: failure, provider: name) else { return }
+        statusTicket = ticket(); standing = next
+        let current = identity()
+        publish(standing, { [identity] in identity() == current })
+    }
+
     public func speech() async throws -> ManagedSpeechClient {
         let ctx = try currentContext()
         let account = try await ctx.account.id()

@@ -123,6 +123,19 @@ final class SpeechCompletionTests: XCTestCase {
     /// The spy's `isSpeaking` is permanently false, so the whole test lives in the
     /// pre-start window the old guard fell through. The real-synthesizer version
     /// raced a 20ms sleep to land here and spoke its phrase whenever it lost.
+    /// ⇧ pauses the system voice too. It used to take the protocol's no-op
+    /// default, so on 22 Sep, when every recap fell to the system voice, ⇧
+    /// did nothing at all. Driven through the chain, as the hotkey does.
+    func testShiftPausesAndResumesTheSystemVoice() {
+        let spy = SilentSynthesizerSpy()
+        let chain = SpeechChain(preferred: nil,
+                                fallback: SystemSpeechProvider(rate: 0.52, voiceIdentifier: nil, synthesizer: spy))
+        chain.togglePause()
+        XCTAssertTrue(spy.isPaused); XCTAssertTrue(chain.isPaused)
+        chain.togglePause()
+        XCTAssertFalse(spy.isPaused); XCTAssertFalse(chain.isPaused)
+    }
+
     func testStopAlwaysSettlesTheWaiterEvenBeforeAudioStarts() async throws {
         let spy = SilentSynthesizerSpy()
         let provider = SystemSpeechProvider(rate: 0.52, voiceIdentifier: nil, synthesizer: spy)
@@ -197,6 +210,19 @@ private final class SilentSynthesizerSpy: SpeechSynthesizing {
     @discardableResult
     func stopSpeaking(at boundary: AVSpeechBoundary) -> Bool {
         lock.lock(); stops += 1; lock.unlock()
+        return true
+    }
+
+    private var paused = false
+    var isPaused: Bool { lock.lock(); defer { lock.unlock() }; return paused }
+    @discardableResult
+    func pauseSpeaking(at boundary: AVSpeechBoundary) -> Bool {
+        lock.lock(); paused = true; lock.unlock()
+        return true
+    }
+    @discardableResult
+    func continueSpeaking() -> Bool {
+        lock.lock(); paused = false; lock.unlock()
         return true
     }
 }
