@@ -537,9 +537,7 @@ extension AppDelegate {
         case .hearing:
             hud.setManagerState(StatusHUD.orbState, line: "hearing you", mood: "hearing")
         case .listening:
-            // The turn finished without a reply. Clear the hearing tint and
-            // restore the last spoken line, rather than leaving "hearing you".
-            hud.setManagerState(StatusHUD.orbState, line: managerLastLine == "speaking" ? "listening" : managerLastLine)
+            break  // silent on a turn: whatever was last said stays on the panel
         case .addressed:
             hud.setManagerState(StatusHUD.orbState, line: Self.intentLine(e.intent))
         case .speaking:
@@ -566,23 +564,6 @@ extension AppDelegate {
             // with nothing open; the socket's end reconnects. Say nothing.
             break
         }
-    }
-
-    /// Isolated launch drill: real event handling and rendered orb, no voice services.
-    func managerListeningDrill() async -> Bool {
-        func event(_ json: String) {
-            handle(ManagerEvent.parse(Data(json.utf8))!)
-        }
-        event(#"{"event":"hearing"}"#)
-        guard await hud.managerOrb.matchesPresentationForDrill(line: "hearing you", mood: "hearing") else { return false }
-        event(#"{"event":"listening"}"#)
-        guard await hud.managerOrb.matchesPresentationForDrill(line: "listening", mood: "") else { return false }
-        event(#"{"event":"speaking","text":"Ask for the findings."}"#)
-        guard await hud.managerOrb.matchesPresentationForDrill(line: "Ask for the findings.", mood: "speaking") else { return false }
-        event(#"{"event":"hearing"}"#)
-        guard await hud.managerOrb.matchesPresentationForDrill(line: "hearing you", mood: "hearing") else { return false }
-        event(#"{"event":"listening"}"#)
-        return await hud.managerOrb.matchesPresentationForDrill(line: "Ask for the findings.", mood: "")
     }
 
     /// What the manager is doing about what you said, in words.

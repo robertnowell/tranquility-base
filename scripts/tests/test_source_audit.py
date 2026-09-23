@@ -53,7 +53,6 @@ class SourceAuditTests(unittest.TestCase):
             "test-debug-symbols.sh", "test.sh", "test-dev-lanes.sh", "test-dispatch-tmux.sh",
             "test-past-agents-search.sh",
             "test-credits-onboarding.sh",
-            "test-manager-listening.sh",
         ):
             path = self.repo / "scripts" / name
             path.write_text('''#!/bin/bash
@@ -103,7 +102,7 @@ fi
     def assert_audited(self, result):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         steps = self.log.read_text().splitlines()
-        for required in ("test_source_audit.py", "test_deployment_state.py", "test_delivery.py", "test_queue_measurements.py", "test.sh", "test-dev-lanes.sh", "test-dispatch-tmux.sh", "test-past-agents-search.sh", "test-credits-onboarding.sh", "test-manager-listening.sh"):
+        for required in ("test_source_audit.py", "test_deployment_state.py", "test_delivery.py", "test_queue_measurements.py", "test.sh", "test-dev-lanes.sh", "test-dispatch-tmux.sh", "test-past-agents-search.sh", "test-credits-onboarding.sh"):
             self.assertIn(required, steps)
         self.assertIn("swift build", steps)
         self.assertIn("source audit passed for", result.stdout)

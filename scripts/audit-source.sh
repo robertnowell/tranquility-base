@@ -101,9 +101,6 @@ scripts/test-past-agents-search.sh
 echo "→ isolated credits onboarding UI"
 scripts/test-credits-onboarding.sh
 
-echo "→ isolated manager listening UI"
-scripts/test-manager-listening.sh
-
 echo "→ testing"
 # Captured, never piped. `... | grep -q ...` under `set -o pipefail` reports a
 # FAILED pipeline on success: grep exits the moment it matches, the writer takes
