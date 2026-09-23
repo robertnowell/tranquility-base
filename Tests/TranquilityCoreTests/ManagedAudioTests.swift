@@ -1,3 +1,4 @@
+import Network
 import XCTest
 @testable import TranquilityCore
 
@@ -128,5 +129,82 @@ final class ManagedAudioTests: XCTestCase {
         var streaming = AssemblyAIStreaming()
         streaming.tokenSource = audio.streamingToken()
         XCTAssertTrue(streaming.isConfigured)
+    }
+
+    /// A transcript refused for credit is an answer about the account: the
+    /// standing becomes out of credits, so the top bar can say "Add credits".
+    /// 22 Sep: the refusals reached only app.log and nothing on screen changed.
+    func testARefusedTranscriptBecomesTheStanding() async throws {
+        let refused = Transport([(402, json(["error": ["code": "insufficient_credit"]]))])
+        let published = Published()
+        let session = ManagedCreditSession(
+            identity: { .init(hub: URL(string: "https://fixture.invalid")!, token: "A") },
+            outboxURL: FileManager.default.temporaryDirectory.appendingPathComponent("audio-\(UUID().uuidString).sqlite"),
+            connect: { _, _ in .init(transport: refused) },
+            publish: { standing, _ in published.set(standing) })
+        await session.noteAudioFailure(ManagedSummaryFailure.refused(code: "insufficient_credit", operationId: nil),
+                                       during: "transcript")
+        guard case .floored(.outOfCredits, _)? = published.value else {
+            return XCTFail("standing was \(String(describing: published.value))")
+        }
+        XCTAssertEqual(published.value?.line(ownKey: true), "Add credits")
+    }
+
+    private final class Published: @unchecked Sendable {
+        private let lock = NSLock(); private var standing: CreditStanding?
+        func set(_ s: CreditStanding) { lock.lock(); standing = s; lock.unlock() }
+        var value: CreditStanding? { lock.lock(); defer { lock.unlock() }; return standing }
+    }
+}
+
+/// The transport returns what it received, measured through the real `GatewayHTTPTransport`
+/// against a loopback server rather than a fake: the fake transports in this
+/// file never applied the old 256 KB cap, which is how a limit that discarded every
+/// ordinary voice clip shipped with green tests (22 Sep).
+final class GatewayResponseLimitTests: XCTestCase {
+
+    /// Serves one fixed body to every request, then closes.
+    private func serve(_ body: Data) throws -> (NWListener, URL) {
+        let listener = try NWListener(using: .tcp, on: .any)
+        listener.newConnectionHandler = { connection in
+            connection.start(queue: .global())
+            connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { _, _, _, _ in
+                var reply = Data("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: \(body.count)\r\nConnection: close\r\n\r\n".utf8)
+                reply.append(body)
+                connection.send(content: reply, completion: .contentProcessed { _ in connection.cancel() })
+            }
+        }
+        let ready = expectation(description: "listening")
+        listener.stateUpdateHandler = { if case .ready = $0 { ready.fulfill() } }
+        listener.start(queue: .global())
+        wait(for: [ready], timeout: 5)
+        let port = try XCTUnwrap(listener.port?.rawValue)
+        return (listener, try XCTUnwrap(URL(string: "http://127.0.0.1:\(port)")))
+    }
+
+    private func transport(_ base: URL) throws -> GatewayHTTPTransport {
+        try GatewayHTTPTransport(base: base, allowLoopbackFixture: true,
+                                 credential: { _, _ in .init(authorization: "DPoP fixture", proof: "fixture") })
+    }
+
+    /// An 18-second recap is about 400 KB as base64 MP3. It must arrive.
+    func testAnOrdinaryVoiceClipIsNotDiscarded() async throws {
+        let body = Data(repeating: UInt8(ascii: "a"), count: 400_000)
+        let (listener, base) = try serve(body)
+        defer { listener.cancel() }
+        let response = try await transport(base).request(
+            method: "PUT", path: "/v1/accounts/a/speech/b", body: Data("{}".utf8))
+        XCTAssertEqual(response.status, 200)
+        XCTAssertEqual(response.body.count, body.count)
+    }
+
+    /// And a summary, which the old cap was written for, is not size-checked
+    /// either: the check guarded nothing, since the body was already read.
+    func testALargeSummaryResponseIsReturnedToBeValidated() async throws {
+        let (listener, base) = try serve(Data(repeating: UInt8(ascii: "a"), count: 400_000))
+        defer { listener.cancel() }
+        let response = try await transport(base).request(
+            method: "GET", path: "/v1/accounts/a/summaries/b", body: nil)
+        XCTAssertEqual(response.body.count, 400_000)
     }
 }

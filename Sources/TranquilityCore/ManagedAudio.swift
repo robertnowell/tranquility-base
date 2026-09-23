@@ -238,8 +238,13 @@ public final class ManagedAudio: @unchecked Sendable {
             catch let failure as ManagedSummaryFailure {
                 if case let .refused(code, _) = failure,
                    code == "not_connected" || code == "rebinding_required" { return nil }
-                log("credits: the voice could not be bought (\(failure))")
+                log("credits: the voice could not be bought (\(ManagedCreditSession.describe(failure)))")
+                await session.noteAudioFailure(failure, during: "voice")
                 throw failure                          // a credits failure falls to the system voice, never to a key
+            } catch {
+                log("credits: the voice could not be bought (\(ManagedCreditSession.describe(error)))")
+                await session.noteAudioFailure(error, during: "voice")
+                throw error
             }
         }
     }
@@ -269,8 +274,14 @@ public final class ManagedAudio: @unchecked Sendable {
                 live.set(nil)
                 if case let .refused(code, _) = failure,
                    code == "not_connected" || code == "rebinding_required" { return nil }
-                log("credits: the transcript could not be bought (\(failure))")
+                log("credits: the transcript could not be bought (\(ManagedCreditSession.describe(failure)))")
+                await session.noteAudioFailure(failure, during: "transcript")
                 throw failure
+            } catch {
+                live.set(nil)
+                log("credits: the transcript could not be bought (\(ManagedCreditSession.describe(error)))")
+                await session.noteAudioFailure(error, during: "transcript")
+                throw error
             }
         }
     }
