@@ -412,8 +412,12 @@ extension AppDelegate {
                 return
             }
             self.managerReconnects += 1
-            guard self.managerReconnects <= 3 else {
-                Permissions.log("manager: webrtc reconnect gave up after 3 tries")
+            // Five, not three: a session can land on an instance that is being
+            // replaced, and on 23 Sep two in a row did. Each costs five
+            // seconds now rather than fifteen, so trying more is cheap and
+            // giving up early is what the person actually feels.
+            guard self.managerReconnects <= 5 else {
+                Permissions.log("manager: webrtc reconnect gave up after 5 tries")
                 self.hud.showResult("Hands-free lost its connection three times; press the chord to try again.")
                 self.managerReconnects = 0
                 self.hud.setManager(on: false)
