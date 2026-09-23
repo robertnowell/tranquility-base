@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 
 /// File-based AssemblyAI recovery — the vendor-diversity rung.
@@ -32,6 +33,20 @@ public struct AssemblyAIFileRecovery: RecoveryTranscriptionProvider {
     static let pollInterval: TimeInterval = 3
     static let pollCeiling: TimeInterval = 600
 
+    /// The vendor's documented minimum, 160 ms. Anything shorter is refused
+    /// with "Audio duration is too short." (measured 23 Sep), and the shortest
+    /// capture this app has ever recorded is 546 ms, so nothing legitimate is
+    /// near it -- but nothing caps a recording's length at either end, so a
+    /// clipped capture can reach here.
+    static let minimumSeconds: TimeInterval = 0.16
+
+    /// Duration without decoding the audio. Nil when the file cannot be opened,
+    /// which is a question for the upload to answer, not this guard.
+    static func seconds(of url: URL) -> TimeInterval? {
+        guard let file = try? AVAudioFile(forReading: url), file.fileFormat.sampleRate > 0 else { return nil }
+        return Double(file.length) / file.fileFormat.sampleRate
+    }
+
     var session: URLSession = .shared
     var pollingInterval: TimeInterval = Self.pollInterval
 
@@ -62,13 +77,21 @@ public struct AssemblyAIFileRecovery: RecoveryTranscriptionProvider {
             return .completed(text.trimmingCharacters(in: .whitespacesAndNewlines))
         case "error":
             let reason = (json["error"] as? String) ?? "unspecified"
+            let measured = reason.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             // Measured with a silent WAV on 09 Sep: language detection returns
             // this terminal error instead of a completed empty transcript.
             // Match that observation narrowly; other detection errors remain failures.
-            if reason.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-                == "language_detection cannot be performed on files with no spoken audio." {
+            if measured == "language_detection cannot be performed on files with no spoken audio." {
                 return .noSpeechDetected
             }
+            // Measured 23 Sep against the live API at 100 ms and 150 ms, which
+            // are under the documented 160 ms floor. Both come back with this
+            // exact sentence; 200 ms clears the floor and returns the silent
+            // case above instead. Without this it reads as a service failure,
+            // so the chain retries twice with backoff and then hands the same
+            // impossible file to the next rung. It is not a fault and it will
+            // never succeed: a sixth of a second cannot hold speech.
+            if measured == "audio duration is too short." { return .noSpeechDetected }
             return .failed(reason)
         default:
             return .processing
@@ -81,6 +104,15 @@ public struct AssemblyAIFileRecovery: RecoveryTranscriptionProvider {
 
     public func transcribe(fileAt url: URL) async throws -> TranscriptionResult {
         guard let key = keySource() else { throw TranscriptionFailure.notConfigured }
+        // The vendor's floor, checked before the wire rather than after it:
+        // uploading, creating and polling a file that is known to be under it
+        // costs three round trips and a charge to learn what the duration
+        // already said. Unreadable duration is not a refusal -- let the vendor
+        // decide, and `state(of:)` recognises its answer.
+        if let seconds = Self.seconds(of: url), seconds < Self.minimumSeconds {
+            Self.trace?("\(Int(seconds * 1000)) ms is under the \(Int(Self.minimumSeconds * 1000)) ms floor")
+            throw TranscriptionFailure.noSpeechDetected
+        }
         // The upload is most of this rung's latency, and the recording is raw
         // PCM16. Sending AAC instead is the single biggest thing that makes a
         // long recovery quick. A nil here is not a failure: it means send what
