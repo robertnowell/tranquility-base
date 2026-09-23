@@ -213,7 +213,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
         ),
     )
 
-    gate = Manager(JevClient(os.environ["JEV_API_KEY"]))
+    gate = Manager(JevClient(os.environ["JEV_API_KEY"]), tts=tts)
 
     logger.info(f"pipeline built in {time.monotonic() - t_start:.2f}s")
 

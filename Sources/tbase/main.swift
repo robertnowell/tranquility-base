@@ -1265,6 +1265,21 @@ case "reconcile":
             print("         \(s.sessionId)")
         }
 
+    // The voice a session speaks in, so the manager can read its announcement
+    // down the connection and still sound like that agent. Assigned on first
+    // use, exactly as it was when the app did the reading — this is the same
+    // call, moved to where the bot can reach it.
+    case "voice":
+        guard args.count > 1 else { usage() }
+        let pair: (cloud: String?, system: String?) =
+            (try? store.voices(for: args[1], roster: VoiceRoster.load(),
+                               systemRoster: VoiceRoster.approvedSystem())) ?? (nil, nil)
+        if args.contains("--json") {
+            print(ManagerJSON.encode(["cloud": pair.cloud, "system": pair.system] as [String: String?]))
+        } else {
+            print("cloud: \(pair.cloud ?? "—")  system: \(pair.system ?? "—")")
+        }
+
     case "enrolment":
         let (sessions, prefixes, all) = EnrolmentRegistry().summary()
         print("allowAll: \(all)")
