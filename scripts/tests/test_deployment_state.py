@@ -11,6 +11,8 @@ import signal
 import subprocess
 import sys
 import tempfile
+import pathlib
+import time
 import unittest
 
 
@@ -237,6 +239,7 @@ app_running() { return 1; }
 app_stop() { echo stop >> "$TB_TEST_MUTATIONS"; exit 99; }
 app_stop_path() { echo stop_path >> "$TB_TEST_MUTATIONS"; exit 99; }
 wait_for_microphone() { return 0; }
+refuse_while_hands_free() { return 0; }
 ''')
         binary = self.root / "bin"
         binary.mkdir()
@@ -346,7 +349,9 @@ tb_deployment_authorize fixture "''' + A + '''" dev 1
         self.assertFalse(self.state.lock_dir.exists())
 
     def test_main_advancing_after_preparation_defers_automatic_activation(self):
-        (self.repo / "scripts/lib/app-process.sh").write_text("app_at_path_running() { return 1; }\napp_running() { return 0; }\n")
+        (self.repo / "scripts/lib/app-process.sh").write_text(
+            "app_at_path_running() { return 1; }\napp_running() { return 0; }\n"
+            "refuse_while_hands_free() { return 0; }\n")
         self.git("commit", "--allow-empty", "-qm", "newer main")
         self.git("push", "-q", "origin", "main")
         result = subprocess.run(["bash", "scripts/relaunch.sh", "--activate-prepared", self.sha,
@@ -365,6 +370,7 @@ tb_deployment_authorize fixture "''' + A + '''" dev 1
                 if prod:
                     helper.write_text('''app_at_path_running() { [[ "$1" == *"Tranquility Base.app" ]]; }
 app_running() { return 0; }
+refuse_while_hands_free() { return 0; }
 ''')
                 result = subprocess.run(["bash", "scripts/relaunch.sh", "origin/main"],
                                         cwd=self.repo, env=dict(self.env, TB_DEPLOY_AUTOMATIC="1"),
@@ -373,6 +379,54 @@ app_running() { return 0; }
                 self.assertIn("Prod is selected" if prod else "does not undo Quit", result.stderr)
                 self.assertFalse((self.root / "mutations").exists())
                 self.assertFalse(self.state.lock_dir.exists())
+
+    def _install_real_app_process(self):
+        """The real helper, with only the process probes replaced.
+
+        The fixture's stub cannot answer this question — the whole point is
+        that `refuse_while_hands_free` exists and fires — so the shipped file
+        is copied in and the two probes are appended over it, since a later
+        definition wins in bash.
+        """
+        real = pathlib.Path(__file__).resolve().parents[1] / "lib/app-process.sh"
+        (self.repo / "scripts/lib/app-process.sh").write_text(
+            real.read_text()
+            + "\napp_at_path_running() { return 1; }\napp_running() { return 0; }\n"
+            + 'app_stop() { echo stop >> "$TB_TEST_MUTATIONS"; exit 99; }\n')
+
+    def test_a_live_hands_free_session_defers_activation(self):
+        """Three deliveries landed inside the session testing them on 23 Sep.
+
+        Not a wait, like an utterance in flight: a session is open-ended, so the
+        answer is to leave the app on the build it is already running and come
+        back. The real guard runs here, not a stub, because the point of this
+        test is that the guard exists and fires.
+        """
+        self._install_real_app_process()
+        support = self.root / "Library/Application Support/VoiceDispatch"
+        support.mkdir(parents=True, exist_ok=True)
+        (support / "hands-free").write_text(str(int(time.time())))
+        result = subprocess.run(["bash", "scripts/relaunch.sh", "origin/main"],
+                                cwd=self.repo,
+                                env=dict(self.env, TB_DEPLOY_AUTOMATIC="1", HOME=str(self.root)),
+                                text=True, capture_output=True, timeout=15)
+        self.assertEqual(result.returncode, 75, result.stdout + result.stderr)
+        self.assertIn("hands-free is live", result.stderr)
+        self.assertFalse((self.root / "mutations").exists())
+        self.assertFalse(self.state.lock_dir.exists())
+
+    def test_a_stale_hands_free_marker_does_not_hold_the_app_forever(self):
+        """Every failure mode resolves to "not live": a marker nobody cleared
+        must not mean an app that never updates again."""
+        self._install_real_app_process()
+        support = self.root / "Library/Application Support/VoiceDispatch"
+        support.mkdir(parents=True, exist_ok=True)
+        (support / "hands-free").write_text(str(int(time.time()) - 60))
+        result = subprocess.run(["bash", "scripts/relaunch.sh", "origin/main"],
+                                cwd=self.repo,
+                                env=dict(self.env, TB_DEPLOY_AUTOMATIC="1", HOME=str(self.root)),
+                                text=True, capture_output=True, timeout=15)
+        self.assertNotIn("hands-free is live", result.stderr)
 
 
 if __name__ == "__main__":

@@ -29,6 +29,8 @@ public enum UpdateReadiness {
         case panelEngaged = "panel engaged"
         /// Audio has been captured and has not yet reached its session.
         case utterancesInFlight = "utterances in flight"
+        /// A hands-free session is up. Relaunching ends the call.
+        case handsFreeLive = "hands-free is live"
     }
 
     /// The whole rule.
@@ -39,10 +41,21 @@ public enum UpdateReadiness {
     ///     which is the queue's own canonical answer to "is anything unfinished".
     ///     Reusing that set is the point: the boot sweep, the retention sweep and
     ///     the updater now agree by construction about what unfinished means.
+    ///   - handsFree: whether a hands-free session is up.
     public static func block(
         panel: PanelState,
-        inFlightUtterances: Int
+        inFlightUtterances: Int,
+        handsFree: Bool = false
     ) -> Block? {
+        // First, and above the panel, because the panel does not describe it.
+        // A hands-free session runs with the panel hidden or idle for minutes
+        // at a time — the two states this function reads as "now is the moment"
+        // — while a conversation is actually in progress. Every other block
+        // here is measured in seconds and worth waiting out; this one has no
+        // bound, so it is a refusal rather than a delay, and the install waits
+        // for the session to end.
+        if handsFree { return .handsFreeLive }
+
         switch panel {
         // Nothing on screen, or an idle grid. The only two moments an update may
         // land. `.idle` carries a waiting count, but waiting sessions are the
