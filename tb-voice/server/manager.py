@@ -20,6 +20,7 @@ from pipecat.frames.frames import (
     BotStoppedSpeakingFrame,
     EndWorkerFrame,
     Frame,
+    InputTransportMessageFrame,
     LLMContextFrame,
     StartFrame,
     TTSSpeakFrame,
@@ -485,7 +486,22 @@ class Manager(FrameProcessor):
                 self._last_heard = time.monotonic()
                 self._idle_task = self.create_task(self._end_when_idle())
             # The pipeline is running and the mic is open: now it is listening.
+            # Both: main's build stamp on the ready line, and the data
+            # channel's replies.
             await emit(None, "ready", build=build_stamp.stamp()["sha"])
+        if isinstance(frame, InputTransportMessageFrame):
+            # A door's answer over a data channel (WebRTC). Over the WebSocket
+            # the same JSON arrives through the serializer; the shapes are the
+            # same and only the carriage differs.
+            import wire as _wire
+            message = frame.message
+            if isinstance(message, str):
+                try:
+                    message = json.loads(message)
+                except ValueError:
+                    message = None
+            if isinstance(message, dict):
+                _wire.take_reply(message)
         if isinstance(frame, BotStartedSpeakingFrame):
             session.current().bot_voice["speaking"] = True  # the echo gate reads this
         if isinstance(frame, BotStoppedSpeakingFrame):
