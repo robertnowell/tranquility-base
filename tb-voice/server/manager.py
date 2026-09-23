@@ -517,6 +517,9 @@ class Manager(FrameProcessor):
             # same and only the carriage differs.
             import wire as _wire
             message = frame.message
+            # The client stamps a `type` on its replies because the data
+            # channel drops anything without one; it is not part of the
+            # contract and nothing reads it here.
             if isinstance(message, str):
                 try:
                     message = json.loads(message)
