@@ -59,6 +59,17 @@ final class ManagerOrbView: NSView {
         return String(arr.dropFirst().dropLast())
     }
 
+    /// Read the real page after navigation and queued presentation updates settle.
+    func matchesPresentationForDrill(line: String, mood: String) async -> Bool {
+        let js = "document.getElementById('line').textContent === \(Self.quote(line))"
+            + " && target === TINTS[\(Self.quote(mood))]"
+        for _ in 0..<100 {
+            if ready, (try? await web.evaluateJavaScript(js)) as? Bool == true { return true }
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        return false
+    }
+
     /// Bundled first (bundle.sh copies Resources/Orb), the repo copy in
     /// development, the same two-step lookup Earcons uses for its sounds.
     private static func pageURL() -> URL? {
