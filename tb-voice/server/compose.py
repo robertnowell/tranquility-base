@@ -22,6 +22,8 @@ import os
 import re
 import time
 
+from vocab import Verdict
+
 READBACK_SECS = float(os.getenv("TB_READBACK_SECS", "30"))
 SHORT_TURN_WORDS = 10
 
@@ -67,31 +69,30 @@ def continues(previous: str) -> bool:
     return bool(previous) and not previous.rstrip().endswith((".", "?", "!"))
 
 
-def classify(text: str, previous: str = "") -> tuple[str, str]:
-    """The certain path. Returns (verdict, remainder): verdict is one of
-    send / hold / cancel / retarget / content; remainder is the content part of
+def classify(text: str, previous: str = "") -> tuple[Verdict, str]:
+    """The certain path. Returns (verdict, remainder): remainder is the content part of
     a turn that ends in a send phrase ("...and that's it, send it")."""
     if continues(previous):
-        return "content", text
+        return Verdict.CONTENT, text
     n = _norm(text)
     if _short(n):
         cue = any(p in n for p in ("instead", "not that one", "the other one", "wrong agent", "wrong one"))
         if cue or (n.startswith("send") and " to " in n):
-            return "retarget", text  # "send this to X instead" names a place, not an end
+            return Verdict.RETARGET, text  # "send this to X instead" names a place, not an end
         # A send phrase counts when it IS the turn or opens it; "whether to send
         # it" and "ready to send" are talk about sending, not the word.
         if any(n == p or n.startswith(p + " ") for p in SEND):
-            return "send", ""
+            return Verdict.SEND, ""
         if any(n == p or n.startswith(p) for p in CANCEL):
-            return "cancel", ""
+            return Verdict.CANCEL, ""
         if any(n == p for p in HOLD) or n in ("no", "nope", "not yet"):
-            return "hold", ""
+            return Verdict.HOLD, ""
     # A long turn that closes with a send phrase after a clause break: the words
     # before the break are content. "…, send it." yes; "whether to send it" no.
     m = _TRAILING.search(text)
     if m:
-        return "send", text[: m.start()].rstrip(" ,.;:")
-    return "content", text
+        return Verdict.SEND, text[: m.start()].rstrip(" ,.;:")
+    return Verdict.CONTENT, text
 
 
 class OpenMessage:

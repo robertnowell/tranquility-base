@@ -27,8 +27,8 @@ final class ManagerToolHostTests: XCTestCase {
 
     func testHelloListsTheOfferedToolsInOrder() async throws {
         let host = ManagerToolHost(tools: [
-            ManagerTool(name: "agents", deadlineMs: 100, capBytes: 1000) { _ in [] },
-            ManagerTool(name: "brief", version: 2, deadlineMs: 100, capBytes: 1000) { _ in [:] },
+            ManagerTool(name: .agents, deadlineMs: 100, capBytes: 1000) { _ in [] },
+            ManagerTool(name: .brief, version: 2, deadlineMs: 100, capBytes: 1000) { _ in [:] },
         ])
         let helloData = await host.hello(appVersion: "t")
         let hello = try Self.parse(helloData)
@@ -37,6 +37,17 @@ final class ManagerToolHostTests: XCTestCase {
         let tools = try XCTUnwrap(hello["tools"] as? [[String: Any]])
         XCTAssertEqual(tools.map { $0["name"] as? String }, ["agents", "brief"])
         XCTAssertEqual(tools[1]["version"] as? Int, 2)
+    }
+
+    func testAFrameOfUnknownOrWrongWayKindIsIgnoredNotActedOn() async throws {
+        let runs = Counter()
+        let host = ManagerToolHost(tools: [ManagerTool(name: .agents, deadlineMs: 100, capBytes: 1000) { _ in runs.bump(); return [] }])
+        for kind in ["delete_everything", "result", "hello", "event"] {
+            let frame: [String: Any] = ["wire": kind, "id": "z", "tool": "agents"]
+            let reply = await host.handle(try JSONSerialization.data(withJSONObject: frame))
+            XCTAssertNil(reply, "\(kind) is not something the bot may ask the Mac to do")
+        }
+        XCTAssertEqual(runs.value, 0)
     }
 
     func testAToolTheMacDoesNotOfferIsRefusedByName() async throws {
@@ -48,12 +59,12 @@ final class ManagerToolHostTests: XCTestCase {
 
     func testTheDeadlineKillsTheProcessAndSaysTimeout() async throws {
         let host = ManagerToolHost(tools: [
-            ManagerTool(name: "slow", deadlineMs: 5000, capBytes: 1000) { _ in
+            ManagerTool(name: .agents, deadlineMs: 5000, capBytes: 1000) { _ in
                 try await ManagerCommand.run("/bin/sleep", ["10"]).out
             },
         ])
         let t0 = Date()
-        let r = try await call(host, "slow", deadline: 200)  // the call may ask for less than the tool's own
+        let r = try await call(host, "agents", deadline: 200)  // the call may ask for less than the tool's own
         XCTAssertLessThan(Date().timeIntervalSince(t0), 2.0, "a 200 ms deadline must not wait for a 10 s process")
         XCTAssertEqual(code(r), "timeout")
         XCTAssertEqual((r["error"] as? [String: Any])?["retryable"] as? Bool, true)
@@ -61,19 +72,19 @@ final class ManagerToolHostTests: XCTestCase {
 
     func testACallCannotStretchTheToolsOwnDeadline() async throws {
         let host = ManagerToolHost(tools: [
-            ManagerTool(name: "slow", deadlineMs: 200, capBytes: 1000) { _ in
+            ManagerTool(name: .agents, deadlineMs: 200, capBytes: 1000) { _ in
                 try await Task.sleep(nanoseconds: 3_000_000_000); return "late"
             },
         ])
         let t0 = Date()
-        let r = try await call(host, "slow", deadline: 60_000)
+        let r = try await call(host, "agents", deadline: 60_000)
         XCTAssertLessThan(Date().timeIntervalSince(t0), 2.0)
         XCTAssertEqual(code(r), "timeout")
     }
 
     func testAnEffectfulCallNeedsAnIdemKey() async throws {
         let host = ManagerToolHost(tools: [
-            ManagerTool(name: "send", deadlineMs: 1000, capBytes: 1000, effectful: true) { _ in "typed" },
+            ManagerTool(name: .send, deadlineMs: 1000, capBytes: 1000, effectful: true) { _ in "typed" },
         ])
         let r = try await call(host, "send")
         XCTAssertEqual(code(r), "bad_args")
@@ -82,7 +93,7 @@ final class ManagerToolHostTests: XCTestCase {
     func testARepeatedIdemReturnsTheOutcomeAndNeverRunsTwice() async throws {
         let runs = Counter()
         let host = ManagerToolHost(tools: [
-            ManagerTool(name: "send", deadlineMs: 1000, capBytes: 1000, effectful: true) { _ in
+            ManagerTool(name: .send, deadlineMs: 1000, capBytes: 1000, effectful: true) { _ in
                 runs.bump(); return ["outcome": "typed"]
             },
         ])
@@ -97,7 +108,7 @@ final class ManagerToolHostTests: XCTestCase {
     func testARepeatWhileTheFirstIsStillRunningIsNotRunAgain() async throws {
         let runs = Counter()
         let host = ManagerToolHost(tools: [
-            ManagerTool(name: "send", deadlineMs: 2000, capBytes: 1000, effectful: true) { _ in
+            ManagerTool(name: .send, deadlineMs: 2000, capBytes: 1000, effectful: true) { _ in
                 runs.bump(); try await Task.sleep(nanoseconds: 300_000_000); return "typed"
             },
         ])
@@ -112,7 +123,7 @@ final class ManagerToolHostTests: XCTestCase {
     func testAnEffectThatTimedOutIsNeverRetriedByItsKey() async throws {
         let runs = Counter()
         let host = ManagerToolHost(tools: [
-            ManagerTool(name: "send", deadlineMs: 100, capBytes: 1000, effectful: true) { _ in
+            ManagerTool(name: .send, deadlineMs: 100, capBytes: 1000, effectful: true) { _ in
                 runs.bump(); try await Task.sleep(nanoseconds: 2_000_000_000); return "typed"
             },
         ])
@@ -136,7 +147,7 @@ final class ManagerToolHostTests: XCTestCase {
 
     func testAnOversizedListIsCutFromTheEndItDoesNotKeepAndSaysSo() async throws {
         let host = ManagerToolHost(tools: [
-            ManagerTool(name: "transcript", deadlineMs: 1000, capBytes: 2000, keep: .newest) { _ in
+            ManagerTool(name: .transcript, deadlineMs: 1000, capBytes: 2000, keep: .newest) { _ in
                 (0..<500).map { "turn \($0)" }
             },
         ])
@@ -149,7 +160,7 @@ final class ManagerToolHostTests: XCTestCase {
     }
 
     func testAResultUnderItsCapIsNotMarked() async throws {
-        let host = ManagerToolHost(tools: [ManagerTool(name: "agents", deadlineMs: 1000, capBytes: 2000) { _ in ["a"] }])
+        let host = ManagerToolHost(tools: [ManagerTool(name: .agents, deadlineMs: 1000, capBytes: 2000) { _ in ["a"] }])
         let r = try await call(host, "agents")
         XCTAssertNil(r["truncated"])
         XCTAssertEqual(r["ok"] as? Bool, true)
@@ -157,12 +168,12 @@ final class ManagerToolHostTests: XCTestCase {
 
     func testNoMoreThanFourReadsRunAtOnceAndTheRestWait() async throws {
         let host = ManagerToolHost(tools: [
-            ManagerTool(name: "read", deadlineMs: 3000, capBytes: 1000) { _ in
+            ManagerTool(name: .waiting, deadlineMs: 3000, capBytes: 1000) { _ in
                 try await Task.sleep(nanoseconds: 200_000_000); return "ok"
             },
         ])
         try await withThrowingTaskGroup(of: Data.self) { group in
-            for i in 0..<6 { group.addTask { try await Self.raw(host, "read", id: "r\(i)") } }
+            for i in 0..<6 { group.addTask { try await Self.raw(host, "waiting", id: "r\(i)") } }
             for try await d in group { XCTAssertEqual(try Self.parse(d)["ok"] as? Bool, true) }
         }
         let peak = await host.peakReads
@@ -171,11 +182,11 @@ final class ManagerToolHostTests: XCTestCase {
 
     func testCancelStopsACallInFlight() async throws {
         let host = ManagerToolHost(tools: [
-            ManagerTool(name: "slow", deadlineMs: 5000, capBytes: 1000) { _ in
+            ManagerTool(name: .agents, deadlineMs: 5000, capBytes: 1000) { _ in
                 try await ManagerCommand.run("/bin/sleep", ["10"]).out
             },
         ])
-        async let r = Self.raw(host, "slow", id: "x")
+        async let r = Self.raw(host, "agents", id: "x")
         try await Task.sleep(nanoseconds: 200_000_000)
         _ = await host.handle(try JSONSerialization.data(withJSONObject: ["wire": "cancel", "id": "x"]))
         let t0 = Date()
