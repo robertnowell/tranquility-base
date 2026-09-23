@@ -155,15 +155,14 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
         ),
     )
 
-    # `aec` in the session body: the app captures through the system's
-    # voice-processing unit, so what reaches us has the manager's own voice
-    # removed already. Nothing else may assume it (22 Sep).
+    # A WebRTC client cancels echo in the engine, so what reaches us has the
+    # manager's own voice removed already and the gate can stay open, which is
+    # what lets the manager be interrupted. Nothing else may assume it: a
+    # WebSocket client has no canceller at all, and the gate is its only
+    # defence. The `aec` session-body flag that a client used to set for
+    # itself is gone with the hand-rolled unit that justified it (23 Sep).
     body = session_body(runner_args)
-    # WebRTC clients cancel echo in the engine itself, so the gate is open for
-    # them without being asked. A WebSocket client has to say so (`aec`).
-    cancels_echo = isinstance(runner_args, SmallWebRTCRunnerArguments) or bool(
-        isinstance(body, dict) and body.get("aec")
-    )
+    cancels_echo = isinstance(runner_args, SmallWebRTCRunnerArguments)
     if cancels_echo:
         logger.info("client cancels its own echo: the gate is open and the manager can be interrupted")
 
