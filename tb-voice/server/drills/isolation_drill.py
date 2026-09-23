@@ -8,6 +8,9 @@ then at once, and fails if either can see the other's exchange, echo state or
 Notes agent. It also checks the `said` line carries the whole utterance (hf-20).
 
     TB_HOSTED=1 uv run python drills/isolation_drill.py
+
+Run the live bot with TB_STRICT_SESSION=1 for warm_process_drill.py too, so
+any read outside a session fails the drill instead of logging once.
 """
 
 import asyncio
@@ -87,6 +90,22 @@ async def main():
     queued = wire.outbox().get_nowait() if not wire.outbox().empty() else {}
     check(queued.get("event") == "said" and queued.get("text") == LONG.strip(),
           "hosted, the `said` line is queued for the wire")
+
+    # hf-22: a read outside a bound session is never quiet. In a fresh context
+    # (as a task started before bind would see it), strict mode raises.
+    import contextvars
+    os.environ["TB_STRICT_SESSION"] = "1"
+    try:
+        contextvars.Context().run(session.current)
+        check(False, "an unbound session read raises in strict mode")
+    except session.Unbound:
+        check(True, "an unbound session read raises in strict mode")
+    try:
+        contextvars.Context().run(wire.current)
+        check(False, "an unbound wire read raises in strict mode")
+    except session.Unbound:
+        check(True, "an unbound wire read raises in strict mode")
+    del os.environ["TB_STRICT_SESSION"]
 
     print(f"\n{'FAIL' if failures else 'PASS'}: {len(failures)} failure(s)")
     sys.exit(1 if failures else 0)
