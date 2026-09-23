@@ -31,6 +31,7 @@ from calls import record
 import build_stamp
 from events import emit, line
 from compose import READBACK_SECS, OpenMessage, classify, continues, filler_only
+import app_echo
 import session
 from turns import TurnQueue
 from spoken import spoken
@@ -544,6 +545,10 @@ class Manager(FrameProcessor):
         self._user_speaking = False
         if not text:
             await self.push_frame(frame, direction)
+            return
+        if app_echo.is_app_echo(text):
+            # The app's own announcement, back off the microphone. The client's
+            # canceller never had it in its reference; see app_echo.py.
             return
         if self.open is not None:
             # Dictation: every word is the message. No hold, no gate, no Jev
@@ -1121,7 +1126,7 @@ class Manager(FrameProcessor):
         # word every time, so the tail of the app's own voice reached the STT.
         secs = min(25.0, 1.5 + 0.5 * len(text.split()))
         async with self._voice:
-            session.current().external_until["t"] = time.monotonic() + secs
+            session.current().external_until.update({"t": time.monotonic() + secs, "text": text})
             await _run("open", url)
             await asyncio.sleep(secs)
 

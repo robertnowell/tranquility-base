@@ -31,27 +31,24 @@ class EchoGate(FrameProcessor):
         # make it impossible to interrupt: while it spoke, nothing said would
         # ever be transcribed.
         #
-        # It still needs one for the app's voice. A canceller can only remove
-        # what it played itself, and the app's announcements — an agent's line
-        # read aloud in that session's voice — go out through the app's own
-        # synthesizer, not through the media connection. They are not in the
-        # reference signal, so nothing subtracts them, and the microphone hears
-        # them the way it hears a person. On 23 Sep at 20:03:40 the app said
-        # "The cutover is complete; we're now researching AGI House SF…" and ten
-        # seconds later the manager transcribed it back, verbatim, as something
-        # the developer had said; three announcements in a row came back the
-        # same way. Turning the whole gate off at the WebRTC cutover is what
-        # exposed this: the app-speech window went with it.
+        # The app's announcements are a different problem and are NOT solved
+        # here. They go out through the app's own synthesizer rather than the
+        # media connection, so they are not in the canceller's reference and
+        # nothing subtracts them; on 23 Sep the manager transcribed three of
+        # them back, verbatim, as the developer's speech. The answer to that is
+        # not to close the microphone — the whole point of a canceller is that
+        # the microphone stays open — it is app_echo.is_app_echo(), which drops
+        # the app's own sentence after the fact, and ultimately putting the
+        # app's voice through the same audio engine so the canceller sees it.
         self._cancels_own_voice = cancels_own_voice
 
     def gated(self) -> bool:
-        now = time.monotonic()
-        s = session.current()
-        if now < s.external_until["t"] + self._tail:
-            return True
         if self._cancels_own_voice:
             return False
-        return (s.bot_voice["speaking"] or (now - s.bot_voice["stopped_at"]) < self._tail)
+        now = time.monotonic()
+        s = session.current()
+        return (s.bot_voice["speaking"] or (now - s.bot_voice["stopped_at"]) < self._tail
+                or now < s.external_until["t"] + self._tail)
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)

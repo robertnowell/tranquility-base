@@ -35,7 +35,9 @@ class Session:
     bot_voice: dict = field(default_factory=lambda: {"speaking": False, "stopped_at": 0.0})
     # Until when the app is speaking a line in a session's voice; its audio is
     # echo too, and the bot never sees its frames.
-    external_until: dict = field(default_factory=lambda: {"t": 0.0})
+    # ... and the line it is saying, so a transcript of that line can be told
+    # from a person talking over it (app_echo.py).
+    external_until: dict = field(default_factory=lambda: {"t": 0.0, "text": ""})
     # The Notes agent this session types into. Hosted, a file for this lived in
     # the shared container and outlived the account that created it.
     notes_sid: str | None = None
