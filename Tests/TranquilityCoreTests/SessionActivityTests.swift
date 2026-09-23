@@ -57,6 +57,70 @@ final class SessionActivityTests: XCTestCase {
         XCTAssertEqual(activity.shortReason, "hit your session limit · resets 8pm (America/Los_Angeles)")
     }
 
+    // MARK: - A dropped connection says what to do (23 Sep)
+
+    /// The screenshot from Dallas: the row read "Connection lost
+    /// mid-response", its owner read it as the app losing the terminal. The
+    /// caption in the needs-you channel has to name what is needed.
+    func testADroppedConnectionCaptionIsTheInstructionNotTheDiagnosis() {
+        let activity = SessionActivity.blocked(
+            reason: "API Error: Connection lost mid-response. The response above may be incomplete.")
+        XCTAssertEqual(activity.shortReason, "connection dropped · tell it to carry on")
+    }
+
+    func testADroppedConnectionHoverKeepsTheHarnessSentenceFirst() {
+        // The record still carries the agent's words (11 Sep); the instruction
+        // follows them rather than replacing them.
+        let harness = "API Error: Connection lost mid-response. The response above may be incomplete."
+        let full = SessionActivity.blocked(reason: harness).fullReason ?? ""
+        XCTAssertTrue(full.hasPrefix(harness), full)
+        XCTAssertTrue(full.hasSuffix("Tell it to carry on."), full)
+    }
+
+    func testTheDroppedConnectionClassIsTheStreamLevelHiccups() {
+        // Every sentence the lamp spine had actually shown for a network
+        // fault by 23 Sep, plus Codex's two.
+        for dropped in [
+            "API Error: Connection lost mid-response. The response above may be incomplete.",
+            "API Error: Connection lost before a response was produced. Try again.",
+            "Connection lost while your computer was asleep",
+            "The response stopped arriving",
+            "API Error: Unable to connect to API (ENOTFOUND)",
+            "Can't reach the API server — check your internet or DNS (ENOTFOUND)",
+            "stream disconnected before completion: error sending request for url (https://api.openai.com/v1/responses)",
+        ] {
+            XCTAssertTrue(SessionActivity.isDroppedConnection(dropped), dropped)
+        }
+    }
+
+    func testALimitAnOverloadAndAnUnknownErrorKeepTheirOwnWords() {
+        // A limit is refused first, as in `isTransient`; overload and
+        // capacity end the turn the same way but "connection dropped" would
+        // misdiagnose them; and the list is closed on purpose.
+        for kept in [
+            "You've hit your session limit · resets 8pm (America/Los_Angeles). Try again later.",
+            "You've reached your Fable 5 limit. Run /usage-credits to continue.",
+            "API Error: 529 Overloaded",
+            "Selected model is at capacity",
+            "Failed to refresh OAuth token: another Claude Code process is refreshing it",
+            "cannot reach it",
+            "API Error: something nobody has seen before",
+        ] {
+            XCTAssertFalse(SessionActivity.isDroppedConnection(kept), kept)
+            let activity = SessionActivity.blocked(reason: kept)
+            XCTAssertNotEqual(activity.shortReason, SessionActivity.droppedConnection.short, kept)
+            XCTAssertEqual(activity.fullReason, kept)
+        }
+    }
+
+    func testAStallNeverBorrowsTheDroppedConnectionCaption() {
+        // Same witness, different fact: a stall is inferred from silence and
+        // has no harness sentence to rewrite.
+        let stall = SessionActivity.stalled(reason: "silent for 2h, connection lost to nothing")
+        XCTAssertNotEqual(stall.shortReason, SessionActivity.droppedConnection.short)
+        XCTAssertEqual(stall.fullReason, "silent for 2h, connection lost to nothing")
+    }
+
     func testUserReplyAfterAnErrorClearsTheBlock() {
         // Answering the error means the human is already handling it; the lamp
         // must go back to working rather than staying amber forever.

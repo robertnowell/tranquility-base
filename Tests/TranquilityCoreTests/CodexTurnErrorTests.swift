@@ -80,7 +80,10 @@ final class CodexTurnErrorTests: XCTestCase {
     }
 
     /// And it says so in words a one-line row can hold. Splitting on a bare
-    /// "." cut this at the dot in `api.openai.com`.
+    /// "." cut this at the dot in `api.openai.com`. Since 23 Sep a dropped
+    /// stream is one class across harnesses and the row says what to do
+    /// about it rather than what the harness called it; the harness's
+    /// sentence still leads the hover.
     func testTheRowGetsAReadableClause() {
         guard case .blocked = SessionActivity.classify(tail: [died], modified: errorAt,
                                                        now: errorAt) else {
@@ -89,8 +92,9 @@ final class CodexTurnErrorTests: XCTestCase {
         let activity = SessionActivity.blocked(
             reason: "stream disconnected before completion: error sending request for url "
                 + "(https://api.openai.com/v1/responses)")
-        XCTAssertEqual(activity.shortReason, "stream disconnected before completion")
-        // The whole sentence survives for the hover.
+        XCTAssertEqual(activity.shortReason, "connection dropped · tell it to carry on")
+        // The whole sentence survives for the hover, ahead of the instruction.
+        XCTAssertTrue(activity.fullReason?.hasPrefix("stream disconnected before completion") == true)
         XCTAssertTrue(activity.fullReason?.contains("api.openai.com") == true)
     }
 
@@ -201,8 +205,10 @@ final class CodexTurnErrorTests: XCTestCase {
     /// on 01 Sep, and the fifth kind next month needs no code.
     func testEveryFailureShapeInTheArchiveLandsTheSameWay() {
         let shapes = [
+            // A dropped stream reads as the instruction, like Claude Code's
+            // "Connection lost" does (23 Sep); the other three keep their clause.
             ("stream disconnected before completion: error sending request for url "
-             + "(https://api.openai.com/v1/responses)", "stream disconnected before completion"),
+             + "(https://api.openai.com/v1/responses)", "connection dropped · tell it to carry on"),
             ("rate limit exceeded: Rate limit reached for gpt-5.6-sol in organization "
              + "org-ZjGq9KL28dUkDQ", "rate limit exceeded"),
             ("You've hit your usage limit. To continue using Codex, wait for it to reset.",

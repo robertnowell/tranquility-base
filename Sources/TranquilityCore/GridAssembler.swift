@@ -105,15 +105,47 @@ public enum GridAssembler {
         // screenshot; that a witness which never spoke can no longer be mistaken
         // for one that did (see `Testimony`); and that the rules are testable as
         // properties rather than only as examples.
+        let verdict = self.verdict(for: evidence, sessionId: sessionId, live: live,
+                                   boundary: boundary, pickedUp: pickedUp,
+                                   isInFlight: isInFlight, harness: harness)
+        return (verdict.lamp, verdict.because, verdict.detail)
+    }
+
+    /// The whole verdict, witness and all. `lampAndReason` is its three
+    /// display fields; the bands call this one so they can also ask
+    /// `harnessFault` about the same verdict, rather than deriving a second
+    /// opinion of it.
+    public static func verdict(
+        for evidence: SessionActivity.Evidence?, sessionId: String,
+        live: LiveSession?, boundary: SessionActivity.TurnBoundary? = nil,
+        pickedUp: Bool = false, isInFlight: Bool, harness: String? = nil
+    ) -> Verdict {
         let resumed = AgentRestart.resumed(
             startedAt: live?.startedAtDate,
             lastWord: AgentRestart.lastWord(observedAt: evidence?.observedAt,
                                             boundary: boundary))
-        let verdict = SessionVerdict.resolve(
+        return SessionVerdict.resolve(
             process: SessionVerdict.testimony(of: live, harness: harness, resumed: resumed),
             file: evidence.map { Testimony.says($0.activity) } ?? .silent,
             resumed: resumed, pickedUp: pickedUp, isInFlight: isInFlight)
-        return (verdict.lamp, verdict.because, verdict.detail)
+    }
+
+    /// The harness's own error sentence behind an amber row, or nil.
+    ///
+    /// Three things have to be true at once, and each excludes an amber that
+    /// is not a failure: the verdict is `blocked` (not a stall read as quiet
+    /// by a live process); its witness is the FILE (not the process asking
+    /// for a permission, not a restart, not the user switching it on); and
+    /// the file's own word is an error (`.blocked`, an API error entry) and
+    /// not a stall, which shares the witness and is an inference from
+    /// silence, not a sentence the harness wrote. A restart reading an old
+    /// error is excluded by the witness: `SessionVerdict` hands a resumed
+    /// process to `AgentRestart` before the file is consulted.
+    public static func harnessFault(verdict: Verdict,
+                                    evidence: SessionActivity.Evidence?) -> String? {
+        guard verdict.state == .blocked, verdict.witness == .file,
+              case .blocked(let reason) = evidence?.activity else { return nil }
+        return reason
     }
 
     /// The tab's string for a session, or nil while it has none: the

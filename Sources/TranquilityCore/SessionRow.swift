@@ -209,6 +209,18 @@ public struct SessionRow: Equatable, Sendable {
     /// this field may have. `scripts/check-row-dates.sh` holds that.
     public let lastActivity: Date?
 
+    /// **The harness's own error sentence, when this amber is one it stated.**
+    ///
+    /// Set only where the transcript's last entry is an API error and the
+    /// process that hit it is the one running now (`GridAssembler
+    /// .harnessFault`). Nil for every other amber: a permission prompt, a
+    /// restart, a stall, standing by. It is the raw sentence and never the
+    /// caption, because this is what `FaultWatch` hands to `Failures`, and a
+    /// failure carries the agent's words (11 Sep). Carried on the row for the
+    /// reason everything else here is: one reader of the verdict, so the
+    /// record and the screen cannot disagree about which rows are faults.
+    public let fault: String?
+
     public enum Door: Equatable, Sendable {
         /// A tmux pane this Mac owns. Every local agent.
         case terminal
@@ -260,7 +272,8 @@ public struct SessionRow: Equatable, Sendable {
                switchedOff: Bool = false, detail: String? = nil,
                harness: String? = nil, door: Door = .terminal,
                hasRecordedTurn: Bool = false,
-               lastActivity: Date? = nil) {
+               lastActivity: Date? = nil,
+               fault: String? = nil) {
         self.id = id
         self.name = name
         self.aux = aux
@@ -273,6 +286,7 @@ public struct SessionRow: Equatable, Sendable {
         self.harness = harness
         self.door = door
         self.hasRecordedTurn = hasRecordedTurn
+        self.fault = fault
     }
 
     /// The same row with its lamp out, as a session the user has filed.
@@ -286,7 +300,7 @@ public struct SessionRow: Equatable, Sendable {
         SessionRow(id: id, name: name, aux: aux, lamp: .running,
                    revivable: revivable, read: read, switchedOff: true,
                    detail: detail, harness: harness, door: door,
-                   hasRecordedTurn: hasRecordedTurn)
+                   hasRecordedTurn: hasRecordedTurn, fault: fault)
     }
 
     /// What the pointer gets when it rests on a row: the full name, and

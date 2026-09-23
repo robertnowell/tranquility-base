@@ -71,6 +71,67 @@ final class GridAssemblerTests: XCTestCase {
         XCTAssertEqual(result.lamp, .running)
     }
 
+    // MARK: - harnessFault (the failure spine's one question)
+
+    private let dropped = "API Error: Connection lost mid-response. The response above may be incomplete."
+
+    private func fault(activity: SessionActivity?, observedAt: Date? = nil,
+                       live: LiveSession?) -> (verdict: Verdict, fault: String?) {
+        let evidence = activity.map {
+            SessionActivity.Evidence(activity: $0, observedAt: observedAt, modifiedAt: nil)
+        }
+        let verdict = GridAssembler.verdict(for: evidence, sessionId: "s", live: live,
+                                            isInFlight: false)
+        return (verdict, GridAssembler.harnessFault(verdict: verdict, evidence: evidence))
+    }
+
+    func testAnAPIErrorTheFileStatesIsAFaultInTheHarnessesOwnWords() {
+        let got = fault(activity: .blocked(reason: dropped), live: live(status: "idle"))
+        XCTAssertEqual(got.fault, dropped)
+        // And the row says the instruction while the hover keeps the sentence.
+        XCTAssertEqual(got.verdict.because, "connection dropped · tell it to carry on")
+        XCTAssertTrue(got.verdict.detail?.hasPrefix(dropped) ?? false)
+    }
+
+    func testAStallIsNotAFaultEvenWhenItIsAmber() {
+        // Same witness, an inference from silence: no sentence the harness wrote.
+        let got = fault(activity: .stalled(reason: "silent for 2h"), live: nil)
+        XCTAssertEqual(got.verdict.lamp, .fault)
+        XCTAssertNil(got.fault)
+    }
+
+    func testAPermissionPromptIsNotAFault() {
+        let got = fault(activity: .blocked(reason: dropped),
+                        live: live(status: "waiting", waitingFor: "permission prompt"))
+        XCTAssertEqual(got.verdict.witness, .process)
+        XCTAssertNil(got.fault)
+    }
+
+    func testARevivedAgentDoesNotInheritTheDeadProcessesDroppedLine() {
+        // Dallas, 23 Sep: revived at 6:35, amber on the previous afternoon's
+        // "Connection lost" one second later. The process is newer than the
+        // words, so the restart speaks and the failure spine stays quiet.
+        var resumed = live(status: "idle")
+        resumed.startedAt = 1_000_000_000_000
+        let got = fault(activity: .blocked(reason: dropped),
+                        observedAt: Date(timeIntervalSince1970: 999_999_000),
+                        live: resumed)
+        XCTAssertEqual(got.verdict.witness, .restart)
+        XCTAssertEqual(got.verdict.because, "restarted after a dropped connection")
+        XCTAssertNil(got.fault)
+    }
+
+    func testARevivedAgentStillOverItsLimitKeepsTheLimitAndItIsAFault() {
+        var resumed = live(status: "idle")
+        resumed.startedAt = 1_000_000_000_000
+        let limit = "You've hit your session limit · resets 8pm (America/Los_Angeles)."
+        let got = fault(activity: .blocked(reason: limit),
+                        observedAt: Date(timeIntervalSince1970: 999_999_000),
+                        live: resumed)
+        XCTAssertEqual(got.verdict.witness, .file)
+        XCTAssertEqual(got.fault, limit)
+    }
+
     func testStalledWithNoProcessAtAllStaysFault() {
         let evidence = SessionActivity.Evidence(
             activity: .stalled(reason: "silent"), observedAt: nil, modifiedAt: nil)
