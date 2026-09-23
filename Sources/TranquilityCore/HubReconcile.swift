@@ -67,7 +67,20 @@ public enum HubReconcile {
         }
         guard !files.isEmpty else { return result }
 
-        let known = Set(ArtifactStore.history(for: sessionId, root: root).map(\.path))
+        // Path to its stamp, not a set of paths. A page the record already
+        // names can still have been REWRITTEN since: a Claude session's Write
+        // hook appends a line each time, but Codex writes through a shell
+        // heredoc or a script and has no hook, so this pass is the only thing
+        // that ever stamps its pages. Skipping every known path froze a
+        // Codex report at its first write for the rest of its life, and the
+        // card's door, which asks whether the newest stamp is later than the
+        // turn, read Open Hub over a report the turn had just rewritten
+        // (23 Sep, session 01a0a09c). The file's mtime is the honest signal:
+        // every stamper in this app restores it on purpose, so it moves only
+        // when an agent or a person rewrote the page.
+        let known = Dictionary(
+            ArtifactStore.history(for: sessionId, root: root).map { ($0.path, $0.at) },
+            uniquingKeysWith: { max($0, $1) })
         // One conversation, one hub (10 Sep): a page a continuation wrote
         // into this directory names the continuation, and that is this
         // agent, not somebody else's.
@@ -92,8 +105,11 @@ public enum HubReconcile {
             }
 
             // 1. The record. Keyed by the SLUG, because that is what the path
-            //    carries and what `history` reads back for a hub.
-            if !known.contains(ArtifactStore.canonical(file.path)),
+            //    carries and what `history` reads back for a hub. Unknown, or
+            //    known and rewritten since its stamp; a second pass over an
+            //    untouched file records nothing (pinned by a test).
+            let stamp = known[ArtifactStore.canonical(file.path)]
+            if stamp.map({ at.timeIntervalSince($0) > 1 }) ?? true,
                ArtifactStore.record(file.path, session: full, root: root, at: at) {
                 result.recorded += 1
             }
