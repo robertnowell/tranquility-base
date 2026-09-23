@@ -21,6 +21,7 @@ import json
 import os
 import time
 import uuid
+from enum import Enum
 
 from loguru import logger
 from pipecat.frames.frames import (
@@ -50,7 +51,7 @@ class Wire:
         # Wire v1 (hf-3, docs/wire-v1.md): the tools the Mac said it offers in
         # its hello, and the calls waiting on a result. None until a hello
         # arrives; an app that never sends one stays on request:run.
-        self.tools: set[str] | None = None
+        self.tools: set[Tool] | None = None
         self.hello_seen = asyncio.Event()
         self.calls: dict[str, asyncio.Future] = {}
         self.mac_events: asyncio.Queue = asyncio.Queue()
@@ -100,11 +101,30 @@ async def request(kind: str, timeout: float = 45.0, **fields) -> dict:
 
 # How long each v1 tool may take; the Mac enforces its own and this side gives
 # up half a second after it (docs/wire-v1.md).
+class WireKind(Enum):
+    """The `wire` field of a v1 frame (docs/wire-v1.md)."""
+    HELLO = "hello"
+    CALL = "call"
+    RESULT = "result"
+    CANCEL = "cancel"
+    EVENT = "event"
+
+
+class Tool(Enum):
+    """The tools a Mac may offer in its hello. A name the bot does not know is
+    logged and ignored at the hello; nothing downstream sees it as a string."""
+    AGENTS = "agents"
+    WAITING = "waiting"
+    BRIEF = "brief"
+    TRANSCRIPT = "transcript"
+    LEDGER = "ledger"
+
+
 HELLO_GRACE_S = 1.5
-DEADLINES_MS = {"agents": 3000, "waiting": 3000, "brief": 3000, "transcript": 5000}
+DEADLINES_MS = {Tool.AGENTS: 3000, Tool.WAITING: 3000, Tool.BRIEF: 3000, Tool.TRANSCRIPT: 5000, Tool.LEDGER: 2000}
 
 
-async def call(tool: str, args: dict | None = None, deadline_ms: int | None = None,
+async def call(tool: Tool, args: dict | None = None, deadline_ms: int | None = None,
                idem: str | None = None) -> dict | None:
     """Wire v1: ask the Mac for one named tool. Returns the result frame
     ({ok, data} or {ok: false, error}), or None when this Mac does not offer
@@ -128,36 +148,48 @@ async def call(tool: str, args: dict | None = None, deadline_ms: int | None = No
     deadline_ms = deadline_ms or DEADLINES_MS.get(tool, 5000)
     fut = asyncio.get_running_loop().create_future()
     w.calls[cid] = fut
-    frame = {"wire": "call", "id": cid, "tool": tool, "args": args or {}, "deadline_ms": deadline_ms}
+    frame = {"wire": WireKind.CALL.value, "id": cid, "tool": tool.value, "args": args or {},
+             "deadline_ms": deadline_ms}
     if idem:
         frame["idem"] = idem
     await w.outbox.put(frame)
     try:
         return await asyncio.wait_for(fut, deadline_ms / 1000 + 0.5)
     except TimeoutError:
-        logger.warning(f"wire: no result for {tool} {cid} in {deadline_ms} ms")
-        await w.outbox.put({"wire": "cancel", "id": cid})
-        return {"ok": False, "error": {"code": "timeout", "message": f"{tool} gave no result", "retryable": not idem}}
+        logger.warning(f"wire: no result for {tool.value} {cid} in {deadline_ms} ms")
+        await w.outbox.put({"wire": WireKind.CANCEL.value, "id": cid})
+        return {"ok": False, "error": {"code": "timeout", "message": f"{tool.value} gave no result", "retryable": not idem}}
     finally:
         w.calls.pop(cid, None)
 
 
 def _take_wire(obj: dict, w: "Wire") -> bool:
-    kind = obj.get("wire")
-    if kind == "hello":
-        w.tools = {t.get("name") for t in obj.get("tools") or [] if isinstance(t, dict)}
-        w.hello_seen.set()
-        logger.info(f"wire: hello, protocol {obj.get('protocol')}, app {obj.get('app_version')}, tools {sorted(w.tools)}")
+    try:
+        kind = WireKind(obj.get("wire"))
+    except ValueError:
+        logger.error(f"wire: UNKNOWN frame kind {obj.get('wire')!r} from the Mac; ignored")
         return True
-    if kind == "result":
+    if kind is WireKind.HELLO:
+        offered = set()
+        for t in obj.get("tools") or []:
+            name = t.get("name") if isinstance(t, dict) else None
+            try:
+                offered.add(Tool(name))
+            except ValueError:
+                logger.warning(f"wire: the Mac offers {name!r}, which this bot does not know; ignored")
+        w.tools = offered
+        w.hello_seen.set()
+        logger.info(f"wire: hello, protocol {obj.get('protocol')}, app {obj.get('app_version')}, "
+                    f"tools {sorted(t.value for t in offered)}")
+    elif kind is WireKind.RESULT:
         fut = w.calls.get(obj.get("id"))
         if fut is not None and not fut.done():
             fut.set_result(obj)
-        return True
-    if kind == "event":
+    elif kind is WireKind.EVENT:
         w.mac_events.put_nowait(obj)  # chords and tray changes; read by later work (hf-16, hf-12)
-        return True
-    return False
+    else:
+        logger.error(f"wire: a {kind.value} frame arrived from the Mac, which only the bot sends; ignored")
+    return True
 
 
 def take_reply(obj: dict, wire: "Wire | None" = None) -> bool:

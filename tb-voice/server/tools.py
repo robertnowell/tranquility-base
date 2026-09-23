@@ -49,17 +49,19 @@ async def _run(*argv: str, timeout: float = 45.0) -> tuple[int, str]:
     return p.returncode or 0, out.decode(errors="replace")
 
 
-def _as_call(argv) -> tuple[str, dict] | None:
-    """The v1 tool for a tbase read, or None to keep request:run."""
+def _as_call(argv) -> tuple[wire.Tool, dict] | None:
+    """The v1 tool for a tbase read, or None to keep request:run. The argv is
+    built in this file's own callers, so this is a table of our own calls, not
+    a reading of anything a person said."""
     if argv[0] != TBASE:
         return None
-    rest = list(argv[1:])
-    if rest == ["targets", "--json"]:
-        return "agents", {}
-    if rest == ["status", "--json"]:
-        return "waiting", {}
+    rest = tuple(argv[1:])
+    if rest == ("targets", "--json"):
+        return wire.Tool.AGENTS, {}
+    if rest == ("status", "--json"):
+        return wire.Tool.WAITING, {}
     if len(rest) == 3 and rest[0] == "brief" and rest[2] == "--json":
-        return "brief", {"agent": rest[1]}
+        return wire.Tool.BRIEF, {"agent": rest[1]}
     return None
 
 

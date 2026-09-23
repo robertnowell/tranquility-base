@@ -185,10 +185,6 @@ extension AppDelegate {
             // them; a read at the bot's end would wait on a pipeline that does
             // not exist yet (5 s, every start, 22 Sep).
             let names = await Self.fleetNames()
-            // One flag, both halves: the app captures through the canceller
-            // and the bot leaves its gate open. Either alone leaves the
-            // manager uninterruptible.
-            let cancelsEcho = ManagerConfig.echoCancellation() && VoiceProcessingAudio.isAvailable()
             let started = Date()
             let session: ManagerSession
             var lease: ManagedVoiceLease?
@@ -198,7 +194,7 @@ extension AppDelegate {
                     Permissions.log("manager: managed, buying a session from the Gateway")
                     let client = try await credits.voice()
                     let id = UUID()
-                    let bought = try await client.start(id: id, keyterms: names, cancelsEcho: cancelsEcho)
+                    let bought = try await client.start(id: id, keyterms: names)
                     guard let url = bought.wsUrl.flatMap(URL.init(string:)) else {
                         throw ManagedSummaryFailure.invalidResponse
                     }
@@ -208,7 +204,7 @@ extension AppDelegate {
                     self.scheduleManagerRenewal(lease!, renewBy: bought.renewByDate)
                 case .hosted(let hosted):
                     Permissions.log("manager: hosted, starting a session at \(hosted.start.host ?? "?")")
-                    session = try await ManagerSessionStarter.start(hosted, keyterms: names, cancelsEcho: cancelsEcho)
+                    session = try await ManagerSessionStarter.start(hosted, keyterms: names)
                 }
             } catch {
                 self.hud.showResult(Self.managerStartMessage(for: error))
@@ -216,13 +212,11 @@ extension AppDelegate {
                 self.hud.setManager(on: false)
                 return
             }
-            // With echo cancellation on, the microphone and the manager's
-            // voice share one voice-processing unit, which is what makes
-            // talking over the manager possible: a canceller removes what it
-            // renders, so its voice has to go through it. If the unit will
-            // not start, hands-free carries on exactly as before.
-            let (microphone, voice) = Self.managerAudio(processing: cancelsEcho)
-            let socket = ManagerSocket(session: session, audio: microphone, player: voice,
+            // The WebSocket path has no echo cancellation, and cannot: the
+            // bot's gate is its only defence, which is why nothing said over
+            // the manager reaches it here. That is what `manager.webrtc` is
+            // for, and what this path is being retired in favour of.
+            let socket = ManagerSocket(session: session, audio: ManagerMicrophone(), player: PCMPlayer(),
                                        toolHost: Self.managerToolHost, appVersion: Self.managerAppVersion) { argv in
                 await AppDelegate.answerManagerRequest(argv)
             }
@@ -250,6 +244,7 @@ extension AppDelegate {
             defer { try? eventsHandle?.close() }
             for await line in socket.lines() {
                 eventsHandle?.write(line + Data([0x0A]))
+                Self.managerLedger.enqueue(line: line, session: session.sessionId)
                 guard let event = ManagerEvent.parse(line) else { continue }
                 if event.event == .ready {
                     Permissions.log("manager: ready \(Int(Date().timeIntervalSince(started) * 1000)) ms after start")
@@ -402,6 +397,7 @@ extension AppDelegate {
             defer { try? eventsHandle?.close() }
             for await line in peer.lines() {
                 eventsHandle?.write(line + Data([0x0A]))
+                Self.managerLedger.enqueue(line: line, session: offer.pathComponents.dropLast(2).last)
                 guard let event = ManagerEvent.parse(line) else { continue }
                 if event.event == .ready {
                     Permissions.log("manager: ready \(Int(Date().timeIntervalSince(started) * 1000)) ms after start")
@@ -454,23 +450,6 @@ extension AppDelegate {
             .appendingPathComponent("api").appendingPathComponent("offer")
     }
 
-    /// The microphone and the player hands-free will use: one voice-processing
-    /// unit when it is asked for and this Mac will give us one, the pinned
-    /// capture unit and a separate player otherwise. The pair has to come from
-    /// here together, because the whole point is that they are the same unit.
-    @MainActor
-    static func managerAudio(processing: Bool) -> (ManagerAudioSource, PCMPlayer) {
-        guard processing else {
-            if ManagerConfig.echoCancellation() {
-                Permissions.log("manager: echo cancellation asked for, but no voice-processing unit; using the pinned capture unit")
-            }
-            return (ManagerMicrophone(), PCMPlayer())
-        }
-        let unit = VoiceProcessingAudio()
-        Permissions.log("manager: echo cancellation on; the manager can be interrupted while it speaks")
-        return (unit, unit.player)
-    }
-
     /// The grid's display names, for the transcriber's key terms.
     static func fleetNames() async -> [String] {
         let (code, out) = await answerManagerRequest(["tbase", "targets", "--json"])
@@ -485,8 +464,16 @@ extension AppDelegate {
     /// Wire v1's tools, one host for every session and both transports, so
     /// an idempotency key outlives a reconnect (hf-3). Reads today; effects
     /// still go through `answerManagerRequest` until send moves to Coordinator.
+    /// Everything said in hands-free, numbered and whole, on this Mac (hf-5).
+    static let managerLedger: ManagerLedger = {
+        let ledger = ManagerLedger(
+            directory: QueueStore.supportDirectory.appendingPathComponent("ledger", isDirectory: true))
+        ledger.onUnparsed = { Permissions.log($0) }
+        return ledger
+    }()
+
     static let managerToolHost = ManagerToolHost(
-        tools: ManagerTools.standard(tbase: ManagerConfig.tbasePath()),
+        tools: ManagerTools.standard(tbase: ManagerConfig.tbasePath(), ledger: managerLedger),
         idempotency: ManagerIdempotency(url: QueueStore.supportDirectory.appendingPathComponent("manager-idem.json")))
 
     static var managerAppVersion: String {
@@ -559,6 +546,8 @@ extension AppDelegate {
         case .idle:
             managerEndedByIdle = true
             hud.setManagerState(StatusHUD.orbState, line: "paused after \((e.secs ?? 0) / 60) quiet minutes")
+        case .said:
+            break  // the ledger has it (managerLedger); nothing to paint
         case .rotate:
             // The bot is ending the session before Cloud's cap, at a moment
             // with nothing open; the socket's end reconnects. Say nothing.
