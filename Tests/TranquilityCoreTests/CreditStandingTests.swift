@@ -88,23 +88,20 @@ final class CreditStandingTests: XCTestCase {
         XCTAssertTrue(Prerequisites.items(harnesses: [], providers: []).contains(.credits))
     }
 
-    /// Out of credits with a pasted key is a state, not an alarm: the chain
-    /// moves onto the key and summaries carry on. Without a key it is amber
-    /// and the row wants attention.
-    func testOutOfCreditsIsOnlyAmberWhenThereIsNothingToFallTo() {
+    /// Out of credits is amber with or without a pasted Anthropic key. That
+    /// key covers summaries only; hearing and speaking run on credits and
+    /// never fall to a key (#571). 22 Sep: the key hid the line while the
+    /// transcripts were being refused.
+    func testOutOfCreditsIsAmberEvenWithAnAnthropicKey() {
         let out = CreditStanding.floored(.outOfCredits, at: now)
         XCTAssertEqual(out.line(ownKey: false), "Add credits")
-        XCTAssertNil(out.line(ownKey: true))
-        XCTAssertTrue(out.needsAttention(ownKey: false))
-        XCTAssertFalse(out.needsAttention(ownKey: true))
-        XCTAssertTrue(out.detail(ownKey: true).contains("your own Anthropic key"))
-        // Every other standing is indifferent to the key.
-        let down = CreditStanding.floored(.connectAgain, at: now)
-        XCTAssertEqual(down.line(ownKey: true), down.line(ownKey: false))
+        XCTAssertEqual(out.line(ownKey: true), "Add credits")
+        XCTAssertTrue(out.needsAttention(ownKey: true))
+        XCTAssertTrue(out.detail(ownKey: true).contains("hearing and speaking need credits"))
         let probes = Prerequisites.Probes(tmuxPath: { nil }, hooksProblem: { _ in nil },
                                           hasSecret: { $0 == .anthropicAPIKey }, creditStanding: { out })
         let row = Prerequisites.snapshot(probes).first { $0.item == .credits }!
-        XCTAssertFalse(row.attention, "a key on the row below means nothing is owed here")
+        XCTAssertTrue(row.attention, "a summaries key does not pay for the microphone")
     }
 
     /// Every amber line is something to do, never a fault (ruled 22 Sep).
