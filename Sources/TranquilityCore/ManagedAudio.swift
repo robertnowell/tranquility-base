@@ -33,11 +33,67 @@ struct GatewaySpeechResult: Decodable, Sendable {
     let error: GatewayOperation.ServiceError?
 }
 
+/// Every clip bought on the account, kept on disk under its operation id.
+///
+/// The Gateway does not store audio: asking again for a line already bought
+/// returns the receipt and no sound, on the understanding that "the app's clip
+/// cache" kept it. That cache is eight clips in memory, and the app prewarms a
+/// clip for every waiting agent, so on 22 Sep lines were routinely evicted
+/// before they were played: 59 `no_audio` refusals against 11 plays in twenty
+/// minutes, each one read in the system voice. With a pasted key an eviction
+/// just re-rendered; on credits it cannot, so the copy has to outlive memory
+/// and relaunches. This is that copy.
+///
+/// Pruned by age rather than count, because the id is the content: a line
+/// asked for again tomorrow is the same purchase and should still play.
+public struct ManagedClipStore: Sendable {
+    public let directory: URL
+    public let maxAge: TimeInterval
+
+    public init(directory: URL = QueueStore.supportDirectory.appendingPathComponent("managed-clips", isDirectory: true),
+                maxAge: TimeInterval = 7 * 86_400) {
+        self.directory = directory; self.maxAge = maxAge
+    }
+
+    private struct Stored: Codable { let audio: Data; let starts: [Double]? }
+
+    private func url(_ id: String) -> URL { directory.appendingPathComponent("\(id).clip") }
+
+    func load(_ id: String) -> SpokenClip? {
+        guard let data = try? Data(contentsOf: url(id)),
+              let stored = try? PropertyListDecoder().decode(Stored.self, from: data),
+              !stored.audio.isEmpty else { return nil }
+        return SpokenClip(audio: stored.audio, starts: stored.starts)
+    }
+
+    func save(_ clip: SpokenClip, id: String) {
+        let fm = FileManager.default
+        try? fm.createDirectory(at: directory, withIntermediateDirectories: true,
+                                attributes: [.posixPermissions: 0o700])
+        let encoder = PropertyListEncoder(); encoder.outputFormat = .binary
+        guard let data = try? encoder.encode(Stored(audio: clip.audio, starts: clip.starts)) else { return }
+        try? data.write(to: url(id), options: [.atomic])
+        prune()
+    }
+
+    private func prune() {
+        let fm = FileManager.default
+        guard let files = try? fm.contentsOfDirectory(
+            at: directory, includingPropertiesForKeys: [.contentModificationDateKey]) else { return }
+        let cutoff = Date().addingTimeInterval(-maxAge)
+        for file in files where file.pathExtension == "clip" {
+            let modified = (try? file.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+            if let modified, modified < cutoff { try? fm.removeItem(at: file) }
+        }
+    }
+}
+
 public struct ManagedSpeechClient: Sendable {
     public let accountId: UUID
     public let transport: any GatewayTransport
-    public init(accountId: UUID, transport: any GatewayTransport) {
-        self.accountId = accountId; self.transport = transport
+    public let store: ManagedClipStore
+    public init(accountId: UUID, transport: any GatewayTransport, store: ManagedClipStore = ManagedClipStore()) {
+        self.accountId = accountId; self.transport = transport; self.store = store
     }
 
     /// One line, bought once.
@@ -45,9 +101,26 @@ public struct ManagedSpeechClient: Sendable {
     /// The clip id is derived from the words and the voice, so the same line
     /// asked for twice is the same operation: the Gateway answers the second
     /// time with the receipt and no audio, and the caller must already have
-    /// kept the sound — which the app's clip cache does.
+    /// kept the sound. `ManagedClipStore` is where it is kept; the in-memory
+    /// clip cache was assumed to be, and holds only eight.
     public func speak(_ text: String, voice: String?) async throws -> SpokenClip {
-        let id = Self.clipId(text: text, voice: voice, account: accountId)
+        do { return try await buy(text, voice: voice, id: Self.clipId(text: text, voice: voice, account: accountId)) }
+        catch ManagedSummaryFailure.refused(code: "already_bought", _) {
+            // Bought before there was a copy to keep, so the Gateway has the
+            // receipt and nobody has the sound. Buy it once more under a
+            // second id rather than read the line in the system voice; that
+            // copy is kept, so this happens once per lost line, not per ask.
+            let second = Self.clipId(text: text, voice: voice, account: accountId, attempt: "rebuy")
+            let clip = try await buy(text, voice: voice, id: second)
+            store.save(clip, id: Self.clipId(text: text, voice: voice, account: accountId).uuidString.lowercased())
+            return clip
+        }
+    }
+
+    private func buy(_ text: String, voice: String?, id: UUID) async throws -> SpokenClip {
+        // Already bought: play our own copy. Asking the Gateway again would
+        // only return the receipt, because it keeps no audio.
+        if let kept = store.load(id.uuidString.lowercased()) { return kept }
         var payload: [String: Any] = ["version": "1", "text": text]
         if let voice { payload["voice"] = voice }
         let body = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
@@ -63,20 +136,27 @@ public struct ManagedSpeechClient: Sendable {
         guard result.version == "1", result.kind == "speech",
               result.accountId == accountId.uuidString.lowercased(),
               result.operationId == id.uuidString.lowercased() else { throw ManagedSummaryFailure.invalidResponse }
+        if result.state == "succeeded", result.clip == nil, result.error == nil {
+            throw ManagedSummaryFailure.refused(code: "already_bought", operationId: result.operationId)
+        }
         guard result.state == "succeeded", let clip = result.clip,
               let audio = Data(base64Encoded: clip.audioBase64), !audio.isEmpty else {
             throw ManagedSummaryFailure.refused(code: result.error?.code ?? "no_audio", operationId: result.operationId)
         }
-        return SpokenClip(audio: audio, starts: clip.characterStartTimes)
+        let bought = SpokenClip(audio: audio, starts: clip.characterStartTimes)
+        store.save(bought, id: result.operationId)
+        return bought
     }
 
     /// Content IS the identity, as it is for the app's own clip cache: the
     /// same words in the same voice on the same account are one purchase.
     /// Length-framed like the summary's operation id, so two fields cannot be
     /// slid past each other into the same digest.
-    static func clipId(text: String, voice: String?, account: UUID) -> UUID {
+    /// `attempt` is empty for the first purchase, which keeps every existing
+    /// id unchanged, and "rebuy" for the one repurchase of a lost line.
+    static func clipId(text: String, voice: String?, account: UUID, attempt: String = "") -> UUID {
         var bytes = Data("tb.speech.v1\0".utf8)
-        for part in [account.uuidString.lowercased(), voice ?? "", text] {
+        for part in [account.uuidString.lowercased(), voice ?? "", text] + (attempt.isEmpty ? [] : [attempt]) {
             let value = Data(part.utf8)
             bytes.append(Data("\(value.count):".utf8)); bytes.append(value)
         }

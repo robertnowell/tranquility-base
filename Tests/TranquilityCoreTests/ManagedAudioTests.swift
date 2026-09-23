@@ -38,7 +38,7 @@ final class ManagedAudioTests: XCTestCase {
             "state": "succeeded", "characters": 14,
             "clip": ["audioBase64": audio.base64EncodedString(), "characterStartTimes": [0, 0.2], "characters": 14],
         ]))])
-        let client = ManagedSpeechClient(accountId: account, transport: transport)
+        let client = ManagedSpeechClient(accountId: account, transport: transport, store: freshStore())
         let clip = try await client.speak("Ready to ship.", voice: nil)
         XCTAssertEqual(clip.audio, audio)
         XCTAssertEqual(clip.starts, [0, 0.2])
@@ -55,6 +55,65 @@ final class ManagedAudioTests: XCTestCase {
         XCTAssertNotEqual(same, ManagedSpeechClient.clipId(text: "Ready to ship.", voice: nil, account: UUID()))
     }
 
+    private func freshStore() -> ManagedClipStore {
+        ManagedClipStore(directory: FileManager.default.temporaryDirectory
+            .appendingPathComponent("clips-\(UUID().uuidString)", isDirectory: true))
+    }
+
+    /// A line already bought plays from our own copy, with no second request.
+    /// The Gateway keeps no audio, so on 22 Sep a clip evicted from the
+    /// eight-slot memory cache came back as a receipt with no sound and was
+    /// read in the system voice: 59 times against 11 plays. The copy also
+    /// survives a relaunch, which is a new client over the same directory.
+    func testABoughtLineIsKeptAndNeverAskedForAgain() async throws {
+        let audio = Data("mp3 bytes".utf8)
+        let id = ManagedSpeechClient.clipId(text: "Ready to ship.", voice: "v", account: account).uuidString.lowercased()
+        let first = Transport([(200, json([
+            "version": "1", "kind": "speech", "accountId": account.uuidString.lowercased(),
+            "operationId": id, "state": "succeeded", "characters": 14,
+            "clip": ["audioBase64": audio.base64EncodedString(), "characterStartTimes": [0, 0.2], "characters": 14],
+        ]))])
+        let store = freshStore()
+        _ = try await ManagedSpeechClient(accountId: account, transport: first, store: store)
+            .speak("Ready to ship.", voice: "v")
+
+        let replayOnly = Transport([(200, json([
+            "version": "1", "kind": "speech", "accountId": account.uuidString.lowercased(),
+            "operationId": id, "state": "succeeded", "characters": 14,
+        ]))])
+        let again = try await ManagedSpeechClient(accountId: account, transport: replayOnly, store: store)
+            .speak("Ready to ship.", voice: "v")
+        XCTAssertEqual(again.audio, audio)
+        XCTAssertEqual(again.starts, [0, 0.2])
+        let asked = await replayOnly.paths
+        XCTAssertTrue(asked.isEmpty, "a line we already own is not bought, or asked for, twice")
+    }
+
+    /// A line bought before there was a copy to keep: the Gateway answers
+    /// with the receipt only. It is bought once more under a second id and
+    /// kept, rather than read in the system voice.
+    func testALineLostBeforeTheStoreIsBoughtOnceMore() async throws {
+        let audio = Data("mp3 bytes".utf8)
+        let first = ManagedSpeechClient.clipId(text: "Lost line.", voice: "v", account: account).uuidString.lowercased()
+        let second = ManagedSpeechClient.clipId(text: "Lost line.", voice: "v", account: account, attempt: "rebuy").uuidString.lowercased()
+        XCTAssertNotEqual(first, second)
+        let acct = account.uuidString.lowercased()
+        let transport = Transport([
+            (200, json(["version": "1", "kind": "speech", "accountId": acct, "operationId": first,
+                        "state": "succeeded", "characters": 10])),
+            (200, json(["version": "1", "kind": "speech", "accountId": acct, "operationId": second,
+                        "state": "succeeded", "characters": 10,
+                        "clip": ["audioBase64": audio.base64EncodedString(), "characters": 10]])),
+        ])
+        let store = freshStore()
+        let clip = try await ManagedSpeechClient(accountId: account, transport: transport, store: store)
+            .speak("Lost line.", voice: "v")
+        XCTAssertEqual(clip.audio, audio)
+        let paths = await transport.paths
+        XCTAssertEqual(paths.map { $0.components(separatedBy: "/").last! }, [first, second])
+        XCTAssertEqual(store.load(first)?.audio, audio, "kept under the line's own id, so it is never bought a third time")
+    }
+
     func testAnAnswerForAnotherClipOrWithoutAudioIsRefused() async throws {
         for body in [
             ["version": "1", "kind": "speech", "accountId": account.uuidString.lowercased(),
@@ -64,7 +123,7 @@ final class ManagedAudioTests: XCTestCase {
              "operationId": ManagedSpeechClient.clipId(text: "hi", voice: nil, account: account).uuidString.lowercased(),
              "state": "failed", "error": ["code": "provider_failed"]],
         ] {
-            let client = ManagedSpeechClient(accountId: account, transport: Transport([(200, json(body))]))
+            let client = ManagedSpeechClient(accountId: account, transport: Transport([(200, json(body))]), store: freshStore())
             do { _ = try await client.speak("hi", voice: nil); XCTFail("must refuse \(body)") }
             catch {}
         }
