@@ -207,4 +207,54 @@ final class GatewayResponseLimitTests: XCTestCase {
             method: "GET", path: "/v1/accounts/a/summaries/b", body: nil)
         XCTAssertEqual(response.body.count, 400_000)
     }
+
+}
+
+extension ManagedAudioTests {
+    // MARK: - Out of credits falls to the person's own keys (ruled 22 Sep)
+
+    private func signedIn(_ transport: Transport, published: Published) -> ManagedCreditSession {
+        ManagedCreditSession(
+            identity: { .init(hub: URL(string: "https://fixture.invalid")!, token: "A") },
+            outboxURL: FileManager.default.temporaryDirectory.appendingPathComponent("audio-\(UUID().uuidString).sqlite"),
+            connect: { _, _ in .init(transport: transport) },
+            publish: { standing, _ in published.set(standing) })
+    }
+
+    private func accountReply() throws -> (Int, Data) {
+        (200, try GatewayContract.encode(GatewayAccount(
+            version: "1", accountId: account.uuidString.lowercased(), currency: "USD",
+            balance: GatewayBalance(availableMicros: "0", reservedMicros: "0", ledgerSequence: "1"))))
+    }
+
+    func testARefusedTranscriptHandsOverToTheOwnKeyAndSaysSo() async throws {
+        let transport = Transport([try accountReply(), (402, json(["error": ["code": "insufficient_credit"]]))])
+        let published = Published()
+        let audio = ManagedAudio(session: signedIn(transport, published: published))
+        let token = try await audio.streamingToken()()
+        XCTAssertNil(token, "out of credits: the AssemblyAI key path runs, nothing is thrown")
+        guard case .floored(.outOfCredits, _)? = published.value else {
+            return XCTFail("standing was \(String(describing: published.value))")
+        }
+    }
+
+    func testOnceRefusedTheNextUtterancesSkipTheGateway() async throws {
+        let transport = Transport([try accountReply(), (402, json(["error": ["code": "insufficient_credit"]]))])
+        let audio = ManagedAudio(session: signedIn(transport, published: Published()))
+        let first = try await audio.streamingToken()()
+        XCTAssertNil(first)
+        let before = await transport.paths.count
+        let clip = try await audio.clip()(SpokenTextSanitizer().sanitize("hello"), nil, 4)
+        let token = try await audio.streamingToken()()
+        XCTAssertNil(clip); XCTAssertNil(token)
+        let after = await transport.paths
+        XCTAssertEqual(after.count, before, "no refused round trip per utterance: \(after)")
+    }
+
+    func testAServiceFaultStillNeverSpendsTheKey() async throws {
+        let transport = Transport([try accountReply(), (502, json(["error": ["code": "provider_failed"]]))])
+        let audio = ManagedAudio(session: signedIn(transport, published: Published()))
+        do { _ = try await audio.streamingToken()(); XCTFail("a fault is not a reason to spend the key") }
+        catch {}
+    }
 }
