@@ -13,42 +13,52 @@ final class ConnectivityTests: XCTestCase {
         var get: T { lock.lock(); defer { lock.unlock() }; return value }
     }
 
-    func testABlipShorterThanTheDebounceShowsNothing() async throws {
-        let c = Connectivity(debounce: 0.3)
+    /// No sleeps against the debounce: a blip is a drop and a return well
+    /// inside a long debounce, and a sustained outage waits on the state,
+    /// with a generous ceiling, rather than on a guess about the scheduler.
+    /// The sleeping version failed on a slow CI runner (22 Sep, #582).
+    func testABlipShorterThanTheDebounceShowsNothing() {
+        let c = Connectivity(debounce: 30)
         let heard = Box<[Bool]>([])
         c.observeOffline { v in heard.update { $0.append(v) } }
         c.ingest(true); c.ingest(false)
         XCTAssertFalse(c.isReachable, "the raw reading is immediate")
-        try await Task.sleep(for: .milliseconds(100))
         c.ingest(true)
-        try await Task.sleep(for: .milliseconds(400))
+        c.drainForTesting()
         XCTAssertFalse(c.isOffline)
         XCTAssertEqual(heard.get, [false], "nothing but the joining value")
     }
 
+    private func waitUntil(_ condition: @autoclosure () -> Bool, within seconds: TimeInterval = 10) async throws {
+        let deadline = Date().addingTimeInterval(seconds)
+        while !condition() {
+            guard Date() < deadline else { return XCTFail("condition not met within \(seconds)s") }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+    }
+
     func testASustainedOutageShowsOnceAndClearsOnReturn() async throws {
-        let c = Connectivity(debounce: 0.1)
+        let c = Connectivity(debounce: 0.05)
         let heard = Box<[Bool]>([])
         c.observeOffline { v in heard.update { $0.append(v) } }
         c.ingest(false)
-        try await Task.sleep(for: .milliseconds(300))
-        XCTAssertTrue(c.isOffline)
+        try await waitUntil(c.isOffline)
         c.ingest(false)
         c.ingest(true)
-        try await Task.sleep(for: .milliseconds(50))
+        c.drainForTesting()
         XCTAssertFalse(c.isOffline)
         XCTAssertEqual(heard.get, [false, true, false])
     }
 
-    func testReconnectRunsOnlyOnARealReturn() async throws {
-        let c = Connectivity(debounce: 10)
+    func testReconnectRunsOnlyOnARealReturn() {
+        let c = Connectivity(debounce: 30)
         let count = Box(0)
         c.onReconnect { count.update { $0 += 1 } }
         c.ingest(true)   // first reading: not a return
         c.ingest(true)
         c.ingest(false)
         c.ingest(true)   // a return
-        try await Task.sleep(for: .milliseconds(50))
+        c.drainForTesting()
         XCTAssertEqual(count.get, 1)
     }
 
