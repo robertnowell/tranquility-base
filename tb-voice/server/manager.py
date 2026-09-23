@@ -32,6 +32,7 @@ import build_stamp
 from events import emit, line
 from compose import READBACK_SECS, OpenMessage, classify, continues, filler_only
 import session
+from turns import TurnQueue
 from spoken import spoken
 from tools import _json_or_text, _run
 
@@ -423,6 +424,9 @@ class Manager(FrameProcessor):
         self._held: str | None = None       # a turn that ended mid-sentence, waiting for its rest
         self._user_speaking = False         # between on_user_turn_started and the next context frame
         self._held_task: asyncio.Task | None = None
+        # Every turn, in the order said, decided one at a time (turns.py, hf-13).
+        self._turns = TurnQueue(self._dispatch)
+        self._turns_task: asyncio.Task | None = None
 
     async def _say_and_wait(self, text: str, timeout: float = 8.0):
         await self._say(text)  # _say already waits for its own voice to stop
@@ -481,6 +485,8 @@ class Manager(FrameProcessor):
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
         if isinstance(frame, StartFrame):
+            if self._turns_task is None:
+                self._turns_task = self.create_task(self._turns.run())
             if os.getenv("TB_HOSTED") and self._wire_task is None:
                 self._wire_task = self.create_task(self._drain_wire())
                 self._last_heard = time.monotonic()
@@ -521,8 +527,9 @@ class Manager(FrameProcessor):
             await self.push_frame(frame, direction)
             return
         if self.open is not None:
-            # Dictation: every word is the message. No hold, no gate, no Jev intent.
-            self._handler = asyncio.create_task(self._compose_turn(text, frame, direction))
+            # Dictation: every word is the message. No hold, no gate, no Jev
+            # intent. Queued like any turn; _dispatch routes it when reached.
+            self._turns.put((text, frame, direction))
             return
         # A turn cut mid-sentence (no terminal punctuation) waits for its
         # continuation; the two are judged as one. 16:58:32: "…the risks,
@@ -548,10 +555,7 @@ class Manager(FrameProcessor):
             self._held_task = asyncio.create_task(self._release_held(frame, direction, wait))
             return
         self.heard += 1
-        # The handler runs detached: an interruption cancels the frame task it
-        # started from, and an invite that dies between "Inviting…" and the hear
-        # verb leaves nobody speaking (16:49:39).
-        self._handler = asyncio.create_task(self._handle_turn(text, frame, direction))
+        self._turns.put((text, frame, direction))
         self._recent.append(text)
 
     async def _release_held(self, frame, direction, wait: float):
@@ -570,8 +574,17 @@ class Manager(FrameProcessor):
         text, self._held = self._held, None
         if text:
             self.heard += 1
-            self._handler = asyncio.create_task(self._handle_turn(text, frame, direction))
+            self._turns.put((text, frame, direction))
             self._recent.append(text)
+
+    async def _dispatch(self, turn: tuple):
+        """One turn, when every turn before it has finished. Whether it is
+        dictation is read NOW: the turn before may have just opened a message."""
+        text, frame, direction = turn
+        if self.open is not None:
+            await self._compose_turn(text, frame, direction)
+        else:
+            await self._handle_turn(text, frame, direction)
 
     async def _handle_turn(self, text, frame, direction):
         try:
