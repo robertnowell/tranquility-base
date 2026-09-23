@@ -2049,9 +2049,16 @@ extension StatusHUD {
         // first run it read as a stalled startup screen, and the press it
         // taught does nothing on an empty grid. The same showIdle every
         // ambient tick calls, painting the real panel.
+        // The placard is shared: a live credits line or Offline outranks the
+        // title by design, so the drill measures the room with neither and
+        // puts them back. 22 Sep: a Mac genuinely out of credits failed this
+        // for showing "Add credits", which was the right thing to show.
+        let liveCredits = creditStanding, liveOffline = isOffline
+        setCreditStanding(nil); setOffline(false)
         showIdle(rows: [])
         let describesItself = face.grid && bodyLabel.stringValue.isEmpty
             && stateLabel.attributedStringValue.string.contains(StateLegend.gridStripTitle)
+        setCreditStanding(liveCredits); setOffline(liveOffline)
         let offersTheDoor = !waitingRows.isHidden
             && waitingRows.arrangedSubviews.contains { $0 is SplitPlacardRowView }
             && !waitingRows.arrangedSubviews.contains { $0 is GridRowView }

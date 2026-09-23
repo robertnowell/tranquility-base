@@ -18,6 +18,17 @@ if [ -n "$(git status --porcelain -- . 2>/dev/null)" ]; then
   exit 1
 fi
 
+# Production takes only merged code: #572 went live by hand from a feature
+# worktree on 22 Sep, and nothing stopped an unmerged commit going the same way.
+# A drill agent may deploy anything; it is nobody's session (hf-23).
+if [ "$AGENT" = "tranquility-manager" ]; then
+  git fetch -q origin
+  if ! git merge-base --is-ancestor HEAD origin/main; then
+    echo "✗ $(git rev-parse --short HEAD) is not on origin/main; only merged code goes to tranquility-manager" >&2
+    exit 1
+  fi
+fi
+
 SHA="$(git rev-parse --short HEAD)"
 BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 BUILT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
