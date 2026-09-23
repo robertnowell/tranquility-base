@@ -337,7 +337,7 @@ final class StatusHUD: NSObject {
     /// The session is the card's reply target, read now rather than at the
     /// deadline so a face change in between cannot move the draft.
     func scheduleDraftSave() {
-        guard let target = replyTargetForDrop?() else { return }
+        guard let target = handTarget() else { return }
         let session = target.sessionId
         draftSave?.cancel()
         let work = DispatchWorkItem { [weak self] in
@@ -359,7 +359,7 @@ final class StatusHUD: NSObject {
     /// now, not after a debounce a crash could beat.
     func noteDraftCleared() {
         draftSave?.cancel(); draftSave = nil
-        guard let target = replyTargetForDrop?() else { return }
+        guard let target = handTarget() else { return }
         onDraftChanged?(target.sessionId, "")
     }
 
@@ -1164,6 +1164,10 @@ final class StatusHUD: NSObject {
                 onSpeakDoor?()
             } else {
                 let text = trayRow.composedText
+                // The words go to who the card names at THIS press. The
+                // app's cache is refreshed here, before it is read by
+                // `onSendTyped`; see `refreshReplyTarget`.
+                refreshReplyTarget?()
                 releasePaste(because: "sent", repaint: false)
                 trayRow.clearComposed()
                 noteDraftCleared()
@@ -3399,6 +3403,29 @@ final class StatusHUD: NSObject {
     /// on its own tick, never by probing `claude agents --json` here.
     var replyTargetForDrop: (() -> (sessionId: String, label: String)?)?
 
+    /// Asked BEFORE a hand reads `replyTargetForDrop`: arming the typed
+    /// line, pasting, saving or clearing a draft, pressing Send. The app
+    /// re-resolves its cached target so the hand acts on who the card names
+    /// now, not who it named one tick ago.
+    ///
+    /// 23 Sep 2026, 2:41 PM: Robert picked "Build repeatable email planning",
+    /// heard its card, pressed it and typed "mailchimpo too". The card, the
+    /// cursor and the voice path had all moved at the pick; the cache the
+    /// hands read moves only on the ambient tick, and that tick's refresh
+    /// sat behind an awaited voice prefetch until 400 ms after Send. The
+    /// words went to the crobot task he had dismissed twice. The receipt
+    /// said "→ CROBOT" — 90 ms after the fact.
+    ///
+    /// Never called from render(): a paint reads the cache as it stands.
+    var refreshReplyTarget: (() -> Void)?
+
+    /// The target a hand acts on: refreshed, then read. One call, so no
+    /// door can read first and refresh second.
+    func handTarget() -> (sessionId: String, label: String)? {
+        refreshReplyTarget?()
+        return replyTargetForDrop?()
+    }
+
     /// The name a picked row was showing, for the receipt.
     func pastListName(_ id: String) -> String {
         face.sessionRows.first { $0.id == id }?.name ?? SessionRow.shortId(id)
@@ -3721,7 +3748,7 @@ final class StatusHUD: NSObject {
     private var pasteNote: String?
 
     func armPaste(via door: String) {
-        guard let panel, let target = replyTargetForDrop?() else { return }
+        guard let panel, let target = handTarget() else { return }
         switch state {
         case .settings, .pastAgents, .hidden: return
         default: break
@@ -3765,7 +3792,7 @@ final class StatusHUD: NSObject {
     /// handler a drop uses, and stay armed: a second paste is a second chip.
     func pasteIntoTray() {
         guard pasteArmed else { return }
-        guard let target = replyTargetForDrop?() else {
+        guard let target = handTarget() else {
             pasteNote = "nothing to attach to yet"
             render(); return
         }

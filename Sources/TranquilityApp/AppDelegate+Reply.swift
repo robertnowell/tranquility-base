@@ -326,6 +326,15 @@ extension AppDelegate {
     /// to nine seconds the agent took to come up, which is precisely the
     /// moment you have one to hand.
     func refreshDropTarget() {
+        let before = dropTarget?.sessionId
+        defer {
+            // Only on a change, so the tick is silent and the next misroute
+            // has a line to find: who the hands address, and since when.
+            if dropTarget?.sessionId != before {
+                Permissions.log("routing: hands address "
+                    + (dropTarget.map { "\($0.sessionId.prefix(8)) (\($0.label))" } ?? "nobody"))
+            }
+        }
         switch replyDestinationNow() {
         case .session(let id):
             if let conversation = activeConversation, conversation.sessionId == id {
