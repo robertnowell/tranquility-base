@@ -179,13 +179,20 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
             # long as nothing else happens (thirty seconds, in a drill on
             # 22 Sep). EchoGate feeds the transcriber zeros while the manager
             # speaks, which is asked on every audio frame and cannot stick.
-            # A turn starts on words, not on VAD: in a loud room VAD fired 300 ms into
-            # every answer and cancelled it before TTS. Two words of transcript start a
-            # turn; noise and one-word backchannels do not.
+            # A turn starts on words, not on VAD: in a loud room VAD fired 300 ms
+            # into every answer and cancelled it before TTS.
+            #
+            # This number is the INTERRUPTION threshold and nothing else: the
+            # strategy requires min_words only while the bot is speaking, and
+            # one word otherwise. Two was right when the microphone still
+            # carried the manager's own voice, because its own words could
+            # interrupt it. WebRTC cancels that now, so two words only means a
+            # person saying "Stop" is ignored and has to keep talking for three
+            # seconds (23 Sep). One word, and a cut-off is a cut-off.
             user_turn_strategies=UserTurnStrategies(
                 start=[
                     MinWordsUserTurnStartStrategy(
-                        min_words=int(os.getenv("TB_MIN_WORDS", "2"))
+                        min_words=int(os.getenv("TB_MIN_WORDS", "1"))
                     )
                 ],
                 stop=[
