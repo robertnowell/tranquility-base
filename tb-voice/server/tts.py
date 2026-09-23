@@ -9,6 +9,28 @@ from spoken import spoken
 
 
 class SpokenTTSService(ElevenLabsTTSService):
+    async def use_voice(self, voice_id: str | None):
+        """Speak in somebody else's voice from here on.
+
+        Every line this Mac says out loud now comes down the connection, so
+        that the canceller has it and the microphone never has to close. That
+        means the bot, not the app, reads a session's announcement — and it has
+        to read it in that session's own voice, or every agent would suddenly
+        sound like the manager.
+
+        The socket bakes the voice into its URL (`_build_websocket_url` reads
+        `settings.voice` when it connects), so changing the setting alone
+        changes nothing until the next connection. Hence the reconnect: one
+        handshake, once per change of speaker, and the voice the URL names is
+        the voice that comes back.
+        """
+        if not voice_id or voice_id == self._settings.voice:
+            return
+        logger.info(f"voice: {self._settings.voice} -> {voice_id}")
+        await self._update_settings(self.Settings(voice=voice_id))
+        await self._disconnect()
+        await self._connect()
+
     async def run_tts(self, text: str, context_id: str):
         clean = spoken(text)
         if clean != text.strip():

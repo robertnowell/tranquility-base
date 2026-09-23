@@ -194,6 +194,23 @@ public enum ArtifactStore {
         return newest.at > turnBegan ? newest.path : nil
     }
 
+    /// The same rule with "this turn began" read from the store: the
+    /// PREVIOUS turn's brief. At card time this turn's own brief is the
+    /// newest row, so the second row is where the turn began; a session with
+    /// one brief began at the dawn of time and any page it has is fresh.
+    /// This is the whole of the card's resolver, so the in-app drill and the
+    /// app call one function and cannot drift.
+    public static func freshReport(for session: String, store: QueueStore, root: String,
+                                   exists: (String) -> Bool = {
+                                       FileManager.default.fileExists(atPath: $0)
+                                   }) -> String? {
+        let briefs = (try? store.briefs(for: session, limit: 2)) ?? []
+        let turnBegan = briefs.count > 1
+            ? Date(timeIntervalSince1970: Double(briefs[1].atMs) / 1000)
+            : .distantPast
+        return freshReport(for: session, root: root, since: turnBegan, exists: exists)
+    }
+
     /// The page to offer, or nil — and nil is the common case, so every caller
     /// must render without it.
     ///
