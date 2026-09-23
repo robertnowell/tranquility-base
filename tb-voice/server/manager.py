@@ -638,11 +638,6 @@ class Manager(FrameProcessor):
         p, intent_answer = await self._jev.turn(text, self._recent, self.stage)
         ms = int((time.monotonic() - t0) * 1000)
         intent = parse_intent(_chosen(intent_answer))
-        low = text.lower()
-        # A word-match override, kept only until hf-7 replaces it with context
-        # for the classifier and deletes it (ruled 23 Sep: no new ones).
-        if "send" in low and any(w in low for w in ("message", "to this agent", "to the agent", "to it")):
-            intent = Intent.SEND_MESSAGE
         if not self.stage and intent in RUNG_FOR:
             # "What's next?" with nobody on stage is the ⌃⌥ question: the next
             # agent's update, not a lecture about the stage being empty.
