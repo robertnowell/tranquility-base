@@ -267,7 +267,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// matching latest, and the derived target vanishes — which is why a second
     /// message to the same session was so hard. A conversation is an app-level
     /// fact about your attention, not a log-level fact.
-    var activeConversation: (sessionId: String, label: String, cwd: String?)?
+    var activeConversation: (sessionId: String, label: String, cwd: String?)? {
+        // The hands' cache follows your attention the moment it moves, not
+        // one tick later (23 Sep: a typed line sent to the card dismissed
+        // five seconds earlier). The tick remains as the backstop.
+        didSet { refreshDropTarget() }
+    }
     /// The most recent announcement, kept whole so ⌃⌃ can speak its depth-1
     /// (goal, risk, question) from the already-computed brief — no model call,
     /// and the session itself is never woken.
@@ -830,6 +835,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                                   "face": .token(self.hud.state.name)])
                     self.rebuildMenu()
                 }
+                // Who a dropped file would go to, read synchronously by
+                // render(). Refreshed BEFORE anything below is awaited: on 23
+                // Sep this sat at the bottom of the tick, behind a voice
+                // prefetch that took 4.6 s, and a typed Send read the value
+                // from the tick before. It is now also refreshed at every
+                // hand action and every move of attention; this is the
+                // backstop for a cache render() alone reads.
+                self.refreshDropTarget()
                 // Warm the liveness cache off-main first. The probe is a ~0.3s
                 // subprocess; called synchronously from the main actor it froze the
                 // UI on every tick and every press — which also risks the CGEvent
@@ -866,11 +879,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // an expired entry is already invisible to the lamp. This just
                 // stops the map growing across a long-lived app.
                 self.delivering.prune()
-                // Who a dropped file would go to, refreshed on the tick and
-                // read synchronously by render(). Cached rather than resolved
-                // per paint because the panel must never wait, and stale by at
-                // most one tick is exactly as stale as the grid beside it.
-                self.refreshDropTarget()
                 let rows = self.sessionRowsNow()
                 // The lamp spine: one event per agent per change, from the
                 // same rows the grid draws, so the record and the screen
@@ -1247,6 +1255,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // `claude agents --json` for a pid the tray does not need. Rule 9 —
         // the main actor draws, it does not wait on a subprocess.
         hud.replyTargetForDrop = { [weak self] in self?.dropTarget }
+        // …and a hand may ask for it to be brought current first. Same
+        // ladder, same cache, one sqlite read — on a press, never a paint.
+        hud.refreshReplyTarget = { [weak self] in self?.refreshDropTarget() }
         hud.stagedFragments = { [weak self] session in
             self?.coordinator?.attachments.staged(for: session) ?? []
         }
@@ -1296,8 +1307,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             (try? self?.store?.draft(session: session)) ?? nil
         }
         hud.onSendTyped = { [weak self] text in
-            guard let self, let coordinator, let target = dropTarget else {
-                self?.lastStatusLine = "nothing to send to yet"
+            guard let self, let coordinator else { return }
+            // The write resolves its own target. The panel asked already;
+            // this is the guarantee that does not depend on which door the
+            // words came through.
+            refreshDropTarget()
+            guard let target = dropTarget else {
+                lastStatusLine = "nothing to send to yet"
                 return
             }
             Task { @MainActor in
@@ -1332,11 +1348,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 case .typed: return "typed_line"
                 }
             }()
-            guard let self, let coordinator, let target = dropTarget else {
+            guard let self, let coordinator else { return false }
+            // A picker can sit open for as long as you like, and a drag
+            // began under whatever card was up when it started: resolve at
+            // the moment the file lands.
+            refreshDropTarget()
+            guard let target = dropTarget else {
                 // Refused rather than swallowed. The overlay never appears
                 // without a target, so this is the race where the last
                 // session died mid-drag — say so instead of eating the file.
-                self?.lastStatusLine = "nothing to attach to yet"
+                lastStatusLine = "nothing to attach to yet"
                 Permissions.log("\(via.rawValue): refused, no reply target")
                 Track.record(event, ["count": .int(items.count), "accepted": false, "staged": 0])
                 return false
