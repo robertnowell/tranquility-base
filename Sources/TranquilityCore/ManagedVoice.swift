@@ -71,13 +71,9 @@ public struct ManagedVoiceClient: Sendable {
     /// Start, or pick up the one this id already named: PUT is idempotent, so
     /// a retry after a lost reply returns the same session and the same socket
     /// rather than reserving a second block.
-    public func start(id: UUID, keyterms: [String] = [],
-                      cancelsEcho: Bool = false) async throws -> GatewayVoiceSession {
+    public func start(id: UUID, keyterms: [String] = []) async throws -> GatewayVoiceSession {
         var fields: [String: Any] = [:]
         if !keyterms.isEmpty { fields["keyterms"] = Array(keyterms.prefix(64)) }
-        // The bot keeps its gate open for a client that cancels its own echo;
-        // that is what makes the manager interruptible.
-        if cancelsEcho { fields["aec"] = true }
         let body = fields.isEmpty ? nil : try JSONSerialization.data(withJSONObject: fields)
         return try await call("PUT", path(id), body: body, id: id, expectSocket: true)
     }
