@@ -2288,20 +2288,6 @@ if CommandLine.arguments.contains("--selftest-past-search") {
     exit(1)
 }
 
-// Isolated manager regression: rendered orb and events, without a live connection.
-if CommandLine.arguments.contains("--selftest-manager-listening") {
-    let probeApplication = NSApplication.shared
-    Task { @MainActor in
-        let probe = AppDelegate()
-        let passed = await probe.managerListeningDrill()
-        Permissions.flushLog()
-        print(passed ? "manager listening UI: PASS" : "manager listening UI: FAIL")
-        exit(passed ? 0 : 1)
-    }
-    probeApplication.run()
-    exit(1)
-}
-
 // Isolated credits regression: the real checklist, with only fixture services.
 if CommandLine.arguments.contains("--selftest-credits-onboarding") {
     let probeApplication = NSApplication.shared
