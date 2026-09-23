@@ -4,4 +4,4 @@ agent_profile = "agent-1x"
 region = "us-west"
 
 [scaling]
-min_agents = 0
+min_agents = 1
