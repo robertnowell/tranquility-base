@@ -195,3 +195,23 @@ final class WebRTCConfigTests: XCTestCase {
         XCTAssertEqual(rtc?.key, "pk_x")
     }
 }
+
+/// The events file and the panel see the manager's lines and nothing else.
+/// A WebRTC data channel also carries the framework's own protocol traffic,
+/// which rendered as rows of "Invalid" in the viewer (23 Sep).
+final class ManagerLineFilterTests: XCTestCase {
+    private func isManagerLine(_ json: String) -> Bool {
+        guard let data = json.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return false }
+        return obj["event"] is String
+    }
+
+    func testOnlyTheManagersLinesCount() {
+        XCTAssertTrue(isManagerLine(#"{"event":"hearing","t":1}"#))
+        XCTAssertTrue(isManagerLine(#"{"event":"addressed","p":0.83,"intent":"invite_next"}"#))
+        XCTAssertFalse(isManagerLine(#"{"type":"rtvi-ai","label":"rtvi-ai","id":"1"}"#))
+        XCTAssertFalse(isManagerLine(#"{"reply":"abc","code":0,"out":"{}"}"#))
+        XCTAssertFalse(isManagerLine("ping"))
+    }
+}

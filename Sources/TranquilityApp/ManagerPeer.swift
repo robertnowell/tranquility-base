@@ -235,15 +235,34 @@ extension ManagerPeer: LKRTCDataChannelDelegate {
            let argv = obj["argv"] as? [String] {
             onTrace?("frame request:run \(data.count)b")
             let handler = onRequest
+            let started = Date()
             Task { [weak self] in
                 let (code, out) = await handler(argv)
-                guard let payload = try? JSONSerialization.data(
-                    withJSONObject: ["reply": id, "code": code, "out": out] as [String: Any]) else { return }
+                // `type` is not decoration: the bot's data channel reads
+                // `json_message["type"]` on every message and throws away
+                // anything without one ("Error parsing JSON message",
+                // connection.py:365). Our replies had no type, so every door
+                // answer was discarded and every invite timed out after 45 s
+                // (23 Sep). Anything but "signalling", which is reserved.
+                guard let payload = try? JSONSerialization.data(withJSONObject: [
+                    "type": "tb", "reply": id, "code": code, "out": out,
+                ] as [String: Any]) else { return }
                 self?.send(payload)
+                self?.onTrace?("answered \(argv.prefix(2).joined(separator: " ")) -> \(code) "
+                               + "in \(Int(Date().timeIntervalSince(started) * 1000)) ms")
             }
             return
         }
-        onTrace?("frame \(obj["event"] as? String ?? "?") \(data.count)b")
+        // Only the manager's own lines go on. A WebRTC data channel also
+        // carries the framework's RTVI traffic, which is not ours to read: it
+        // reached the viewer as rows of "Invalid" with undefined fields
+        // (23 Sep), because the WebSocket serializer had never passed anything
+        // but our lines and everything downstream assumed that.
+        guard let kind = obj["event"] as? String else {
+            onTrace?("ignored a \(obj["type"] as? String ?? "framework") message, \(data.count)b")
+            return
+        }
+        onTrace?("frame \(kind) \(data.count)b")
         currentContinuation()?.yield(data)
     }
 }
