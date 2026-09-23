@@ -24,6 +24,16 @@ async def _run(*argv: str, timeout: float = 45.0) -> tuple[int, str]:
     logger.info("exec " + " ".join(argv))
     line("tool", argv=list(argv))
     if HOSTED:
+        # Wire v1 first, for the reads it covers; an app without it (Prod can
+        # lag Dev by a release) still answers request:run (hf-3).
+        v1 = _as_call(argv)
+        if v1 is not None:
+            r = await wire.call(*v1)
+            if r is not None:
+                if r.get("ok"):
+                    return 0, json.dumps(r.get("data"))
+                err = r.get("error") or {}
+                return (124 if err.get("code") == "timeout" else 1), f"{err.get('code')}: {err.get('message')}"
         # No tbase and no deep links where the bot runs: the app does it and replies.
         name = "tbase" if argv[0] == TBASE else argv[0]
         r = await wire.request("run", timeout=timeout, argv=[name, *argv[1:]])
@@ -37,6 +47,20 @@ async def _run(*argv: str, timeout: float = 45.0) -> tuple[int, str]:
         p.kill()
         return 124, "timed out"
     return p.returncode or 0, out.decode(errors="replace")
+
+
+def _as_call(argv) -> tuple[str, dict] | None:
+    """The v1 tool for a tbase read, or None to keep request:run."""
+    if argv[0] != TBASE:
+        return None
+    rest = list(argv[1:])
+    if rest == ["targets", "--json"]:
+        return "agents", {}
+    if rest == ["status", "--json"]:
+        return "waiting", {}
+    if len(rest) == 3 and rest[0] == "brief" and rest[2] == "--json":
+        return "brief", {"agent": rest[1]}
+    return None
 
 
 def _json_or_text(code: int, out: str):

@@ -324,9 +324,25 @@ class Brain:
             logger.warning(f"transcript read failed: {e}")
         return "\n".join(parts)[-limit:]
 
-    async def answer(self, question: str, brief: dict, recent: list[str]) -> str:
+    async def tail(self, brief: dict, sid: str | None) -> str:
+        """The agent's own words. Hosted the file is on the Mac, not here: the
+        path in the brief never existed in the container and this returned
+        nothing, silently, for every hosted answer (hf-4). The Mac reads it."""
+        if os.getenv("TB_HOSTED") and sid:
+            import wire
+            r = await wire.call("transcript", {"agent": sid, "chars": 7000})
+            if r is not None:
+                if not r.get("ok"):
+                    logger.warning(f"transcript for {sid[:8]}: {(r.get('error') or {}).get('code')}")
+                    return ""
+                turns = (r.get("data") or {}).get("turns") or []
+                return "\n".join(f"{t.get('who')}: {t.get('text')}" for t in turns)[-7000:]
+            logger.warning("transcript: this Mac offers no transcript tool; answering from the brief alone")
+        return self.transcript_tail(brief.get("transcriptPath"))
+
+    async def answer(self, question: str, brief: dict, recent: list[str], sid: str | None = None) -> str:
         facts = {k: brief.get(k) for k in ("goal", "recap", "proposal", "findings", "solution", "why", "lastAssistantMessage")}
-        tail = self.transcript_tail(brief.get("transcriptPath"))
+        tail = await self.tail(brief, sid)
         msgs = [
             {"role": "system", "content": (
                 "You are a coding-agent session answering its supervisor aloud, in first person "
@@ -727,7 +743,7 @@ class Manager(FrameProcessor):
             await self._say("That session has no brief stored yet.")
             return
         try:
-            answer = await self._brain.answer(question, brief, self._recent)
+            answer = await self._brain.answer(question, brief, self._recent, sid)
         except Exception as e:
             logger.error(f"brain failed: {e}")
             await emit(self, "error", reason=f"brain: {str(e)[:120]}")
