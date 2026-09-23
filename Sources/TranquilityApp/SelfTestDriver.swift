@@ -290,6 +290,76 @@ extension StatusHUD {
     /// Synchronous, and it stands its own fixture down, so it must run BEFORE
     /// `selfTestPendingSend` — that one owns the panel for five more seconds and
     /// releases the drill hold when it finishes.
+    /// A rewritten report opens. Throwaway store and directory, never the
+    /// real ones: `swift test` once wrote real hubs (18 Sep), and a drill
+    /// that leaves a brief in the real store puts a ghost in Past Agents.
+    func selfTestCardDoor() {
+        let fm = FileManager.default
+        let base = fm.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("tranquility-drills/card-door-\(UUID().uuidString)")
+        defer { try? fm.removeItem(at: base) }
+        let session = UUID().uuidString.lowercased()
+        let dir = base.appendingPathComponent("agents/\(session)")
+        let root = base.appendingPathComponent("support").path
+        let page = dir.appendingPathComponent("report.html")
+        let now = Date()
+        func write(_ body: String, at: Date) throws {
+            try "<html><head></head><body>\(body)</body></html>"
+                .write(to: page, atomically: true, encoding: .utf8)
+            try fm.setAttributes([.modificationDate: at], ofItemAtPath: page.path)
+        }
+        func reconcile() {
+            HubReconcile.run(sessionId: session, title: "Card door drill",
+                             dir: dir, root: root, now: now)
+        }
+        do {
+            try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+            try fm.createDirectory(atPath: root, withIntermediateDirectories: true)
+            let store = try QueueStore(url: URL(fileURLWithPath: root)
+                                            .appendingPathComponent("queue.sqlite"))
+            func brief(_ at: Date, _ rowid: Int64) throws {
+                try store.saveBrief(SessionBrief(topic: "card door drill", happened: "wrote a report"),
+                                    sessionId: session, eventRowid: rowid,
+                                    provider: "drill", callsign: nil, at: at)
+            }
+            // Three hours ago the page was written and recorded. Two turns
+            // followed; the second is the one whose card is on stage.
+            try write("v1", at: now.addingTimeInterval(-3 * 3600))
+            reconcile()
+            try brief(now.addingTimeInterval(-2 * 3600), 1)
+            try brief(now, 2)
+            let resolver: (String) -> SecondDoor? = { id in
+                if let report = ArtifactStore.freshReport(for: id, store: store, root: root) {
+                    return .report(report)
+                }
+                return .hub
+            }
+            let priorResolver = doorForSession
+            doorForSession = resolver
+            _ = showAnnouncement(
+                spoken: SpokenTextSanitizer().sanitize("Wrote the report. Go?"),
+                sessionId: session, pid: 1, project: "card door", cwd: "/tmp")
+            let untouchedIsTheHub = !openPageButton.isHidden
+                && openPageButton.attributedTitle.string.contains(StateLegend.openHubTitle)
+            // This turn rewrites it, through a shell as Codex does, and the
+            // reconciler runs at the brief.
+            try write("v2", at: now.addingTimeInterval(-30 * 60))
+            reconcile()
+            render()
+            let rewrittenOpens = !openPageButton.isHidden
+                && openPageButton.attributedTitle.string.contains(StateLegend.openReportTitle)
+            let doorIsThePage = resolver(session) == .report(ArtifactStore.canonical(page.path))
+            doorForSession = priorResolver
+            SelfTest.report("cardDoor", [
+                ("untouchedIsTheHub", untouchedIsTheHub),
+                ("rewrittenOpens", rewrittenOpens),
+                ("doorIsThePage", doorIsThePage),
+            ])
+        } catch {
+            SelfTest.skipped("cardDoor", because: "fixture: \(error)")
+        }
+    }
+
     func selfTestReadbackDoor() {
         var sent = false
         var cancelled = false
@@ -2034,6 +2104,14 @@ extension StatusHUD {
             ("hubOpensADoor", hubOpensADoor),
             ("reportNamesItself", reportNamesItself),
         ])
+        // THE DOOR READS THE RECORD (23 Sep). The three checks above stub the
+        // resolver and prove the label; this one runs the resolver itself,
+        // on a throwaway store and directory, through the same reconciler
+        // and picker the app runs at a brief. A Codex card offered Open Hub
+        // over a report the turn had just rewritten, because the reconciler
+        // skipped known paths and the picker read the last line; a unit test
+        // pins each half, and this is the two of them wired to a card.
+        selfTestCardDoor()
 
         SelfTest.report("invitation", [
             ("offersTheDoor", invitationOffersTheDoor),
