@@ -288,6 +288,18 @@ public actor ManagedCreditSession: SummaryProvider {
         return ManagedTranscriptionSession(accountId: account, transport: ctx.connection.transport)
     }
 
+    /// The recovery client for the account this Mac is signed in as.
+    ///
+    /// Stateless, unlike the transcript's session: from the caller's side a
+    /// recovery is one operation, started and then polled to its end.
+    public func recovery() async throws -> ManagedRecoveryClient {
+        let ctx = try currentContext()
+        try requireCredit()
+        let account = try await ctx.account.id()
+        try requireCurrent(ctx)
+        return ManagedRecoveryClient(accountId: account, transport: ctx.connection.transport)
+    }
+
     private func isCurrent(_ ctx: Context) -> Bool {
         context?.id == ctx.id && identity() == ctx.identity
     }

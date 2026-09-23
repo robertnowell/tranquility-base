@@ -263,6 +263,115 @@ public actor ManagedTranscriptionSession {
     }
 }
 
+// MARK: - The saved recording
+
+struct GatewayRecovery: Decodable, Sendable {
+    let version: String
+    let kind: String
+    let accountId: String
+    let operationId: String
+    let state: String
+    let text: String?
+    let seconds: String?
+    let error: GatewayOperation.ServiceError?
+}
+
+/// Recovering a saved recording on the account.
+///
+/// The caller does the waiting, by design: the Gateway has a sixty-second
+/// request timeout and does no work outside a request, so `PUT` hands the
+/// recording over and answers at once and each poll asks the vendor exactly
+/// once. A four-minute recording is four cheap requests, and this rung already
+/// runs off the critical path with nobody watching a spinner.
+public struct ManagedRecoveryClient: Sendable {
+    public let accountId: UUID
+    public let transport: any GatewayTransport
+
+    public init(accountId: UUID, transport: any GatewayTransport) {
+        self.accountId = accountId; self.transport = transport
+    }
+
+    /// How long to keep asking. The vendor's own ceiling in the key path is
+    /// ten minutes and the measured p95 is under thirty seconds; this is the
+    /// same generosity, spent in three-second polls.
+    static let pollInterval: TimeInterval = 3
+    static let pollCeiling: TimeInterval = 600
+
+    private func path(_ id: UUID) -> String {
+        "/v1/accounts/\(accountId.uuidString.lowercased())/recoveries/\(id.uuidString.lowercased())"
+    }
+
+    /// The whole recovery: hand it over, then poll to a terminal answer.
+    ///
+    /// The id is derived from the recording itself, so the same file offered
+    /// twice is one operation and one charge -- and a Mac that restarts
+    /// mid-recovery rejoins rather than paying again.
+    public func transcribe(_ audio: Data, seconds: Int,
+                           sleep: @Sendable (TimeInterval) async throws -> Void = { try await Task.sleep(nanoseconds: UInt64($0 * 1_000_000_000)) })
+        async throws -> String {
+        let id = Self.recoveryId(audio: audio, account: accountId)
+        var answer = try await put(id, audio: audio, seconds: seconds)
+        let deadline = Date().addingTimeInterval(Self.pollCeiling)
+        while answer.state == "running" || answer.state == "reconciling" {
+            guard Date() < deadline else { throw ManagedSummaryFailure.outcomeUnknown(operationId: id.uuidString) }
+            try Task.checkCancellation()
+            try await sleep(Self.pollInterval)
+            answer = try await poll(id)
+        }
+        guard answer.state == "succeeded", let text = answer.text, !text.isEmpty else {
+            throw ManagedSummaryFailure.refused(code: answer.error?.code ?? "provider_failed",
+                                                operationId: id.uuidString.lowercased())
+        }
+        return text
+    }
+
+    private func put(_ id: UUID, audio: Data, seconds: Int) async throws -> GatewayRecovery {
+        let response = try await transport.request(
+            method: "PUT", path: path(id), body: audio,
+            contentType: "application/octet-stream", headers: ["tb-audio-seconds": String(seconds)])
+        return try Self.read(response, id: id, account: accountId)
+    }
+
+    private func poll(_ id: UUID) async throws -> GatewayRecovery {
+        let response = try await transport.request(method: "GET", path: path(id), body: nil)
+        return try Self.read(response, id: id, account: accountId)
+    }
+
+    private static func read(_ response: (status: Int, body: Data), id: UUID, account: UUID) throws -> GatewayRecovery {
+        // 202 is "still running", which is an answer, not a failure.
+        guard response.status == 200 || response.status == 202 else {
+            struct Envelope: Decodable { let error: GatewayOperation.ServiceError }
+            let code = (try? JSONDecoder().decode(Envelope.self, from: response.body))?.error.code ?? "service_unavailable"
+            throw ManagedSummaryFailure.refused(code: code, operationId: id.uuidString.lowercased())
+        }
+        let recovery = try JSONDecoder().decode(GatewayRecovery.self, from: response.body)
+        guard recovery.version == "1", recovery.kind == "recovery",
+              recovery.accountId == account.uuidString.lowercased(),
+              recovery.operationId == id.uuidString.lowercased() else {
+            throw ManagedSummaryFailure.invalidResponse
+        }
+        return recovery
+    }
+
+    /// Content IS the identity, as it is for a spoken clip. The recording's
+    /// own bytes decide the operation, so offering it twice cannot buy it
+    /// twice. Length-framed like the others, so two fields cannot be slid
+    /// past each other into one digest.
+    static func recoveryId(audio: Data, account: UUID) -> UUID {
+        var bytes = Data("tb.recovery.v1\0".utf8)
+        let accountBytes = Data(account.uuidString.lowercased().utf8)
+        bytes.append(Data("\(accountBytes.count):".utf8)); bytes.append(accountBytes)
+        bytes.append(Data("\(audio.count):".utf8))
+        bytes.append(contentsOf: SHA256.hash(data: audio))
+        var digest = Array(SHA256.hash(data: bytes).prefix(16))
+        digest[6] = (digest[6] & 15) | 128
+        digest[8] = (digest[8] & 63) | 128
+        let hex = digest.map { String(format: "%02x", $0) }
+        return UUID(uuidString: [hex[0..<4], hex[4..<6], hex[6..<8], hex[8..<10], hex[10..<16]]
+            .map { $0.joined() }.joined(separator: "-"))!
+    }
+}
+
 // MARK: - What the app installs
 
 /// The two closures the audio providers ask, and the session behind them.
@@ -393,6 +502,44 @@ public final class ManagedAudio: @unchecked Sendable {
                 log("credits: the transcript could not be bought (\(ManagedCreditSession.describe(error)))")
                 await session.noteAudioFailure(error, during: "transcript")
                 throw error
+            }
+        }
+    }
+
+    /// For `AssemblyAIFileRecovery.managed`: a recording transcribed on the
+    /// account, or nil when this Mac is not on credits, or out of them.
+    ///
+    /// Unlike the voice, a credits fault here falls to the key path too rather
+    /// than throwing. Recovery already has a chain beneath it -- the person's
+    /// own key, then the on-device floor -- and refusing the whole rung
+    /// because the Gateway was unreachable would lose a recording to protect
+    /// a preference.
+    public func recovering() -> @Sendable (Data, Int) async throws -> String? {
+        { [session, log] audio, seconds in
+            let client: ManagedRecoveryClient
+            do { client = try await session.recovery() }
+            catch let failure as ManagedSummaryFailure {
+                ManagedAudio.recordFallback("recovery", failure)
+                return nil                             // not on credits, or out: the key path runs
+            }
+            catch { return nil }
+            do { return try await client.transcribe(audio, seconds: seconds) }
+            catch let failure as ManagedSummaryFailure {
+                if case .refused("no_speech_detected", _) = failure {
+                    // A real answer about the recording, not about the
+                    // account: there is nothing in it, and the next rung would
+                    // spend somebody's key finding that out again.
+                    return ""
+                }
+                if !ManagedAudio.useOwnKey(failure) {
+                    log("credits: the recording could not be recovered (\(ManagedCreditSession.describe(failure)))")
+                    await session.noteAudioFailure(failure, during: "recovery")
+                }
+                ManagedAudio.recordFallback("recovery", failure)
+                return nil
+            } catch {
+                log("credits: the recording could not be recovered (\(ManagedCreditSession.describe(error)))")
+                return nil
             }
         }
     }
