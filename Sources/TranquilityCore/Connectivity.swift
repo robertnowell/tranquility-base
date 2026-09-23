@@ -36,6 +36,14 @@ public final class Connectivity: @unchecked Sendable {
         return made
     }
 
+    /// Test only: returns once every reading so far has been applied and
+    /// every listener it woke has run. Replaces sleeping in tests, which
+    /// raced the debounce on a slow CI runner (22 Sep, #582).
+    func drainForTesting() {
+        queue.sync {}
+        delivery.sync {}
+    }
+
     /// Test isolation only: install a monitor-less instance, or clear it.
     static func installForTesting(_ instance: Connectivity?) { shared = instance }
 
