@@ -4,8 +4,8 @@ import Foundation
 /// Reads only for now; `send` joins when it goes through the app's own Send
 /// (hf-12), and until then the bot keeps using `request:run` for effects.
 public enum ManagerTools {
-    public static func standard(tbase: String) -> [ManagerTool] {
-        [
+    public static func standard(tbase: String, ledger: ManagerLedger? = nil) -> [ManagerTool] {
+        var tools: [ManagerTool] = [
             ManagerTool(name: .agents, deadlineMs: 3000, capBytes: 16 * 1024) { _ in
                 try await tbaseJSON(tbase, ["targets", "--json"])
             },
@@ -28,6 +28,22 @@ public enum ManagerTools {
                 return TranscriptTail.read(path: path, chars: chars)
             },
         ]
+        if let ledger {
+            // What the developer (and the manager, and the agents) said, on
+            // this Mac, numbered (hf-5). Newest last; a cut drops the oldest.
+            tools.append(ManagerTool(name: .ledger, deadlineMs: 2000, capBytes: 32 * 1024, keep: .newest) { args in
+                let lines: [ManagerLedger.Line]
+                if let from = args["from"] as? Int {
+                    lines = ledger.lines(from: from, to: (args["to"] as? Int) ?? Int.max)
+                } else if let last = args["last"] as? Int {
+                    lines = ledger.last(min(max(last, 1), 500))
+                } else {
+                    lines = ledger.sinceLastAction()
+                }
+                return lines.map { ["n": $0.n, "t": $0.t, "who": $0.who, "text": $0.text, "kind": $0.kind] as [String: Any] }
+            })
+        }
+        return tools
     }
 
     static func agent(_ args: [String: Any]) throws -> String {
