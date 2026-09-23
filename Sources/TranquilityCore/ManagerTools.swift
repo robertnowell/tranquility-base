@@ -40,7 +40,14 @@ public enum ManagerTools {
                 } else {
                     lines = ledger.sinceLastAction()
                 }
-                return lines.map { ["n": $0.n, "t": $0.t, "who": $0.who, "text": $0.text, "kind": $0.kind] as [String: Any] }
+                return lines.map { line -> [String: Any] in
+                    var out: [String: Any] = ["n": line.n, "t": line.t, "role": line.role.rawValue,
+                                              "kind": line.kind.rawValue, "text": line.text]
+                    if let speaker = line.speaker { out["speaker"] = speaker }
+                    if let target = line.target { out["target"] = target }
+                    if let name = line.targetName { out["target_name"] = name }
+                    return out
+                }
             })
         }
         return tools

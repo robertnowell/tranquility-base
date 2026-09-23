@@ -465,8 +465,12 @@ extension AppDelegate {
     /// an idempotency key outlives a reconnect (hf-3). Reads today; effects
     /// still go through `answerManagerRequest` until send moves to Coordinator.
     /// Everything said in hands-free, numbered and whole, on this Mac (hf-5).
-    static let managerLedger = ManagerLedger(
-        directory: QueueStore.supportDirectory.appendingPathComponent("ledger", isDirectory: true))
+    static let managerLedger: ManagerLedger = {
+        let ledger = ManagerLedger(
+            directory: QueueStore.supportDirectory.appendingPathComponent("ledger", isDirectory: true))
+        ledger.onUnparsed = { Permissions.log($0) }
+        return ledger
+    }()
 
     static let managerToolHost = ManagerToolHost(
         tools: ManagerTools.standard(tbase: ManagerConfig.tbasePath(), ledger: managerLedger),
@@ -542,6 +546,8 @@ extension AppDelegate {
         case .idle:
             managerEndedByIdle = true
             hud.setManagerState(StatusHUD.orbState, line: "paused after \((e.secs ?? 0) / 60) quiet minutes")
+        case .said:
+            break  // the ledger has it (managerLedger); nothing to paint
         case .rotate:
             // The bot is ending the session before Cloud's cap, at a moment
             // with nothing open; the socket's end reconnects. Say nothing.
