@@ -33,6 +33,7 @@ from events import emit, line
 from compose import READBACK_SECS, OpenMessage, classify, continues, filler_only
 import app_echo
 import session
+import span
 from vocab import Intent, Line, LineKind, Role, Verdict, line_from_transcript, parse_intent, parse_verdict
 from turns import TurnQueue
 from spoken import spoken
@@ -401,27 +402,52 @@ class Brain:
         words = ((r.json()["choices"][0]["message"].get("content") or "")).split()
         return " ".join(words[:20]).rstrip(".")
 
-    async def compose_message(self, request: str, exchange: list[str]) -> str:
-        """The message to type into the agent's terminal, from the developer's own
-        words: the request itself when it carries the instruction ('tell it to run
-        the tests'), or the dictated turns before it ('send that message')."""
+    async def pick_span(self, request: str, cands: list, agent: str, goal: str | None) -> dict | None:
+        """Which of the developer's own lines are the message, or which part of
+        the request is (span.py). The model only points; it writes nothing that
+        is sent. Returns its answer as JSON, checked by span.check."""
+        numbered = "\n".join(f"[{c.n}] {c.text}" for c in cands) or "(none)"
         msgs = [
             {"role": "system", "content": (
-                "You turn a developer's spoken words into the exact message to type into a coding "
-                "agent's terminal. Use their words; drop filler, false starts and asides about the "
-                "assistant itself. If the request carries the instruction ('tell it to run the tests'), "
-                "the message is that instruction addressed to the agent ('Run the tests'). If the "
-                "request refers to a message they just dictated ('send that message', 'send it'), the "
-                "message is the dictated turns marked 'you (silent)' that come after the last spoken "
-                "or acted line, joined into clean prose. Output ONLY the message text, no preamble.")},
-            {"role": "user", "content": "Exchange (oldest first):\n" + "\n".join(exchange) + f"\n\nRequest: {request}"},
+                "A developer speaking to a voice assistant has asked it to send a message to a coding agent. "
+                "You decide WHICH of their own words are that message. You never write, fix or rephrase "
+                "anything: you only point. Answer with exactly one JSON object and nothing else:\n"
+                '{"lines": [FROM, TO]}  when the message is a contiguous run of the numbered lines they '
+                "said earlier (use their numbers; leave out chatter that is not for the agent);\n"
+                '{"quote": "..."}  when the message is inside the request itself, copied character for '
+                "character from it (for 'tell it yes, go ahead' the quote is 'yes, go ahead');\n"
+                '{"none": true}  when they have not said the message yet, or you cannot tell which words are it.\n'
+                "A request that only says where or whether to send (\"send that to it\", \"to the same agent\", "
+                "\"send it over\") is not itself the message: point at their earlier lines, or answer none.\n"
+                "Examples:\n"
+                "Lines [4] The deploy script skips the second agent. [5] Can you make it deploy both. "
+                "Request: send that to the deploy agent -> {\"lines\": [4, 5]}\n"
+                "Lines [9] Right. Request: tell it yes, merge it -> {\"quote\": \"yes, merge it\"}\n"
+                "Lines [2] Coffee's cold again. Request: send a message to the build agent -> {\"none\": true}\n"
+                "Lines [6] The export drops the footer. [7] Also the images are stale. "
+                "Request: and to the same one -> {\"lines\": [6, 7]}")},
+            {"role": "user", "content": (
+                f"Agent: {agent}" + (f", working on: {goal}" if goal else "") + "\n"
+                f"Request: {request}\n"
+                f"Their lines since the last message was sent (oldest first):\n{numbered}")},
         ]
-        body = {"model": self.model, "messages": msgs, "max_tokens": 600, "temperature": 0.2}
-        t0 = time.monotonic()
-        r = await self._client.post("/chat/completions", json=body)
-        r.raise_for_status()
-        record("brain", body, r.json(), ms=int((time.monotonic() - t0) * 1000))
-        return (r.json()["choices"][0]["message"].get("content") or "").strip()
+        body = {"model": self.model, "messages": msgs, "max_tokens": 400, "temperature": 0}
+        # It answers in about 0.6 s; now and then the provider stalls past 8 s
+        # (2 of 36 picks, 23 Sep). A pick changes nothing, so a stalled one is
+        # abandoned at 4 s and asked once more rather than waited out.
+        for attempt in (1, 2):
+            t0 = time.monotonic()
+            try:
+                r = await self._client.post("/chat/completions", json=body, timeout=4.0)
+            except httpx.TimeoutException:
+                logger.warning(f"span pick stalled past 4 s (attempt {attempt})")
+                if attempt == 2:
+                    raise
+                continue
+            r.raise_for_status()
+            record("brain", body, r.json(), ms=int((time.monotonic() - t0) * 1000))
+            return span.parse_answer(r.json()["choices"][0]["message"].get("content") or "")
+        return None
 
 
 class Manager(FrameProcessor):
@@ -830,13 +856,13 @@ class Manager(FrameProcessor):
         if self.stage:
             # The stage is the target. Compose from the developer's words and send;
             # no tool-choosing model in the loop to ask which project.
+            name = self.stage.get("name") or self.stage.get("project") or "the agent"
             try:
-                message = await self._brain.compose_message(text, exchange_lines(12))
+                message = await self._span_message(text, name, self.stage.get("goal"))
             except Exception as e:
-                logger.error(f"compose failed: {e}")
-                await emit(self, "error", reason=f"compose: {str(e)[:120]}")
-                await self._say("I couldn't put that message together.")
-                return
+                logger.error(f"span pick failed: {e}")
+                await emit(self, "error", reason=f"span: {str(e)[:120]}")
+                message = None  # nothing picked is nothing sent: keep listening
             if not message:
                 await self._open({"kind": "agent", "sessionId": self.stage["sessionId"],
                                   "name": self.stage.get("name") or self.stage.get("project") or "the agent"})
@@ -859,11 +885,21 @@ class Manager(FrameProcessor):
         self.stage = c
         await emit(self, "stage", session=c["sessionId"], goal=c.get("goal"), name=c.get("name"), project=c.get("project"))
         try:
-            seed = await self._brain.compose_message(text, exchange_lines(6))
-        except Exception:
+            seed = await self._span_message(text, c.get("name") or c.get("project") or "the agent", c.get("goal")) or ""
+        except Exception as e:
+            logger.error(f"span pick failed: {e}")
             seed = ""
         await self._open({"kind": "agent", "sessionId": c["sessionId"],
                           "name": c.get("name") or c.get("project") or "the agent"}, seed=seed)
+
+    async def _span_message(self, request: str, agent: str, goal: str | None) -> str | None:
+        """The developer's own words for this send, copied, or None when there
+        is nothing to send yet (span.py)."""
+        cands = await span.candidates()
+        answer = await self._brain.pick_span(request, cands, agent, goal)
+        pick = span.check(answer, cands, request)
+        logger.info(f"span: {len(cands)} candidate lines; answer {answer}; pick {pick}")
+        return span.text_of(pick, cands) if pick else None
 
     async def _do_start_agent(self, text, frame, direction):
         """Defaults, not a chooser: Claude Code in the default project, started
