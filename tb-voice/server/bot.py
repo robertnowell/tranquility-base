@@ -37,9 +37,6 @@ from pipecat.runner.utils import create_transport
 from pipecat.services.assemblyai.stt import AssemblyAISTTService
 from pipecat.services.openai.llm import OpenAILLMService
 from pipecat.transports.base_transport import BaseTransport, TransportParams
-from pipecat.turns.user_start.min_words_user_turn_start_strategy import (
-    MinWordsUserTurnStartStrategy,
-)
 from pipecat.turns.user_stop.speech_timeout_user_turn_stop_strategy import (
     SpeechTimeoutUserTurnStopStrategy,
 )
@@ -57,6 +54,7 @@ from prompt import SYSTEM
 from tools import SCHEMAS
 import build_stamp
 from tts import SpokenTTSService
+from turn_start import turn_start_strategy
 
 
 KEYTERMS = [
@@ -180,14 +178,10 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
             # 22 Sep). EchoGate feeds the transcriber zeros while the manager
             # speaks, which is asked on every audio frame and cannot stick.
             # A turn starts on words, not on VAD: in a loud room VAD fired 300 ms into
-            # every answer and cancelled it before TTS. Two words of transcript start a
-            # turn; noise and one-word backchannels do not.
+            # every answer and cancelled it before TTS. Echo-cancelled clients
+            # may interrupt on their first recognized word, including "Stop".
             user_turn_strategies=UserTurnStrategies(
-                start=[
-                    MinWordsUserTurnStartStrategy(
-                        min_words=int(os.getenv("TB_MIN_WORDS", "2"))
-                    )
-                ],
+                start=[turn_start_strategy(cancels_echo=cancels_echo)],
                 stop=[
                     TurnAnalyzerUserTurnStopStrategy(
                         turn_analyzer=LocalSmartTurnAnalyzerV3(
