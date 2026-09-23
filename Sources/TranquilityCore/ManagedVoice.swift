@@ -160,6 +160,27 @@ public struct ManagedVoiceClient: Sendable {
         return try await call("PUT", path(id), body: body, id: id, expectEndpoint: true)
     }
 
+    /// Carry one signalling message for a WebRTC session, and bring the reply.
+    ///
+    /// The host's own offer endpoint answers `401 Invalid public API key` to
+    /// anything without the vendor's key (measured 23 Sep), and this Mac holds
+    /// no vendor keys -- so the Gateway carries the SDP offer and the trickled
+    /// candidates, the same way it mints a transcript's token rather than
+    /// shipping the key. Signalling only: the media goes peer to peer.
+    public func signal(id: UUID, method: String, body: [String: Any]) async throws -> [String: Any] {
+        let payload = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
+        let response = try await transport.request(method: method, path: path(id, "/offer"), body: payload)
+        guard response.status == 200,
+              let object = try? JSONSerialization.jsonObject(with: response.body) as? [String: Any]
+        else {
+            struct Envelope: Decodable { struct E: Decodable { let code: String }; let error: E }
+            let code = (try? JSONDecoder().decode(Envelope.self, from: response.body))?.error.code
+                ?? "service_unavailable"
+            throw ManagedSummaryFailure.refused(code: code, operationId: id.uuidString.lowercased())
+        }
+        return object
+    }
+
     public func renew(id: UUID) async throws -> GatewayVoiceSession {
         try await call("POST", path(id, "/renew"), body: nil, id: id, expectEndpoint: false)
     }
