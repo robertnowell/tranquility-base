@@ -211,4 +211,57 @@ final class UpdateReadinessTests: XCTestCase {
         XCTAssertFalse(UpdateReadiness.isOffline(http), "an HTTP status means the feed answered")
         XCTAssertFalse(UpdateReadiness.isOffline(tls), "a TLS failure could be a cert problem")
     }
+
+    // MARK: - hands-free
+
+    /// The case the panel cannot describe. A hands-free session runs for
+    /// minutes with the panel hidden or idle — the two states this function
+    /// otherwise reads as "now is the moment" — while a conversation is
+    /// actually happening, and installing ends the call. 23 Sep: three
+    /// deliveries landed in the middle of the session testing them.
+    func testAHandsFreeSessionHoldsAnInstallEvenWithNothingOnScreen() {
+        XCTAssertEqual(
+            UpdateReadiness.block(panel: .hidden, inFlightUtterances: 0, handsFree: true),
+            .handsFreeLive)
+        XCTAssertEqual(
+            UpdateReadiness.block(panel: .idle(waiting: 0), inFlightUtterances: 0, handsFree: true),
+            .handsFreeLive)
+    }
+
+    /// And it outranks the others, so the log line names the thing that will
+    /// actually be lost rather than the panel state underneath it.
+    func testHandsFreeIsNamedAheadOfThePanelAndTheQueue() {
+        XCTAssertEqual(
+            UpdateReadiness.block(panel: .listening(eventId: nil), inFlightUtterances: 3, handsFree: true),
+            .handsFreeLive)
+    }
+
+    /// With no session, nothing changes: the default is off and every existing
+    /// answer stands.
+    func testNoSessionLeavesTheOldRuleExactlyAsItWas() {
+        XCTAssertNil(UpdateReadiness.block(panel: .hidden, inFlightUtterances: 0, handsFree: false))
+        XCTAssertEqual(
+            UpdateReadiness.block(panel: .listening(eventId: nil), inFlightUtterances: 0, handsFree: false),
+            .panelEngaged)
+    }
+
+    // MARK: - the marker the shell reads
+
+    func testAFreshStampReadsAsLiveAndAStaleOneDoesNot() {
+        let now = Date()
+        XCTAssertTrue(HandsFreeMarker.decide(
+            contents: String(Int(now.timeIntervalSince1970)), now: now))
+        XCTAssertFalse(HandsFreeMarker.decide(
+            contents: String(Int(now.timeIntervalSince1970 - 21)), now: now))
+    }
+
+    /// Every failure mode resolves to "not live". The cost of getting this
+    /// wrong in the other direction is an app that never updates again.
+    func testAnythingUnreadableMeansNotLive() {
+        let now = Date()
+        for contents in [nil, "", "   ", "not a number", "-5"] as [String?] {
+            XCTAssertFalse(HandsFreeMarker.decide(contents: contents, now: now),
+                           "\(contents ?? "nil") should not read as a live session")
+        }
+    }
 }

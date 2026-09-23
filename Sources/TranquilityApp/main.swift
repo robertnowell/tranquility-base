@@ -800,6 +800,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     self.utteranceWasInFlight = inFlight
                 }
                 CaptureMarker.settle(inFlight: inFlight)
+                // And the other promise: a hands-free session is a live
+                // conversation, and stopping the app ends it. Same timer,
+                // because a marker that depends on somebody remembering to
+                // clear it is a marker that eventually holds off every
+                // install forever.
+                HandsFreeMarker.settle(live: self.managerIsOn)
             }
         }
         // One intake beat: drain the spool, prepare the next brief, repaint

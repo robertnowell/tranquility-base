@@ -307,7 +307,8 @@ extension Updates: @preconcurrency SPUUpdaterDelegate {
 
     private func currentBlock() -> UpdateReadiness.Block? {
         UpdateReadiness.block(
-            panel: panelState(), inFlightUtterances: inFlightUtterances())
+            panel: panelState(), inFlightUtterances: inFlightUtterances(),
+            handsFree: HandsFreeMarker.isLive())
     }
 
     /// Re-ask on a timer until nothing is in motion, then let the install run.
