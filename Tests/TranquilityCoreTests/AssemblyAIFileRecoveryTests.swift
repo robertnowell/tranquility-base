@@ -45,6 +45,58 @@ final class AssemblyAIFileRecoveryTests: XCTestCase {
         XCTAssertEqual(AssemblyAIFileRecovery.state(of: [:]), .processing)
     }
 
+    /// Measured against the live API on 23 Sep: 100 ms and 150 ms both come
+    /// back with this exact sentence, 200 ms clears the floor. Read as a
+    /// service failure it would be retried twice with backoff and then handed
+    /// to the next rung, which cannot do anything with it either.
+    func testTooShortIsSilenceRatherThanAFault() {
+        XCTAssertEqual(
+            AssemblyAIFileRecovery.state(of: ["status": "error", "error": "Audio duration is too short."]),
+            .noSpeechDetected)
+        // Narrowly, like its neighbour: another duration complaint is still a fault.
+        XCTAssertEqual(
+            AssemblyAIFileRecovery.state(of: ["status": "error", "error": "Audio duration is too long."]),
+            .failed("Audio duration is too long."))
+    }
+
+    /// And it should not reach the wire at all: three round trips and a charge
+    /// to learn what the file's own duration already said.
+    func testAudioUnderTheFloorIsRefusedWithoutAskingTheVendor() async throws {
+        final class Fail: URLProtocol, @unchecked Sendable {
+            nonisolated(unsafe) static var asked = false
+            override class func canInit(with request: URLRequest) -> Bool { true }
+            override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+            override func startLoading() {
+                Fail.asked = true
+                client?.urlProtocol(self, didFailWithError: URLError(.notConnectedToInternet))
+            }
+            override func stopLoading() {}
+        }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [Fail.self]
+
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("too-short-\(UUID().uuidString).wav")
+        // 100 ms, measured above as under the vendor's floor.
+        var pcm = Data()
+        for _ in 0..<1_600 { withUnsafeBytes(of: Int16(0).littleEndian) { pcm.append(contentsOf: $0) } }
+        try BuddyWAVBuilder.wavData(fromPCM16: pcm, sampleRate: 16_000).write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        XCTAssertEqual(AssemblyAIFileRecovery.seconds(of: url) ?? 0, 0.1, accuracy: 0.01)
+
+        var rung = AssemblyAIFileRecovery(keyOverride: "k")
+        rung.session = URLSession(configuration: configuration)
+        Fail.asked = false
+        do {
+            _ = try await rung.transcribe(fileAt: url)
+            XCTFail("expected the floor to refuse it")
+        } catch {
+            XCTAssertEqual(error as? TranscriptionFailure, .noSpeechDetected)
+        }
+        XCTAssertFalse(Fail.asked, "nothing under the floor should reach the vendor")
+    }
+
     func testUnconfiguredRungReportsItselfHonestly() {
         XCTAssertFalse(AssemblyAIFileRecovery(keyOverride: nil).isConfigured)
         XCTAssertTrue(AssemblyAIFileRecovery(keyOverride: "k").isConfigured)
