@@ -226,12 +226,9 @@ public enum SessionVerdict {
                 // An error is a fact the file states outright, and no process
                 // status contradicts it: a session sitting on a usage limit is
                 // idle by every measure the API has.
-                // Both lengths from the activity itself, so a class that
-                // rewrites its caption (a dropped connection) rewrites its
-                // hover in the same place and the two cannot disagree.
-                let said = SessionActivity.blocked(reason: reason)
                 return Verdict(state: .blocked, witness: .file,
-                               because: said.shortReason, detail: said.fullReason)
+                               because: SessionActivity.blocked(reason: reason).shortReason,
+                               detail: reason)
 
             case .stalled(let reason):
                 // A stall is an INFERENCE from silence, and silence is exactly

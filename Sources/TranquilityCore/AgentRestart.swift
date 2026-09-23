@@ -75,23 +75,10 @@ public enum AgentRestart {
     /// grid, and the error it names tells the reader more than the restart
     /// does. `working`/`stalled` after a restart is the interrupted case;
     /// `idle` and an unreadable verdict are the reopened one.
-    ///
-    /// EXCEPT a dropped connection (23 Sep). That error belonged to the
-    /// process that was killed: the line it lost is not this process's line,
-    /// and a revived agent that comes up reading "Connection lost", which is
-    /// exactly what one did in Dallas at 6:35 that morning, one second after
-    /// its owner revived it, tells its owner the opposite of the truth. A
-    /// limit or an expired login is different: the account is still over it,
-    /// so those keep their words.
     public static func reason(for activity: SessionActivity?)
         -> (short: String, full: String)? {
         switch activity {
-        case .blocked(let reason):
-            guard SessionActivity.isDroppedConnection(reason) else { return nil }
-            return ("restarted after a dropped connection",
-                    "This session was restarted after a dropped connection cut its "
-                    + "last answer short. It is back and has heard nothing since, so "
-                    + "tell it to carry on.")
+        case .blocked: return nil
         case .working, .stalled:
             return ("restarted mid-turn",
                     "This session was restarted while a turn was still open. The work "

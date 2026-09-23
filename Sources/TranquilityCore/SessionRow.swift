@@ -209,17 +209,23 @@ public struct SessionRow: Equatable, Sendable {
     /// this field may have. `scripts/check-row-dates.sh` holds that.
     public let lastActivity: Date?
 
-    /// **The harness's own error sentence, when this amber is one it stated.**
-    ///
-    /// Set only where the transcript's last entry is an API error and the
-    /// process that hit it is the one running now (`GridAssembler
-    /// .harnessFault`). Nil for every other amber: a permission prompt, a
-    /// restart, a stall, standing by. It is the raw sentence and never the
-    /// caption, because this is what `FaultWatch` hands to `Failures`, and a
-    /// failure carries the agent's words (11 Sep). Carried on the row for the
-    /// reason everything else here is: one reader of the verdict, so the
-    /// record and the screen cannot disagree about which rows are faults.
-    public let fault: String?
+    /// **What this amber is, for the failure stream.** Nil on every lamp but
+    /// amber, and on the one amber the person caused a second ago by switching
+    /// the row on. Set by `GridAssembler.amber` from the verdict's witness, so
+    /// the record and the screen read one verdict and cannot disagree about
+    /// which rows are faults. The reason is the row's own words, the hover
+    /// text, whichever harness wrote them.
+    public let fault: Fault?
+
+    /// A reported amber: which spine of evidence lit it, in the vocabulary
+    /// `Failures` files under, and the words the row shows for it.
+    public struct Fault: Equatable, Sendable {
+        public let kind: FailureKind
+        public let reason: String
+        public init(kind: FailureKind, reason: String) {
+            self.kind = kind; self.reason = reason
+        }
+    }
 
     public enum Door: Equatable, Sendable {
         /// A tmux pane this Mac owns. Every local agent.
@@ -273,7 +279,7 @@ public struct SessionRow: Equatable, Sendable {
                harness: String? = nil, door: Door = .terminal,
                hasRecordedTurn: Bool = false,
                lastActivity: Date? = nil,
-               fault: String? = nil) {
+               fault: Fault? = nil) {
         self.id = id
         self.name = name
         self.aux = aux

@@ -83,21 +83,6 @@ final class AgentRestartTests: XCTestCase {
         // Already amber, already on the grid, and the error it names tells the
         // reader more than the restart would.
         XCTAssertNil(AgentRestart.reason(for: .blocked(reason: "usage limit")))
-        XCTAssertNil(AgentRestart.reason(for: .blocked(
-            reason: "Failed to refresh OAuth token: another Claude Code process is refreshing it")))
-    }
-
-    /// Dallas, 23 Sep, 6:35 CT: an agent revived one second earlier came up
-    /// amber reading "Connection lost mid-response", the last line of the
-    /// process that had been killed the afternoon before. The line it lost
-    /// was never this process's line.
-    func testADroppedConnectionBelongsToTheProcessThatWasKilled() {
-        let said = AgentRestart.reason(for: .blocked(
-            reason: "API Error: Connection lost mid-response. The response above may be incomplete."))
-        XCTAssertEqual(said?.short, "restarted after a dropped connection")
-        XCTAssertTrue(said?.full.hasSuffix("tell it to carry on.") ?? false, said?.full ?? "nil")
-        XCTAssertNotEqual(said?.short, AgentRestart.reason(for: .working)?.short)
-        XCTAssertNotEqual(said?.short, AgentRestart.reason(for: .idle)?.short)
     }
 
     func testTheTwoRestartsDoNotReadAlike() {

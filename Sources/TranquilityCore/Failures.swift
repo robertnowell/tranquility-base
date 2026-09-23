@@ -79,17 +79,29 @@ public enum FailureKind: String, Codable, CaseIterable, Sendable {
     /// exactly why it must be recorded: before 22 Sep it reached only app.log.
     /// Offline is not this; that is Connectivity's, and not a fault.
     case creditsService = "credits_service"
-    /// An agent's harness reported an error the person can see: the
-    /// transcript's last entry is an API error (a dropped connection, a rate
-    /// limit, an expired login) that outlived the transient grace, so the row
-    /// is amber with the harness's own sentence. Filed by `FaultWatch` from
-    /// the same rows the grid draws, once per new sentence per agent, and
-    /// only for the process that hit it (a restart reading an old error is
-    /// not this). Before 23 Sep 2026 it reached only the lamp spine in
+    /// **Every amber lamp is reported** (ruled 23 Sep 2026: "basically every
+    /// amber lamp I want to know about"). Three kinds rather than one, because
+    /// Sentry groups by kind and site, and one kind would fold a dropped
+    /// connection, a permission prompt and a restart into a single issue that
+    /// posts to Slack once and never again. The kind is the verdict's
+    /// WITNESS, which is a fact the arbiter already states, and not a reading
+    /// of the sentence: the same ruling refused text parsing as a way to
+    /// reach a state ("manual string parsing... is just a way to get bugs").
+    /// The row's own words ride along as the reason, whatever harness wrote
+    /// them. Filed by `FaultWatch` from the rows the grid draws, once per new
+    /// sentence per agent. Before this, a fault reached only the lamp spine in
     /// PostHog: a user sat on "Connection lost mid-response" across two
-    /// sessions and nothing posted to Slack. A permission prompt and a
-    /// restart are amber the person caused, not failures, and stay out.
+    /// sessions and nothing posted anywhere.
+    ///
+    /// The file spoke: an API error the transcript states outright, or a
+    /// stall inferred from its silence.
     case agentFault = "agent_fault"
+    /// The process spoke: it is holding for a human, at a permission prompt
+    /// or a question.
+    case agentWaiting = "agent_waiting"
+    /// The restart rule spoke: a resumed process that has heard nothing since
+    /// it came up.
+    case agentRestarted = "agent_restarted"
     case persistFailed = "persist_failed"
     case notice = "notice"
 }

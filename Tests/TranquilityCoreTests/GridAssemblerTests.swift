@@ -71,65 +71,69 @@ final class GridAssemblerTests: XCTestCase {
         XCTAssertEqual(result.lamp, .running)
     }
 
-    // MARK: - harnessFault (the failure spine's one question)
+    // MARK: - amber (the failure spine's one question)
 
     private let dropped = "API Error: Connection lost mid-response. The response above may be incomplete."
 
-    private func fault(activity: SessionActivity?, observedAt: Date? = nil,
-                       live: LiveSession?) -> (verdict: Verdict, fault: String?) {
+    private func amber(activity: SessionActivity?, observedAt: Date? = nil,
+                       live: LiveSession?, pickedUp: Bool = false)
+        -> (verdict: Verdict, fault: SessionRow.Fault?) {
         let evidence = activity.map {
             SessionActivity.Evidence(activity: $0, observedAt: observedAt, modifiedAt: nil)
         }
         let verdict = GridAssembler.verdict(for: evidence, sessionId: "s", live: live,
-                                            isInFlight: false)
-        return (verdict, GridAssembler.harnessFault(verdict: verdict, evidence: evidence))
+                                            pickedUp: pickedUp, isInFlight: false)
+        return (verdict, GridAssembler.amber(verdict: verdict))
     }
 
-    func testAnAPIErrorTheFileStatesIsAFaultInTheHarnessesOwnWords() {
-        let got = fault(activity: .blocked(reason: dropped), live: live(status: "idle"))
-        XCTAssertEqual(got.fault, dropped)
-        // And the row says the instruction while the hover keeps the sentence.
-        XCTAssertEqual(got.verdict.because, "connection dropped · tell it to carry on")
-        XCTAssertTrue(got.verdict.detail?.hasPrefix(dropped) ?? false)
+    func testAnAPIErrorTheFileStatesReportsAsAFaultInTheRowsOwnWords() {
+        let got = amber(activity: .blocked(reason: dropped), live: live(status: "idle"))
+        XCTAssertEqual(got.fault, SessionRow.Fault(kind: .agentFault, reason: dropped))
     }
 
-    func testAStallIsNotAFaultEvenWhenItIsAmber() {
-        // Same witness, an inference from silence: no sentence the harness wrote.
-        let got = fault(activity: .stalled(reason: "silent for 2h"), live: nil)
+    func testAStallWithNoProcessReportsAsAFaultToo() {
+        // Amber is amber: every one reports. The kind says the file inferred it.
+        let got = amber(activity: .stalled(reason: "silent for 2h"), live: nil)
+        XCTAssertEqual(got.verdict.lamp, .fault)
+        XCTAssertEqual(got.fault?.kind, .agentFault)
+        XCTAssertEqual(got.fault?.reason, "silent for 2h")
+    }
+
+    func testAPermissionPromptReportsUnderItsOwnKind() {
+        let got = amber(activity: nil,
+                        live: live(status: "waiting", waitingFor: "permission prompt"))
+        XCTAssertEqual(got.verdict.witness, .process)
+        XCTAssertEqual(got.fault?.kind, .agentWaiting)
+    }
+
+    func testARestartReportsUnderItsOwnKind() {
+        var resumed = live(status: "idle")
+        resumed.startedAt = 1_000_000_000_000
+        let got = amber(activity: .idle, observedAt: Date(timeIntervalSince1970: 999_999_000),
+                        live: resumed)
+        XCTAssertEqual(got.verdict.witness, .restart)
+        XCTAssertEqual(got.fault?.kind, .agentRestarted)
+    }
+
+    func testStandingByIsTheOneAmberThatDoesNotReport() {
+        // The person switched the row on a second ago; nothing is wrong.
+        let got = amber(activity: .idle, live: live(status: "idle"), pickedUp: true)
+        XCTAssertEqual(got.verdict.witness, .user)
         XCTAssertEqual(got.verdict.lamp, .fault)
         XCTAssertNil(got.fault)
     }
 
-    func testAPermissionPromptIsNotAFault() {
-        let got = fault(activity: .blocked(reason: dropped),
-                        live: live(status: "waiting", waitingFor: "permission prompt"))
-        XCTAssertEqual(got.verdict.witness, .process)
-        XCTAssertNil(got.fault)
+    func testAGreenOrBlueRowIsNotAFault() {
+        XCTAssertNil(amber(activity: .working, live: live(status: "busy")).fault)
+        XCTAssertNil(amber(activity: .idle, live: live(status: "idle")).fault)
     }
 
-    func testARevivedAgentDoesNotInheritTheDeadProcessesDroppedLine() {
-        // Dallas, 23 Sep: revived at 6:35, amber on the previous afternoon's
-        // "Connection lost" one second later. The process is newer than the
-        // words, so the restart speaks and the failure spine stays quiet.
-        var resumed = live(status: "idle")
-        resumed.startedAt = 1_000_000_000_000
-        let got = fault(activity: .blocked(reason: dropped),
-                        observedAt: Date(timeIntervalSince1970: 999_999_000),
-                        live: resumed)
-        XCTAssertEqual(got.verdict.witness, .restart)
-        XCTAssertEqual(got.verdict.because, "restarted after a dropped connection")
-        XCTAssertNil(got.fault)
-    }
-
-    func testARevivedAgentStillOverItsLimitKeepsTheLimitAndItIsAFault() {
-        var resumed = live(status: "idle")
-        resumed.startedAt = 1_000_000_000_000
-        let limit = "You've hit your session limit · resets 8pm (America/Los_Angeles)."
-        let got = fault(activity: .blocked(reason: limit),
-                        observedAt: Date(timeIntervalSince1970: 999_999_000),
-                        live: resumed)
-        XCTAssertEqual(got.verdict.witness, .file)
-        XCTAssertEqual(got.fault, limit)
+    func testTheReasonIsTheHoverNotTheCaption() {
+        // The whole sentence, since the row's clause is cut to a column.
+        let limit = "You've hit your session limit · resets 8pm (America/Los_Angeles). Try later."
+        let got = amber(activity: .blocked(reason: limit), live: live(status: "idle"))
+        XCTAssertEqual(got.fault?.reason, limit)
+        XCTAssertNotEqual(got.fault?.reason, got.verdict.because)
     }
 
     func testStalledWithNoProcessAtAllStaysFault() {

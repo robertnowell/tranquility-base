@@ -130,22 +130,25 @@ public enum GridAssembler {
             resumed: resumed, pickedUp: pickedUp, isInFlight: isInFlight)
     }
 
-    /// The harness's own error sentence behind an amber row, or nil.
+    /// What an amber verdict is for the failure stream, or nil when it is
+    /// not amber, or is the one amber not worth a report.
     ///
-    /// Three things have to be true at once, and each excludes an amber that
-    /// is not a failure: the verdict is `blocked` (not a stall read as quiet
-    /// by a live process); its witness is the FILE (not the process asking
-    /// for a permission, not a restart, not the user switching it on); and
-    /// the file's own word is an error (`.blocked`, an API error entry) and
-    /// not a stall, which shares the witness and is an inference from
-    /// silence, not a sentence the harness wrote. A restart reading an old
-    /// error is excluded by the witness: `SessionVerdict` hands a resumed
-    /// process to `AgentRestart` before the file is consulted.
-    public static func harnessFault(verdict: Verdict,
-                                    evidence: SessionActivity.Evidence?) -> String? {
-        guard verdict.state == .blocked, verdict.witness == .file,
-              case .blocked(let reason) = evidence?.activity else { return nil }
-        return reason
+    /// Every amber reports (23 Sep 2026). The KIND is the witness, which the
+    /// arbiter states as a fact about where the evidence came from; nothing
+    /// here reads the sentence. The one exclusion is `.user`: "standing by"
+    /// is a row the person switched on a second ago, with nothing wrong, and
+    /// filing that as a failure would report the person's own tap. `.delivery`
+    /// and `.none` never produce a blocked verdict, so they return nil by
+    /// construction rather than by policy.
+    public static func amber(verdict: Verdict) -> SessionRow.Fault? {
+        guard verdict.state == .blocked else { return nil }
+        let reason = verdict.detail ?? verdict.because ?? "amber, no reason given"
+        switch verdict.witness {
+        case .file: return SessionRow.Fault(kind: .agentFault, reason: reason)
+        case .process: return SessionRow.Fault(kind: .agentWaiting, reason: reason)
+        case .restart: return SessionRow.Fault(kind: .agentRestarted, reason: reason)
+        case .user, .delivery, .none: return nil
+        }
     }
 
     /// The tab's string for a session, or nil while it has none: the

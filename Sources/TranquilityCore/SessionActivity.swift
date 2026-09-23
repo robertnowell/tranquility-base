@@ -61,7 +61,9 @@ public enum SessionActivity: Equatable, Sendable {
         // not words: a first version matched bare "limit", which swallowed
         // "temporarily limiting requests" — the commonest transient error of
         // all — and would have lit amber for it every time.
-        if namesALimit(text) { return false }
+        for blocking in ["session limit", "reached your", "hit your",
+                         "usage-credits", "quota", "switch models"]
+        where text.contains(blocking) { return false }
         for transient in ["overloaded", "529", "temporarily", "connection closed",
                           "socket", "enotfound", "econnreset", "etimedout",
                           "unable to connect", "rate limiting", "try again",
@@ -77,59 +79,6 @@ public enum SessionActivity: Equatable, Sendable {
         where text.contains(transient) { return true }
         return false
     }
-
-    /// A usage or session limit, by its phrasing. Shared by the transient
-    /// rule and the dropped-connection rule, which both have to refuse it
-    /// first: limit copy borrows transient words ("Try again later").
-    static func namesALimit(_ lowercased: String) -> Bool {
-        for blocking in ["session limit", "reached your", "hit your",
-                         "usage-credits", "quota", "switch models"]
-        where lowercased.contains(blocking) { return true }
-        return false
-    }
-
-    /// The errors that mean the harness LOST ITS LINE to the model and gave
-    /// up on the turn: the connection dropped mid-answer or before one, the
-    /// host could not be found, the stream went quiet. What they have in
-    /// common, and what makes them one class for the row, is what the person
-    /// has to do next: nothing is broken on their side any more, the process
-    /// is alive at its prompt, and their last message went unanswered. So
-    /// the one move that helps is to speak to it again.
-    ///
-    /// Ruled 23 Sep 2026, from a screenshot sent at 6:36 that morning: a row
-    /// reading "Connection lost mid-response", the harness's own first
-    /// sentence, was read by its owner as the app having lost the terminal
-    /// ("I am getting a connection lost error. I think it is to the
-    /// terminal"). The words were true and pointed nowhere. Amber is the
-    /// needs-you channel, and a caption in that channel has to say what is
-    /// needed.
-    ///
-    /// A closed list, like `isTransient`: an error this does not recognise
-    /// keeps the harness's own sentence, which is the safe direction. Server
-    /// overload and capacity ("529", "at capacity") are deliberately NOT
-    /// here: they end the turn the same way, but "connection dropped" would
-    /// be a false diagnosis of them, and a limit is refused first for the
-    /// reason `isTransient` gives.
-    static func isDroppedConnection(_ reason: String) -> Bool {
-        let text = reason.lowercased()
-        if namesALimit(text) { return false }
-        for dropped in ["connection lost", "connection closed", "connection error",
-                        "connection reset", "socket", "enotfound", "econnreset",
-                        "etimedout", "unable to connect", "reach the api",
-                        "stopped arriving", "mid-response", "mid-stream",
-                        "idle timeout", "stream disconnected", "error sending request"]
-        where text.contains(dropped) { return true }
-        return false
-    }
-
-    /// What a dropped-connection row says, in the two lengths a row has.
-    /// The short form is the caption beside the lamp; the full form is the
-    /// hover, and it FOLLOWS the harness's own sentence rather than replacing
-    /// it, so the record still carries the agent's words (the 11 Sep rule).
-    static let droppedConnection = (
-        short: "connection dropped · tell it to carry on",
-        full: "The agent is still here and has heard nothing since, so its last "
-            + "answer is cut short. Tell it to carry on.")
 
     /// Transcript timestamps carry fractional seconds ("…T16:40:28.887Z").
     /// Parsed with a formatter built per call rather than a shared static —
@@ -555,12 +504,7 @@ extension SessionActivity {
     /// text the hover shows, uncut.
     public var fullReason: String? {
         switch self {
-        case .blocked(let r):
-            // A dropped connection keeps the harness's sentence and adds what
-            // to do about it; see `isDroppedConnection`.
-            return Self.isDroppedConnection(r)
-                ? r + " " + Self.droppedConnection.full : r
-        case .stalled(let r): return r
+        case .blocked(let r), .stalled(let r): return r
         case .working, .idle: return nil
         }
     }
@@ -570,13 +514,6 @@ extension SessionActivity {
         switch self {
         case .blocked(let r), .stalled(let r): reason = r
         case .working, .idle: return nil
-        }
-        // An error in the dropped-connection class does not get the harness's
-        // first sentence: it gets the instruction. "Connection lost
-        // mid-response" is true and was read as the app losing the terminal
-        // (23 Sep); "tell it to carry on" is what the row is for.
-        if case .blocked = self, Self.isDroppedConnection(reason) {
-            return Self.droppedConnection.short
         }
         // ". " and not ".", because a bare period is not a sentence boundary
         // in the strings this actually receives. Codex's first error to reach

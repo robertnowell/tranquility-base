@@ -355,9 +355,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// What each agent's lamp looked like on the last tick, for the
     /// `agent_lamp_changed` spine (Core `LampWatch`).
     var lampWatch = LampWatch()
-    /// Which rows were at fault on a harness sentence on the last tick, for
-    /// the failure spine (Core `FaultWatch`): the same rows, once per new
-    /// sentence, into `Failures` and so Sentry and Slack.
+    /// Which rows were amber on the last tick, for the failure spine (Core
+    /// `FaultWatch`): the same rows, once per new reason, into `Failures` and
+    /// so Sentry and Slack.
     var faultWatch = FaultWatch()
     /// Which agents were live on the last tick, for the exit-reason spine
     /// (Core `ExitWatch`). When one leaves the live set its tmux corpse, if it
@@ -876,12 +876,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }) {
                     Track.record(event.name, event.properties)
                 }
-                // The fault spine, beside the lamp spine: an amber the harness
-                // caused, with the harness's own sentence, once per new
-                // sentence per agent. A launch that intakes standing faults
+                // The fault spine, beside the lamp spine: every amber, under
+                // its witness's kind, with the row's own words, once per new
+                // reason per agent. A launch that intakes standing faults
                 // stays quiet, like the lamp spine's first tick.
                 for row in self.faultWatch.observe(rows) {
-                    Failures.report(.agentFault, reason: row.fault ?? row.aux,
+                    guard let fault = row.fault else { continue }
+                    Failures.report(fault.kind, reason: fault.reason,
                                     harness: row.harness, session: row.id)
                 }
                 // The exit-reason spine, beside the lamp spine and fed from the

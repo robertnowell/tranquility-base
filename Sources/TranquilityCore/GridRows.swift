@@ -438,7 +438,7 @@ public extension GridAssembler {
                 // The conversation's clock, then the hook's; never the file's.
                 lastActivity: evidence?.observedAt
                     ?? Date(timeIntervalSince1970: Double(stored.createdAtMs) / 1000),
-                fault: GridAssembler.harnessFault(verdict: storedLamp, evidence: evidence)))
+                fault: GridAssembler.amber(verdict: storedLamp)))
         }
 
         // BAND 3: live sessions with no stored events yet. Nothing to rank them
@@ -468,7 +468,7 @@ public extension GridAssembler {
                 hasRecordedTurn: input.recordedTurns.contains(live.sessionId),
                 // The conversation's clock, then the process start; never the file's.
                 lastActivity: evidence?.observedAt ?? live.startedAtDate,
-                fault: GridAssembler.harnessFault(verdict: liveLamp, evidence: evidence)))
+                fault: GridAssembler.amber(verdict: liveLamp)))
         }
 
         // BAND 4: the sessions that are not awake (ruled 11 Aug). Everything
