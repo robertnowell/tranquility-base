@@ -37,9 +37,7 @@ from pipecat.runner.utils import create_transport
 from pipecat.services.assemblyai.stt import AssemblyAISTTService
 from pipecat.services.openai.llm import OpenAILLMService
 from pipecat.transports.base_transport import BaseTransport, TransportParams
-from pipecat.turns.user_start.min_words_user_turn_start_strategy import (
-    MinWordsUserTurnStartStrategy,
-)
+from turn_start import InterruptOrCommandStrategy
 from pipecat.turns.user_stop.speech_timeout_user_turn_stop_strategy import (
     SpeechTimeoutUserTurnStopStrategy,
 )
@@ -182,17 +180,17 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
             # A turn starts on words, not on VAD: in a loud room VAD fired 300 ms
             # into every answer and cancelled it before TTS.
             #
-            # This number is the INTERRUPTION threshold and nothing else: the
-            # strategy requires min_words only while the bot is speaking, and
-            # one word otherwise. Two was right when the microphone still
-            # carried the manager's own voice, because its own words could
-            # interrupt it. WebRTC cancels that now, so two words only means a
-            # person saying "Stop" is ignored and has to keep talking for three
-            # seconds (23 Sep). One word, and a cut-off is a cut-off.
+            # Two thresholds, because cutting the manager off and giving it an
+            # order are different acts with opposite costs. One word over its
+            # voice interrupts; two words in the quiet start a turn. One number
+            # could only ever get one of them right, and Pipecat's own default
+            # has them the other way round — see turn_start.py for the log line
+            # that settles it.
             user_turn_strategies=UserTurnStrategies(
                 start=[
-                    MinWordsUserTurnStartStrategy(
-                        min_words=int(os.getenv("TB_MIN_WORDS", "2"))
+                    InterruptOrCommandStrategy(
+                        min_words=int(os.getenv("TB_MIN_WORDS", "2")),
+                        interrupt_words=int(os.getenv("TB_INTERRUPT_WORDS", "1")),
                     )
                 ],
                 stop=[

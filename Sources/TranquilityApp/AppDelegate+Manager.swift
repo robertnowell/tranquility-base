@@ -562,6 +562,26 @@ extension AppDelegate {
 
     static func answerManagerRequest(_ argv: [String]) async -> (code: Int, out: String) {
         switch argv.first {
+        // Answered here, not by the CLI on disk.
+        //
+        // The bot asks which voice a session speaks in, because it reads that
+        // session's announcements now and has to sound like the right agent.
+        // Routing that through `tbase` meant the answer came from whatever
+        // build happened to be at the configured path — on 23 Sep that was a
+        // binary from two days earlier, which had never heard of the
+        // subcommand, exited 1, and left every agent talking in the manager's
+        // voice. The app is the thing that assigns voices and the thing that
+        // ships with the bot's changes, so the app answers.
+        case "tbase" where argv.count > 2 && argv[1] == "voice":
+            let session = argv[2]
+            guard let coordinator = await MainActor.run(body: {
+                (NSApp.delegate as? AppDelegate)?.coordinator
+            }) else { return (1, "no coordinator") }
+            let voices = coordinator.voices(for: session)
+            let json = ManagerJSON.encode(
+                ["cloud": voices.cloud, "system": voices.system] as [String: String?])
+            Permissions.log("manager: \(session.prefix(8)) speaks as \(voices.cloud ?? "—")")
+            return (0, json)
         case "tbase":
             // The exit status is the answer (send maps 0/2/3/4/5), so this is a
             // plain Process rather than Subprocess.run, which folds status into a message.
