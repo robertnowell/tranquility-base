@@ -11,7 +11,10 @@ way wire.Wire is, and every task the pipeline starts inherits it.
 """
 
 import contextvars
+import os
 from dataclasses import dataclass, field
+
+from loguru import logger
 
 # How many turns of the exchange the models see at most; see note().
 EXCHANGE_KEEP = 12
@@ -49,8 +52,28 @@ def bind() -> Session:
     return s
 
 
+class Unbound(RuntimeError):
+    """Session state read outside a bound session (TB_STRICT_SESSION=1)."""
+
+
+_warned: set[str] = set()
+
+
+def unbound(what: str):
+    """A read outside run_bot's context. It would get a fresh, empty state and
+    forget everything without a word, so it is never quiet: drills set
+    TB_STRICT_SESSION=1 and it raises; a live session logs it once per process
+    and carries on rather than dropping the user's turn (hf-22)."""
+    if os.getenv("TB_STRICT_SESSION"):
+        raise Unbound(f"{what} read outside a bound session")
+    if what not in _warned:
+        _warned.add(what)
+        logger.error(f"UNBOUND {what}: read outside a bound session; this task gets empty state")
+
+
 def current() -> Session:
     s = _current.get()
     if s is None:
+        unbound("session")
         s = bind()
     return s

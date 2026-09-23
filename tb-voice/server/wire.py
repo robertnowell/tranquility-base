@@ -62,6 +62,8 @@ def bind() -> Wire:
 def current() -> Wire:
     w = _current.get()
     if w is None:
+        from session import unbound
+        unbound("wire")  # a fresh queue here is a dead socket; see session.unbound
         w = bind()
     return w
 
