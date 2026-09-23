@@ -18,12 +18,16 @@ import TranquilityCore
 ///
 /// Two things this class has to get right, both learned by measurement rather
 /// than documentation:
-///   - The audio device module must be `platformDefault`, the one that speaks
-///     to the HAL. A factory built with no arguments enumerates no devices at
-///     all, and then takes whatever the system default is, which is the AirPods
-///     and the failure `AudioInputDevice.swift` exists to prevent.
-///   - A running module will not change microphones underneath itself:
-///     `trySetInputDevice` returns true and does nothing. Stop, set, start.
+///   - The audio device module must be `audioEngine`. It is the one whose
+///     delegate hands us the live `AVAudioEngine`, which is the only way the
+///     app's own voice can join the graph the canceller references — see
+///     `ManagerAudio`. It also brings Apple's Voice Processing I/O, which
+///     `platformDefault` reports unavailable on this Mac.
+///   - The capture device is chosen on the engine's input unit, not on the
+///     module: `.audioEngine` refuses `trySetInputDevice` and reads its
+///     `inputDevice` back empty. `ManagerAudio` owns that, because it owns the
+///     engine, and it picks the built-in microphone by transport type so the
+///     system default — the AirPods — is never opened.
 final class ManagerPeer: NSObject, ManagerTransport, @unchecked Sendable {
     typealias RequestHandler = @Sendable ([String]) async -> (code: Int, out: String)
 
@@ -42,6 +46,9 @@ final class ManagerPeer: NSObject, ManagerTransport, @unchecked Sendable {
     /// The channel `hello` last went out on; a new current channel gets its own.
     private weak var helloChannel: LKRTCDataChannel?
     private let factory: LKRTCPeerConnectionFactory
+    /// The engine's delegate: the capture device, and the speakers the app's
+    /// own voice uses while this session is up.
+    let audio = ManagerAudio()
     private var connection: LKRTCPeerConnection?
     private var channel: LKRTCDataChannel?
     private var pcId: String?
@@ -59,12 +66,17 @@ final class ManagerPeer: NSObject, ManagerTransport, @unchecked Sendable {
         self.onRequest = onRequest
         LKRTCInitializeSSL()
         factory = LKRTCPeerConnectionFactory(
-            audioDeviceModuleType: .platformDefault,
+            audioDeviceModuleType: .audioEngine,
             bypassVoiceProcessing: false,
             encoderFactory: nil,
             decoderFactory: nil,
             audioProcessingModule: nil)
         super.init()
+        audio.onTrace = { [weak self] line in self?.onTrace?(line) }
+        factory.audioDeviceModule.observer = audio
+        // Everything this Mac says out loud now goes through the engine the
+        // connection renders through, so the canceller subtracts it.
+        SpokenAudioRoute.sink = audio
     }
 
     // MARK: - ManagerTransport
@@ -128,46 +140,38 @@ final class ManagerPeer: NSObject, ManagerTransport, @unchecked Sendable {
     }
 
     func close() async {
+        if SpokenAudioRoute.sink === audio { SpokenAudioRoute.sink = nil }
+        audio.stop()
         channel?.close()
         connection?.close()
         connection = nil
         takeContinuation()?.finish()
     }
 
-    /// The microphone this Mac has chosen, not the system default.
-    /// Called once audio is running, because the module lists no devices until
-    /// then. Returns the name it settled on, for the log.
+    /// The microphone this Mac has chosen, not the system default. `ManagerAudio`
+    /// does the choosing, from inside the engine callbacks where it is possible;
+    /// this reports what it landed on.
     @discardableResult
-    func pinMicrophone(named wanted: String) -> String {
-        let module = factory.audioDeviceModule
-        guard let device = module.inputDevices.first(where: {
-            $0.deviceId != "default" && $0.name == wanted
-        }) else { return module.inputDevice.name }
-        if module.inputDevice.deviceId == device.deviceId { return device.name }
-        // Stop, set, start: a recording module ignores the setter and says it
-        // succeeded (22 Sep).
-        if module.recording { _ = module.stopRecording() }
-        _ = module.trySetInputDevice(device)
-        _ = module.initAndStartRecording()
-        return module.inputDevice.name
-    }
+    func pinMicrophone(named wanted: String) -> String { microphoneName }
 
-    var microphoneName: String { factory.audioDeviceModule.inputDevice.name }
+    var microphoneName: String {
+        let named = factory.audioDeviceModule.inputDevices.first { $0.deviceId != "default" }
+        return named?.name ?? factory.audioDeviceModule.inputDevice.name
+    }
     var echoCancellationIsActive: Bool {
         String(describing: factory.audioProcessingState.echoCancellation).contains("active:1")
     }
 
     /// Everything about the audio path in one line, because "echo cancellation
-    /// on" was not enough: on 23 Sep the app reported it on and the manager
-    /// still transcribed its own voice three seconds into its own sentence,
-    /// while the same code in a command-line client cancelled eleven seconds
-    /// of it cleanly. The difference has to be somewhere in here.
+    /// on" was not enough: on 23 Sep the app reported it on while the manager
+    /// was transcribing the app's own announcements back as the developer's
+    /// speech. What that boolean could not say, and this does, is which
+    /// canceller is running and whether the app's voice is in its reference.
     var audioPathDescription: String {
         let adm = factory.audioDeviceModule
         let state = factory.audioProcessingState
-        return "in=\(adm.inputDevice.name) [\(adm.inputDevice.deviceId)] "
-            + "out=\(adm.outputDevice.name) [\(adm.outputDevice.deviceId)] "
-            + "recording=\(adm.recording) playing=\(adm.playing) "
+        return "in=\(microphoneName) recording=\(adm.recording) playing=\(adm.playing) "
+            + "app voice through the engine=\(audio.isReady) "
             + "echo=\(state.echoCancellation) ns=\(state.noiseSuppression)"
     }
 
