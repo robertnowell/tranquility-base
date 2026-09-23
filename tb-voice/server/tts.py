@@ -14,6 +14,7 @@ class SpokenTTSService(ElevenLabsTTSService):
         if clean != text.strip():
             logger.info(f"spoken: {text[:80]!r} -> {clean[:80]!r}")
         from manager import note  # late import: manager imports events, not tts
-        note("Tranquility", clean, "spoken")
+        from vocab import Line, LineKind, Role
+        note(Line(Role.MANAGER, LineKind.SPOKEN, clean))
         async for frame in super().run_tts(clean, context_id):
             yield frame

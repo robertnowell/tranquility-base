@@ -33,6 +33,7 @@ from events import emit, line
 from compose import READBACK_SECS, OpenMessage, classify, continues, filler_only
 import app_echo
 import session
+from vocab import Intent, Line, LineKind, Role, Verdict, line_from_transcript, parse_intent, parse_verdict
 from turns import TurnQueue
 from spoken import spoken
 from tools import _json_or_text, _run
@@ -62,21 +63,21 @@ TBASE = os.getenv("TBASE_BIN", "tbase")
 if not os.path.exists(TBASE) and TBASE != "tbase":
     logger.warning(f"TBASE_BIN {TBASE} does not exist; reads will fail closed")
 
-INTENTS = {
-    "invite_next": "Invite the next agent or session to speak; 'next agent'; 'who is up'; 'what's next' when no agent is on stage",
-    "rung_goal": "Asks what this project or piece of work is, or what the goal is",
-    "rung_findings": "Asks what the agent found or what happened",
-    "rung_solution": "Asks for the recommended next step, the solution, or what it proposes",
-    "rung_why": "Asks why, for the rationale or reasoning",
-    "custom": "Any other question about the agent on stage or its work: files, code, status, details, opinions",
-    "send_message": "Tells an agent to do something; a message or instruction to relay",
-    "start_agent": "Asks to start, spin up, or open a new agent or session",
-    "take_note": "Asks to take a note, dictate a note, or put something on the clipboard",
-    "summarize_recent": "Asks what has been going on recently across ALL agents, or what we did today or yesterday; not about one session",
-    "teach": "Asks what the manager can do, what this is, or how it works",
-    "speak": "Tells the manager to say something, speak, respond, answer, or prove it is listening",
-    "mute": "Tells whoever is talking to stop, pause, be quiet, mute, hold on, or that's enough",
-    "none": "Addressed but nothing to do: an acknowledgement, a compliment, or filler",
+INTENTS: dict[Intent, str] = {
+    Intent.INVITE_NEXT: "Invite the next agent or session to speak; 'next agent'; 'who is up'; 'what's next' when no agent is on stage",
+    Intent.RUNG_GOAL: "Asks what this project or piece of work is, or what the goal is",
+    Intent.RUNG_FINDINGS: "Asks what the agent found or what happened",
+    Intent.RUNG_SOLUTION: "Asks for the recommended next step, the solution, or what it proposes",
+    Intent.RUNG_WHY: "Asks why, for the rationale or reasoning",
+    Intent.CUSTOM: "Any other question about the agent on stage or its work: files, code, status, details, opinions",
+    Intent.SEND_MESSAGE: "Tells an agent to do something; a message or instruction to relay",
+    Intent.START_AGENT: "Asks to start, spin up, or open a new agent or session",
+    Intent.TAKE_NOTE: "Asks to take a note, dictate a note, or put something on the clipboard",
+    Intent.SUMMARIZE_RECENT: "Asks what has been going on recently across ALL agents, or what we did today or yesterday; not about one session",
+    Intent.TEACH: "Asks what the manager can do, what this is, or how it works",
+    Intent.SPEAK: "Tells the manager to say something, speak, respond, answer, or prove it is listening",
+    Intent.MUTE: "Tells whoever is talking to stop, pause, be quiet, mute, hold on, or that's enough",
+    Intent.NONE: "Addressed but nothing to do: an acknowledgement, a compliment, or filler",
 }
 
 # How the transcriber has actually spelled the name, from bot.log. A word that
@@ -107,17 +108,22 @@ def names_the_manager(text: str) -> bool:
 # Intents that are commands only the manager can carry out. Thinking aloud does
 # not produce "invite the next agent"; a clear one of these is addressed even
 # without the name.
-COMMANDS = {"invite_next", "send_message", "start_agent", "take_note", "rung_goal", "rung_findings",
-            "rung_solution", "rung_why", "summarize_recent", "mute"}
+COMMANDS = {Intent.INVITE_NEXT, Intent.SEND_MESSAGE, Intent.START_AGENT, Intent.TAKE_NOTE,
+            Intent.RUNG_GOAL, Intent.RUNG_FINDINGS, Intent.RUNG_SOLUTION, Intent.RUNG_WHY,
+            Intent.SUMMARIZE_RECENT, Intent.MUTE}
 
 # Intents that take seconds (a tool run, a model call) before anything is heard.
-SLOW_INTENTS = {"send_message", "summarize_recent", "custom", "teach", "speak"}
+SLOW_INTENTS = {Intent.SEND_MESSAGE, Intent.SUMMARIZE_RECENT, Intent.CUSTOM, Intent.TEACH, Intent.SPEAK}
 
 # With a session on stage, a confident question about its work is for the manager.
-STAGE_QUESTIONS = {"rung_goal", "rung_findings", "rung_solution", "rung_why", "custom", "send_message"}
+STAGE_QUESTIONS = {Intent.RUNG_GOAL, Intent.RUNG_FINDINGS, Intent.RUNG_SOLUTION, Intent.RUNG_WHY,
+                   Intent.CUSTOM, Intent.SEND_MESSAGE}
 
-RUNG_FOR = {"rung_goal": "goal", "rung_findings": "findings",
-            "rung_solution": "solution", "rung_why": "why"}
+# Jev's answer to "Send to X?" (a yes/no/other choice), parsed at the boundary.
+CONFIRM_ANSWER = {"yes": Verdict.SEND, "no": Verdict.HOLD}
+
+RUNG_FOR = {Intent.RUNG_GOAL: "goal", Intent.RUNG_FINDINGS: "findings",
+            Intent.RUNG_SOLUTION: "solution", Intent.RUNG_WHY: "why"}
 
 
 class JevClient:
@@ -146,7 +152,7 @@ class JevClient:
         state = {
             "context": ctx,
             "conversation_before": [
-                {"who": e["who"], "status": e["status"], "text": e["text"]} for e in session.current().exchange[-8:]
+                {"who": ln.jev_who, "status": ln.jev_status, "text": ln.jev_text} for ln in session.current().exchange[-8:]
             ],
             "agent_on_stage": (stage or {}).get("goal"),
             "text_to_judge": utterance,
@@ -168,7 +174,7 @@ class JevClient:
                                        f"person, reading text aloud, or the word {NAME.lower()} used for something else")}},
             "intent": {"type": "choice",
                 "instructions": "If text_to_judge is a request to the assistant, which kind is it?",
-                "criteria": INTENTS},
+                "criteria": {i.value: d for i, d in INTENTS.items()}},
         })
         return float(answers["addressed"]["noul"]), answers["intent"]
 
@@ -232,7 +238,7 @@ NOTES_SEED = (
 )
 
 
-def note(who: str, text: str, status: str = "said"):
+def note(ln: Line):
     """What was said, by whom, for a person to read later and for the models to
     see as context. The exchange (the models' tail) and the count are this
     session's own; see session.py. Every line also goes out whole as a `said`
@@ -240,17 +246,17 @@ def note(who: str, text: str, status: str = "said"):
     carries the user's words is cut to 120 characters, and hosted there is no
     transcript on disk at all (hf-20)."""
     s = session.current()
-    text = text.strip()
-    s.exchange.append({"who": who, "text": text, "status": status})
+    ln = Line(ln.role, ln.kind, ln.text.strip(), ln.speaker, ln.target, ln.target_name)
+    s.exchange.append(ln)
     del s.exchange[:-session.EXCHANGE_KEEP]
     s.said += 1
-    rec = line("said", n=s.said, who=who, status=status, text=text)
+    rec = line("said", n=s.said, **ln.said_fields())
     if os.getenv("TB_HOSTED"):
         from wire import outbox
         outbox().put_nowait(rec)
         return  # no transcript on disk where the bot is hosted; the app keeps the `said` lines
     with open(TRANSCRIPT, "a") as f:
-        f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')}  {who} [{status}]: {text}\n")
+        f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')}  {ln.jev_who} [{ln.jev_status}]: {ln.jev_text}\n")
 
 
 def seed_exchange():
@@ -267,13 +273,13 @@ def seed_exchange():
                     continue
                 head, text = parts[1].split(": ", 1)
                 who, _, status = head.partition(" [")
-                s.exchange.append({"who": who, "text": text, "status": status.rstrip("]") or "said"})
+                s.exchange.append(line_from_transcript(who, status.rstrip("]"), text))
     except FileNotFoundError:
         pass
 
 
 def exchange_lines(n: int = 8) -> list[str]:
-    return [f"{e['who']} ({e['status']}): {e['text']}" for e in session.current().exchange[-n:]]
+    return [f"{ln.jev_who} ({ln.jev_status}): {ln.jev_text}" for ln in session.current().exchange[-n:]]
 
 
 def _chosen(choice: dict) -> str:
@@ -331,7 +337,7 @@ class Brain:
         nothing, silently, for every hosted answer (hf-4). The Mac reads it."""
         if os.getenv("TB_HOSTED") and sid:
             import wire
-            r = await wire.call("transcript", {"agent": sid, "chars": 7000})
+            r = await wire.call(wire.Tool.TRANSCRIPT, {"agent": sid, "chars": 7000})
             if r is not None:
                 if not r.get("ok"):
                     logger.warning(f"transcript for {sid[:8]}: {(r.get('error') or {}).get('code')}")
@@ -425,10 +431,21 @@ class Manager(FrameProcessor):
         self._brain = Brain()
         seed_exchange()
         self._recent: list[str] = []
-        self._last_intent: str | None = None
+        self._last_intent: Intent | None = None
+        # Each intent's handler, named once. Found by building "_do_<label>"
+        # before hf-26: a renamed label was not an error, only a handler that
+        # silently never ran. SUMMARIZE_RECENT has none: it goes to the LLM.
+        self._handlers = {
+            Intent.MUTE: self._do_mute, Intent.NONE: self._do_none,
+            Intent.INVITE_NEXT: self._do_invite_next,
+            Intent.RUNG_GOAL: self._do_rung_goal, Intent.RUNG_FINDINGS: self._do_rung_findings,
+            Intent.RUNG_SOLUTION: self._do_rung_solution, Intent.RUNG_WHY: self._do_rung_why,
+            Intent.CUSTOM: self._do_custom, Intent.TEACH: self._do_teach, Intent.SPEAK: self._do_speak,
+            Intent.SEND_MESSAGE: self._do_send_message, Intent.START_AGENT: self._do_start_agent,
+            Intent.TAKE_NOTE: self._do_take_note,
+        }
         self._last_intent_at = 0.0
         self.stage: dict | None = None
-        self.pending: dict | None = None  # a confirmation waiting for yes/no
         self.open: OpenMessage | None = None  # dictation with a destination (compose.py)
         self._wire_task = None  # hosted: drains wire.outbox into transport messages
         self._idle_task = None  # hosted: ends the session after IDLE_SECS without speech
@@ -467,8 +484,8 @@ class Manager(FrameProcessor):
             if idle_in > 0 and rotate_in > 0:
                 await asyncio.sleep(min(idle_in, rotate_in, 30))
                 continue
-            busy = self.open is not None or self.pending or self._user_speaking
-            if busy:  # mid-message, mid-question or mid-sentence: look again shortly
+            busy = self.open is not None or self._user_speaking
+            if busy:  # mid-message or mid-sentence: look again shortly
                 if idle_in <= 0:
                     self._last_heard = now
                 await asyncio.sleep(5)
@@ -612,10 +629,7 @@ class Manager(FrameProcessor):
 
     async def _handle_turn(self, text, frame, direction):
         try:
-            if self.pending:
-                await self._resolve_pending(text, frame, direction)
-            else:
-                await self._turn(text, frame, direction)
+            await self._turn(text, frame, direction)
         except FileNotFoundError as e:  # a read door is missing: say so, never infer
             logger.error(f"manager read failed: {e}")
             await emit(self, "error", reason=str(e)[:160])
@@ -628,14 +642,11 @@ class Manager(FrameProcessor):
         t0 = time.monotonic()
         p, intent_answer = await self._jev.turn(text, self._recent, self.stage)
         ms = int((time.monotonic() - t0) * 1000)
-        intent = _chosen(intent_answer)
-        low = text.lower()
-        if "send" in low and any(w in low for w in ("message", "to this agent", "to the agent", "to it")):
-            intent = "send_message"  # the words say so; Jev's tie-break does not
+        intent = parse_intent(_chosen(intent_answer))
         if not self.stage and intent in RUNG_FOR:
             # "What's next?" with nobody on stage is the ⌃⌥ question: the next
             # agent's update, not a lecture about the stage being empty.
-            intent = "invite_next"
+            intent = Intent.INVITE_NEXT
         raw_p = p
         rule = None
         if names_the_manager(text):
@@ -648,10 +659,10 @@ class Manager(FrameProcessor):
         await emit(self, "jev", ms=self._jev.last.get("ms"), state=self._jev.last.get("state"),
                    answers=self._jev.last.get("answers"), raw_p=round(raw_p, 2), rule=rule)
         speak = p >= THRESHOLD
-        logger.info(f"gate p={p:.2f} {intent} {ms}ms {'SPEAK' if speak else 'silent'} :: {text[:80]}")
-        note("you", text, "acted" if speak else "silent")
+        logger.info(f"gate p={p:.2f} {intent.value} {ms}ms {'SPEAK' if speak else 'silent'} :: {text[:80]}")
+        note(Line(Role.USER, LineKind.COMMAND if speak else LineKind.TALK, text))
         await emit(self, "addressed" if speak else "listening",
-                   p=round(p, 2), intent=intent if speak else None, ms=ms, text=text[:120])
+                   p=round(p, 2), intent=intent.value if speak else None, ms=ms, text=text[:120])
         if not speak:
             return
         # One sentence, one action. 02:58, 22 Sep: "Okay, can you invite the
@@ -660,7 +671,7 @@ class Manager(FrameProcessor):
         # what it can; this catches what it cannot.
         now = time.monotonic()
         if intent == self._last_intent and now - self._last_intent_at < REPEAT_SECS:
-            logger.info(f"dropping a second {intent} {now - self._last_intent_at:.1f}s after the first")
+            logger.info(f"dropping a second {intent.value} {now - self._last_intent_at:.1f}s after the first")
             await emit(self, "listening", p=round(p, 2), ms=ms, text=text[:120])
             return
         self._last_intent, self._last_intent_at = intent, now
@@ -670,7 +681,7 @@ class Manager(FrameProcessor):
         # on top of the voice. Only the slow intents get one.
         if intent in SLOW_INTENTS:
             await self._earcon("listening")
-        handler = getattr(self, f"_do_{intent}", None)
+        handler = self._handlers.get(intent)
         if handler:
             await handler(text, frame, direction)
         else:
@@ -701,7 +712,8 @@ class Manager(FrameProcessor):
         brief = await self._brief(nxt["sessionId"])
         spoken = " ".join(x for x in ((brief or {}).get("recap"), (brief or {}).get("proposal")) if x)
         await emit(self, "speaking", voice="agent", session=nxt["sessionId"], text=spoken)
-        note(nxt.get("name") or nxt.get("goal") or nxt["sessionId"][:8], spoken or "(no brief stored)", "spoken")
+        note(Line(Role.AGENT, LineKind.SPOKEN, spoken or "(no brief stored)",
+                  speaker=nxt.get("name") or nxt.get("goal") or nxt["sessionId"][:8]))
         await self._app_speaks(f"{SCHEME}://hear?session={nxt['sessionId']}", spoken or "x " * 20)
 
     async def _do_rung_goal(self, t, f, d): await self._rung("goal", t, f, d)
@@ -723,7 +735,8 @@ class Manager(FrameProcessor):
         # The session speaks its own rung: a speak-only deep link into the app.
         await emit(self, "speaking", voice="agent", session=self.stage["sessionId"],
                    rung=kind, text=rung["spoken"])
-        note(self.stage.get("name") or self.stage.get("goal") or self.stage["sessionId"][:8], rung["spoken"], "spoken")
+        note(Line(Role.AGENT, LineKind.SPOKEN, rung["spoken"],
+                  speaker=self.stage.get("name") or self.stage.get("goal") or self.stage["sessionId"][:8]))
         await self._app_speaks(f"{SCHEME}://rung?session={self.stage['sessionId']}&kind={kind}", rung["spoken"])
 
     async def _do_custom(self, text, frame, direction):
@@ -737,7 +750,7 @@ class Manager(FrameProcessor):
             logger.warning(f"is_action failed: {e}")
             p_action = 0.0
         if p_action >= 0.5:
-            await emit(self, "addressed", p=1.0, intent="send_message", ms=0, text=text[:120])
+            await emit(self, "addressed", p=1.0, intent=Intent.SEND_MESSAGE.value, ms=0, text=text[:120])
             await self._do_send_message(text, frame, direction)
             return
         await self._answer_about_stage(text, await self._brief(self.stage["sessionId"]))
@@ -762,7 +775,7 @@ class Manager(FrameProcessor):
             return
         answer = spoken(answer)
         await emit(self, "speaking", voice="agent", session=sid, text=answer[:160])
-        note(self.stage.get("name") or self.stage.get("goal") or sid[:8], answer, "spoken")
+        note(Line(Role.AGENT, LineKind.SPOKEN, answer, speaker=self.stage.get("name") or self.stage.get("goal") or sid[:8]))
         await self._app_speaks(f"{SCHEME}://say?session={sid}&text={quote(answer)}", answer)
 
     CAPABILITIES = ("Say what's next to hear the next agent. Ask for the goal, findings, next step "
@@ -829,7 +842,8 @@ class Manager(FrameProcessor):
                                   "name": self.stage.get("name") or self.stage.get("project") or "the agent"})
                 return
             await emit(self, "speaking", voice="manager", text=f"message: {message[:160]}")
-            note("Tranquility", f"(typing into {self.stage.get('goal') or 'the stage'}) {message}", "acted")
+            note(Line(Role.MANAGER, LineKind.ACTION, message, target=self.stage["sessionId"],
+                      target_name=self.stage.get("name") or self.stage.get("goal") or "the stage"))
             await self._send(self.stage["sessionId"], message)
             return
         live = await self._targets()
@@ -918,7 +932,6 @@ class Manager(FrameProcessor):
     # -- the open message ------------------------------------------------------------
 
     async def _open(self, destination: dict, line: str | None = None, seed: str = ""):
-        self.pending = None
         if destination.get("sessionId"):
             # The app enrols a session the first time you reply to it: your
             # confirmed send is the consent. Naming it as a destination by voice
@@ -968,40 +981,42 @@ class Manager(FrameProcessor):
         if not m:
             return
         verdict, remainder = classify(text, previous=m.last)
-        if verdict == "content" and continues(m.last):
+        if verdict is Verdict.CONTENT and continues(m.last):
             pass  # a continuation is content, whatever it sounds like alone
-        elif verdict == "content" and m.asked:
+        elif verdict is Verdict.CONTENT and m.asked:
             # After the read-back, a short reply is an answer to "send?".
-            ans = _chosen(await self._jev.confirm(text, f"Send to {m.name}?")) if len(text.split()) <= 6 else "other"
-            verdict = {"yes": "send", "no": "hold"}.get(ans, "content")
-            if verdict != "content":
+            if len(text.split()) <= 6:
+                verdict = CONFIRM_ANSWER.get(_chosen(await self._jev.confirm(text, f"Send to {m.name}?")),
+                                             Verdict.CONTENT)
+            if verdict is not Verdict.CONTENT:
                 remainder = ""  # the answer is not part of the message
-        if verdict == "content" and not continues(m.last) and len(text.split()) <= 12:
+        if verdict is Verdict.CONTENT and not continues(m.last) and len(text.split()) <= 12:
             # Short, complete, and not a known phrase: let Jev say whether it is about the message.
             k = await self._jev.compose(text, m.text[-600:], m.name)
-            if float(k.get("confidence", 0)) >= 0.85 and _chosen(k) in ("send", "cancel", "retarget", "hold"):
-                verdict, remainder = _chosen(k), ""
-        await emit(self, "listening" if verdict == "content" else "addressed",
-                   p=1.0, intent=f"compose:{verdict}", ms=0, text=text[:120])
-        if verdict == "content":
+            judged = parse_verdict(_chosen(k))
+            if float(k.get("confidence", 0)) >= 0.85 and judged is not Verdict.CONTENT:
+                verdict, remainder = judged, ""
+        await emit(self, "listening" if verdict is Verdict.CONTENT else "addressed",
+                   p=1.0, intent=f"compose:{verdict.value}", ms=0, text=text[:120])
+        if verdict is Verdict.CONTENT:
             if filler_only(text):
                 return  # a breath the segmenter cut out; not part of the message
             if m.append(text):
-                note("you", text, "dictated")
+                note(Line(Role.USER, LineKind.DICTATION, text))
                 await self._show_draft()
             self._arm_readback()
             return
-        if verdict == "hold":
-            note("you", text, "acted")
+        if verdict is Verdict.HOLD:
+            note(Line(Role.USER, LineKind.COMMAND, text))
             m.asked = True  # no second read-back until more is said
             return
-        if verdict == "cancel":
-            note("you", text, "acted")
+        if verdict is Verdict.CANCEL:
+            note(Line(Role.USER, LineKind.COMMAND, text))
             await self._close()
             await self._say("Dropped.")
             return
-        if verdict == "retarget":
-            note("you", text, "acted")
+        if verdict is Verdict.RETARGET:
+            note(Line(Role.USER, LineKind.COMMAND, text))
             live = await self._targets()
             if live:
                 choice = await self._jev.target(text, live)
@@ -1021,8 +1036,8 @@ class Manager(FrameProcessor):
         # send
         if remainder:
             m.append(remainder)
-            note("you", remainder, "dictated")
-        note("you", text, "acted")
+            note(Line(Role.USER, LineKind.DICTATION, remainder))
+        note(Line(Role.USER, LineKind.COMMAND, text))
         await self._deliver()
 
     async def _deliver(self):
@@ -1032,7 +1047,7 @@ class Manager(FrameProcessor):
             return
         text, dest = m.text.strip(), m.destination
         await self._close()
-        note("Tranquility", f"(typing into {dest.get('name')}) {text}", "acted")
+        note(Line(Role.MANAGER, LineKind.ACTION, text, target=dest.get("sessionId"), target_name=dest.get("name")))
         await self._send(dest["sessionId"], text)
 
     async def _close(self):
@@ -1041,33 +1056,6 @@ class Manager(FrameProcessor):
             self._readback_task = None
         self.open = None
         await emit(self, "quiet")
-
-    async def _ask_confirm(self):
-        sid, _ = self.pending["ranked"][self.pending["index"]]
-        c = self.pending["live"][sid]
-        q = f"To {c.get('name') or c.get('goal') or c['project']}?"
-        self.pending["question"] = q
-        await self._say(q)
-
-    async def _resolve_pending(self, text, frame, direction):
-        answer = _chosen(await self._jev.confirm(text, self.pending["question"]))
-        await emit(self, "addressed", p=1.0, intent=f"confirm:{answer}", ms=0, text=text[:120])
-        if answer == "yes":
-            sid, _ = self.pending["ranked"][self.pending["index"]]
-            self.stage = self.pending["live"][sid]
-            msg = self.pending["text"]
-            self.pending = None
-            await self._send(sid, msg)
-        elif answer == "no":
-            self.pending["index"] += 1
-            if self.pending["index"] >= len(self.pending["ranked"]):
-                self.pending = None
-                await self._say("Out of candidates. Name the project and I will send it.")
-            else:
-                await self._ask_confirm()
-        else:
-            self.pending = None
-            await self._turn(text, frame, direction)
 
     async def _send(self, session_id: str, text: str, quiet: bool = False):
         code, out = await _run(TBASE, "send", session_id, text)
@@ -1084,21 +1072,21 @@ class Manager(FrameProcessor):
             await self._say(f"Not sent: {meaning}.")
 
     async def _llm(self, frame, direction, text, intent, brief=None):
-        note = {"intent": intent, "stage": self.stage and {
+        note = {"intent": intent.value, "stage": self.stage and {
             "sessionId": self.stage["sessionId"], "goal": self.stage.get("goal"),
             "project": self.stage.get("project")}}
-        if self.stage and intent == "custom":
+        if self.stage and intent is Intent.CUSTOM:
             brief = brief or await self._brief(self.stage["sessionId"])
             if brief:
                 note["brief"] = {k: brief.get(k) for k in ("goal", "recap", "proposal", "findings", "solution", "why", "lastAssistantMessage")}
                 note["instruction"] = "Answer the question from this brief in the session's own voice via say_as_session, 30 words max."
-        if intent == "send_message" and self.stage:
+        if intent is Intent.SEND_MESSAGE and self.stage:
             note["instruction"] = ("Call send_message with the stage sessionId now; do not ask "
                                    "which session. Then confirm in one clause.")
-        if intent == "summarize_recent":
+        if intent is Intent.SUMMARIZE_RECENT:
             note["recent"] = await self._recent_briefs()
         frame.context.add_message({"role": "developer", "content": "manager note: " + json.dumps(note)})
-        await emit(self, "speaking", intent=intent, stage=(self.stage or {}).get("goal"))
+        await emit(self, "speaking", intent=intent.value, stage=(self.stage or {}).get("goal"))
         await self.push_frame(frame, direction)
 
     # -- doors ----------------------------------------------------------------------

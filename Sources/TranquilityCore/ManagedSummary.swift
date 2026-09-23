@@ -4,6 +4,24 @@ import GRDB
 /// Explicitly supplied transport: managed code never reads personal provider keys.
 public protocol GatewayTransport: Sendable {
     func request(method: String, path: String, body: Data?) async throws -> (status: Int, body: Data)
+    /// The same request, when the body is not JSON.
+    ///
+    /// Only saved-file recovery needs this: it sends a recording rather than a
+    /// document, and states the recording's length in a header so the Gateway
+    /// knows what to reserve. Everything else keeps the shape above, so the
+    /// default here forwards and a transport that does not care never notices.
+    func request(method: String, path: String, body: Data?, contentType: String,
+                 headers: [String: String]) async throws -> (status: Int, body: Data)
+}
+
+public extension GatewayTransport {
+    /// Forwards, losing the content type and the headers. That is safe because
+    /// the only route that needs them refuses the request without them -- a
+    /// 400 rather than a charge for something misread.
+    func request(method: String, path: String, body: Data?, contentType: String,
+                 headers: [String: String]) async throws -> (status: Int, body: Data) {
+        try await request(method: method, path: path, body: body)
+    }
 }
 
 private final class GatewayRedirectGuard: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
@@ -40,6 +58,11 @@ public final class GatewayHTTPTransport: GatewayTransport, Sendable {
     }
     deinit { session.invalidateAndCancel() }
     public func request(method: String, path: String, body: Data?) async throws -> (status: Int, body: Data) {
+        try await request(method: method, path: path, body: body, contentType: "application/json", headers: [:])
+    }
+
+    public func request(method: String, path: String, body: Data?, contentType: String,
+                        headers: [String: String]) async throws -> (status: Int, body: Data) {
         guard path.hasPrefix("/v1/"), !path.contains(".."), !path.contains("?"), !path.contains("#"),
               let url = URL(string: path, relativeTo: base)?.absoluteURL,
               url.host == base.host, url.scheme == base.scheme, url.port == base.port
@@ -61,7 +84,12 @@ public final class GatewayHTTPTransport: GatewayTransport, Sendable {
         request.setValue(presented.authorization, forHTTPHeaderField: "Authorization")
         request.setValue(presented.proof, forHTTPHeaderField: "DPoP")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        if body != nil { request.setValue("application/json", forHTTPHeaderField: "Content-Type") }
+        if body != nil { request.setValue(contentType, forHTTPHeaderField: "Content-Type") }
+        // Never over the reserved headers above: a caller cannot talk its way
+        // past the proof by naming one of them.
+        for (name, value) in headers where !["authorization", "dpop", "accept", "content-type"].contains(name.lowercased()) {
+            request.setValue(value, forHTTPHeaderField: name)
+        }
         let (data, response) = try await session.data(for: request)
         // No size limit. There was one, 256 KB, and it protected nothing: it ran
         // after the whole body was already in memory, on a response from our own

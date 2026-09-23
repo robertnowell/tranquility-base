@@ -4,44 +4,67 @@ import Foundation
 /// Reads only for now; `send` joins when it goes through the app's own Send
 /// (hf-12), and until then the bot keeps using `request:run` for effects.
 public enum ManagerTools {
-    public static func standard(tbase: String) -> [ManagerTool] {
-        [
-            ManagerTool(name: "agents", deadlineMs: 3000, capBytes: 16 * 1024) { _ in
+    public static func standard(tbase: String, ledger: ManagerLedger? = nil) -> [ManagerTool] {
+        var tools: [ManagerTool] = [
+            ManagerTool(name: .agents, deadlineMs: 3000, capBytes: 16 * 1024) { _ in
                 try await tbaseJSON(tbase, ["targets", "--json"])
             },
-            ManagerTool(name: "waiting", deadlineMs: 3000, capBytes: 16 * 1024) { _ in
+            ManagerTool(name: .waiting, deadlineMs: 3000, capBytes: 16 * 1024) { _ in
                 try await tbaseJSON(tbase, ["status", "--json"])
             },
-            ManagerTool(name: "brief", deadlineMs: 3000, capBytes: 8 * 1024) { args in
+            ManagerTool(name: .brief, deadlineMs: 3000, capBytes: 8 * 1024) { args in
                 try await tbaseJSON(tbase, ["brief", try agent(args), "--json"])
             },
             // The agent's own record, which the hosted manager could not read
             // at all: its transcript lives on this Mac and the path it was
             // handed did not exist in the container (hf-4).
-            ManagerTool(name: "transcript", deadlineMs: 5000, capBytes: 32 * 1024, keep: .newest) { args in
+            ManagerTool(name: .transcript, deadlineMs: 5000, capBytes: 32 * 1024, keep: .newest) { args in
                 let brief = try await tbaseJSON(tbase, ["brief", try agent(args), "--json"])
                 let data = (brief as? [String: Any])?["data"] as? [String: Any] ?? brief as? [String: Any]
                 guard let path = data?["transcriptPath"] as? String, !path.isEmpty else {
-                    throw ManagerToolFailure("not_found", "that agent has no transcript on this Mac")
+                    throw ManagerToolFailure(.notFound, "that agent has no transcript on this Mac")
                 }
                 let chars = min(max((args["chars"] as? Int) ?? 7000, 200), 30_000)
                 return TranscriptTail.read(path: path, chars: chars)
             },
         ]
+        if let ledger {
+            // What the developer (and the manager, and the agents) said, on
+            // this Mac, numbered (hf-5). Newest last; a cut drops the oldest.
+            tools.append(ManagerTool(name: .ledger, deadlineMs: 2000, capBytes: 32 * 1024, keep: .newest) { args in
+                let lines: [ManagerLedger.Line]
+                if let from = args["from"] as? Int {
+                    lines = ledger.lines(from: from, to: (args["to"] as? Int) ?? Int.max)
+                } else if let last = args["last"] as? Int {
+                    lines = ledger.last(min(max(last, 1), 500))
+                } else {
+                    lines = ledger.sinceLastAction()
+                }
+                return lines.map { line -> [String: Any] in
+                    var out: [String: Any] = ["n": line.n, "t": line.t, "role": line.role.rawValue,
+                                              "kind": line.kind.rawValue, "text": line.text]
+                    if let speaker = line.speaker { out["speaker"] = speaker }
+                    if let target = line.target { out["target"] = target }
+                    if let name = line.targetName { out["target_name"] = name }
+                    return out
+                }
+            })
+        }
+        return tools
     }
 
     static func agent(_ args: [String: Any]) throws -> String {
         guard let id = args["agent"] as? String, !id.isEmpty else {
-            throw ManagerToolFailure("bad_args", "agent is required")
+            throw ManagerToolFailure(.badArgs, "agent is required")
         }
         return id
     }
 
     static func tbaseJSON(_ tbase: String, _ args: [String]) async throws -> Any {
         let (code, out) = try await ManagerCommand.run(tbase, args)
-        guard code == 0 else { throw ManagerToolFailure("refused", "tbase \(args.first ?? "") exited \(code): \(out.suffix(200))") }
+        guard code == 0 else { throw ManagerToolFailure(.refused, "tbase \(args.first ?? "") exited \(code): \(out.suffix(200))") }
         guard let obj = try? JSONSerialization.jsonObject(with: Data(out.utf8), options: [.fragmentsAllowed]) else {
-            throw ManagerToolFailure("internal", "tbase \(args.first ?? "") did not print JSON")
+            throw ManagerToolFailure(.internal, "tbase \(args.first ?? "") did not print JSON")
         }
         return obj
     }
@@ -72,7 +95,7 @@ public enum ManagerCommand {
                 }
                 do { try p.run() } catch {
                     p.terminationHandler = nil
-                    cont.resume(throwing: ManagerToolFailure("internal", "could not run \(path): \(error)"))
+                    cont.resume(throwing: ManagerToolFailure(.internal, "could not run \(path): \(error)"))
                 }
             }
         } onCancel: {
