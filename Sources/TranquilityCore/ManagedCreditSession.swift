@@ -261,8 +261,20 @@ public actor ManagedCreditSession: SummaryProvider {
         publish(standing, { [identity] in identity() == current })
     }
 
+    /// Out of credits, hearing and speaking do not ask the Gateway again:
+    /// they go straight to the person's own keys (ruled 22 Sep: "fall back
+    /// when credits run out"), which saves a refused round trip on every
+    /// utterance. Summaries still try credits first, so the first one paid
+    /// after a top-up refreshes the balance and lifts this.
+    private func requireCredit() throws {
+        if case .floored(.outOfCredits, _) = standing {
+            throw ManagedSummaryFailure.refused(code: "insufficient_credit", operationId: nil)
+        }
+    }
+
     public func speech() async throws -> ManagedSpeechClient {
         let ctx = try currentContext()
+        try requireCredit()
         let account = try await ctx.account.id()
         try requireCurrent(ctx)
         return ManagedSpeechClient(accountId: account, transport: ctx.connection.transport)
@@ -270,6 +282,7 @@ public actor ManagedCreditSession: SummaryProvider {
 
     public func transcription() async throws -> ManagedTranscriptionSession {
         let ctx = try currentContext()
+        try requireCredit()
         let account = try await ctx.account.id()
         try requireCurrent(ctx)
         return ManagedTranscriptionSession(accountId: account, transport: ctx.connection.transport)

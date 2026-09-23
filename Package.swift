@@ -24,6 +24,15 @@ let package = Package(
         // PostHog, for product events (Track). Source-built; its own
         // automatic capture is switched off in Analytics.swift.
         .package(url: "https://github.com/PostHog/posthog-ios.git", from: "3.71.4"),
+        // WebRTC, for hands-free. The media path Pipecat prescribes for a
+        // device client, and with it the echo cancellation that lets the
+        // manager be interrupted while it speaks. LiveKit's build rather than
+        // stasel's: theirs is the only one whose macOS slice exposes audio
+        // device selection, which the app's own device policy requires
+        // (AudioInputDevice.swift). Their framework only; their server, room
+        // protocol and SDK are not involved. Like Sparkle it is a prebuilt
+        // XCFramework, so scripts/bundle.sh copies and signs it.
+        .package(url: "https://github.com/livekit/webrtc-xcframework.git", exact: "150.7871.02"),
     ],
     targets: [
         .target(
@@ -46,6 +55,7 @@ let package = Package(
                 .product(name: "Sparkle", package: "Sparkle"),
                 .product(name: "SentryStatic", package: "SentryStatic"),
                 .product(name: "PostHog", package: "posthog-ios"),
+                .product(name: "LiveKitWebRTC", package: "webrtc-xcframework"),
             ]
         ),
         .testTarget(

@@ -32,6 +32,21 @@ public struct ManagerSession: Sendable, Equatable {
     }
 }
 
+/// What hands-free talks to, whichever way the audio travels.
+///
+/// Two of these exist: `ManagerSocket`, one WebSocket carrying PCM and JSON
+/// lines, and the WebRTC peer in the app target, where the engine cancels the
+/// manager's own voice out of the microphone so it can be interrupted. The
+/// panel, the orb and the door answering are the same code for both: they see
+/// event lines arriving and a way to stop.
+public protocol ManagerTransport: AnyObject, Sendable {
+    func start() throws
+    func lines() -> AsyncStream<Data>
+    func close() async
+    /// Every frame kind and every failure, for the log.
+    var onTrace: (@Sendable (String) -> Void)? { get set }
+}
+
 /// Where the microphone audio comes from. The real one is an AUHAL capture
 /// unit converted to 16 kHz PCM16; a drill hands in a WAV so the socket can
 /// be proven without a room.
@@ -121,7 +136,7 @@ public enum ManagerSocketError: Error, Equatable {
     case closed
 }
 
-public final class ManagerSocket: @unchecked Sendable {
+public final class ManagerSocket: ManagerTransport, @unchecked Sendable {
     public typealias RequestHandler = @Sendable ([String]) async -> (code: Int, out: String)
 
     private let session: ManagerSession
