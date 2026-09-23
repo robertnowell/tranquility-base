@@ -178,6 +178,30 @@ final class ArtifactStoreTests: XCTestCase {
         XCTAssertEqual(pages.first?.at, Date(timeIntervalSince1970: 9_000))
     }
 
+    /// The report this turn wrote is the NEWEST STAMP, not the last line. A
+    /// page rewritten after a newer page was started sits earlier in the
+    /// history, and reading `.last` offered the hub over it (23 Sep, a Codex
+    /// card on a report the turn had just rewritten).
+    func testTheFreshReportIsTheNewestStampNotTheLastLine() {
+        let a = "/Users/x/Documents/deep-research/a/mirai-audit.html"
+        let b = "/Users/x/Documents/deep-research/a/hands-free.html"
+        ArtifactStore.record(a, session: session, root: root, at: Date(timeIntervalSince1970: 1_000))
+        ArtifactStore.record(b, session: session, root: root, at: Date(timeIntervalSince1970: 5_000))
+        ArtifactStore.record(a, session: session, root: root, at: Date(timeIntervalSince1970: 9_000))
+        let always: (String) -> Bool = { _ in true }
+        XCTAssertEqual(ArtifactStore.freshReport(for: session, root: root,
+                                                 since: Date(timeIntervalSince1970: 7_000),
+                                                 exists: always), a)
+        // Nothing written since the turn began: nil, and the door is the hub.
+        XCTAssertNil(ArtifactStore.freshReport(for: session, root: root,
+                                               since: Date(timeIntervalSince1970: 9_500),
+                                               exists: always))
+        // A page that is gone is not offered, whatever its stamp.
+        XCTAssertEqual(ArtifactStore.freshReport(for: session, root: root,
+                                                 since: Date(timeIntervalSince1970: 4_000),
+                                                 exists: { $0 == b }), b)
+    }
+
     /// A regex is not a redirect. `re.sub(r'<[^>]+>', ...)` carries two
     /// greater-than signs and writes nothing; treating them as redirects put
     /// three read-only pages back on a hub minutes after they were pruned.
