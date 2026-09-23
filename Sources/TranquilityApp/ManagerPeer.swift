@@ -152,6 +152,20 @@ final class ManagerPeer: NSObject, ManagerTransport, @unchecked Sendable {
         String(describing: factory.audioProcessingState.echoCancellation).contains("active:1")
     }
 
+    /// Everything about the audio path in one line, because "echo cancellation
+    /// on" was not enough: on 23 Sep the app reported it on and the manager
+    /// still transcribed its own voice three seconds into its own sentence,
+    /// while the same code in a command-line client cancelled eleven seconds
+    /// of it cleanly. The difference has to be somewhere in here.
+    var audioPathDescription: String {
+        let adm = factory.audioDeviceModule
+        let state = factory.audioProcessingState
+        return "in=\(adm.inputDevice.name) [\(adm.inputDevice.deviceId)] "
+            + "out=\(adm.outputDevice.name) [\(adm.outputDevice.deviceId)] "
+            + "recording=\(adm.recording) playing=\(adm.playing) "
+            + "echo=\(state.echoCancellation) ns=\(state.noiseSuppression)"
+    }
+
     // MARK: - signalling
 
     private func post(_ offer: LKRTCSessionDescription) {

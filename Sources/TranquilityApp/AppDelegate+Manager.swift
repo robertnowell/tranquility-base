@@ -385,6 +385,7 @@ extension AppDelegate {
                 let landed = peer.pinMicrophone(named: wanted)
                 Permissions.log("manager: microphone \(landed)\(landed == wanted ? "" : " (wanted \(wanted))"), "
                                 + "echo cancellation \(peer.echoCancellationIsActive ? "on" : "OFF")")
+                Permissions.log("manager audio: \(peer.audioPathDescription)")
             }
             let eventsFile = QueueStore.supportDirectory.appendingPathComponent("manager-events.jsonl")
             let eventsHandle: FileHandle? = {
