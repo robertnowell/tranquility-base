@@ -167,3 +167,56 @@ final class SessionShapeTests: XCTestCase {
         XCTAssertFalse(t.isValid(account: UUID(), id: id, expectSocket: true))
     }
 }
+
+/// The SDP exchange goes through the Gateway, because this Mac holds no
+/// vendor key and the host's own offer endpoint refuses anything without one.
+final class ManagedSignallingTests: XCTestCase {
+    private let account = UUID(uuidString: "7f3c2a10-1111-4222-8333-444455556666")!
+
+    actor Transport: GatewayTransport {
+        var replies: [(Int, Data)]
+        private(set) var calls: [(method: String, path: String, body: Data?)] = []
+        init(_ replies: [(Int, Data)]) { self.replies = replies }
+        func request(method: String, path: String, body: Data?) async throws -> (status: Int, body: Data) {
+            calls.append((method, path, body))
+            guard !replies.isEmpty else { throw URLError(.notConnectedToInternet) }
+            return replies.removeFirst()
+        }
+    }
+
+    func testTheOfferAndItsCandidatesTakeTheGatewaysRoute() async throws {
+        let id = UUID()
+        let transport = Transport([
+            (200, try! JSONSerialization.data(withJSONObject: ["sdp": "v=0", "type": "answer", "pc_id": "pc#0"])),
+            (200, try! JSONSerialization.data(withJSONObject: [:] as [String: Any])),
+        ])
+        let client = ManagedVoiceClient(accountId: account, transport: transport)
+
+        let answer = try await client.signal(id: id, method: "POST", body: ["sdp": "v=0", "type": "offer"])
+        XCTAssertEqual(answer["type"] as? String, "answer")
+        XCTAssertEqual(answer["pc_id"] as? String, "pc#0")
+
+        _ = try await client.signal(id: id, method: "PATCH", body: ["pc_id": "pc#0", "candidates": []])
+
+        let calls = await transport.calls
+        XCTAssertEqual(calls.map(\.method), ["POST", "PATCH"])
+        for call in calls {
+            XCTAssertEqual(call.path,
+                "/v1/accounts/\(account.uuidString.lowercased())/voice/sessions/\(id.uuidString.lowercased())/offer",
+                "signalling is a route on the session, not an address the app was handed")
+        }
+    }
+
+    func testARefusalIsNamedRatherThanSwallowed() async throws {
+        let transport = Transport([(409, try! JSONSerialization.data(
+            withJSONObject: ["error": ["code": "session_ended"]]))])
+        let client = ManagedVoiceClient(accountId: account, transport: transport)
+        do {
+            _ = try await client.signal(id: UUID(), method: "POST", body: ["sdp": "v=0"])
+            XCTFail("expected a refusal")
+        } catch let failure as ManagedSummaryFailure {
+            guard case let .refused(code, _) = failure else { return XCTFail("wrong failure: \(failure)") }
+            XCTAssertEqual(code, "session_ended")
+        }
+    }
+}

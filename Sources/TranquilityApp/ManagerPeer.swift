@@ -27,8 +27,14 @@ import TranquilityCore
 final class ManagerPeer: NSObject, ManagerTransport, @unchecked Sendable {
     typealias RequestHandler = @Sendable ([String]) async -> (code: Int, out: String)
 
-    private let offerURL: URL
-    private let bearer: String?
+    /// One signalling message, and its reply.
+    ///
+    /// Two callers, two roads. The dev shim posts straight at the host with a
+    /// key of its own. The managed path goes through the Gateway, which
+    /// carries the message because this Mac holds no vendor key and the host's
+    /// endpoint refuses anything without one. The peer does not care which.
+    typealias Signaller = @Sendable (_ method: String, _ body: [String: Any]) async throws -> [String: Any]
+    private let signal: Signaller
     private let onRequest: RequestHandler
     /// Wire v1 (hf-3): announced with `hello` once a data channel is open.
     private let toolHost: ManagerToolHost?
@@ -45,10 +51,9 @@ final class ManagerPeer: NSObject, ManagerTransport, @unchecked Sendable {
 
     var onTrace: (@Sendable (String) -> Void)?
 
-    init(offerURL: URL, bearer: String?, toolHost: ManagerToolHost? = nil, appVersion: String = "",
+    init(signal: @escaping Signaller, toolHost: ManagerToolHost? = nil, appVersion: String = "",
          onRequest: @escaping RequestHandler) {
-        self.offerURL = offerURL
-        self.bearer = bearer
+        self.signal = signal
         self.toolHost = toolHost
         self.appVersion = appVersion
         self.onRequest = onRequest
@@ -169,31 +174,30 @@ final class ManagerPeer: NSObject, ManagerTransport, @unchecked Sendable {
     // MARK: - signalling
 
     private func post(_ offer: LKRTCSessionDescription) {
-        var request = URLRequest(url: offerURL)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        if let bearer { request.setValue("Bearer \(bearer)", forHTTPHeaderField: "Authorization") }
-        request.httpBody = try? JSONSerialization.data(withJSONObject: ["sdp": offer.sdp, "type": "offer"])
-        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+        // The description itself is not Sendable; its text is.
+        let sdp = offer.sdp
+        Task { [weak self] in
             guard let self else { return }
-            let status = (response as? HTTPURLResponse)?.statusCode ?? -1
-            guard let data, let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let sdp = obj["sdp"] as? String else {
-                self.onTrace?("offer refused: \(status) \(error?.localizedDescription ?? "")")
+            do {
+                let obj = try await self.signal("POST", ["sdp": sdp, "type": "offer"])
+                guard let answer = obj["sdp"] as? String else {
+                    self.onTrace?("offer refused: no sdp in the answer")
+                    self.takeContinuation()?.finish()
+                    return
+                }
+                self.pcId = obj["pc_id"] as? String
+                self.onTrace?("answered, \(answer.count) bytes")
+                self.connection?.setRemoteDescription(LKRTCSessionDescription(type: .answer, sdp: answer)) { _ in
+                    self.flushCandidates()
+                    self.armConnectDeadline()
+                }
+            } catch {
+                self.onTrace?("offer refused: \(error)")
                 self.takeContinuation()?.finish()
-                return
             }
-            self.pcId = obj["pc_id"] as? String
-            self.onTrace?("answered \(status), \(sdp.count) bytes")
-            self.connection?.setRemoteDescription(LKRTCSessionDescription(type: .answer, sdp: sdp)) { _ in
-                self.flushCandidates()
-                self.armConnectDeadline()
-            }
-        }.resume()
+        }
     }
 
-    /// Candidates trickle: waiting for gathering to finish took 35 s against
-    /// the hosted agent, longer than a session waits (22 Sep).
     private func flushCandidates() {
         lock.lock()
         guard let pcId, !pendingCandidates.isEmpty else { lock.unlock(); return }
@@ -202,14 +206,17 @@ final class ManagerPeer: NSObject, ManagerTransport, @unchecked Sendable {
         ] as [String: Any] }
         pendingCandidates.removeAll()
         lock.unlock()
-        var request = URLRequest(url: offerURL)
-        request.httpMethod = "PATCH"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        if let bearer { request.setValue("Bearer \(bearer)", forHTTPHeaderField: "Authorization") }
-        request.httpBody = try? JSONSerialization.data(withJSONObject: ["pc_id": pcId, "candidates": candidates])
-        URLSession.shared.dataTask(with: request) { [weak self] _, response, _ in
-            self?.onTrace?("sent \(candidates.count) candidate(s) -> \((response as? HTTPURLResponse)?.statusCode ?? -1)")
-        }.resume()
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                _ = try await self.signal("PATCH", ["pc_id": pcId, "candidates": candidates])
+                self.onTrace?("sent \(candidates.count) candidate(s)")
+            } catch {
+                // Trickled candidates are an optimisation, not the connection:
+                // the offer already carried everything gathered before it.
+                self.onTrace?("candidates refused: \(error)")
+            }
+        }
     }
 
     /// A door's answer, back the way the request came.

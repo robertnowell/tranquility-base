@@ -195,6 +195,15 @@ extension AppDelegate {
                     let client = try await credits.voice()
                     let id = UUID()
                     let bought = try await client.start(id: id, keyterms: names)
+                    // The Gateway decides what carries the audio, and only its
+                    // answer says which. A peer connection is a different
+                    // client entirely, so hand the session we have just paid
+                    // for to that one rather than buying a second.
+                    if bought.isWebRTC {
+                        self.startWebRTCManager(.bought(ManagedVoiceLease(client: client, id: id),
+                                                        renewBy: bought.renewByDate))
+                        return
+                    }
                     guard let url = bought.wsUrl.flatMap(URL.init(string:)) else {
                         throw ManagedSummaryFailure.invalidResponse
                     }
@@ -348,24 +357,83 @@ extension AppDelegate {
     /// engine cancelling the manager's own voice out of the microphone so it
     /// can be interrupted. The panel sees the same lines it always has.
     @MainActor
-    private func startWebRTCManager(_ rtc: ManagerConfig.WebRTCManager) {
+    /// The dev shim's road: straight at the host, with a key of its own.
+    static func directSignaller(offer: URL, bearer: String?) -> ManagerPeer.Signaller {
+        { method, body in
+            var request = URLRequest(url: offer)
+            request.httpMethod = method
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            if let bearer { request.setValue("Bearer \(bearer)", forHTTPHeaderField: "Authorization") }
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+            let (data, response) = try await URLSession.shared.data(for: request)
+            let status = (response as? HTTPURLResponse)?.statusCode ?? -1
+            guard status == 200 else { throw ManagedSummaryFailure.refused(code: "http_\(status)", operationId: nil) }
+            return (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
+        }
+    }
+
+    /// The paid road: through the Gateway, which carries the message because
+    /// this Mac holds no vendor key and the host's endpoint refuses anything
+    /// without one.
+    static func managedSignaller(_ client: ManagedVoiceClient, id: UUID) -> ManagerPeer.Signaller {
+        { method, body in try await client.signal(id: id, method: method, body: body) }
+    }
+
+    /// Where a WebRTC session comes from. The shim starts one directly with a
+    /// key of its own; the managed path buys one from the Gateway, which
+    /// carries the signalling afterwards because this Mac holds no vendor key.
+    enum WebRTCSource {
+        case shim(ManagerConfig.WebRTCManager)
+        case managed(ManagedCreditSession)
+        /// Already bought, because the transport is only known once the
+        /// Gateway has answered: the socket path starts the purchase and hands
+        /// the session over here rather than paying for a second one.
+        case bought(ManagedVoiceLease, renewBy: Date?)
+    }
+
+    private func startWebRTCManager(_ rtc: ManagerConfig.WebRTCManager) { startWebRTCManager(.shim(rtc)) }
+
+    private func startWebRTCManager(_ source: WebRTCSource) {
         hud.setManager(on: true)
         managerEndedByIdle = false
-        Permissions.log("manager: webrtc, starting a session at \(rtc.start.host ?? "?")")
         managerTask = Task { @MainActor [weak self] in
             guard let self else { return }
             let started = Date()
             let names = await Self.fleetNames()
-            let offer: URL
+            let signaller: ManagerPeer.Signaller
+            let label: String?
             do {
-                offer = try await Self.startWebRTCSession(rtc, keyterms: names)
+                switch source {
+                case .shim(let rtc):
+                    Permissions.log("manager: webrtc, starting a session at \(rtc.start.host ?? "?")")
+                    let offer = try await Self.startWebRTCSession(rtc, keyterms: names)
+                    signaller = Self.directSignaller(offer: offer, bearer: rtc.key)
+                    label = offer.pathComponents.dropLast(2).last
+                case .managed(let credits):
+                    Permissions.log("manager: managed webrtc, buying a session from the Gateway")
+                    let client = try await credits.voice()
+                    let id = UUID()
+                    let bought = try await client.start(id: id, keyterms: names)
+                    guard bought.isWebRTC else { throw ManagedSummaryFailure.invalidResponse }
+                    let lease = ManagedVoiceLease(client: client, id: id)
+                    self.managerLease = lease
+                    self.scheduleManagerRenewal(lease, renewBy: bought.renewByDate)
+                    signaller = Self.managedSignaller(client, id: id)
+                    label = id.uuidString.lowercased()
+                case .bought(let lease, let renewBy):
+                    Permissions.log("manager: managed webrtc session \(lease.id.uuidString.lowercased())")
+                    self.managerLease = lease
+                    self.scheduleManagerRenewal(lease, renewBy: renewBy)
+                    signaller = Self.managedSignaller(lease.client, id: lease.id)
+                    label = lease.id.uuidString.lowercased()
+                }
             } catch {
                 self.hud.showResult(Self.managerStartMessage(for: error))
                 Permissions.log("manager: webrtc start failed \(error)")
                 self.hud.setManager(on: false)
                 return
             }
-            let peer = ManagerPeer(offerURL: offer, bearer: rtc.key,
+            let peer = ManagerPeer(signal: signaller,
                                    toolHost: Self.managerToolHost, appVersion: Self.managerAppVersion) { argv in
                 await AppDelegate.answerManagerRequest(argv)
             }
@@ -398,7 +466,7 @@ extension AppDelegate {
             defer { try? eventsHandle?.close() }
             for await line in peer.lines() {
                 eventsHandle?.write(line + Data([0x0A]))
-                Self.managerLedger.enqueue(line: line, session: offer.pathComponents.dropLast(2).last)
+                Self.managerLedger.enqueue(line: line, session: label)
                 guard let event = ManagerEvent.parse(line) else { continue }
                 if event.event == .ready {
                     Permissions.log("manager: ready \(Int(Date().timeIntervalSince(started) * 1000)) ms after start")
@@ -431,7 +499,7 @@ extension AppDelegate {
             self.hud.setManagerState(StatusHUD.orbState, line: "reconnecting")
             try? await Task.sleep(nanoseconds: wait)
             guard self.managerPeer == nil, self.managerTask != nil else { return }
-            self.startWebRTCManager(rtc)
+            self.startWebRTCManager(source)
         }
     }
 
