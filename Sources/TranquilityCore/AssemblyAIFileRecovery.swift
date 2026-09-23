@@ -56,7 +56,15 @@ public struct AssemblyAIFileRecovery: RecoveryTranscriptionProvider {
         self.keySource = { keyOverride }
     }
 
-    public var isConfigured: Bool { keySource() != nil }
+    /// Configured when this Mac has credits OR a key of its own. Either is
+    /// enough to recover a recording; the managed path is tried first and
+    /// falls through to the key when it says this Mac is not on credits.
+    public var isConfigured: Bool { Self.managed != nil || keySource() != nil }
+
+    /// The account path, installed by the app when a managed session exists.
+    /// Returns nil for "not on credits, or out of them" -- the same rule the
+    /// voice and the live transcript follow -- and the key path runs instead.
+    public nonisolated(unsafe) static var managed: (@Sendable (Data, Int) async throws -> String?)?
 
     enum TranscriptState: Equatable {
         case processing
@@ -103,7 +111,6 @@ public struct AssemblyAIFileRecovery: RecoveryTranscriptionProvider {
     var compress: @Sendable (URL) -> URL? = { CompressedAudio.m4a(from: $0) }
 
     public func transcribe(fileAt url: URL) async throws -> TranscriptionResult {
-        guard let key = keySource() else { throw TranscriptionFailure.notConfigured }
         // The vendor's floor, checked before the wire rather than after it:
         // uploading, creating and polling a file that is known to be under it
         // costs three round trips and a charge to learn what the duration
@@ -125,6 +132,22 @@ public struct AssemblyAIFileRecovery: RecoveryTranscriptionProvider {
         if let compressed, let raw = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize {
             Self.trace?("compressed \(raw) bytes to \(audio.count) (\(compressed.pathExtension))")
         }
+
+        // On credits, this recording is bought on the account and no key of
+        // the person's own is needed. Nil means "not on credits, or out of
+        // them", and the key path below runs exactly as it always has.
+        if let managed = Self.managed {
+            let declared = max(1, Int((Self.seconds(of: url) ?? 0).rounded(.up)))
+            if let text = try await managed(audio, declared) {
+                Self.trace?("recovered on the account: \(text.count) chars")
+                guard !text.isEmpty else { throw TranscriptionFailure.noSpeechDetected }
+                return TranscriptionResult(text: text, finality: .recoveryForcedFinal, provider: name)
+            }
+        }
+
+        // The key path. Reached when this Mac is not on credits, or out of
+        // them, or the app never installed the managed seam at all.
+        guard let key = keySource() else { throw TranscriptionFailure.notConfigured }
 
         // 1. Upload — the whole file, no slicing. Transport errors map into
         //    the failure taxonomy so the chain's backoff applies, same lesson

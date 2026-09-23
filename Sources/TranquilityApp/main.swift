@@ -646,6 +646,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             let premiumVoice = ElevenLabsSpeechProvider()
             premiumVoice.render = managedAudio.clip()
+            // The fourth and last one: a saved recording recovered on the
+            // account rather than on a key of the person's own. Static,
+            // because the recovery chain builds its own rungs wherever a
+            // recovery starts rather than being handed them.
+            AssemblyAIFileRecovery.managed = managedAudio.recovering()
             self.coordinator = Coordinator(
                 store: store,
                 summarizer: SummarizerChain(providers: [managed, AnthropicSummaryProvider(), DeterministicSummarizer()]),
