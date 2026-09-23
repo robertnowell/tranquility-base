@@ -41,6 +41,9 @@ public struct ManagerEvent: Codable, Equatable, Sendable {
         /// Hosted: the session's life (`secs`) is up; the bot ends it with
         /// nothing open, and the app opens a fresh one.
         case rotate
+        /// One line of the exchange, whole, with its role and kind (hf-20,
+        /// hf-26). The ledger records it; the orb has nothing to show for it.
+        case said
     }
     public var event: Kind
     public var t: Double?
