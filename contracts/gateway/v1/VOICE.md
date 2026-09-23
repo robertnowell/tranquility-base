@@ -73,3 +73,40 @@ deployment offers no voice host, or the host would not start.
 block's admission. The placeholder at launch is 20,000 micros a minute (two
 cents; a $10 grant buys just over eight hours). A version never changes its
 rates; a new price is a new version.
+
+## Addendum, 23 September 2026 — what carries the audio
+
+A session now says which transport carries it, and the shapes are tagged
+rather than one shape with an optional URL.
+
+`PUT /v1/accounts/{accountId}/voice/sessions/{sessionId}` answers with the
+session plus **one** of:
+
+```json
+{ "transport": "websocket", "wsUrl": "wss://…", "token": "…" }
+```
+
+```json
+{ "transport": "webrtc", "offerUrl": "https://api.pipecat.daily.co/v1/public/{agent}/sessions/{hostSession}/api/offer" }
+```
+
+A WebRTC session has no socket and no token. The client POSTs its SDP offer
+to `offerUrl` and PATCHes its ICE candidates to the same address.
+
+**Why the Gateway sends a finished address.** Nothing in the host's reply
+contains it: a WebRTC start answers with a session id alone, and every
+official Pipecat client derives the address by replacing `/start` with
+`/sessions/{id}/api/offer`. That derivation is a convention, and a convention
+reproduced on both sides of a contract is one that will eventually disagree
+with itself. The Gateway already knows the start URL it called, so it does the
+derivation once and hands over the result.
+
+**The live transcript is unaffected and must stay so.** A transcript is always
+`transport: "websocket"` with a `wss://` address — the vendor speaks one
+protocol and it is not WebRTC. Voice and transcription share one start path,
+so a client MUST NOT relax its socket requirement to accommodate the WebRTC
+voice shape; it should branch on `transport` instead.
+
+Money is unchanged. Reservation, renewal, settlement, the block size and the
+pricebook do not read the transport: a minute costs what a minute costs
+whatever carries it.
