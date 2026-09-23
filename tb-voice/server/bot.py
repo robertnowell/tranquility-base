@@ -192,7 +192,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
             user_turn_strategies=UserTurnStrategies(
                 start=[
                     MinWordsUserTurnStartStrategy(
-                        min_words=int(os.getenv("TB_MIN_WORDS", "1"))
+                        min_words=int(os.getenv("TB_MIN_WORDS", "2"))
                     )
                 ],
                 stop=[
