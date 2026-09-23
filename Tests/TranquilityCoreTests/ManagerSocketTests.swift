@@ -175,3 +175,23 @@ final class VoiceProcessingTests: XCTestCase {
         XCTAssertEqual(buffer, [Float](repeating: 0, count: 10), "and now it is silent, mid-line")
     }
 }
+
+/// The WebRTC path is configured, not compiled in: a Mac with no
+/// `manager.webrtc` keeps the transport it has.
+final class WebRTCConfigTests: XCTestCase {
+    private func config(_ json: String) throws -> URL {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("hq-\(UUID().uuidString).json")
+        try Data(json.utf8).write(to: url)
+        return url
+    }
+
+    func testAbsentUnlessConfigured() throws {
+        XCTAssertNil(ManagerConfig.webrtc(config: try config(#"{"manager":{}}"#)))
+        XCTAssertNil(ManagerConfig.webrtc(config: try config(#"{"manager":{"webrtc":{"start":"https://h/start"}}}"#)),
+                     "a block without a key is not configured")
+        let rtc = ManagerConfig.webrtc(config: try config(
+            #"{"manager":{"webrtc":{"start":"https://api.example/v1/public/bot/start","key":"pk_x"}}}"#))
+        XCTAssertEqual(rtc?.start.absoluteString, "https://api.example/v1/public/bot/start")
+        XCTAssertEqual(rtc?.key, "pk_x")
+    }
+}

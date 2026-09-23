@@ -75,7 +75,7 @@ extension AppDelegate {
 
 extension AppDelegate {
 
-    var managerIsOn: Bool { managerTransport != nil || managerSocket != nil }
+    var managerIsOn: Bool { managerTransport != nil || managerSocket != nil || managerPeer != nil }
 
     @objc func toggleManagerMode() {
         if managerIsOn { stopManager() } else { startManager() }
@@ -87,6 +87,9 @@ extension AppDelegate {
         // A hosted manager when configured and no local command is: the same
         // event lines arrive over a socket instead of a pipe, and the bot asks
         // this process for its doors (ManagerSocket.swift).
+        // WebRTC first when it is configured, whatever else is: it is the
+        // only path where talking over the manager reaches it.
+        if let rtc = ManagerConfig.webrtc() { startWebRTCManager(rtc); return }
         switch ManagerConfig.availability() {
         case .managed:
             // Signed in: the Gateway sells the session, starts the bot, and
@@ -150,6 +153,8 @@ extension AppDelegate {
         managerTransport = nil
         if let socket = managerSocket { Task { await socket.close() } }
         managerSocket = nil
+        if let peer = managerPeer { Task { await peer.close() } }
+        managerPeer = nil
         endManagerLease()
         managerReconnects = 0
         managerEndedByIdle = false
@@ -341,6 +346,110 @@ extension AppDelegate {
                 Permissions.log("manager: end failed \(error)")
             }
         }
+    }
+
+    /// Hands-free over WebRTC: one session, one peer connection, and the
+    /// engine cancelling the manager's own voice out of the microphone so it
+    /// can be interrupted. The panel sees the same lines it always has.
+    @MainActor
+    private func startWebRTCManager(_ rtc: ManagerConfig.WebRTCManager) {
+        hud.setManager(on: true)
+        managerEndedByIdle = false
+        Permissions.log("manager: webrtc, starting a session at \(rtc.start.host ?? "?")")
+        managerTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            let started = Date()
+            let names = await Self.fleetNames()
+            let offer: URL
+            do {
+                offer = try await Self.startWebRTCSession(rtc, keyterms: names)
+            } catch {
+                self.hud.showResult(Self.managerStartMessage(for: error))
+                Permissions.log("manager: webrtc start failed \(error)")
+                self.hud.setManager(on: false)
+                return
+            }
+            let peer = ManagerPeer(offerURL: offer, bearer: rtc.key) { argv in
+                await AppDelegate.answerManagerRequest(argv)
+            }
+            peer.onTrace = { line in Permissions.log("manager wire: \(line)") }
+            do { try peer.start() } catch {
+                self.hud.showResult("Hands-free could not open the microphone: \(error.localizedDescription)")
+                Permissions.log("manager: webrtc peer failed \(error)")
+                self.hud.setManager(on: false)
+                return
+            }
+            self.managerPeer = peer
+            // The device the app chose, not the system default. The module
+            // lists nothing until audio is running, so this waits for it.
+            let wanted = AudioInputDevice.resolve()?.name
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                guard self.managerPeer === peer, let wanted else { return }
+                let landed = peer.pinMicrophone(named: wanted)
+                Permissions.log("manager: microphone \(landed)\(landed == wanted ? "" : " (wanted \(wanted))"), "
+                                + "echo cancellation \(peer.echoCancellationIsActive ? "on" : "OFF")")
+            }
+            let eventsFile = QueueStore.supportDirectory.appendingPathComponent("manager-events.jsonl")
+            let eventsHandle: FileHandle? = {
+                if !FileManager.default.fileExists(atPath: eventsFile.path) {
+                    FileManager.default.createFile(atPath: eventsFile.path, contents: nil)
+                }
+                let h = try? FileHandle(forWritingTo: eventsFile); h?.seekToEndOfFile(); return h
+            }()
+            defer { try? eventsHandle?.close() }
+            for await line in peer.lines() {
+                eventsHandle?.write(line + Data([0x0A]))
+                guard let event = ManagerEvent.parse(line) else { continue }
+                if event.event == .ready {
+                    Permissions.log("manager: ready \(Int(Date().timeIntervalSince(started) * 1000)) ms after start")
+                }
+                self.handle(event)
+            }
+            guard self.managerPeer === peer else { return }  // stopped by the chord
+            Permissions.log("manager: webrtc session ended")
+            self.managerPeer = nil
+            if self.managerEndedByIdle {
+                self.managerEndedByIdle = false
+                self.hud.setManager(on: false)
+                self.rebuildMenu()
+                return
+            }
+            self.managerReconnects += 1
+            guard self.managerReconnects <= 3 else {
+                Permissions.log("manager: webrtc reconnect gave up after 3 tries")
+                self.hud.showResult("Hands-free lost its connection three times; press the chord to try again.")
+                self.managerReconnects = 0
+                self.hud.setManager(on: false)
+                self.rebuildMenu()
+                return
+            }
+            let wait = UInt64(1 << (self.managerReconnects - 1)) * 1_000_000_000
+            self.hud.setManagerState(StatusHUD.orbState, line: "reconnecting")
+            try? await Task.sleep(nanoseconds: wait)
+            guard self.managerPeer == nil, self.managerTask != nil else { return }
+            self.startWebRTCManager(rtc)
+        }
+    }
+
+    /// `POST /start` on the hosted agent, then the session's own offer route.
+    /// Pipecat Cloud starts the session before any offer exists, so the bot is
+    /// waiting by the time this returns.
+    static func startWebRTCSession(_ rtc: ManagerConfig.WebRTCManager, keyterms: [String]) async throws -> URL {
+        var request = URLRequest(url: rtc.start)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(rtc.key)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["createDailyRoom": false])
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let session = obj["sessionId"] as? String else {
+            throw ManagerSocketError.closed
+        }
+        let base = rtc.start.deletingLastPathComponent()   // .../<agent>
+        return base.appendingPathComponent("sessions").appendingPathComponent(session)
+            .appendingPathComponent("api").appendingPathComponent("offer")
     }
 
     /// The microphone and the player hands-free will use: one voice-processing
