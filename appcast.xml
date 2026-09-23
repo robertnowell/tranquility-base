@@ -6,6 +6,14 @@
     <description>Updates for Tranquility Base.</description>
     <language>en</language>
     <item>
+      <title>Version 0.3.1300</title>
+      <sparkle:version>1300</sparkle:version>
+      <sparkle:shortVersionString>0.3.1300</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <pubDate>Wed, 23 Sep 2026 00:01:24 +0000</pubDate>
+      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1300-8b393ae71/TranquilityBase-0.3.1300.dmg" type="application/octet-stream" length="16886336" sparkle:edSignature="e6jGnix2LkTIlSFXILyff7Quq+CL2Z+9ejKRSI8TB8UmvHJLYFUv7eetxDfc2eDIxsVnvFZqOfPeNS1zz0LRDg==" />
+    </item>
+    <item>
       <title>Version 0.3.1299</title>
       <sparkle:version>1299</sparkle:version>
       <sparkle:shortVersionString>0.3.1299</sparkle:shortVersionString>
@@ -77,16 +85,8 @@
       <pubDate>Tue, 22 Sep 2026 19:46:57 +0000</pubDate>
       <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1290-c90bb59f5/TranquilityBase-0.3.1290.dmg" type="application/octet-stream" length="16639436" sparkle:edSignature="Wfj7+8G9f9ju6KNw+zO5xvxmvo8Cp9qehK77jCMuAv9loSnsmwLFDkPQ8ClzRqmMHlT+wnGtd1g7p6duVZjuAQ==" />
     </item>
-    <item>
-      <title>Version 0.3.1289</title>
-      <sparkle:version>1289</sparkle:version>
-      <sparkle:shortVersionString>0.3.1289</sparkle:shortVersionString>
-      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <pubDate>Tue, 22 Sep 2026 08:12:17 +0000</pubDate>
-      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1289-2c732d682/TranquilityBase-0.3.1289.dmg" type="application/octet-stream" length="16639425" sparkle:edSignature="mtqUsD2/tbJkkP0sxzHm+n115Qo9DfccQCSqigJ+o7UI1nkUN8o8UFt9wmt9EW1nEDmNQXwj6RXnVIL8ImH0Cg==" />
-    </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: rWjxh1PfGVJVNq/EtI18zuzMqzzsA88GvfooA/2DE5qyZ+B3c4+c3Oz2shCR6Q9uNBUEUCZpiB6zknusVs2NCA==
+edSignature: ohZT0tDSPbiNB6nsh74Px/vmCxGZWWEJK7K0ui5NvBqdFnPcyL3RzE6i1dc0w5DG+AUOvXTjUhhdoyo39VQ0BA==
 length: 6457
 -->
