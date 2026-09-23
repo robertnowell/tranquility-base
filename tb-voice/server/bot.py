@@ -230,7 +230,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
             # transcriber while it is still speaking, which is what an
             # interruption is made of. When it is not, the gate is the only
             # defence and stays.
-            EchoGate(passthrough=cancels_echo),
+            EchoGate(cancels_own_voice=cancels_echo),
             stt,
             user_aggregator,
             gate,
