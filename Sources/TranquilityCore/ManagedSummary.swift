@@ -63,7 +63,13 @@ public final class GatewayHTTPTransport: GatewayTransport, Sendable {
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         if body != nil { request.setValue("application/json", forHTTPHeaderField: "Content-Type") }
         let (data, response) = try await session.data(for: request)
-        guard data.count <= 262144, let http = response as? HTTPURLResponse
+        // No size limit. There was one, 256 KB, and it protected nothing: it ran
+        // after the whole body was already in memory, on a response from our own
+        // Gateway over authenticated TLS with a 45 s resource timeout. When the
+        // voice moved onto this transport (#571) it discarded every clip over
+        // about twelve seconds AFTER the Gateway had charged for it, and the
+        // retry got a receipt with no audio. Found live, 22 Sep.
+        guard let http = response as? HTTPURLResponse
         else { throw ManagedSummaryFailure.invalidResponse }
         return (http.statusCode, data)
     }

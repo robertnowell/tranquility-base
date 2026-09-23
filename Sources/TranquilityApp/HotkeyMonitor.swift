@@ -223,7 +223,8 @@ public final class HotkeyMonitor: @unchecked Sendable {
             .filter { flags.contains($0) }
         let ms = Int(duration * 1000)
         switch ChordRelease.verdict(modifiers: pressed.count, duration: duration,
-                                    holdThreshold: holdThreshold, interfered: interfered) {
+                                    holdThreshold: holdThreshold, interfered: interfered,
+                                    hasHoldMeaning: flags != bindings.pause) {
         case .interfered:
             return
         case .heldPastTap:
