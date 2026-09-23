@@ -27,21 +27,28 @@ extension AppDelegate {
         guard let coordinator else { return }
         Permissions.log("manager: speaking \(placard) for \(session.prefix(8)): \(spoken.text.prefix(200))")
         if managerIsOn {
+            // Hands-free has ONE mouth, and it is not this one.
+            //
+            // This used to read the line aloud here, in the session's own
+            // voice, through the app's own speakers. Nothing could cancel it: a
+            // canceller removes the audio its own renderer played, and this is
+            // a different renderer, so the microphone heard every announcement
+            // the way it hears a person. On 23 Sep the manager transcribed
+            // three of them back, verbatim, as the developer's own words, and
+            // acted on them.
+            //
+            // So the bot speaks it, down the connection, in this session's
+            // ElevenLabs voice (`tbase voice <session>` is where it gets the
+            // id, the same assignment this Mac has always used). It arrives
+            // already cancelled, the microphone stays open through it, and you
+            // can talk over an announcement — which was never possible before.
+            //
+            // The card and the words under the orb still belong here. Only the
+            // sound moved.
             returnToGridWork?.cancel()
-            let previous = announceTask
-            announceTask = Task { @MainActor in
-                coordinator.speech.stop()
-                previous?.cancel()
-                _ = await previous?.value
-                guard !Task.isCancelled else { return }
-                // The words themselves go under the orb, and stay there after the
-                // voice stops: what was said is what you want to read.
-                hud.setManagerState(StatusHUD.orbState, line: spoken.text, mood: "speaking")
-                let voices = coordinator.voices(for: session)
-                _ = await coordinator.speech.speak(
-                    spoken, voice: voices.cloud, systemVoice: voices.system, onWord: { _ in })
-                hud.setManagerState(StatusHUD.orbState, line: spoken.text)
-            }
+            announceTask?.cancel()
+            coordinator.speech.stop()
+            hud.setManagerState(StatusHUD.orbState, line: spoken.text, mood: "speaking")
             return
         }
         returnToGridWork?.cancel()

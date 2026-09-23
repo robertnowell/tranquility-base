@@ -450,9 +450,16 @@ class Brain:
 
 
 class Manager(FrameProcessor):
-    def __init__(self, jev: JevClient):
+    def __init__(self, jev: JevClient, tts=None):
         super().__init__()
         self._jev = jev
+        # The one mouth. Every line this Mac says aloud comes down the
+        # connection now, a session's announcement included, so the canceller
+        # has all of it and the microphone never has to close. Held directly
+        # rather than addressed through a frame because changing the speaker
+        # means reconnecting the socket; see SpokenTTSService.use_voice.
+        self._tts = tts
+        self._manager_voice = None
         self._brain = Brain()
         seed_exchange()
         self._recent: list[str] = []
@@ -735,7 +742,8 @@ class Manager(FrameProcessor):
         await emit(self, "speaking", voice="agent", session=nxt["sessionId"], text=spoken)
         note(Line(Role.AGENT, LineKind.SPOKEN, spoken or "(no brief stored)",
                   speaker=nxt.get("name") or nxt.get("goal") or nxt["sessionId"][:8]))
-        await self._app_speaks(f"{SCHEME}://hear?session={nxt['sessionId']}", spoken or "x " * 20)
+        await self._app_speaks(f"{SCHEME}://hear?session={nxt['sessionId']}", spoken or "x " * 20,
+                               nxt["sessionId"])
 
     async def _do_rung_goal(self, t, f, d): await self._rung("goal", t, f, d)
     async def _do_rung_findings(self, t, f, d): await self._rung("findings", t, f, d)
@@ -758,7 +766,8 @@ class Manager(FrameProcessor):
                    rung=kind, text=rung["spoken"])
         note(Line(Role.AGENT, LineKind.SPOKEN, rung["spoken"],
                   speaker=self.stage.get("name") or self.stage.get("goal") or self.stage["sessionId"][:8]))
-        await self._app_speaks(f"{SCHEME}://rung?session={self.stage['sessionId']}&kind={kind}", rung["spoken"])
+        await self._app_speaks(f"{SCHEME}://rung?session={self.stage['sessionId']}&kind={kind}",
+                               rung["spoken"], self.stage["sessionId"])
 
     async def _do_custom(self, text, frame, direction):
         if not self.stage:
@@ -797,7 +806,7 @@ class Manager(FrameProcessor):
         answer = spoken(answer)
         await emit(self, "speaking", voice="agent", session=sid, text=answer[:160])
         note(Line(Role.AGENT, LineKind.SPOKEN, answer, speaker=self.stage.get("name") or self.stage.get("goal") or sid[:8]))
-        await self._app_speaks(f"{SCHEME}://say?session={sid}&text={quote(answer)}", answer)
+        await self._app_speaks(f"{SCHEME}://say?session={sid}&text={quote(answer)}", answer, sid)
 
     CAPABILITIES = ("Say what's next to hear the next agent. Ask for the goal, findings, next step "
                     "or why. Say tell it to, then your message. Say stop to mute. Say start an agent.")
@@ -1122,10 +1131,20 @@ class Manager(FrameProcessor):
 
     # -- doors ----------------------------------------------------------------------
 
-    async def _say(self, text: str, voice: str = "manager", session: str | None = None):
-        """The manager's voice. Holds the voice lock until its own speech stops,
-        so nothing else can start talking over it."""
+    async def _say(self, text: str, voice: str = "manager", session: str | None = None,
+                   voice_id: str | None = None):
+        """The manager's voice, or a session's. Holds the voice lock until the
+        speech stops, so nothing else can start talking over it.
+
+        `voice_id` is an ElevenLabs id: the session's own voice, so an agent
+        announced down the connection still sounds like that agent rather than
+        like the manager. The manager's own id is remembered the first time and
+        restored after, so a session never leaves the manager in its voice."""
         async with self._voice:
+            if self._tts is not None:
+                if self._manager_voice is None:
+                    self._manager_voice = self._tts._settings.voice
+                await self._tts.use_voice(voice_id or self._manager_voice)
             await emit(self, "speaking", voice=voice, session=session, text=text)
             self._bot_stopped.clear()
             # The synthesizer notes the line when it speaks it (tts.py), so every
@@ -1136,18 +1155,44 @@ class Manager(FrameProcessor):
             except TimeoutError:
                 pass
 
-    async def _app_speaks(self, url: str, text: str):
-        """A session speaks through the app. Hold the voice lock and mute the mic
-        for the line's estimated length: the app's voice is echo to this mic."""
-        # Measured against three announcements on 23 Sep: 16 to 18 words each
-        # took 8.1 to 8.4 s of real speech, and the transcriber finalises after
-        # that again. The old 1.2 + 0.42w put the window's end inside the last
-        # word every time, so the tail of the app's own voice reached the STT.
-        secs = min(25.0, 1.5 + 0.5 * len(text.split()))
-        async with self._voice:
-            session.current().external_until["t"] = time.monotonic() + secs
-            await _run("open", url)
-            await asyncio.sleep(secs)
+    async def _app_speaks(self, url: str, text: str, session_id: str | None = None):
+        """A session's line: the card opens on the Mac, the voice comes from here.
+
+        It used to be read aloud by the app, in that session's voice, through
+        the app's own speakers. Nothing could cancel that — a canceller removes
+        the audio its own renderer played, and the app's synthesiser is not it —
+        so the microphone heard every announcement as a person talking. On
+        23 Sep at 20:03 the app said "The cutover is complete; we're now
+        researching AGI House SF…" and ten seconds later the manager
+        transcribed it back as the developer's own words. Three in a row.
+
+        The guards tried first were both worse than the disease: closing the
+        microphone while the app read is the deafness the whole transport
+        change existed to remove, and matching the transcript against the line
+        being read is a string comparison standing in for signal processing.
+        Routing the app's audio into the connection's engine broke the shared
+        microphone device for everything else on the Mac, dictation included.
+
+        So there is one mouth. The app still opens the card — that is what the
+        URL is for — and the line is spoken here, down the same connection the
+        manager speaks on, in the session's own ElevenLabs voice. It is in the
+        canceller's reference like everything else we play, which is why the
+        microphone can stay open through it, and why you can now talk over an
+        announcement at all."""
+        await _run("open", url)
+        await self._say(text, voice="agent", session=session_id,
+                        voice_id=await self._voice_for(session_id))
+
+    async def _voice_for(self, session_id: str | None) -> str | None:
+        """The ElevenLabs voice this Mac has assigned to a session. Assigned on
+        first use, exactly as it was when the app did the speaking, so an agent
+        keeps the voice it has always had."""
+        if not session_id:
+            return None
+        code, out = await _run(TBASE, "voice", session_id, "--json")
+        data = _json_or_text(code, out)
+        voice = data.get("cloud") if isinstance(data, dict) else None
+        return voice or None
 
     async def _earcon(self, name: str):
         await emit(self, "earcon", name=name)
