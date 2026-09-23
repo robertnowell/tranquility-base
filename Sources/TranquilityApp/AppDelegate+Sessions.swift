@@ -183,14 +183,10 @@ extension AppDelegate {
     /// newest stamp wins, not the last line.
     func freshReport(session: String) -> String? {
         guard let store else { return nil }
-        let briefs = (try? store.briefs(for: session, limit: 2)) ?? []
-        let turnBegan = briefs.count > 1
-            ? Date(timeIntervalSince1970: Double(briefs[1].atMs) / 1000)
-            : .distantPast
-        // The rule lives in the store, where it is tested: newest by stamp,
-        // not the last line (23 Sep).
-        return ArtifactStore.freshReport(for: session, root: QueueStore.supportDirectory.path,
-                                         since: turnBegan)
+        // The rule lives in the store, where it is tested and drilled: newest
+        // by stamp since the previous brief, not the last line (23 Sep).
+        return ArtifactStore.freshReport(for: session, store: store,
+                                         root: QueueStore.supportDirectory.path)
     }
 
     /// The hub, rewritten fresh and then shown. One code path for both of its
