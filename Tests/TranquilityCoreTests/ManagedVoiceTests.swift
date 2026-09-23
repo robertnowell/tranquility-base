@@ -88,3 +88,82 @@ final class ManagedVoiceTests: XCTestCase {
         }
     }
 }
+
+/// The split: each lane keeps its own requirement, and neither can lose it on
+/// the other's behalf. This is the whole reason the types are two.
+final class SessionShapeTests: XCTestCase {
+    private let account = UUID(uuidString: "7f3c2a10-1111-4222-8333-444455556666")!
+    private let id = UUID(uuidString: "0a1b2c3d-4444-4555-8666-777788889999")!
+
+    private func decode<T: Decodable>(_ type: T.Type, _ object: [String: Any]) throws -> T {
+        var body = object
+        body["version"] = body["version"] ?? "1"
+        body["accountId"] = body["accountId"] ?? account.uuidString.lowercased()
+        body["sessionId"] = body["sessionId"] ?? id.uuidString.lowercased()
+        body["state"] = body["state"] ?? "running"
+        body["blocks"] = body["blocks"] ?? 1
+        body["pricebookVersion"] = body["pricebookVersion"] ?? "fixture"
+        body["startedAt"] = body["startedAt"] ?? "2026-09-23T12:00:00Z"
+        return try JSONDecoder().decode(type, from: JSONSerialization.data(withJSONObject: body))
+    }
+
+    func testAWebRTCVoiceSessionIsValidWithNoSocketAtAll() throws {
+        let s = try decode(GatewayVoiceSession.self, [
+            "transport": "webrtc",
+            "offerUrl": "https://api.pipecat.daily.co/v1/public/agent/sessions/abc/api/offer",
+        ])
+        XCTAssertTrue(s.isWebRTC)
+        XCTAssertTrue(s.isValid(account: account, id: id, expectEndpoint: true))
+        XCTAssertNil(s.wsUrl)
+    }
+
+    func testAWebRTCSessionWithNoOfferAddressIsNotASession() throws {
+        let s = try decode(GatewayVoiceSession.self, ["transport": "webrtc"])
+        XCTAssertFalse(s.isValid(account: account, id: id, expectEndpoint: true))
+    }
+
+    func testASocketVoiceSessionStillNeedsItsSocketAndToken() throws {
+        let good = try decode(GatewayVoiceSession.self, [
+            "transport": "websocket", "wsUrl": "wss://host.example/ws", "token": "t"])
+        XCTAssertTrue(good.isValid(account: account, id: id, expectEndpoint: true))
+        let noToken = try decode(GatewayVoiceSession.self, [
+            "transport": "websocket", "wsUrl": "wss://host.example/ws"])
+        XCTAssertFalse(noToken.isValid(account: account, id: id, expectEndpoint: true))
+        // An older reply, from before the tag existed, is a socket.
+        let untagged = try decode(GatewayVoiceSession.self, ["wsUrl": "wss://host.example/ws", "token": "t"])
+        XCTAssertFalse(untagged.isWebRTC)
+        XCTAssertTrue(untagged.isValid(account: account, id: id, expectEndpoint: true))
+    }
+
+    /// THE point of the split. A transcript offered the WebRTC shape must
+    /// refuse it: the vendor speaks one protocol and it is not WebRTC. While
+    /// both decoded one struct, relaxing the guard for voice would have
+    /// relaxed it here too, and this would have passed.
+    func testATranscriptRefusesTheWebRTCShapeThatAVoiceSessionAccepts() throws {
+        let webrtcShaped: [String: Any] = [
+            "transport": "webrtc",
+            "offerUrl": "https://api.pipecat.daily.co/v1/public/agent/sessions/abc/api/offer",
+        ]
+        let asVoice = try decode(GatewayVoiceSession.self, webrtcShaped)
+        XCTAssertTrue(asVoice.isValid(account: account, id: id, expectEndpoint: true),
+                      "the bot may legitimately be carried this way")
+
+        let asTranscript = try decode(GatewayTranscriptSession.self, webrtcShaped)
+        XCTAssertFalse(asTranscript.isValid(account: account, id: id, expectSocket: true),
+                       "the transcript may not: there is no socket here to open")
+    }
+
+    func testATranscriptStillAcceptsItsOwnShape() throws {
+        let s = try decode(GatewayTranscriptSession.self, [
+            "wsUrl": "wss://streaming.assemblyai.com/v3/ws", "token": "tok"])
+        XCTAssertTrue(s.isValid(account: account, id: id, expectSocket: true))
+    }
+
+    func testNeitherAcceptsAnotherAccountsSession() throws {
+        let v = try decode(GatewayVoiceSession.self, [
+            "transport": "websocket", "wsUrl": "wss://h/ws", "token": "t"])
+        XCTAssertFalse(v.isValid(account: UUID(), id: id, expectEndpoint: true))
+        let t = try decode(GatewayTranscriptSession.self, ["wsUrl": "wss://h/ws", "token": "t"])
+        XCTAssertFalse(t.isValid(account: UUID(), id: id, expectSocket: true))
+    }
+}

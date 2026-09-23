@@ -230,7 +230,9 @@ public actor ManagedTranscriptionSession {
         }
         let response = try await transport.request(method: "PUT", path: path(id), body: body)
         guard response.status == 200 else { throw Self.failure(response, id: id) }
-        let session = try JSONDecoder().decode(GatewayVoiceSession.self, from: response.body)
+        // Its own type, with its own unconditional socket requirement -- not
+        // the voice session's, which can legitimately have no socket at all.
+        let session = try JSONDecoder().decode(GatewayTranscriptSession.self, from: response.body)
         guard session.isValid(account: accountId, id: id, expectSocket: true), let token = session.token else {
             throw ManagedSummaryFailure.invalidResponse
         }
@@ -241,7 +243,7 @@ public actor ManagedTranscriptionSession {
     private func renew(_ id: UUID) async throws {
         let response = try await transport.request(method: "POST", path: path(id, "/renew"), body: nil)
         guard response.status == 200 else { throw Self.failure(response, id: id) }
-        let session = try JSONDecoder().decode(GatewayVoiceSession.self, from: response.body)
+        let session = try JSONDecoder().decode(GatewayTranscriptSession.self, from: response.body)
         renewBy = session.renewByDate
     }
 
