@@ -78,6 +78,29 @@ final class HubReconcileTests: XCTestCase {
         XCTAssertEqual(out.recorded, 0)
     }
 
+    /// A page rewritten since its stamp is recorded again, with the new
+    /// stamp. Codex has no Write hook, so this pass is the only thing that
+    /// ever stamps its pages; skipping every known path froze a report at
+    /// its first write and the card's door read Open Hub over a report the
+    /// turn had just rewritten (23 Sep).
+    func testARewrittenPageIsRecordedAgain() throws {
+        let p = try page("report.html")
+        let first = Date(timeIntervalSince1970: 1_700_000_000)
+        try FileManager.default.setAttributes([.modificationDate: first], ofItemAtPath: p.path)
+        XCTAssertEqual(reconcile().recorded, 1)
+        XCTAssertEqual(reconcile().recorded, 0)
+        // The agent writes it again, an hour later.
+        try page("report.html", "<html><head></head><body>y</body></html>")
+        let second = first.addingTimeInterval(3600)
+        try FileManager.default.setAttributes([.modificationDate: second], ofItemAtPath: p.path)
+        XCTAssertEqual(reconcile().recorded, 1)
+        XCTAssertEqual(reconcile().recorded, 0)
+        let history = ArtifactStore.history(for: session, root: support.path)
+        XCTAssertEqual(history.count, 1)
+        XCTAssertEqual(try XCTUnwrap(history.first).at.timeIntervalSince1970,
+                       second.timeIntervalSince1970, accuracy: 1)
+    }
+
     /// A refreshed mtime re-attributes the page to whichever session last ran a
     /// shell command (16 Aug). Load-bearing.
     func testTheModificationTimeSurvives() throws {

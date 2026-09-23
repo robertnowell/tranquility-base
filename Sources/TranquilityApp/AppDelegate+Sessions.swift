@@ -178,18 +178,19 @@ extension AppDelegate {
     /// The one report this turn just wrote, if any: the newest recorded
     /// artifact, on disk, stamped after the PREVIOUS turn's brief — which is
     /// when this turn began. An artifact from an earlier turn is the hub's
-    /// job; an artifact re-touched but first recorded long ago keeps its
-    /// first stamp and stays with the hub too, deliberately.
+    /// job. A page rewritten this turn counts: its stamp moves with every
+    /// write (the hook's line, or the reconciler's since 23 Sep), and the
+    /// newest stamp wins, not the last line.
     func freshReport(session: String) -> String? {
-        guard let store,
-              let latest = ArtifactStore.history(
-                  for: session, root: QueueStore.supportDirectory.path).last
-        else { return nil }
+        guard let store else { return nil }
         let briefs = (try? store.briefs(for: session, limit: 2)) ?? []
         let turnBegan = briefs.count > 1
             ? Date(timeIntervalSince1970: Double(briefs[1].atMs) / 1000)
             : .distantPast
-        return latest.at > turnBegan ? latest.path : nil
+        // The rule lives in the store, where it is tested: newest by stamp,
+        // not the last line (23 Sep).
+        return ArtifactStore.freshReport(for: session, root: QueueStore.supportDirectory.path,
+                                         since: turnBegan)
     }
 
     /// The hub, rewritten fresh and then shown. One code path for both of its
