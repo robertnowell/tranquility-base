@@ -97,6 +97,25 @@ final class ManagerPeer: NSObject, ManagerTransport, @unchecked Sendable {
         }
     }
 
+    /// A session that has not connected in this long is not going to. ICE
+    /// gives up after fifteen seconds, and 23 Sep showed what that costs: two
+    /// sessions landed on an instance that was being replaced, each sat the
+    /// full fifteen seconds, and starting hands-free took twenty-two seconds
+    /// instead of one. Failing fast turns a bad instance into a blink, because
+    /// the reconnect path already tries again.
+    static let connectDeadline: TimeInterval = 5
+
+    private func armConnectDeadline() {
+        let deadline = Self.connectDeadline
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(deadline * 1_000_000_000))
+            guard let self, self.connection?.connectionState != .connected,
+                  self.connection != nil else { return }
+            self.onTrace?("no connection in \(Int(deadline)) s; giving up on this session")
+            await self.close()
+        }
+    }
+
     func lines() -> AsyncStream<Data> {
         AsyncStream { continuation in
             lock.lock(); self.continuation = continuation; lock.unlock()
@@ -133,6 +152,20 @@ final class ManagerPeer: NSObject, ManagerTransport, @unchecked Sendable {
         String(describing: factory.audioProcessingState.echoCancellation).contains("active:1")
     }
 
+    /// Everything about the audio path in one line, because "echo cancellation
+    /// on" was not enough: on 23 Sep the app reported it on and the manager
+    /// still transcribed its own voice three seconds into its own sentence,
+    /// while the same code in a command-line client cancelled eleven seconds
+    /// of it cleanly. The difference has to be somewhere in here.
+    var audioPathDescription: String {
+        let adm = factory.audioDeviceModule
+        let state = factory.audioProcessingState
+        return "in=\(adm.inputDevice.name) [\(adm.inputDevice.deviceId)] "
+            + "out=\(adm.outputDevice.name) [\(adm.outputDevice.deviceId)] "
+            + "recording=\(adm.recording) playing=\(adm.playing) "
+            + "echo=\(state.echoCancellation) ns=\(state.noiseSuppression)"
+    }
+
     // MARK: - signalling
 
     private func post(_ offer: LKRTCSessionDescription) {
@@ -154,6 +187,7 @@ final class ManagerPeer: NSObject, ManagerTransport, @unchecked Sendable {
             self.onTrace?("answered \(status), \(sdp.count) bytes")
             self.connection?.setRemoteDescription(LKRTCSessionDescription(type: .answer, sdp: sdp)) { _ in
                 self.flushCandidates()
+                self.armConnectDeadline()
             }
         }.resume()
     }

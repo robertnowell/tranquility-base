@@ -55,9 +55,17 @@ final class Spike: NSObject, LKRTCPeerConnectionDelegate {
     /// the system default is? Our device policy exists because the default is
     /// the AirPods, and opening their microphone drags the link into HFP.
     func chooseMicrophone(_ when: String) {
+        if ProcessInfo.processInfo.environment["TB_NO_PIN"] != nil {
+            print("not pinning: leaving the module on its own device")
+            let adm = factory.audioDeviceModule
+            print("   current: \(adm.inputDevice.name) [\(adm.inputDevice.deviceId)]")
+            print("   processing: \(factory.audioProcessingState.echoCancellation)")
+            return
+        }
         let adm = factory.audioDeviceModule
         print("WebRTC input devices (\(when)), recording=\(adm.recording):")
         print("   processing: echo=\(factory.audioProcessingState.echoCancellation), ns=\(factory.audioProcessingState.noiseSuppression)")
+        print("   playout: \(adm.outputDevice.name) [\(adm.outputDevice.deviceId)] playing=\(adm.playing)")
         for device in adm.inputDevices { print("   \(device.name)  [\(device.deviceId)]") }
         print("   current: \(adm.inputDevice.name)")
         if adm.inputDevices.isEmpty {
@@ -95,6 +103,7 @@ final class Spike: NSObject, LKRTCPeerConnectionDelegate {
             let started = adm.initAndStartRecording()
             print("   stop(\(stopped)) set(\(set)) start(\(started)) -> \(adm.inputDevice.name) [\(adm.inputDevice.deviceId)]")
         }
+        print("   processing after the pin: echo=\(factory.audioProcessingState.echoCancellation)")
         print(adm.inputDevice.deviceId == builtIn.deviceId
               ? "   PINNED by identity, not following the default"
               : "   NOT PINNED: still on \(adm.inputDevice.deviceId)")
@@ -188,6 +197,7 @@ final class Spike: NSObject, LKRTCPeerConnectionDelegate {
                 if stat.type == "media-source", let level = stat.values["audioLevel"] as? NSNumber { heardLevel = level.doubleValue }
             }
             print(String(format: "audio: %.0f bytes up, %.0f bytes down, microphone level %.4f", sent, received, heardLevel))
+            print("   echo=\(self.factory.audioProcessingState.echoCancellation) in=\(self.factory.audioDeviceModule.inputDevice.deviceId) out=\(self.factory.audioDeviceModule.outputDevice.deviceId)")
             self.sentBytes = sent; self.receivedBytes = received
         }
     }

@@ -22,22 +22,33 @@ import session
 
 
 class EchoGate(FrameProcessor):
-    def __init__(self, tail_secs: float = 0.6, passthrough: bool = False, **kwargs):
+    def __init__(self, tail_secs: float = 0.6, cancels_own_voice: bool = False, **kwargs):
         super().__init__(**kwargs)
         self._tail = tail_secs
         self._was_gated = False
-        # A client whose microphone already has our voice subtracted from it
-        # needs no gate, and a gate would make it impossible to interrupt the
-        # manager: while it speaks, nothing said would ever be transcribed.
-        self._passthrough = passthrough
+        # A client whose microphone already has OUR voice subtracted from it
+        # needs no gate for the manager's own speech, and a gate there would
+        # make it impossible to interrupt: while it spoke, nothing said would
+        # ever be transcribed.
+        #
+        # The app's announcements are a different problem and are NOT solved
+        # here. They go out through the app's own synthesizer rather than the
+        # media connection, so they are not in the canceller's reference and
+        # nothing subtracts them; on 23 Sep the manager transcribed three of
+        # them back, verbatim, as the developer's speech. The answer to that is
+        # not to close the microphone — the whole point of a canceller is that
+        # the microphone stays open — it is app_echo.is_app_echo(), which drops
+        # the app's own sentence after the fact, and ultimately putting the
+        # app's voice through the same audio engine so the canceller sees it.
+        self._cancels_own_voice = cancels_own_voice
 
     def gated(self) -> bool:
-        if self._passthrough:
+        if self._cancels_own_voice:
             return False
         now = time.monotonic()
         s = session.current()
         return (s.bot_voice["speaking"] or (now - s.bot_voice["stopped_at"]) < self._tail
-                or now < s.external_until["t"])
+                or now < s.external_until["t"] + self._tail)
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)

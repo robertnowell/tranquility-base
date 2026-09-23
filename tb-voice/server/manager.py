@@ -31,6 +31,7 @@ from calls import record
 import build_stamp
 from events import emit, line
 from compose import READBACK_SECS, OpenMessage, classify, continues, filler_only
+import app_echo
 import session
 from vocab import Intent, Line, LineKind, Role, Verdict, line_from_transcript, parse_intent, parse_verdict
 from turns import TurnQueue
@@ -561,6 +562,10 @@ class Manager(FrameProcessor):
         self._user_speaking = False
         if not text:
             await self.push_frame(frame, direction)
+            return
+        if app_echo.is_app_echo(text):
+            # The app's own announcement, back off the microphone. The client's
+            # canceller never had it in its reference; see app_echo.py.
             return
         if self.open is not None:
             # Dictation: every word is the message. No hold, no gate, no Jev
@@ -1103,9 +1108,13 @@ class Manager(FrameProcessor):
     async def _app_speaks(self, url: str, text: str):
         """A session speaks through the app. Hold the voice lock and mute the mic
         for the line's estimated length: the app's voice is echo to this mic."""
-        secs = min(20.0, 1.2 + 0.42 * len(text.split()))
+        # Measured against three announcements on 23 Sep: 16 to 18 words each
+        # took 8.1 to 8.4 s of real speech, and the transcriber finalises after
+        # that again. The old 1.2 + 0.42w put the window's end inside the last
+        # word every time, so the tail of the app's own voice reached the STT.
+        secs = min(25.0, 1.5 + 0.5 * len(text.split()))
         async with self._voice:
-            session.current().external_until["t"] = time.monotonic() + secs
+            session.current().external_until.update({"t": time.monotonic() + secs, "text": text})
             await _run("open", url)
             await asyncio.sleep(secs)
 
