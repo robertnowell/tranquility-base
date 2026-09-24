@@ -42,6 +42,8 @@ GITHUB_API_VERSION="2026-03-10"
 
 # shellcheck source=lib/sparkle.sh
 . "$(dirname "$0")/lib/sparkle.sh"
+# shellcheck source=lib/webrtc.sh
+. "$(dirname "$0")/lib/webrtc.sh"
 
 # Immutable-release endpoints and response fields are versioned additions to
 # GitHub's REST API. gh still defaults to an older API version, which makes an
@@ -314,6 +316,12 @@ step "signing with a secure timestamp"
 # wrapped around a foreign-signed helper does not notarize, and the failure
 # would otherwise surface an hour into CI at the notarization step.
 sparkle_sign "$APP_SRC" "$IDENTITY" --timestamp
+# LiveKitWebRTC needs the same treatment and never got it: every release from
+# 23 Sep failed notarization with "not signed with a valid Developer ID
+# certificate" and "no secure timestamp" on this framework's binary, and Prod
+# stayed on 0.3.1307 while 30-plus merges piled up behind it.
+webrtc_sign "$APP_SRC" "$IDENTITY" --options runtime --timestamp \
+  || fail "could not sign LiveKitWebRTC.framework with the Developer ID"
 codesign --force --sign "$IDENTITY" --identifier "$BUNDLE_ID" \
   --entitlements TranquilityBase.entitlements \
   --options runtime --timestamp "$APP_SRC"
@@ -321,6 +329,15 @@ codesign --verify --deep --strict --verbose=2 "$APP_SRC"
 SIGN_INFO=$(codesign -dv --verbose=4 "$APP_SRC" 2>&1)
 case "$SIGN_INFO" in *"Timestamp="*) ;; *) fail "app signature has no secure timestamp" ;; esac
 echo "$SIGN_INFO" | grep -E "^(Authority|TeamIdentifier|Timestamp)=" || true
+# Checked here, before the upload, because Apple's answer takes minutes and
+# says only "Invalid". Every nested framework binary must carry our team and a
+# timestamp, or the notarization that follows cannot pass.
+for nested in "$APP_SRC"/Contents/Frameworks/*.framework/Versions/[!C]*/*; do
+  [ -f "$nested" ] && file -b "$nested" | grep -q "Mach-O" || continue
+  NESTED=$(codesign -dv --verbose=4 "$nested" 2>&1)
+  case "$NESTED" in *"TeamIdentifier=$TEAM_ID"*) ;; *) fail "${nested#"$APP_SRC/"} is not signed by team $TEAM_ID" ;; esac
+  case "$NESTED" in *"Timestamp="*) ;; *) fail "${nested#"$APP_SRC/"} has no secure timestamp" ;; esac
+done
 
 step "notarizing and stapling the installable app"
 rm -f "$APP_NOTARY_ARCHIVE"
