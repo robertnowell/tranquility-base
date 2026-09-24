@@ -38,6 +38,26 @@ func builtInMicrophoneID() -> AudioDeviceID? {
     return nil
 }
 
+func defaultOutputID() -> AudioDeviceID {
+    var id = AudioDeviceID(0)
+    var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+    var a = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+                                       mScope: kAudioObjectPropertyScopeGlobal,
+                                       mElement: kAudioObjectPropertyElementMain)
+    AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &a, 0, nil, &size, &id)
+    return id
+}
+
+func defaultOutputRate() -> Double {
+    var r = Double(0)
+    var size = UInt32(MemoryLayout<Double>.size)
+    var a = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyNominalSampleRate,
+                                       mScope: kAudioObjectPropertyScopeOutput,
+                                       mElement: kAudioObjectPropertyElementMain)
+    AudioObjectGetPropertyData(defaultOutputID(), &a, 0, nil, &size, &r)
+    return r
+}
+
 func systemDefaultInputName() -> String {
     var id = AudioDeviceID(0)
     var size = UInt32(MemoryLayout<AudioDeviceID>.size)
@@ -76,11 +96,13 @@ final class Spike: NSObject, LKRTCPeerConnectionDelegate {
         // listen. The question this spike answers is whether that module can
         // still name a microphone, because the platform-default one can and
         // our device policy depends on it.
+        let bypassVP = ProcessInfo.processInfo.environment["TB_BYPASS_VP"] != nil
+        print("platform voice processing: \(bypassVP ? "BYPASSED (software AEC3)" : "on")")
         let engineADM = ProcessInfo.processInfo.environment["TB_ENGINE_ADM"] != nil
         print("audio device module: \(engineADM ? "audioEngine" : "platformDefault")")
         factory = LKRTCPeerConnectionFactory(
             audioDeviceModuleType: engineADM ? .audioEngine : .platformDefault,
-            bypassVoiceProcessing: false,
+            bypassVoiceProcessing: bypassVP,
             encoderFactory: nil,
             decoderFactory: nil,
             audioProcessingModule: nil)
@@ -103,6 +125,14 @@ final class Spike: NSObject, LKRTCPeerConnectionDelegate {
         print("WebRTC input devices (\(when)), recording=\(adm.recording):")
         print("   processing: echo=\(factory.audioProcessingState.echoCancellation), ns=\(factory.audioProcessingState.noiseSuppression)")
         print("   playout: \(adm.outputDevice.name) [\(adm.outputDevice.deviceId)] playing=\(adm.playing)")
+        print("   system default output: \(defaultOutputID()) at \(defaultOutputRate()) Hz")
+        for d in adm.outputDevices { print("   out: \(d.name)  [\(d.deviceId)]") }
+        if let want = ProcessInfo.processInfo.environment["TB_PIN_OUT"],
+           let device = adm.outputDevices.first(where: { $0.deviceId == want }) {
+            let ok = adm.trySetOutputDevice(device)
+            print("   trySetOutputDevice(\(device.name) [\(device.deviceId)]) -> \(ok)")
+            print("   now: \(adm.outputDevice.name) [\(adm.outputDevice.deviceId)], device rate \(defaultOutputRate()) Hz")
+        }
         for device in adm.inputDevices { print("   \(device.name)  [\(device.deviceId)]") }
         print("   current: \(adm.inputDevice.name)")
         if adm.inputDevices.isEmpty {
@@ -235,6 +265,7 @@ final class Spike: NSObject, LKRTCPeerConnectionDelegate {
             }
             print(String(format: "audio: %.0f bytes up, %.0f bytes down, microphone level %.4f", sent, received, heardLevel))
             print("   echo=\(self.factory.audioProcessingState.echoCancellation) in=\(self.factory.audioDeviceModule.inputDevice.deviceId) out=\(self.factory.audioDeviceModule.outputDevice.deviceId)")
+            print(String(format: "   OUTPUT DEVICE %d IS RUNNING AT %.0f Hz", defaultOutputID(), defaultOutputRate()))
             self.sentBytes = sent; self.receivedBytes = received
         }
     }
@@ -338,8 +369,56 @@ extension Spike: LKRTCAudioDeviceModuleDelegate {
     func audioDeviceModuleDidUpdateDevices(_ m: LKRTCAudioDeviceModule) {}
 }
 
+/// Follow the device's rate instead of trusting the one it had when we started.
+///
+/// A Bluetooth headset renegotiates when a duplex path opens: the AirPods drop
+/// to 24 kHz for the transition and come back to 48 kHz, and whatever read the
+/// rate during that window is now rendering at half speed's worth of samples
+/// into a device running twice as fast. TB_FOLLOW_RATE re-initialises playout
+/// once the rate has settled.
+final class RateWatcher {
+    private let adm: LKRTCAudioDeviceModule
+    private var pending: DispatchWorkItem?
+    private var lastSeen: Double = 0
+
+    init(adm: LKRTCAudioDeviceModule) {
+        self.adm = adm
+        lastSeen = defaultOutputRate()
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyNominalSampleRate,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        let me = Unmanaged.passUnretained(self).toOpaque()
+        AudioObjectAddPropertyListener(defaultOutputID(), &address, { _, _, _, ctx in
+            guard let ctx else { return noErr }
+            Unmanaged<RateWatcher>.fromOpaque(ctx).takeUnretainedValue().changed()
+            return noErr
+        }, me)
+    }
+
+    private func changed() {
+        let now = defaultOutputRate()
+        print(String(format: "   rate changed: %.0f -> %.0f Hz", lastSeen, now))
+        lastSeen = now
+        // Bluetooth fires several of these in a burst; act once it settles.
+        pending?.cancel()
+        let work = DispatchWorkItem { [adm] in
+            let settled = defaultOutputRate()
+            print(String(format: "   settled at %.0f Hz; re-initialising playout", settled))
+            print("   stopPlayout=\(adm.stopPlayout()) initPlayout=\(adm.initPlayout()) startPlayout=\(adm.startPlayout()) playing=\(adm.playing)")
+        }
+        pending = work
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.25, execute: work)
+    }
+}
+
 print("system default input: \(systemDefaultInputName())")
 let spike = Spike()
+var watcher: RateWatcher?
+if ProcessInfo.processInfo.environment["TB_FOLLOW_RATE"] != nil {
+    watcher = RateWatcher(adm: spike.factory.audioDeviceModule)
+    print("following the output device's rate")
+}
 spike.chooseMicrophone("before")
 spike.start()
 DispatchQueue.global().asyncAfter(deadline: .now() + 6) { spike.chooseMicrophone("once running") }
