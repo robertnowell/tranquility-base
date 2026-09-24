@@ -34,6 +34,54 @@ extension SpeechProvider {
     }
 }
 
+/// Why an announcement was read in the system voice, in words for the person.
+///
+/// The panel used to print the raw error: "Read in the system voice.
+/// refused(code: \"no_audio\", operationId: Optional(\"…\"))", which told
+/// the person nothing they could act on (22 to 24 Sep). The raw text stays in
+/// the log; this is parsed from the error's type at the boundary, once, and
+/// the panel shows `words`.
+public enum FallbackReason: Sendable, Equatable {
+    /// The account has no credit left for the premium voice.
+    case creditsSpent
+    /// The premium voice was paid for but its audio was not kept.
+    case clipLost
+    /// The ElevenLabs key was refused.
+    case keyRejected
+    /// The premium voice started and stopped before it said anything.
+    case cutOff
+    /// The service did not answer in time, or could not be reached.
+    case unreachable
+    /// Anything else. The log has the detail.
+    case other
+
+    public init(_ error: Error) {
+        switch error {
+        case ManagedSummaryFailure.refused(let code, _):
+            switch code {
+            case "insufficient_credit": self = .creditsSpent
+            case "no_audio", "already_bought": self = .clipLost
+            case "service_unavailable", "provider_uncertain": self = .unreachable
+            default: self = .other
+            }
+        case ManagedSummaryFailure.outcomeUnknown, ManagedSummaryFailure.pending: self = .unreachable
+        case is URLError, is CancellationError: self = .unreachable
+        default: self = .other
+        }
+    }
+
+    public var words: String {
+        switch self {
+        case .creditsSpent: return "Your credit balance is spent. Add credit for the premium voice."
+        case .clipLost: return "The premium voice couldn't get this line's audio."
+        case .keyRejected: return "Your ElevenLabs key was refused. Check it in Settings."
+        case .cutOff: return "The premium voice cut out before it started."
+        case .unreachable: return "The premium voice didn't answer in time."
+        case .other: return "The premium voice failed on this line."
+        }
+    }
+}
+
 public enum SpeechError: Error, Sendable {
     case notConfigured
     case synthesisFailed(String)
@@ -787,6 +835,8 @@ public struct SpeechChain: Sendable {
         /// Set when the preferred voice failed and the system voice covered for it.
         /// The announcement WAS heard; this exists so a silent downgrade is visible.
         public var degraded: String?
+        /// The same fact in words for the person; `degraded` is for the log.
+        public var degradedReason: FallbackReason?
         /// Whether any audio actually reached the speakers. Starting to talk counts
         /// as read — but an announcement that never made a sound was not read, and
         /// that distinction is what keeps a silent failure from being marked
@@ -835,6 +885,7 @@ public struct SpeechChain: Sendable {
         // `cloudVoice` is present and the cloud is used like everywhere else.
         let sessionHasNoCloudVoice = cloudVoice == nil && ownSystemVoice != nil
         var degraded: String?
+        var degradedReason: FallbackReason?
         var heardAny = false
         // Anything that happens after a stop belongs to an announcement the user
         // already dismissed. Checked before each provider, because the expensive
@@ -881,9 +932,11 @@ public struct SpeechChain: Sendable {
                         heardAny: true)
                 }
                 degraded = String(format: "no audio (stopped at %.0fs of %.0fs)", played, total)
+                degradedReason = .cutOff
             } catch SpeechError.synthesisFailed(let reason) where reason.contains("401") {
                 ElevenLabsSpeechProvider.trace?("chain: 401 from elevenlabs: \(reason)")
                 degraded = "ElevenLabs returned 401"
+                degradedReason = .keyRejected
             } catch is CancellationError {
                 // Cancellation is not a voice failure. Treating it as one read a
                 // cancelled announcement aloud in the system voice (app.log
@@ -893,6 +946,7 @@ public struct SpeechChain: Sendable {
                 return Spoken(provider: "none", completed: false, heardAny: heardAny)
             } catch {
                 degraded = "\(error)"
+                degradedReason = FallbackReason(error)
                 ElevenLabsSpeechProvider.trace?("chain: \(preferred.name) failed: \(error)")
                 // fall through to the system voice for this utterance only
             }
@@ -912,7 +966,7 @@ public struct SpeechChain: Sendable {
             // Heard, in the plainer voice. Not a failure — a degradation, reported
             // so an outage cannot hide behind a robotic voice you assume is normal.
             return Spoken(provider: fallback.name, completed: true,
-                          degraded: degraded, heardAny: true)
+                          degraded: degraded, degradedReason: degradedReason, heardAny: true)
         } catch SpeechError.interrupted {
             return Spoken(provider: fallback.name, completed: false, heardAny: true)
         } catch {
