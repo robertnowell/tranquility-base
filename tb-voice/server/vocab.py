@@ -8,12 +8,12 @@ intent's handler by building a method name from the label. A typo in any of
 them was not an error, only a branch that silently never ran.
 
 Boundaries, and nowhere else:
-- Jev's answers become an Intent or a Verdict (parse_intent, parse_verdict).
+- Jev's answers become an Intent (parse_intent).
 - A Line becomes the strings Jev and the brain read (Line.jev_who, jev_status).
 - A Line becomes the `said` event the Mac records (Line.said_fields).
 - Wire frames and tool names are WireKind and Tool (wire.py).
 An unknown value at a boundary is logged loudly and mapped to the one safe
-member (Intent.NONE, Verdict.CONTENT); it never flows on as a string.
+member (Intent.NONE); it never flows on as a string.
 """
 
 from dataclasses import dataclass
@@ -117,26 +117,9 @@ class Intent(Enum):
     NONE = "none"
 
 
-class Verdict(Enum):
-    """What a turn is while a message is open (compose)."""
-    CONTENT = "content"
-    SEND = "send"
-    HOLD = "hold"
-    CANCEL = "cancel"
-    RETARGET = "retarget"
-
-
 def parse_intent(label: str | None) -> Intent:
     try:
         return Intent(label)
     except ValueError:
         logger.error(f"UNKNOWN INTENT {label!r} from the classifier; treated as none")
         return Intent.NONE
-
-
-def parse_verdict(label: str | None) -> Verdict:
-    try:
-        return Verdict(label)
-    except ValueError:
-        logger.error(f"UNKNOWN VERDICT {label!r} from the classifier; treated as content")
-        return Verdict.CONTENT

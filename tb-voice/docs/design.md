@@ -171,6 +171,16 @@ tool is what keeps them apart. ⌥⌥ hands-free lock stays off during the demo.
 
 ## 8b. The open message: dictation with a destination (ruled 21 Sep)
 
+> **Superseded 24 Sep (hf-10).** The open message is removed. On 23 Sep 17:43 it
+> sent a brief mid-sentence: a fragment ("Think a little") was judged *hold*, hold
+> flags the message as read back, and the next fragment ("bit more towards") was
+> taken as "yes" to a "Send to Claude Code?" that was never spoken. Now nothing is
+> ever open: every line goes to the ledger (hf-5), and a send happens only on an
+> addressed request to send, whose words are picked from what was said and
+> copied, never generated (span.py, hf-8). The explicit-signal finding below
+> still holds; the signal is now "send that", said to the manager. The section
+> is kept for the record.
+
 **What broke.** 12:58, 21 Sep: "Tranquility, start a Claude Code agent…" followed by
 a two-minute brief. Jev said start_agent at 1.00; the start rode the tool-calling model
 and was cancelled by the next breath (function calls default to

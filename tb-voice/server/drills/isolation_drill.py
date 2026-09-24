@@ -52,7 +52,9 @@ async def a_session(name: str, lines: int, hold: asyncio.Event | None = None) ->
             if hold is not None:
                 await asyncio.sleep(0)  # interleave with the other session
         s.bot_voice["speaking"] = name == "A"
-        s.external_until["t"] = time.monotonic() + (60 if name == "A" else 0)
+        # A: the app is mid-line in a session's voice. B: the app never spoke
+        # (0, not "just now": a tail follows app speech since #598).
+        s.external_until["t"] = time.monotonic() + 60 if name == "A" else 0.0
         s.notes_sid = f"notes-{name}"
 
     await asyncio.create_task(handler())

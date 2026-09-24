@@ -15,6 +15,13 @@ it, since the last action. Three utterances per scenario:
            "Tranquility, can you send a message to this agent?"
     PASS when nothing is typed into the agent.
 
+  talking: "Tranquility, what's next?"
+           "The landing page should not be showy."
+           "Think a little"
+           "bit more towards modern and warm."
+    PASS when nothing is typed into the agent: dictation is never a send,
+    however it is cut (24 Sep: compose mode sent this mid-sentence).
+
     TB_HOSTED=1 <keys> uv run bot.py -t websocket --port 7879
     uv run python drills/span_drill.py ws://localhost:7879/ws next.wav mail.wav sendthat.wav sendmsg.wav
 """
@@ -88,7 +95,7 @@ async def session(url, wavs):
     return ledger, sends
 
 
-async def main(url, nxt, mail, sendthat, sendmsg):
+async def main(url, nxt, mail, sendthat, sendmsg, showy=None, think=None, bit=None):
     fails = []
 
     def check(ok, what):
@@ -107,9 +114,15 @@ async def main(url, nxt, mail, sendthat, sendmsg):
     print("  typed into the agent:", sends)
     check(sends == [], "'send a message' with nothing said sends nothing")
 
+    if showy:
+        ledger, sends = await session(url, [nxt, showy, think, bit])
+        print("  heard:", [(r["kind"], r["text"]) for r in ledger if r["role"] == "user"])
+        print("  typed into the agent:", sends)
+        check(sends == [], "talking, cut into fragments, sends nothing")
+
     print(f"\n{'FAIL' if fails else 'PASS'}: {len(fails)} failure(s)")
     sys.exit(1 if fails else 0)
 
 
 if __name__ == "__main__":
-    asyncio.run(main(*sys.argv[1:6]))
+    asyncio.run(main(*sys.argv[1:9]))
