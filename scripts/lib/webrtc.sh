@@ -39,7 +39,12 @@ webrtc_sign() {
     for version in "$versions"/*; do
       [ -d "$version" ] || continue
       [ "$(basename "$version")" = "Current" ] && continue
-      codesign --force --sign "$identity" "$@" "$version/LiveKitWebRTC" 2>/dev/null || true
+      # Fatal, never `|| true`: this binary is the one Apple inspects, and a
+      # swallowed failure here left it on the build job's throwaway signature,
+      # which notarization rejected on every release from 23 Sep.
+      if [ -e "$version/LiveKitWebRTC" ]; then
+        codesign --force --sign "$identity" "$@" "$version/LiveKitWebRTC" || return 1
+      fi
       codesign --force --sign "$identity" "$@" "$version" || return 1
     done
   fi
