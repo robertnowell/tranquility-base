@@ -1020,9 +1020,13 @@ class Manager(FrameProcessor):
         if not session_id:
             return None
         code, out = await _run(TBASE, "voice", session_id, "--json")
-        data = _json_or_text(code, out)
-        voice = data.get("cloud") if isinstance(data, dict) else None
-        return voice or None
+        # `.get("data")` first: _json_or_text wraps every door's answer as
+        # {"exit": code, "data": ...}. Reading "cloud" off the wrapper returns
+        # None every time, which is silent — the caller just falls back to the
+        # manager's voice, and every agent sounds like the manager. Every other
+        # caller in this file unwraps; this one did not, and nothing said so.
+        data = _json_or_text(code, out).get("data") or {}
+        return (data.get("cloud") if isinstance(data, dict) else None) or None
 
     async def _earcon(self, name: str):
         await emit(self, "earcon", name=name)
