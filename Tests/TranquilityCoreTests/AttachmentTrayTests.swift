@@ -319,4 +319,33 @@ final class AttachmentTrayAdoptionTests: XCTestCase {
         tray.stage("\"/tmp/two.png\"", session: "launch:abc")
         XCTAssertTrue(tray.staged(for: "sess-1").isEmpty)
     }
+
+    // MARK: - The developer's tray (hands-free, ruled 22 Sep)
+
+    func testAManagerSendTakesEverythingStagedWhicheverAgentItWasFor() {
+        var tray = AttachmentTray()
+        XCTAssertTrue(tray.stage("'/tmp/a.png'", session: "sess-a"))
+        XCTAssertTrue(tray.stage("'/tmp/b.png'", session: "sess-b"))
+        let riding = tray.snapshotAll(into: "sess-b", utteranceId: "u1")
+        XCTAssertEqual(Set(riding), ["'/tmp/a.png'", "'/tmp/b.png'"])
+        XCTAssertTrue(tray.staged(for: "sess-a").isEmpty)
+        XCTAssertTrue(tray.staged(for: "sess-b").isEmpty)
+        XCTAssertFalse(tray.hasAnythingStaged)
+        XCTAssertEqual(tray.snapshotAll(into: "sess-b", utteranceId: "u1"), riding, "idempotent per utterance")
+    }
+
+    func testAFailedManagerSendPutsTheChipsBackOnItsTarget() {
+        var tray = AttachmentTray()
+        XCTAssertTrue(tray.stage("'/tmp/a.png'", session: "sess-a"))
+        _ = tray.snapshotAll(into: "sess-b", utteranceId: "u1")
+        tray.resolve(utteranceId: "u1", landed: false)
+        XCTAssertEqual(tray.staged(for: "sess-b"), ["'/tmp/a.png'"])
+    }
+
+    func testThePanelsOwnSendStaysPerSession() {
+        var tray = AttachmentTray()
+        XCTAssertTrue(tray.stage("'/tmp/a.png'", session: "sess-a"))
+        XCTAssertTrue(tray.snapshot(session: "sess-b", utteranceId: "u2").isEmpty)
+        XCTAssertEqual(tray.staged(for: "sess-a"), ["'/tmp/a.png'"])
+    }
 }

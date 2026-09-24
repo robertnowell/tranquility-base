@@ -412,6 +412,29 @@ final class CoordinatorTests: XCTestCase {
         XCTAssertEqual(transport.sent, [shown])
     }
 
+    /// A send the hands-free manager makes carries the developer's whole tray,
+    /// including chips staged against another agent (hf-12, ruled 22 Sep),
+    /// through the same door as the panel's typed Send.
+    func testAManagerSendCarriesTheWholeTrayThroughTheSameDoor() async throws {
+        let transport = RecordingTransport()
+        let coordinator = try makeCoordinator(tmuxTransport: transport)
+        try append()
+        _ = try await coordinator.announceNext()
+        XCTAssertTrue(coordinator.attachments.stage("'/tmp/elsewhere.png'", session: "another-agent"))
+
+        guard case .readyToSend(let utteranceId, let shown, _, let session) =
+            try await coordinator.submitTypedReply(text: "the sends are stuck", to: "sess-1",
+                                                   tray: .developer, provider: "manager")
+        else { return XCTFail("expected a pending send") }
+        XCTAssertEqual(session, "sess-1")
+        XCTAssertTrue(shown.contains("'/tmp/elsewhere.png'"), shown)
+        XCTAssertTrue(shown.hasSuffix("the sends are stuck"), shown)
+        XCTAssertFalse(coordinator.attachments.hasAnythingStaged, "the tray left with the send")
+        guard case .dispatched = try await coordinator.confirmAndSend(utteranceId: utteranceId)
+        else { return XCTFail("expected a dispatch") }
+        XCTAssertEqual(transport.sent, [shown])
+    }
+
     // MARK: - What was heard rides the reply (HeardContext, 11 Sep)
 
     /// The user answers what Tranquility Base SPOKE, not what the agent

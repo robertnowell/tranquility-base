@@ -4,7 +4,34 @@ import Foundation
 /// Reads only for now; `send` joins when it goes through the app's own Send
 /// (hf-12), and until then the bot keeps using `request:run` for effects.
 public enum ManagerTools {
-    public static func standard(tbase: String, ledger: ManagerLedger? = nil) -> [ManagerTool] {
+    /// What a manager send came to, as the bot reads it (docs/wire-v1.md).
+    public enum SendOutcome: String, Sendable {
+        /// Typed into the agent and seen to land.
+        case typed
+        /// The agent was mid-turn; it goes in when that turn ends.
+        case queued
+        /// Nothing was typed.
+        case notDispatched = "not_dispatched"
+        /// Typed, but never seen to land. It may have: never retried.
+        case ambiguous
+
+        public init(_ outcome: Coordinator.ReplyOutcome?) {
+            switch outcome {
+            case .dispatched: self = .typed
+            case .queued: self = .queued
+            case .dispatchFailed(.verificationTimedOut, _), .duplicateSuppressed: self = .ambiguous
+            case .dispatchFailed, .noTarget, .sessionNotReady, .transcriptionFailed, .readyToSend, .none:
+                self = .notDispatched
+            }
+        }
+    }
+
+    /// The app's own Send, for the `send` tool: the words, to this agent, with
+    /// the developer's tray riding along. Returns how it ended.
+    public typealias Sender = @Sendable (_ agent: String, _ text: String) async -> Coordinator.ReplyOutcome?
+
+    public static func standard(tbase: String, ledger: ManagerLedger? = nil,
+                                sender: Sender? = nil) -> [ManagerTool] {
         var tools: [ManagerTool] = [
             ManagerTool(name: .agents, deadlineMs: 3000, capBytes: 16 * 1024) { _ in
                 try await tbaseJSON(tbase, ["targets", "--json"])
@@ -28,6 +55,18 @@ public enum ManagerTools {
                 return TranscriptTail.read(path: path, chars: chars)
             },
         ]
+        if let sender {
+            // Effectful: the host requires an idem key and records it before
+            // this runs, so a repeat can never type twice (wire v1).
+            tools.append(ManagerTool(name: .send, deadlineMs: 20_000, capBytes: 1024, effectful: true) { args in
+                let agent = try agent(args)
+                guard let text = args["text"] as? String, !text.trimmingCharacters(in: .whitespaces).isEmpty else {
+                    throw ManagerToolFailure(.badArgs, "text is required")
+                }
+                let outcome = SendOutcome(await sender(agent, text))
+                return ["outcome": outcome.rawValue]
+            })
+        }
         if let ledger {
             // What the developer (and the manager, and the agents) said, on
             // this Mac, numbered (hf-5). Newest last; a cut drops the oldest.

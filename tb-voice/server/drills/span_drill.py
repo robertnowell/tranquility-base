@@ -22,6 +22,11 @@ it, since the last action. Three utterances per scenario:
     PASS when nothing is typed into the agent: dictation is never a send,
     however it is cut (24 Sep: compose mode sent this mid-sentence).
 
+  app send: "sent" again, with a Mac that offers wire v1 `send` (hf-12).
+    PASS when the words arrive once, verbatim, as a `send` call with an idem
+    key, and nothing goes to `tbase send`: the app's own Send typed it, tray
+    and all. Every other scenario plays an older app, without `send`.
+
     TB_HOSTED=1 <keys> uv run bot.py -t websocket --port 7879
     uv run python drills/span_drill.py ws://localhost:7879/ws next.wav mail.wav sendthat.wav sendmsg.wav
 """
@@ -45,11 +50,14 @@ def pcm(path):
         return w.readframes(w.getnframes())
 
 
-async def session(url, wavs):
-    ledger, sends, lines = [], [], []
+async def session(url, wavs, offer_send=False):
+    """Returns the ledger, the texts sent by either door, and the wire `send`
+    calls themselves (the app's door)."""
+    ledger, sends, lines, app_sends = [], [], [], []
+    offered = ("agents", "waiting", "brief", "ledger") + (("send",) if offer_send else ())
     async with websockets.connect(url, max_size=None) as ws:
         await ws.send(json.dumps({"wire": "hello", "protocol": 1, "app_version": "span-drill",
-                                  "tools": [{"name": n, "version": 1} for n in ("agents", "waiting", "brief", "ledger")]}))
+                                  "tools": [{"name": n, "version": 1} for n in offered]}))
 
         async def speak(audio, silence_s):
             step = 16000 * 2 // 50
@@ -79,7 +87,11 @@ async def session(url, wavs):
                     lines.append(obj)
                 elif obj.get("wire") == "call":
                     tool = obj["tool"]
-                    if tool == "ledger":
+                    if tool == "send":
+                        app_sends.append(obj)
+                        sends.append(obj["args"].get("text", ""))
+                        data = {"outcome": "typed"}
+                    elif tool == "ledger":
                         last_action = max([r["n"] for r in ledger if r["kind"] == "action"], default=0)
                         data = [r for r in ledger if r["n"] > last_action]
                     else:
@@ -92,7 +104,7 @@ async def session(url, wavs):
                     await ws.send(json.dumps({"reply": obj["id"], "code": 0, "out": ""}))
         finally:
             pumper.cancel()
-    return ledger, sends
+    return ledger, sends, app_sends
 
 
 async def main(url, nxt, mail, sendthat, sendmsg, showy=None, think=None, bit=None):
@@ -103,22 +115,30 @@ async def main(url, nxt, mail, sendthat, sendmsg, showy=None, think=None, bit=No
         if not ok:
             fails.append(what)
 
-    ledger, sends = await session(url, [nxt, mail, sendthat])
+    ledger, sends, _ = await session(url, [nxt, mail, sendthat])
     said_mail = [r["text"] for r in ledger if r["role"] == "user" and "Mailchimp" in (r["text"] or "")]
     print("  heard:", [(r["role"], r["kind"], r["text"]) for r in ledger if r["role"] == "user"])
     print("  typed into the agent:", sends)
     check(len(sends) == 1, "exactly one message was sent")
     check(bool(said_mail) and sends[:1] == said_mail[:1], "it is the transcriber's own words for the line, verbatim")
 
-    ledger, sends = await session(url, [nxt, sendmsg])
+    ledger, sends, _ = await session(url, [nxt, sendmsg])
     print("  typed into the agent:", sends)
     check(sends == [], "'send a message' with nothing said sends nothing")
 
     if showy:
-        ledger, sends = await session(url, [nxt, showy, think, bit])
+        ledger, sends, _ = await session(url, [nxt, showy, think, bit])
         print("  heard:", [(r["kind"], r["text"]) for r in ledger if r["role"] == "user"])
         print("  typed into the agent:", sends)
         check(sends == [], "talking, cut into fragments, sends nothing")
+
+    ledger, sends, app_sends = await session(url, [nxt, mail, sendthat], offer_send=True)
+    said_mail = [r["text"] for r in ledger if r["role"] == "user" and "Mailchimp" in (r["text"] or "")]
+    print("  through the app:", [(c["args"], c.get("idem")) for c in app_sends])
+    check(len(app_sends) == 1 and len(sends) == 1, "offered send: one message, through the app's Send only")
+    check(bool(said_mail) and [c["args"].get("text") for c in app_sends] == said_mail[:1]
+          and all(c["args"].get("agent") == SID for c in app_sends), "to the staged agent, verbatim")
+    check(all(c.get("idem") for c in app_sends), "with an idem key")
 
     print(f"\n{'FAIL' if fails else 'PASS'}: {len(fails)} failure(s)")
     sys.exit(1 if fails else 0)

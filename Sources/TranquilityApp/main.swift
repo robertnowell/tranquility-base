@@ -1313,7 +1313,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             (try? self?.store?.draft(session: session)) ?? nil
         }
         hud.onSendTyped = { [weak self] text in
-            guard let self, let coordinator else { return }
+            guard let self else { return }
             // The write resolves its own target. The panel asked already;
             // this is the guarantee that does not depend on which door the
             // words came through.
@@ -1322,28 +1322,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 lastStatusLine = "nothing to send to yet"
                 return
             }
-            Task { @MainActor in
-                do {
-                    let outcome = try await coordinator.submitTypedReply(text: text, to: target.sessionId)
-                    switch outcome {
-                    case .readyToSend(let utteranceId, _, let label, let sessionId):
-                        let answering = (try? coordinator.waiting())?
-                            .first { $0.sessionId == sessionId }?.latestId
-                        self.delivering.began(sessionId: sessionId, answering: answering)
-                        self.hud.render()
-                        self.send(utteranceId: utteranceId, label: label, sessionId: sessionId)
-                    case .noTarget:
-                        self.lastStatusLine = "nothing to send"
-                        Permissions.log("typed send: nothing typed and nothing staged")
-                        self.hud.render()
-                    default:
-                        Permissions.log("typed send: unexpected outcome \(outcome)")
-                    }
-                } catch {
-                    Permissions.log("typed send threw: \(error)")
-                    Failures.report(.deliveryFailed, reason: "typed send threw: \(error)")
-                }
-            }
+            Task { @MainActor in _ = await self.sendTyped(text, to: target.sessionId) }
         }
         hud.onItemsStaged = { [weak self] items, via in
             let event: String = {

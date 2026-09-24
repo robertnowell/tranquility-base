@@ -118,10 +118,13 @@ class Tool(Enum):
     BRIEF = "brief"
     TRANSCRIPT = "transcript"
     LEDGER = "ledger"
+    SEND = "send"
 
 
 HELLO_GRACE_S = 1.5
-DEADLINES_MS = {Tool.AGENTS: 3000, Tool.WAITING: 3000, Tool.BRIEF: 3000, Tool.TRANSCRIPT: 5000, Tool.LEDGER: 2000}
+DEADLINES_MS = {Tool.AGENTS: 3000, Tool.WAITING: 3000, Tool.BRIEF: 3000, Tool.TRANSCRIPT: 5000, Tool.LEDGER: 2000,
+                # The app's Send types, then watches the agent take it.
+                Tool.SEND: 20000}
 
 
 async def call(tool: Tool, args: dict | None = None, deadline_ms: int | None = None,

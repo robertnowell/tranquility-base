@@ -52,9 +52,14 @@ Error codes: `unknown_tool`, `bad_args`, `not_found`, `refused`, `timeout`,
 | `brief` | `agent` | `tbase brief <agent> --json` | 3 s | 8 KB |
 | `transcript` | `agent`, `chars` (≤ 30 000, default 7 000) | `{turns: [{who, text}], total_turns}`, newest last | 5 s | 32 KB |
 
-`send`, `start_agent`, `enroll` and `open` stay on `request:run` until send
-goes through the app's own Send (Coordinator: tray, card, undo; ruled with this
-spec, hf-12) with an `idem` key.
+| `send` | `agent`, `text`; `idem` required | `{outcome}`: `typed`, `queued`, `not_dispatched` or `ambiguous` | 20 s | 1 KB |
+
+`send` is the panel's own Send (`AppDelegate.sendTyped`, hf-12): the words go
+in verbatim, and everything the developer has staged, for whichever agent,
+rides with them. `ambiguous` (and a `timeout`) means it may have landed: the
+bot says so and never retries. Quiet sends (notes, seeding) and `start_agent`,
+`enroll` and `open` stay on `request:run`, as does every send to an app that
+does not offer `send`.
 
 ## Where it lives
 
