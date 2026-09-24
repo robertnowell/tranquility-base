@@ -1,12 +1,9 @@
-"""Turns are decided in the order said, and dictation is recognised on arrival
-at the head of the queue, not at arrival on the wire (hf-13).
+"""Turns are decided in the order said, one at a time (hf-13).
 
-The case that broke: "send a message to Mailchimp" opens a message, but it
-takes a Jev call and a target lookup to get there. The user keeps talking. The
-next sentence used to be dispatched the moment it arrived, while the open
-message did not exist yet, so it went through the command gate. Here the first
-turn opens the message after 300 ms, the second arrives 50 ms in, and the
-second must be handled as dictation, after the first, never alongside it.
+A slow turn (a send: the span pick, the target lookup, the enroll) must finish
+before the next is judged, and what was said meanwhile keeps its order. Since
+compose mode was removed (24 Sep) there is no dictation state to route by; the
+property left is order and exclusion, which is what the queue is for.
 
     TB_HOSTED=1 uv run python drills/turn_order_drill.py
 """
@@ -38,23 +35,13 @@ async def main():
     async def fake_turn(text, frame, direction):
         running["n"] += 1
         running["max"] = max(running["max"], running["n"])
-        log.append(("start", "command", text))
+        log.append(("start", text))
         if text.startswith("send a message"):
-            await asyncio.sleep(0.3)  # Jev, the target lookup, the enroll
-            m.open = object()  # the message is open now
+            await asyncio.sleep(0.3)  # the span pick, the target lookup, the enroll
         running["n"] -= 1
-        log.append(("end", "command", text))
-
-    async def fake_compose(text, frame, direction):
-        running["n"] += 1
-        running["max"] = max(running["max"], running["n"])
-        log.append(("start", "dictation", text))
-        await asyncio.sleep(0.01)
-        running["n"] -= 1
-        log.append(("end", "dictation", text))
+        log.append(("end", text))
 
     m._handle_turn = fake_turn
-    m._compose_turn = fake_compose
     worker = asyncio.create_task(m._turns.run())
 
     m._turns.put(("send a message to Mailchimp.", None, None))
@@ -64,24 +51,23 @@ async def main():
     await asyncio.wait_for(m._turns.drained(), 5)
     worker.cancel()
 
-    starts = [(kind, text) for ev, kind, text in log if ev == "start"]
-    for s in starts:
-        print("  ", s)
-    check(starts[0] == ("command", "send a message to Mailchimp."), "the send request is handled first")
-    check(starts[1][0] == "dictation", "the sentence said while the message was opening becomes dictation")
-    check([t for _, t in starts[1:]] == ["The Back to School sends look stuck in draft.",
-                                         "And the discount code expired."], "dictation keeps the order it was said in")
+    starts = [text for ev, text in log if ev == "start"]
+    for t in starts:
+        print("  ", t)
+    check(starts == ["send a message to Mailchimp.", "The Back to School sends look stuck in draft.",
+                     "And the discount code expired."], "turns are handled in the order said")
+    check(log.index(("end", "send a message to Mailchimp.")) < log.index(("start", "The Back to School sends look stuck in draft.")),
+          "the slow turn finishes before the next is judged")
     check(running["max"] == 1, "never two turns at once")
 
     # One failing turn never stops the ones behind it.
-    m.open = None
     boom = {"hit": False}
 
     async def failing(text, frame, direction):
         if not boom["hit"]:
             boom["hit"] = True
             raise RuntimeError("a turn that fails")
-        log.append(("start", "command", text))
+        log.append(("start", text))
 
     m._handle_turn = failing
     worker = asyncio.create_task(m._turns.run())
@@ -89,7 +75,7 @@ async def main():
     m._turns.put(("second.", None, None))
     await asyncio.wait_for(m._turns.drained(), 5)
     worker.cancel()
-    check(("start", "command", "second.") in log, "a failed turn does not stop the next one")
+    check(("start", "second.") in log, "a failed turn does not stop the next one")
 
     print(f"\n{'FAIL' if failures else 'PASS'}: {len(failures)} failure(s)")
     sys.exit(1 if failures else 0)

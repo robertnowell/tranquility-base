@@ -30,10 +30,9 @@ from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from calls import record
 import build_stamp
 from events import emit, line
-from compose import READBACK_SECS, OpenMessage, classify, continues, filler_only
 import session
 import span
-from vocab import Intent, Line, LineKind, Role, Verdict, line_from_transcript, parse_intent, parse_verdict
+from vocab import Intent, Line, LineKind, Role, line_from_transcript, parse_intent
 from turns import TurnQueue
 from spoken import spoken
 from tools import _json_or_text, _run
@@ -119,9 +118,6 @@ SLOW_INTENTS = {Intent.SEND_MESSAGE, Intent.SUMMARIZE_RECENT, Intent.CUSTOM, Int
 STAGE_QUESTIONS = {Intent.RUNG_GOAL, Intent.RUNG_FINDINGS, Intent.RUNG_SOLUTION, Intent.RUNG_WHY,
                    Intent.CUSTOM, Intent.SEND_MESSAGE}
 
-# Jev's answer to "Send to X?" (a yes/no/other choice), parsed at the boundary.
-CONFIRM_ANSWER = {"yes": Verdict.SEND, "no": Verdict.HOLD}
-
 RUNG_FOR = {Intent.RUNG_GOAL: "goal", Intent.RUNG_FINDINGS: "findings",
             Intent.RUNG_SOLUTION: "solution", Intent.RUNG_WHY: "why"}
 
@@ -200,31 +196,6 @@ class JevClient:
                                      "false": "A question about what the agent did, found, proposes, or why"}}})
         return float(answers["action"]["noul"])
 
-    async def compose(self, utterance: str, draft_tail: str, destination: str) -> dict:
-        """While a message is open: is this turn more of the message, or a word
-        about the message? Only a confident send/cancel/retarget acts; the rest
-        is content, which is the safe default."""
-        answers = await self.ask(
-            {"context": f"The developer is dictating a message to {destination}. It will be sent "
-                        "only when they say so. The turn may be more of the message, or an "
-                        "instruction about the message itself.",
-             "message_so_far": draft_tail, "turn": utterance},
-            {"kind": {"type": "choice", "instructions": "What is this turn?",
-                      "criteria": {"content": "More of the message being dictated",
-                                   "send": "Says the message is finished and should be sent now",
-                                   "hold": "Says not to send yet, wait, or that they are still thinking",
-                                   "cancel": "Says to drop, discard, or forget the message",
-                                   "retarget": "Says the message should go to a different agent or place"}}})
-        return answers["kind"]
-
-    async def confirm(self, utterance: str, question: str) -> dict:
-        answers = await self.ask(
-            {"question_asked": question, "reply": utterance},
-            {"answer": {"type": "choice", "instructions": "How did the speaker answer?",
-                        "criteria": {"yes": "Agrees, confirms, go ahead",
-                                     "no": "Declines, 'not that one', a different target",
-                                     "other": "Unrelated, or talking to someone else"}}})
-        return answers["answer"]
 
 
 TRANSCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "transcript.md")
@@ -385,22 +356,6 @@ class Brain:
         record("brain", body, r.json(), ms=int((time.monotonic() - t0) * 1000))
         return " ".join(((r.json()["choices"][0]["message"].get("content") or "")).split())
 
-    async def readback(self, text: str) -> str:
-        """Twenty words of what was dictated, for the one read-back after silence."""
-        msgs = [
-            {"role": "system", "content": (
-                "Summarize the dictated message below in at most 20 words, spoken aloud, plain "
-                "words, no preamble, no quotes, no ids. Keep the concrete nouns.")},
-            {"role": "user", "content": text[-4000:]},
-        ]
-        body = {"model": self.model, "messages": msgs, "max_tokens": 120, "temperature": 0.2}
-        t0 = time.monotonic()
-        r = await self._client.post("/chat/completions", json=body)
-        r.raise_for_status()
-        record("brain", body, r.json(), ms=int((time.monotonic() - t0) * 1000))
-        words = ((r.json()["choices"][0]["message"].get("content") or "")).split()
-        return " ".join(words[:20]).rstrip(".")
-
     async def pick_span(self, request: str, cands: list, agent: str, goal: str | None) -> dict | None:
         """Which of the developer's own lines are the message, or which part of
         the request is (span.py). The model only points; it writes nothing that
@@ -478,11 +433,9 @@ class Manager(FrameProcessor):
         }
         self._last_intent_at = 0.0
         self.stage: dict | None = None
-        self.open: OpenMessage | None = None  # dictation with a destination (compose.py)
         self._wire_task = None  # hosted: drains wire.outbox into transport messages
         self._idle_task = None  # hosted: ends the session after IDLE_SECS without speech
         self._last_heard = time.monotonic()
-        self._readback_task: asyncio.Task | None = None
         self.heard = 0
         self.addressed = 0
         self._bot_stopped = asyncio.Event()
@@ -516,8 +469,8 @@ class Manager(FrameProcessor):
             if idle_in > 0 and rotate_in > 0:
                 await asyncio.sleep(min(idle_in, rotate_in, 30))
                 continue
-            busy = self.open is not None or self._user_speaking
-            if busy:  # mid-message or mid-sentence: look again shortly
+            busy = self._user_speaking
+            if busy:  # mid-sentence: look again shortly
                 if idle_in <= 0:
                     self._last_heard = now
                 await asyncio.sleep(5)
@@ -595,11 +548,6 @@ class Manager(FrameProcessor):
         if not text:
             await self.push_frame(frame, direction)
             return
-        if self.open is not None:
-            # Dictation: every word is the message. No hold, no gate, no Jev
-            # intent. Queued like any turn; _dispatch routes it when reached.
-            self._turns.put((text, frame, direction))
-            return
         # A turn cut mid-sentence (no terminal punctuation) waits for its
         # continuation; the two are judged as one. 16:58:32: "…the risks,
         # tradeof" / "uncertainties we're still facing" were judged separately
@@ -647,13 +595,9 @@ class Manager(FrameProcessor):
             self._recent.append(text)
 
     async def _dispatch(self, turn: tuple):
-        """One turn, when every turn before it has finished. Whether it is
-        dictation is read NOW: the turn before may have just opened a message."""
+        """One turn, when every turn before it has finished."""
         text, frame, direction = turn
-        if self.open is not None:
-            await self._compose_turn(text, frame, direction)
-        else:
-            await self._handle_turn(text, frame, direction)
+        await self._handle_turn(text, frame, direction)
 
     async def _handle_turn(self, text, frame, direction):
         try:
@@ -857,44 +801,49 @@ class Manager(FrameProcessor):
     # -- intents that need the LLM, with the stage handed over as a note ---------------
 
     async def _do_send_message(self, text, frame, direction):
+        """A send is a request to the manager, never a verdict read off a
+        fragment of dictation (compose mode is gone, 24 Sep): the words sent
+        are the developer's own, picked from what they said (span.py). With
+        nothing to send, the target is set and the manager keeps listening; a
+        later "send that" goes there."""
         if self.stage:
-            # The stage is the target. Compose from the developer's words and send;
-            # no tool-choosing model in the loop to ask which project.
-            name = self.stage.get("name") or self.stage.get("project") or "the agent"
-            try:
-                message = await self._span_message(text, name, self.stage.get("goal"))
-            except Exception as e:
-                logger.error(f"span pick failed: {e}")
-                await emit(self, "error", reason=f"span: {str(e)[:120]}")
-                message = None  # nothing picked is nothing sent: keep listening
-            if not message:
-                await self._open({"kind": "agent", "sessionId": self.stage["sessionId"],
-                                  "name": self.stage.get("name") or self.stage.get("project") or "the agent"})
-                return
-            await emit(self, "speaking", voice="manager", text=f"message: {message[:160]}")
-            note(Line(Role.MANAGER, LineKind.ACTION, message, target=self.stage["sessionId"],
-                      target_name=self.stage.get("name") or self.stage.get("goal") or "the stage"))
-            await self._send(self.stage["sessionId"], message)
+            await self._send_to(self.stage, text)
             return
         live = await self._targets()
         if not live:
             await self._say("I see no live sessions to send to.")
             return
-        # The destination is settled at the door: named once, before a word is
-        # spent, so a wrong pick costs one clause ("no, the planning one") and
-        # never a list. The message itself is dictated after.
         choice = await self._jev.target(text, live)
         sid = _chosen(choice)
         c = next((x for x in live if x["sessionId"] == sid), live[0])
-        self.stage = c
-        await emit(self, "stage", session=c["sessionId"], goal=c.get("goal"), name=c.get("name"), project=c.get("project"))
+        await self._take_stage(c)
+        await self._send_to(c, text)
+
+    async def _take_stage(self, agent: dict):
+        """This agent is who the developer is talking to now. The app enrols a
+        session the first time you reply to it; naming it by voice is the same
+        consent, and a fresh `tbase new` session refuses every send until then."""
+        self.stage = agent
+        await emit(self, "stage", session=agent["sessionId"], goal=agent.get("goal"),
+                   name=agent.get("name"), project=agent.get("project"))
+        await _run(TBASE, "enroll", agent["sessionId"], timeout=10)
+
+    async def _send_to(self, agent: dict, request: str):
+        name = agent.get("name") or agent.get("project") or "the agent"
         try:
-            seed = await self._span_message(text, c.get("name") or c.get("project") or "the agent", c.get("goal")) or ""
+            message = await self._span_message(request, name, agent.get("goal"))
         except Exception as e:
             logger.error(f"span pick failed: {e}")
-            seed = ""
-        await self._open({"kind": "agent", "sessionId": c["sessionId"],
-                          "name": c.get("name") or c.get("project") or "the agent"}, seed=seed)
+            await emit(self, "error", reason=f"span: {str(e)[:120]}")
+            message = None
+        if not message:
+            # Nothing said yet to send: keep listening, target kept.
+            await self._earcon("listening")
+            return
+        await emit(self, "speaking", voice="manager", text=f"message: {message[:160]}")
+        note(Line(Role.MANAGER, LineKind.ACTION, message, target=agent["sessionId"],
+                  target_name=agent.get("name") or agent.get("goal") or name))
+        await self._send(agent["sessionId"], message)
 
     async def _span_message(self, request: str, agent: str, goal: str | None) -> str | None:
         """The developer's own words for this send, copied, or None when there
@@ -907,8 +856,8 @@ class Manager(FrameProcessor):
 
     async def _do_start_agent(self, text, frame, direction):
         """Defaults, not a chooser: Claude Code in the default project, started
-        now, deterministically, so no breath can cancel it. Then the door opens
-        and the brief is dictated to it."""
+        now, deterministically, so no breath can cancel it. It takes the stage;
+        the brief is said, then sent on request like any message."""
         harness = "codex" if "codex" in text.lower() else "claude"
         # Registration is the proof we need; the first send waits for liveness on
         # its own (tbase send defers). --wait-live is left off: until 21 Sep the
@@ -923,21 +872,30 @@ class Manager(FrameProcessor):
             await self._say("I couldn't start the agent.")
             return
         name = "Codex" if harness == "codex" else "Claude Code"
-        self.stage = {"sessionId": reg, "name": name, "project": "", "goal": ""}
-        await emit(self, "stage", session=reg, name=name)
-        await self._open({"kind": "agent", "sessionId": reg, "name": name},
-                         line=f"Started {name}. What would you like to say?")
+        await self._take_stage({"sessionId": reg, "name": name, "project": "", "goal": ""})
+        await self._say(f"Started {name}. Say the brief, then ask me to send it.")
 
     async def _do_take_note(self, text, frame, direction):
         """Notes are a destination like any agent: a session named Notes that
         keeps notes.md and notes.html in its own hub directory. Found by the id
         in notes-session.txt while it is live; started (and seeded once) when
-        it is not. No writer, no file format, no new door."""
+        it is not. The note is picked from what was said (span.py), like a send.
+        No writer, no file format, no new door."""
         dest = await self._notes_session()
         if not dest:
             await self._say("I couldn't start the notes agent.")
             return
-        await self._open(dest, line="Noting. Go ahead.")
+        try:
+            message = await self._span_message(text, "Notes", "keeping the developer's notes")
+        except Exception as e:
+            logger.error(f"span pick failed: {e}")
+            message = None
+        if not message:
+            await self._say("Say the note, then ask me to note it.")
+            return
+        note(Line(Role.MANAGER, LineKind.ACTION, message, target=dest["sessionId"], target_name="Notes"))
+        await self._send(dest["sessionId"], message, quiet=True)
+        await self._say("Noted.")
 
     async def _notes_session(self) -> dict | None:
         live = {t["sessionId"] for t in await self._targets()}
@@ -968,134 +926,6 @@ class Manager(FrameProcessor):
         await _run(TBASE, "enroll", reg, timeout=10)
         await self._send(reg, NOTES_SEED, quiet=True)
         return {"kind": "agent", "sessionId": reg, "name": "Notes"}
-
-    # -- the open message ------------------------------------------------------------
-
-    async def _open(self, destination: dict, line: str | None = None, seed: str = ""):
-        if destination.get("sessionId"):
-            # The app enrols a session the first time you reply to it: your
-            # confirmed send is the consent. Naming it as a destination by voice
-            # is the same consent, so the door enrols (idempotent). Without it a
-            # fresh `tbase new` session refuses every send: "not enrolled".
-            await _run(TBASE, "enroll", destination["sessionId"], timeout=10)
-        self.open = OpenMessage(destination)
-        if seed and len(seed.split()) > 2:
-            self.open.append(seed)
-        await self._earcon("listening")
-        await self._say(line or f"For {self.open.name}. Go ahead.")
-        await self._show_draft()
-        self._arm_readback()
-
-    async def _show_draft(self):
-        if not self.open:
-            return
-        tail = self.open.text[-140:]
-        await emit(self, "speaking", voice="draft", session=self.open.destination.get("sessionId"),
-                   text=f"for {self.open.name}: {tail}" if tail else f"for {self.open.name}")
-
-    def _arm_readback(self):
-        if self._readback_task:
-            self._readback_task.cancel()
-        self._readback_task = asyncio.create_task(self._readback_after_silence())
-
-    async def _readback_after_silence(self):
-        """One read-back after READBACK_SECS of silence, then wait for the word.
-        Never a second one until more has been said; never while speech is live."""
-        try:
-            await asyncio.sleep(READBACK_SECS)
-        except asyncio.CancelledError:
-            return
-        m = self.open
-        if not m or m.asked or not m.text:
-            return
-        try:
-            summary = await self._brain.readback(m.text)
-        except Exception as e:
-            logger.error(f"readback failed: {e}")
-            summary = " ".join(m.text.split()[:20])
-        m.asked = True
-        await self._say(f"I heard: {summary}. Send to {m.name}?")
-
-    async def _compose_turn(self, text, frame, direction):
-        m = self.open
-        if not m:
-            return
-        verdict, remainder = classify(text, previous=m.last)
-        if verdict is Verdict.CONTENT and continues(m.last):
-            pass  # a continuation is content, whatever it sounds like alone
-        elif verdict is Verdict.CONTENT and m.asked:
-            # After the read-back, a short reply is an answer to "send?".
-            if len(text.split()) <= 6:
-                verdict = CONFIRM_ANSWER.get(_chosen(await self._jev.confirm(text, f"Send to {m.name}?")),
-                                             Verdict.CONTENT)
-            if verdict is not Verdict.CONTENT:
-                remainder = ""  # the answer is not part of the message
-        if verdict is Verdict.CONTENT and not continues(m.last) and len(text.split()) <= 12:
-            # Short, complete, and not a known phrase: let Jev say whether it is about the message.
-            k = await self._jev.compose(text, m.text[-600:], m.name)
-            judged = parse_verdict(_chosen(k))
-            if float(k.get("confidence", 0)) >= 0.85 and judged is not Verdict.CONTENT:
-                verdict, remainder = judged, ""
-        await emit(self, "listening" if verdict is Verdict.CONTENT else "addressed",
-                   p=1.0, intent=f"compose:{verdict.value}", ms=0, text=text[:120])
-        if verdict is Verdict.CONTENT:
-            if filler_only(text):
-                return  # a breath the segmenter cut out; not part of the message
-            if m.append(text):
-                note(Line(Role.USER, LineKind.DICTATION, text))
-                await self._show_draft()
-            self._arm_readback()
-            return
-        if verdict is Verdict.HOLD:
-            note(Line(Role.USER, LineKind.COMMAND, text))
-            m.asked = True  # no second read-back until more is said
-            return
-        if verdict is Verdict.CANCEL:
-            note(Line(Role.USER, LineKind.COMMAND, text))
-            await self._close()
-            await self._say("Dropped.")
-            return
-        if verdict is Verdict.RETARGET:
-            note(Line(Role.USER, LineKind.COMMAND, text))
-            live = await self._targets()
-            if live:
-                choice = await self._jev.target(text, live)
-                sid = _chosen(choice)
-                c = next((x for x in live if x["sessionId"] == sid), None)
-                if c:
-                    self.stage = c
-                    m.destination = {"kind": "agent", "sessionId": c["sessionId"],
-                                     "name": c.get("name") or c.get("project") or "the agent"}
-                    await _run(TBASE, "enroll", c["sessionId"], timeout=10)  # same consent as the door
-                    await self._say(f"For {m.name}. Go ahead.")
-                    await self._show_draft()
-                    self._arm_readback()
-                    return
-            await self._say("I couldn't find that one. Say the project name.")
-            return
-        # send
-        if remainder:
-            m.append(remainder)
-            note(Line(Role.USER, LineKind.DICTATION, remainder))
-        note(Line(Role.USER, LineKind.COMMAND, text))
-        await self._deliver()
-
-    async def _deliver(self):
-        m = self.open
-        if not m or not m.text.strip():
-            await self._say("There's nothing to send yet.")
-            return
-        text, dest = m.text.strip(), m.destination
-        await self._close()
-        note(Line(Role.MANAGER, LineKind.ACTION, text, target=dest.get("sessionId"), target_name=dest.get("name")))
-        await self._send(dest["sessionId"], text)
-
-    async def _close(self):
-        if self._readback_task:
-            self._readback_task.cancel()
-            self._readback_task = None
-        self.open = None
-        await emit(self, "quiet")
 
     async def _send(self, session_id: str, text: str, quiet: bool = False):
         code, out = await _run(TBASE, "send", session_id, text)
