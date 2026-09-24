@@ -44,10 +44,10 @@ final class ManagerPeer: NSObject, ManagerTransport, @unchecked Sendable {
     private let factory: LKRTCPeerConnectionFactory
     /// The output device changes its sample rate when a Bluetooth link
     /// renegotiates for duplex; the module reads that rate once and never
-    /// again. See OutputRate.swift.
-    private lazy var outputRate = OutputRateFollower(adm: factory.audioDeviceModule) { [weak self] in
-        self?.onTrace?($0)
-    }
+    /// again. See OutputRateFollower in TranquilityCore. Created in `start()`,
+    /// stopped in `close()` and again on the way out of scope: a follower that
+    /// outlives this peer's factory is the 23 Sep crash.
+    private var outputRate: OutputRateFollower?
     private var connection: LKRTCPeerConnection?
     private var channel: LKRTCDataChannel?
     private var pcId: String?
@@ -73,10 +73,30 @@ final class ManagerPeer: NSObject, ManagerTransport, @unchecked Sendable {
         super.init()
     }
 
+    /// The module reads the device's rate when playout is initialised and
+    /// not again, so: stop, init, start. Called only from the follower's
+    /// queue, and never after `stop()`, which is the follower's contract; the
+    /// module itself marshals every call onto its own worker thread.
+    private struct Playout: @unchecked Sendable {
+        let adm: LKRTCAudioDeviceModule
+        func rebuild() -> String {
+            let stopped = adm.stopPlayout()
+            let inited = adm.initPlayout()
+            let started = adm.startPlayout()
+            return String(format: "stop %ld, init %ld, start %ld, playing %@",
+                          stopped, inited, started, adm.playing ? "yes" : "no")
+        }
+    }
+
     // MARK: - ManagerTransport
 
     func start() throws {
-        outputRate.start()
+        let playout = Playout(adm: factory.audioDeviceModule)
+        let follower = OutputRateFollower(log: { [weak self] in self?.onTrace?($0) }) {
+            playout.rebuild()
+        }
+        outputRate = follower
+        follower.start()
         let config = LKRTCConfiguration()
         config.sdpSemantics = .unifiedPlan
         config.iceServers = [LKRTCIceServer(urlStrings: ["stun:stun.l.google.com:19302"])]
@@ -134,8 +154,12 @@ final class ManagerPeer: NSObject, ManagerTransport, @unchecked Sendable {
         }
     }
 
+    /// The follower goes first and synchronously: after `stop()` returns it
+    /// will never touch the module again, so the factory may follow.
+    deinit { outputRate?.stop() }
+
     func close() async {
-        outputRate.stop()
+        outputRate?.stop()
         channel?.close()
         connection?.close()
         connection = nil
