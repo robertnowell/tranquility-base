@@ -42,6 +42,12 @@ final class ManagerPeer: NSObject, ManagerTransport, @unchecked Sendable {
     /// The channel `hello` last went out on; a new current channel gets its own.
     private weak var helloChannel: LKRTCDataChannel?
     private let factory: LKRTCPeerConnectionFactory
+    /// The output device changes its sample rate when a Bluetooth link
+    /// renegotiates for duplex; the module reads that rate once and never
+    /// again. See OutputRate.swift.
+    private lazy var outputRate = OutputRateFollower(adm: factory.audioDeviceModule) { [weak self] in
+        self?.onTrace?($0)
+    }
     private var connection: LKRTCPeerConnection?
     private var channel: LKRTCDataChannel?
     private var pcId: String?
@@ -70,6 +76,7 @@ final class ManagerPeer: NSObject, ManagerTransport, @unchecked Sendable {
     // MARK: - ManagerTransport
 
     func start() throws {
+        outputRate.start()
         let config = LKRTCConfiguration()
         config.sdpSemantics = .unifiedPlan
         config.iceServers = [LKRTCIceServer(urlStrings: ["stun:stun.l.google.com:19302"])]
@@ -128,6 +135,7 @@ final class ManagerPeer: NSObject, ManagerTransport, @unchecked Sendable {
     }
 
     func close() async {
+        outputRate.stop()
         channel?.close()
         connection?.close()
         connection = nil
@@ -165,8 +173,13 @@ final class ManagerPeer: NSObject, ManagerTransport, @unchecked Sendable {
     var audioPathDescription: String {
         let adm = factory.audioDeviceModule
         let state = factory.audioProcessingState
+        // The output device's RATE, not only its name. A device that changes
+        // rate under a module which read it once is the whole of the 23 Sep
+        // chipmunk, and a name could never have shown it.
+        let out = OutputRateFollower.defaultOutput()
         return "in=\(adm.inputDevice.name) [\(adm.inputDevice.deviceId)] "
             + "out=\(adm.outputDevice.name) [\(adm.outputDevice.deviceId)] "
+            + String(format: "at %.0f Hz (device %u) ", OutputRateFollower.rate(of: out), out)
             + "recording=\(adm.recording) playing=\(adm.playing) "
             + "echo=\(state.echoCancellation) ns=\(state.noiseSuppression)"
     }
