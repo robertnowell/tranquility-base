@@ -229,23 +229,45 @@ extension Coordinator {
     /// ride it. `text` may be empty when only attachments are going; the
     /// composition then IS the fragments. Nothing when both are empty: a
     /// Send with nothing in it is a press with no meaning.
-    public func submitTypedReply(text: String, to sessionId: String) async throws -> ReplyOutcome {
+    /// Which staged fragments ride a typed reply.
+    public enum TrayScope: Sendable {
+        /// The target session's own chips: the panel's Send.
+        case session
+        /// Everything in the tray, whichever agent it was staged against: a
+        /// send the hands-free manager makes for the developer (ruled 22 Sep).
+        case developer
+    }
+
+    public func submitTypedReply(text: String, to sessionId: String,
+                                 tray: TrayScope = .session,
+                                 provider: String = "typed") async throws -> ReplyOutcome {
         let typed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let target = try store.allKnownSessions().first(where: { $0.sessionId == sessionId })
         else { return .noTarget }
-        let carrying = attachments.staged(for: target.sessionId)
-        guard !typed.isEmpty || !carrying.isEmpty else { return .noTarget }
+        let carrying: Bool = {
+            switch tray {
+            case .session: return !attachments.staged(for: target.sessionId).isEmpty
+            case .developer: return attachments.hasAnythingStaged
+            }
+        }()
+        guard !typed.isEmpty || carrying else { return .noTarget }
         var utterance = Utterance(id: UUID().uuidString,
                                   eventId: try store.eventId(forRowid: target.latestId),
                                   status: .ready)
         utterance.transcriptText = typed
-        utterance.transcriptProvider = "typed"
+        utterance.transcriptProvider = provider
         utterance.transcriptFinality = .explicitEndOfTurn
         utterance.transcriptionOutcome = TranscriptionDisposition.completed.rawValue
         utterance.targetSessionId = target.sessionId
         try store.update(utterance: utterance)
-        let riding = attachments.snapshot(session: target.sessionId, utteranceId: utterance.id)
-        Track.record("typed_reply", ["chars": .int(typed.count), "fragments": .int(riding.count)])
+        let riding: [String] = {
+            switch tray {
+            case .session: return attachments.snapshot(session: target.sessionId, utteranceId: utterance.id)
+            case .developer: return attachments.snapshotAll(into: target.sessionId, utteranceId: utterance.id)
+            }
+        }()
+        Track.record("typed_reply", ["chars": .int(typed.count), "fragments": .int(riding.count),
+                                     "provider": .token(provider)])
         return .readyToSend(
             utteranceId: utterance.id,
             text: outgoingText(for: utterance, transcript: typed, fragments: riding),

@@ -23,7 +23,7 @@ public enum ManagerWireKind: String, Sendable {
 /// The tools wire v1 knows. A name outside this list is refused at the door.
 public enum ManagerToolName: String, CaseIterable, Sendable {
     case agents, waiting, brief, transcript, ledger
-    /// In the spec, not yet offered: it arrives with Coordinator send (hf-12).
+    /// The app's own Send, tray and all (hf-12). Effectful: needs `idem`.
     case send
 }
 

@@ -119,6 +119,50 @@ final class ManagerToolHostTests: XCTestCase {
         XCTAssertEqual(second["repeat"] as? Bool, true)
     }
 
+    /// The manager's `send` is the app's own Send (hf-12): the words and the
+    /// agent reach it untouched, and what it came to is reported in the
+    /// bot's words.
+    func testTheStandardSendHandsTheWordsToTheAppsSendAndReportsHowItEnded() async throws {
+        let seen = Box()
+        let tools = ManagerTools.standard(tbase: "/nonexistent") { agent, text in
+            seen.set("\(agent)|\(text)")
+            return .dispatched(text: text, latencyMs: 5, sessionId: agent, pid: nil)
+        }
+        let host = ManagerToolHost(tools: tools)
+        let frame: [String: Any] = ["wire": "call", "id": "s1", "tool": "send", "idem": "k-send",
+                                    "args": ["agent": "abc", "text": "The sends are stuck in draft."]]
+        let reply = await host.handle(try JSONSerialization.data(withJSONObject: frame))
+        let r = try Self.parse(try XCTUnwrap(reply))
+        XCTAssertEqual((r["data"] as? [String: Any])?["outcome"] as? String, "typed")
+        XCTAssertEqual(seen.value, "abc|The sends are stuck in draft.")
+    }
+
+    func testASendWithNoWordsIsRefusedBeforeTheAppIsAsked() async throws {
+        let seen = Box()
+        let host = ManagerToolHost(tools: ManagerTools.standard(tbase: "/nonexistent") { _, _ in
+            seen.set("asked"); return nil
+        })
+        let frame: [String: Any] = ["wire": "call", "id": "s2", "tool": "send", "idem": "k-empty",
+                                    "args": ["agent": "abc", "text": "  "]]
+        let reply = await host.handle(try JSONSerialization.data(withJSONObject: frame))
+        let r = try Self.parse(try XCTUnwrap(reply))
+        XCTAssertEqual(code(r), "bad_args")
+        XCTAssertNil(seen.value)
+    }
+
+    /// Only a send the app saw land reads as typed; one that may have landed
+    /// reads as ambiguous, so the bot never retries it into a double.
+    func testASendOutcomeReadsAsTheBotNeedsIt() {
+        typealias O = ManagerTools.SendOutcome
+        XCTAssertEqual(O(.dispatched(text: "x", latencyMs: 1, sessionId: "s", pid: nil)), .typed)
+        XCTAssertEqual(O(.queued(text: "x", sessionId: "s", pid: nil)), .queued)
+        XCTAssertEqual(O(.dispatchFailed(.verificationTimedOut, utteranceId: "u")), .ambiguous)
+        XCTAssertEqual(O(.duplicateSuppressed(utteranceId: "u")), .ambiguous)
+        XCTAssertEqual(O(.dispatchFailed(.tabNotFound("t"), utteranceId: "u")), .notDispatched)
+        XCTAssertEqual(O(.noTarget), .notDispatched)
+        XCTAssertEqual(O(nil), .notDispatched)
+    }
+
     func testARepeatWhileTheFirstIsStillRunningIsNotRunAgain() async throws {
         let runs = Counter()
         let host = ManagerToolHost(tools: [
@@ -238,4 +282,11 @@ private final class Counter: @unchecked Sendable {
     private var n = 0
     func bump() { lock.lock(); n += 1; lock.unlock() }
     var value: Int { lock.lock(); defer { lock.unlock() }; return n }
+}
+
+private final class Box: @unchecked Sendable {
+    private let lock = NSLock()
+    private var v: String?
+    func set(_ s: String) { lock.lock(); v = s; lock.unlock() }
+    var value: String? { lock.lock(); defer { lock.unlock() }; return v }
 }

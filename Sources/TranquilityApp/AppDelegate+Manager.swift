@@ -541,9 +541,6 @@ extension AppDelegate {
     /// The bot's doors, done here. `tbase …` runs the CLI this Mac has;
     /// `open <scheme>://…` is handed to the app's own deep-link handler, so
     /// the scheme the bot wrote does not matter. Anything else is refused.
-    /// Wire v1's tools, one host for every session and both transports, so
-    /// an idempotency key outlives a reconnect (hf-3). Reads today; effects
-    /// still go through `answerManagerRequest` until send moves to Coordinator.
     /// Everything said in hands-free, numbered and whole, on this Mac (hf-5).
     static let managerLedger: ManagerLedger = {
         let ledger = ManagerLedger(
@@ -552,8 +549,14 @@ extension AppDelegate {
         return ledger
     }()
 
+    /// Wire v1's tools, one host for every session and both transports, so
+    /// an idempotency key outlives a reconnect (hf-3). `send` is the panel's
+    /// own Send (`sendTyped`), with the developer's whole tray riding (hf-12).
     static let managerToolHost = ManagerToolHost(
-        tools: ManagerTools.standard(tbase: ManagerConfig.tbasePath(), ledger: managerLedger),
+        tools: ManagerTools.standard(tbase: ManagerConfig.tbasePath(), ledger: managerLedger) { agent, text in
+            await MainActor.run { NSApp.delegate as? AppDelegate }?
+                .sendTyped(text, to: agent, tray: .developer, provider: "manager")
+        },
         idempotency: ManagerIdempotency(url: QueueStore.supportDirectory.appendingPathComponent("manager-idem.json")))
 
     static var managerAppVersion: String {

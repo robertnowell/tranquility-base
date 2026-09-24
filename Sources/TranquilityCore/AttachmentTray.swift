@@ -148,6 +148,28 @@ public struct AttachmentTray: Equatable, Sendable {
         return fragments
     }
 
+    /// Hands-free (ruled 22 Sep): the tray is the developer's, not a
+    /// session's, and everything in it rides the manager's next send, to
+    /// whichever agent that goes. Per-session keying stays the rule for the
+    /// panel's own Send, which is why this is a separate, named door rather
+    /// than a change to `snapshot`. Idempotent per utterance like `snapshot`.
+    /// A failed send (`resolve(landed: false)`) returns them to the target's
+    /// staged list.
+    public var hasAnythingStaged: Bool { staged.values.contains { !$0.isEmpty } }
+
+    public mutating func snapshotAll(into session: String, utteranceId: String) -> [String] {
+        if let already = riding[utteranceId] { return already.fragments }
+        let target = realSession(session)
+        var fragments: [String] = []
+        for key in staged.keys.sorted() {
+            for f in staged[key] ?? [] where !fragments.contains(f) { fragments.append(f) }
+        }
+        guard !fragments.isEmpty else { return [] }
+        staged = [:]
+        riding[utteranceId] = (target, fragments)
+        return fragments
+    }
+
     /// Move fragments staged during the undo window onto the utterance that is
     /// already waiting to send. Unlike `snapshot`, this deliberately absorbs
     /// newly staged strings on a later call: the user can still see and change
@@ -259,6 +281,17 @@ public final class AttachmentStore: @unchecked Sendable {
     public func snapshot(session: String, utteranceId: String) -> [String] {
         lock.lock(); defer { lock.unlock() }
         return tray.snapshot(session: session, utteranceId: utteranceId)
+    }
+
+    /// Whether anything at all is staged, for any session.
+    public var hasAnythingStaged: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return tray.hasAnythingStaged
+    }
+
+    public func snapshotAll(into session: String, utteranceId: String) -> [String] {
+        lock.lock(); defer { lock.unlock() }
+        return tray.snapshotAll(into: session, utteranceId: utteranceId)
     }
 
     public func riding(utteranceId: String) -> [String] {

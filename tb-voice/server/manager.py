@@ -12,6 +12,7 @@ import asyncio
 import json
 import os
 import time
+import uuid
 
 import httpx
 from loguru import logger
@@ -928,18 +929,44 @@ class Manager(FrameProcessor):
         return {"kind": "agent", "sessionId": reg, "name": "Notes"}
 
     async def _send(self, session_id: str, text: str, quiet: bool = False):
-        code, out = await _run(TBASE, "send", session_id, text)
-        meaning = {0: "sent", 2: "not dispatched", 3: "deferred", 4: "ambiguous", 5: "failed"}.get(code, "unknown")
-        await emit(self, "tool", argv=["tbase", "send", session_id[:8]], exit=code, meaning=meaning)
-        if quiet:
-            if code != 0:
-                logger.error(f"quiet send to {session_id[:8]} refused: {meaning}: {out[-200:]}")
-            return
-        if code == 0:
+        # A spoken send goes through the app's own Send, so the tray rides
+        # with it (hf-12). Quiet sends (notes, seeding) stay on `tbase send`:
+        # the developer's tray is not theirs to take.
+        meaning = None if quiet else await self._send_through_app(session_id, text)
+        if meaning is None:
+            code, out = await _run(TBASE, "send", session_id, text)
+            meaning = {0: "sent", 2: "not dispatched", 3: "deferred", 4: "ambiguous", 5: "failed"}.get(code, "unknown")
+            await emit(self, "tool", argv=["tbase", "send", session_id[:8]], exit=code, meaning=meaning)
+            if quiet:
+                if code != 0:
+                    logger.error(f"quiet send to {session_id[:8]} refused: {meaning}: {out[-200:]}")
+                return
+        if meaning == "sent":
             await self._earcon("dispatched")
             await self._say(os.getenv("TB_SENT_LINE", "I've sent your message. What's next?"))
+        elif meaning == "queued":
+            await self._say("It's busy; your message goes in when it finishes.")
         else:
             await self._say(f"Not sent: {meaning}.")
+
+    async def _send_through_app(self, session_id: str, text: str) -> str | None:
+        """Wire v1 `send`: what it came to, or None when this Mac does not offer
+        it. One idem key per spoken request and never a retry: a send that timed
+        out may have landed, so it reads as ambiguous (docs/wire-v1.md)."""
+        if not os.getenv("TB_HOSTED"):
+            return None
+        import wire
+        r = await wire.call(wire.Tool.SEND, {"agent": session_id, "text": text}, idem=uuid.uuid4().hex)
+        if r is None:
+            return None
+        if r.get("ok"):
+            outcome = (r.get("data") or {}).get("outcome")
+            meaning = {"typed": "sent", "queued": "queued", "ambiguous": "ambiguous"}.get(outcome, "not dispatched")
+        else:
+            code = (r.get("error") or {}).get("code")
+            meaning = "ambiguous" if code in ("timeout", "cancelled", "in_progress") else "not dispatched"
+        await emit(self, "tool", argv=["send", session_id[:8]], outcome=meaning, wire=True)
+        return meaning
 
     async def _llm(self, frame, direction, text, intent, brief=None):
         note = {"intent": intent.value, "stage": self.stage and {
