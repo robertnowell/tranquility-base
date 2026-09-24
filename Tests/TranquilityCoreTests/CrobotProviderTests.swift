@@ -118,6 +118,53 @@ final class CrobotProviderTests: XCTestCase {
         XCTAssertEqual(mine.map(\.providerID), [a])
     }
 
+    /// **End Agent, for a provider whose list this app cannot edit.**
+    /// crobot keeps an idle task in its list for ever, so a row removed from
+    /// the snapshot came back on the next poll and again at the next launch.
+    /// Measured against the live gateway, 23 Sep: 134 tasks, 130 archived,
+    /// 4 idle, 2 of them Robert's and green since the 14th. His words: "I
+    /// can't get rid of it from the grid, I can't end session, I can't turn
+    /// the lamp off, it always stays green."
+    func testAnEndedTaskIsNotListedAgainOnTheNextPollOrTheNextLaunch() async throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("crobot-end-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let ledger = ProviderLedger(url: dir.appendingPathComponent("agents-used.json"))
+        let g = Gateway()
+        g.list = [task(a, status: "idle"), task(b, status: "idle")]
+
+        let live = CrobotProvider(transport: g, me: "robert@coframe.com", ledger: ledger)
+        let before = try await live.mine()
+        XCTAssertEqual(before.count, 2)
+        let ended = try XCTUnwrap(before.first { $0.providerID == a })
+
+        await live.forget(ended.id)
+        let after = try await live.mine()
+        XCTAssertEqual(after.map(\.providerID), [b], "the ended task is gone from the very next poll")
+
+        // A fresh provider on the same ledger is the next launch.
+        let relaunched = CrobotProvider(transport: g, me: "robert@coframe.com", ledger: ledger)
+        let afterRelaunch = try await relaunched.mine().map(\.providerID)
+        XCTAssertEqual(afterRelaunch, [b],
+                       "ended is ended across launches, or End Agent is a row that refuses to end")
+
+        // The vendor is left alone: no cancel, no delete, and its page still opens.
+        XCTAssertFalse(live.can.canCancel)
+        XCTAssertNotNil(live.url(for: ended.id))
+    }
+
+    /// Without a ledger (tests, and any provider built before this wiring)
+    /// nothing is filtered, rather than everything.
+    func testWithNoLedgerTheListIsUnchanged() async throws {
+        let g = Gateway()
+        g.list = [task(a, status: "idle")]
+        let bare = CrobotProvider(transport: g, me: "robert@coframe.com")
+        await bare.forget(AgentSession.id(a, provider: "crobot"))
+        let listed = try await bare.mine().map(\.providerID)
+        XCTAssertEqual(listed, [a])
+    }
+
     /// `limit` slices newest-first, so a small page silently drops the
     /// caller's older tasks while returning somebody else's newer ones.
     func testTheListIsReadGenerouslyBecauseItSlicesNewestFirst() async throws {

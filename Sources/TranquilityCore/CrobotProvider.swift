@@ -19,10 +19,25 @@ public struct CrobotProvider: AgentProvider {
     /// so this is applied client-side; without it a row appears for an agent
     /// this user cannot answer.
     private let me: String?
+    /// What this app has been told to stop listing. crobot's list is the
+    /// gateway's, not ours: a task stays in it after it goes idle, for ever,
+    /// so without this End Agent removed the row for exactly one poll and
+    /// the next list brought it back. Robert, 23 Sep: "crobot I can't get
+    /// rid of from the grid, I can't end session, I can't turn lamp off, it
+    /// always stays green." Two of his tasks had been idle and green since
+    /// the 14th.
+    ///
+    /// Keyed by the AGENT's id rather than the task id, because `forget` is
+    /// given the former and a struct provider has nowhere to keep a map;
+    /// both sides of the comparison compute it the same way, and the ledger
+    /// is a set of strings per provider, so the key is this provider's
+    /// business alone.
+    private let ledger: ProviderLedger?
 
-    public init(transport: any CrobotTransport, me: String?) {
+    public init(transport: any CrobotTransport, me: String?, ledger: ProviderLedger? = nil) {
         self.transport = transport
         self.me = me
+        self.ledger = ledger
     }
 
     public var can: Capabilities {
@@ -73,6 +88,10 @@ public struct CrobotProvider: AgentProvider {
             // under a hundred tombstones.
             .filter { $0.status != "archived" }
             .map { withURL($0.agentSession(provider: id)) }
+            // ENDED IS ENDED, across polls and across launches. The vendor
+            // keeps the task (its page still opens, a follow-up still wakes
+            // the sandbox); this app stops carrying a row for it.
+            .filter { ledger?.forgotten($0.id, provider: id) != true }
     }
 
     /// **The task's own web page, set here because only the provider has the
@@ -174,6 +193,13 @@ public struct CrobotProvider: AgentProvider {
         let raw = try await transport.create(repo: repository, prompt: brief.prompt,
                                              baseBranch: brief.branch)
         return AgentSession.id(raw, provider: id)
+    }
+
+    /// End Agent for a provider whose list this app cannot edit: the row
+    /// goes, here and at the next launch, and the task is left alone in
+    /// crobot. `canCancel` is false for the same reason, so nothing is sent.
+    public func forget(_ id: AgentSession.ID) async {
+        ledger?.forget(id, provider: self.id)
     }
 
     public func cancel(_ id: AgentSession.ID) async throws -> SendOutcome {
