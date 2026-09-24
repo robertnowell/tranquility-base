@@ -58,7 +58,12 @@ APP_NAME="${VD_APP_NAME:-Tranquility Base}"
 BUNDLE_ID="${VD_BUNDLE_ID:-com.robertnowell.voice-dispatch}"
 APP_CHANNEL="${VD_APP_CHANNEL:-production}"
 UPDATES_ENABLED="${VD_UPDATES_ENABLED:-true}"
-DATABASE_SCHEMA_VERSION="${VD_DATABASE_SCHEMA_VERSION:-18}"
+# The schema this build migrates to, read from its own migrations. It was a
+# constant 18 while the code reached v22, so switch-app.sh refused every switch
+# to Dev ("v22 is newer than dev can read (v18)") for a build that could.
+DATABASE_SCHEMA_VERSION="${VD_DATABASE_SCHEMA_VERSION:-$(sed -nE 's/.*registerMigration\("v([0-9]+)_.*/\1/p' \
+  Sources/TranquilityCore/QueueStore.swift | sort -n | tail -1)}"
+[ -n "$DATABASE_SCHEMA_VERSION" ] || { echo "✗ no migrations found in QueueStore.swift" >&2; exit 1; }
 URL_SCHEMES="${VD_URL_SCHEMES:-tranquilitybase voicedispatch}"
 
 case "$UPDATES_ENABLED" in
