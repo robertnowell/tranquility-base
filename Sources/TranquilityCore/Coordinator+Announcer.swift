@@ -239,6 +239,8 @@ extension Coordinator {
         /// carrying the reason. A downgrade the user cannot see is a downgrade they
         /// will assume is just how the app sounds now.
         public var degraded: String?
+        /// `degraded` in words for the person, for the panel.
+        public var degradedReason: FallbackReason? = nil
         public var managedReceipt: GatewayReceipt? = nil
         public var managedFailure: ManagedSummaryFailure? = nil
 
@@ -644,6 +646,7 @@ extension Coordinator {
         return .spoke(Announcement(
             event: session, brief: summary.brief, spoken: summary.spoken,
             via: spoken.provider, degraded: spoken.degraded,
+            degradedReason: spoken.degradedReason,
             managedReceipt: summary.managedReceipt, managedFailure: summary.managedFailure))
     }
 
