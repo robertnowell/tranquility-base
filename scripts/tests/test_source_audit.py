@@ -35,6 +35,7 @@ class SourceAuditTests(unittest.TestCase):
         for name in (
             "check-key-names.sh", "check-house-copy.sh", "check-borrowed-descriptors.sh",
             "check-compat-comments.sh", "check-row-dates.sh", "check-posed-rows.sh",
+            "check-door-answers.py",
             "tests/test_source_audit.py",
             "tests/test_deployment_state.py",
             "tests/test_delivery.py",
@@ -42,6 +43,7 @@ class SourceAuditTests(unittest.TestCase):
             "tests/test_test_gate.py",
             "tests/test_run_stage.py",
             "tests/test_prepared_dev.py",
+            "tests/test_door_answers.py",
         ):
             (self.repo / "scripts" / name).write_text(
                 "import os\nfrom pathlib import Path\n"

@@ -2040,6 +2040,52 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 ])
             }
 
+            // Hands-free audio, on every deploy, because on 23 Sep every one of
+            // its five failures was caught by a person listening after the
+            // build was already on the machine — a chipmunk twice, the wrong
+            // voices twice, and a dead microphone. None of them could fail a
+            // unit test: `swift test` cannot hear, and no self-test touched the
+            // audio path at all. These are the two questions a deploy CAN
+            // answer without opening a session or spending a cent, and each one
+            // is a failure that actually happened.
+            Task { @MainActor in
+                // One: is there an output device, and can we read the rate off
+                // it? The whole chipmunk was a rate that changed under a module
+                // which had read it once, and the log line that finally showed
+                // it named the device but not its rate.
+                let device = OutputRateFollower.defaultOutput()
+                let rate = OutputRateFollower.rate(of: device)
+                // Two: does the voice door answer, and does its answer unwrap
+                // to a voice? On 23 Sep it exited 1 for an hour because the
+                // `tbase` on disk was two days old, and then, once it answered,
+                // the reply was read off the wrapper instead of the payload.
+                // Both were silent: no voice means "speak as the manager", and
+                // that is nobody's error.
+                let (code, out) = await AppDelegate.answerManagerRequest(
+                    ["tbase", "targets", "--json"])
+                let live = (code == 0 ? out.data(using: .utf8) : nil)
+                    .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [[String: Any]] }
+                guard let session = live?.compactMap({ $0["sessionId"] as? String }).first else {
+                    Permissions.log("selftest handsFreeAudio: SKIP — no live session to ask about"
+                                    + " (output device \(device) at \(Int(rate)) Hz)")
+                    return
+                }
+                let (voiceCode, voiceOut) = await AppDelegate.answerManagerRequest(
+                    ["tbase", "voice", session, "--json"])
+                let answer = voiceOut.data(using: .utf8)
+                    .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+                let cloud = answer?["cloud"] as? String
+                SelfTest.report("handsFreeAudio", [
+                    ("anOutputDeviceExists", device != 0),
+                    ("itsRateIsReadable", rate > 0),
+                    ("theVoiceDoorAnswers", voiceCode == 0),
+                    ("andNamesAVoice", !(cloud ?? "").isEmpty),
+                ])
+                Permissions.log("selftest handsFreeAudio: output device \(device)"
+                                + " at \(Int(rate)) Hz · \(session.prefix(8))"
+                                + " speaks as \(cloud ?? "—")")
+            }
+
             // The keep-audio data path (ruling-an-open-microphone-is-a-promise),
             // on a throwaway store so it needs neither the mic nor the real
             // audio directory and cannot collide with anyone using the machine.

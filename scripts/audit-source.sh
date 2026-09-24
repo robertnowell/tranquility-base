@@ -33,6 +33,7 @@ python3 scripts/tests/test_queue_measurements.py
 python3 scripts/tests/test_test_gate.py
 python3 scripts/tests/test_run_stage.py
 python3 scripts/tests/test_prepared_dev.py
+python3 scripts/tests/test_door_answers.py
 
 # Cheap, and it catches a class the panel's own drills cannot: a bare modifier
 # glyph in text a human reads. The existing drill guards ONE string; this
@@ -68,6 +69,15 @@ python3 scripts/check-compat-comments.sh
 # by the next afternoon.
 echo "→ row dates"
 python3 scripts/check-row-dates.sh
+
+# And the bot's doors (23 Sep): every answer arrives wrapped as
+# {"exit": ..., "data": ...}, and a caller that reads a payload key off the
+# envelope gets None, which means "no voice", which is nobody's error. That one
+# cost an evening in which every agent in the fleet spoke in the manager's
+# voice while the app was answering correctly in 220 ms. Silent by
+# construction, so it is caught here or by a person listening.
+echo "→ door answers"
+python3 scripts/check-door-answers.py
 
 # And the one that keeps the panel's own fixtures honest (21 Sep): a posed row
 # that carries a waiting or heard turn says the turn exists. #552 retired the
