@@ -18,18 +18,21 @@ class SpokenTTSService(ElevenLabsTTSService):
         to read it in that session's own voice, or every agent would suddenly
         sound like the manager.
 
-        The socket bakes the voice into its URL (`_build_websocket_url` reads
-        `settings.voice` when it connects), so changing the setting alone
-        changes nothing until the next connection. Hence the reconnect: one
-        handshake, once per change of speaker, and the voice the URL names is
-        the voice that comes back.
+        The socket bakes the voice into its URL, so a change of speaker costs a
+        handshake — and `_update_settings` ALREADY does that handshake. `voice`
+        is in `ElevenLabsTTSSettings.URL_FIELDS`, and the base class reconnects
+        whenever a URL field changes. This asked for a second one on top, and
+        two reconnects racing left a socket the service had not negotiated the
+        output format with: everything after the first change of speaker came
+        back at the wrong sample rate, so the whole session played high and
+        fast, the manager's own voice included. One reconnect, done by the
+        framework, is the entire operation.
         """
         if not voice_id or voice_id == self._settings.voice:
             return
         logger.info(f"voice: {self._settings.voice} -> {voice_id}")
         await self._update_settings(self.Settings(voice=voice_id))
-        await self._disconnect()
-        await self._connect()
+        logger.info(f"voice: now {self._settings.voice} at {self._output_format}")
 
     async def run_tts(self, text: str, context_id: str):
         clean = spoken(text)
