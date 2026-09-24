@@ -34,6 +34,12 @@ retried. v1 replaces that with named tools.
 | `cancel` | bot → Mac | `{id}` |
 | `event` | Mac → bot | `{kind, ...}`, reserved for chords (hf-16) and tray changes (hf-12) |
 
+On WebRTC, every frame the Mac sends also carries `"type": "tb"`: the bot's
+data channel reads `type` on each message and drops any without it. That is
+carriage, not protocol; nothing reads it (`ManagerDataChannel.stamped`). A
+hello sent without it on 24 Sep never arrived, and the bot stayed on
+`request:run` for the whole session.
+
 Error codes: `unknown_tool`, `bad_args`, `not_found`, `refused`, `timeout`,
 `cancelled`, `in_progress`, `too_large`, `internal`.
 
