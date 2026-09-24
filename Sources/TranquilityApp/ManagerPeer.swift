@@ -255,7 +255,7 @@ extension ManagerPeer: LKRTCDataChannelDelegate {
         let version = appVersion
         Task { [weak self] in
             let hello = await toolHost.hello(appVersion: version)
-            self?.send(hello)
+            self?.send(ManagerDataChannel.stamped(hello))
             self?.onTrace?("hello sent (\(hello.count)b)")
         }
     }
@@ -268,7 +268,7 @@ extension ManagerPeer: LKRTCDataChannelDelegate {
             onTrace?("frame wire:\(obj["wire"] as? String ?? "?") \(data.count)b")
             Task { [weak self] in
                 guard let reply = await toolHost.handle(data) else { return }
-                self?.send(reply)
+                self?.send(ManagerDataChannel.stamped(reply))
             }
             return
         }
@@ -286,7 +286,7 @@ extension ManagerPeer: LKRTCDataChannelDelegate {
                 // answer was discarded and every invite timed out after 45 s
                 // (23 Sep). Anything but "signalling", which is reserved.
                 guard let payload = try? JSONSerialization.data(withJSONObject: [
-                    "type": "tb", "reply": id, "code": code, "out": out,
+                    "type": ManagerDataChannel.carriageType, "reply": id, "code": code, "out": out,
                 ] as [String: Any]) else { return }
                 self?.send(payload)
                 self?.onTrace?("answered \(argv.prefix(2).joined(separator: " ")) -> \(code) "

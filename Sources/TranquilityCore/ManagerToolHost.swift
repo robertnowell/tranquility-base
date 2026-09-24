@@ -302,6 +302,23 @@ public actor ManagerToolHost {
     }
 }
 
+/// What the WebRTC data channel needs on every message it carries. The bot's
+/// framework reads `type` on each one and throws away any without it (pipecat
+/// smallwebrtc connection.py: `json_message["type"]`), so a wire v1 `hello` or
+/// `result` sent bare never arrived: on 24 Sep the Mac said hello and the bot
+/// went on using request:run. The field is carriage, not protocol, so the
+/// transport stamps it and nothing reads it. "signalling" is reserved.
+public enum ManagerDataChannel {
+    public static let carriageType = "tb"
+
+    /// The same JSON object with `type` set for the data channel.
+    public static func stamped(_ json: Data) -> Data {
+        guard var obj = try? JSONSerialization.jsonObject(with: json) as? [String: Any] else { return json }
+        obj["type"] = carriageType
+        return (try? JSONSerialization.data(withJSONObject: obj)) ?? json
+    }
+}
+
 /// Idempotency keys for effectful calls, persisted so a repeat after an app
 /// restart still never runs twice. Kept 24 hours.
 public final class ManagerIdempotency: @unchecked Sendable {

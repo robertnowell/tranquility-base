@@ -50,6 +50,20 @@ final class ManagerToolHostTests: XCTestCase {
         XCTAssertEqual(runs.value, 0)
     }
 
+    /// The WebRTC data channel drops a message without `type`; a hello or a
+    /// result sent bare never reached the bot (24 Sep).
+    func testEveryFrameForTheDataChannelCarriesItsTypeAndKeepsItsContent() async throws {
+        let host = ManagerToolHost(tools: [ManagerTool(name: .agents, deadlineMs: 1000, capBytes: 1000) { _ in ["a"] }])
+        let helloData = await host.hello(appVersion: "t")
+        let result = try await Self.raw(host, "agents")
+        for frame in [helloData, result] {
+            let obj = try Self.parse(ManagerDataChannel.stamped(frame))
+            XCTAssertEqual(obj["type"] as? String, "tb")
+            XCTAssertNotNil(obj["wire"], "the protocol fields survive the stamp")
+        }
+        XCTAssertEqual(try Self.parse(ManagerDataChannel.stamped(result))["data"] as? [String], ["a"])
+    }
+
     func testAToolTheMacDoesNotOfferIsRefusedByName() async throws {
         let host = ManagerToolHost(tools: [])
         let r = try await call(host, "rm_rf")
