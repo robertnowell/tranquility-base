@@ -127,8 +127,14 @@ def main() -> int:
     ap.add_argument("--no-deploy", action="store_true", help="use an agent that is already up")
     args = ap.parse_args()
 
-    if args.agent == "tranquility-manager":
-        print("✗ refusing: that is the production manager (hf-2). Use a drill agent.")
+    # Both names. `tranquility-manager` was production until the WebSocket
+    # transport went on 25 Sep and `tranquility-manager-rtc` took over; a
+    # guard that still named only the retired one would have let a drill
+    # deploy over the live manager, which is the exact accident it exists to
+    # prevent. The old name stays because the guard costs nothing and a
+    # resurrected agent would be production again.
+    if args.agent in ("tranquility-manager-rtc", "tranquility-manager"):
+        print(f"✗ refusing: {args.agent} is a production manager (hf-2). Use a drill agent.")
         return 1
 
     deployed = False
