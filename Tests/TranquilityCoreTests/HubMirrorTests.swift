@@ -148,6 +148,19 @@ final class HubMirrorTests: XCTestCase {
         XCTAssertNil(HubMirror.turnPayload(b, session: nil, live: nil)["agent_title"])
     }
 
+    func testTheProposalStandsInForTheNextStepTheHubStillKeysOn() {
+        var b = StoredBrief(eventRowid: 43, sessionId: session, atMs: 1_700_000_000_000, topic: "the poller",
+                            goal: nil, happened: "Finished.", nextStep: nil, question: nil, risk: nil,
+                            rationale: nil, findings: nil, solution: nil, recap: "Finished.",
+                            proposal: "Land it. Go?", headline: nil, deck: nil, pullRequests: nil,
+                            branch: nil, callsign: nil, provider: "test")
+        XCTAssertEqual(HubMirror.turnPayload(b, session: nil, live: nil)["next_step"] as? String, "Land it. Go?",
+                       "the 14 Sep prompt moved the next action into proposal; the hub column follows it")
+        b.nextStep = "Old shape."
+        XCTAssertEqual(HubMirror.turnPayload(b, session: nil, live: nil)["next_step"] as? String, "Old shape.",
+                       "a flat response that still fills nextStep wins")
+    }
+
     /// The turn itself rides with the summary of it, copied not written.
     ///
     /// The hub had the brief and nothing else, and for about a quarter of
