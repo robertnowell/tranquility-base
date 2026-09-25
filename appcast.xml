@@ -6,6 +6,14 @@
     <description>Updates for Tranquility Base.</description>
     <language>en</language>
     <item>
+      <title>Version 0.3.1356</title>
+      <sparkle:version>1356</sparkle:version>
+      <sparkle:shortVersionString>0.3.1356</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <pubDate>Fri, 25 Sep 2026 21:22:14 +0000</pubDate>
+      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1356-733e020c7/TranquilityBase-0.3.1356.dmg" type="application/octet-stream" length="34257916" sparkle:edSignature="ujxbMAeA0Lrc9RUa1b0QzIdDTYAc/H8N+t+kMctZgzIqwROjI+BpnMKHfWHCfQT3xE7VeDnB9hxkcuCtc6a2DA==" />
+    </item>
+    <item>
       <title>Version 0.3.1355</title>
       <sparkle:version>1355</sparkle:version>
       <sparkle:shortVersionString>0.3.1355</sparkle:shortVersionString>
@@ -77,16 +85,8 @@
       <pubDate>Wed, 23 Sep 2026 02:44:50 +0000</pubDate>
       <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1307-92f8ddb23/TranquilityBase-0.3.1307.dmg" type="application/octet-stream" length="16891094" sparkle:edSignature="VPS1G8ddBGHmmxTr6RTzdPkjvlbXzdqFXS80Z3vE+iMDEjSZI4UY9JNZPLQv3FX6IUp/OWytdTXBDTngOGXdCQ==" />
     </item>
-    <item>
-      <title>Version 0.3.1306</title>
-      <sparkle:version>1306</sparkle:version>
-      <sparkle:shortVersionString>0.3.1306</sparkle:shortVersionString>
-      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <pubDate>Wed, 23 Sep 2026 02:33:02 +0000</pubDate>
-      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1306-067e28cd6/TranquilityBase-0.3.1306.dmg" type="application/octet-stream" length="16891052" sparkle:edSignature="PyLKlcSBH39CvmJmYm/JtBiqeGdq4LKnJLMsmS06vYzwo3t7sCzrhkHwurXvxoeNO1FLodPDNCk5dUYcCxEIBg==" />
-    </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: gQ727IbIeW3sSdkeA0dtePm28QIZa4gbG9Pf0DxIvfo0ud4Rt/Ks2oyX8RcgAFmUDzIJZqIwzkuS1vsU+uFiBA==
+edSignature: XY0EmsV5x/02bqr2cfi2IC8LH+CGIYRwPtMSCqhhR+EQWPSlhAgO5lq+UgPBGYlLDS7GK+VrD9bRu16nRJiNAg==
 length: 6457
 -->
