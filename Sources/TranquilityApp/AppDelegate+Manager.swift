@@ -166,6 +166,9 @@ extension AppDelegate {
         managerReconnects = 0
         managerEndedByIdle = false
         hud.setManager(on: false)
+        // The stage belongs to a session. A name carried into the next one
+        // would be a lie about who a send is going to.
+        managerStageName = nil
         Permissions.log("manager: stopped")
     }
 
@@ -618,6 +621,14 @@ extension AppDelegate {
         }
     }
 
+    /// Every orb line while hands-free is up, with whoever is on stage in front
+    /// of it. One funnel, so a new event cannot quietly lose the name again.
+    @MainActor
+    private func orbLine(_ line: String) -> String {
+        guard let stage = managerStageName, !stage.isEmpty else { return line }
+        return "\(stage) · \(line)"
+    }
+
     @MainActor
     private func handle(_ e: ManagerEvent) {
         let p = String(format: "%.2f", e.p ?? 0)
@@ -631,29 +642,30 @@ extension AppDelegate {
             // The mic-open cue plays now, when it is true: the pipeline is up.
             Earcons.acknowledge(.listening)
             managerReconnects = 0
-            hud.setManagerState(StatusHUD.orbState, line: "listening")
+            hud.setManagerState(StatusHUD.orbState, line: orbLine("listening"))
         case .hearing:
-            hud.setManagerState(StatusHUD.orbState, line: "hearing you", mood: "hearing")
+            hud.setManagerState(StatusHUD.orbState, line: orbLine("hearing you"), mood: "hearing")
         case .listening:
             break  // silent on a turn: whatever was last said stays on the panel
         case .addressed:
-            hud.setManagerState(StatusHUD.orbState, line: Self.intentLine(e.intent))
+            hud.setManagerState(StatusHUD.orbState, line: orbLine(Self.intentLine(e.intent)))
         case .speaking:
             managerLastLine = e.text ?? (e.voice == "agent" ? "the agent is speaking" : "speaking")
-            hud.setManagerState(StatusHUD.orbState, line: managerLastLine, mood: "speaking")
+            hud.setManagerState(StatusHUD.orbState, line: orbLine(managerLastLine), mood: "speaking")
         case .reloading:
             hud.setManagerState(StatusHUD.orbState, line: "reloading")
         case .quiet:
             // Voice over: colour back to rest, the last words stay readable.
-            hud.setManagerState(StatusHUD.orbState, line: managerLastLine == "speaking" ? "listening" : managerLastLine)
+            hud.setManagerState(StatusHUD.orbState, line: orbLine(managerLastLine == "speaking" ? "listening" : managerLastLine))
         case .stage:
-            hud.setManagerState(StatusHUD.orbState, line: "on stage: \(e.name ?? e.goal ?? e.project ?? "")")
+            managerStageName = e.name ?? e.goal ?? e.project
+            hud.setManagerState(StatusHUD.orbState, line: orbLine("on stage"))
         case .earcon:
             if let name = e.name, let cue = EarconGate.Cue(rawValue: name) { Earcons.acknowledge(cue) }
         case .tool:
-            hud.setManagerState(StatusHUD.orbState, line: e.meaning.map { "sent: \($0)" } ?? "working")
+            hud.setManagerState(StatusHUD.orbState, line: orbLine(e.meaning.map { "sent: \($0)" } ?? "working"))
         case .error:
-            hud.setManagerState(StatusHUD.orbState, line: "something failed; check the log")
+            hud.setManagerState(StatusHUD.orbState, line: orbLine("something failed; check the log"))
         case .idle:
             managerEndedByIdle = true
             hud.setManagerState(StatusHUD.orbState, line: "paused after \((e.secs ?? 0) / 60) quiet minutes")
