@@ -229,8 +229,8 @@ public enum SkillManifest {
     ///
     /// A real directory at a skill's name is a hand-installed copy, and this
     /// Mac's `~/.claude/skills` was the hand that made every one of them: it
-    /// is renamed to `<name>.before-tbase` (with a stamp if that exists) and
-    /// left there. Nothing is deleted. The receipt is a re-audit.
+    /// is moved to `<skillsDir>.before-tbase/<name>` (with a stamp if that
+    /// exists) and left there. Nothing is deleted. The receipt is a re-audit.
     public static func repair(target: Target, source: String,
                               expecting wanted: [Skill] = expected) -> RepairOutcome {
         guard directoryHoldsEverySkill(source) else {
@@ -264,8 +264,10 @@ public enum SkillManifest {
                 return .unavailable("could not link \(at): \(error.localizedDescription)")
             }
         }
+        retired += sweepParkedCopies(in: target.skillsDir, expecting: wanted)
         // A copy in a directory the harness also reads loads beside ours.
         for legacy in target.legacyDirs {
+            retired += sweepParkedCopies(in: legacy, expecting: wanted)
             for skill in wanted {
                 let at = legacy.appendingPathComponent(skill.name).path
                 guard let kind = try? fm.attributesOfItem(atPath: at)[.type] as? FileAttributeType
@@ -316,6 +318,13 @@ public enum SkillManifest {
         do { try fm.createDirectory(at: bin, withIntermediateDirectories: true) }
         catch { return .unavailable("could not create \(bin.path)") }
         var linked = 0, retired = 0
+        // Shims the first cut parked as `<shim>.before-tbase` beside the live
+        // ones: harmless on PATH, and still not where retirement puts them.
+        if let names = try? fm.contentsOfDirectory(atPath: bin.path) {
+            for name in names where shims.contains(where: { name.hasPrefix($0 + ".before-tbase") }) {
+                if retire(bin.appendingPathComponent(name).path) { retired += 1 }
+            }
+        }
         for shim in shims {
             let at = bin.appendingPathComponent(shim).path
             let want = from + "/" + shim
@@ -356,15 +365,40 @@ public enum SkillManifest {
         !directory.isEmpty && expected.allSatisfy { holdsSkill(directory + "/" + $0.name) }
     }
 
-    /// `x` -> `x.before-tbase`, or `x.before-tbase-<epoch>` when that name
-    /// is taken. A rename, never a removal: a hand-installed copy may hold
-    /// edits nobody committed.
+    /// `<dir>/x` -> `<dir>.before-tbase/x` (with a stamp when that name is
+    /// taken). A move, never a removal: a hand-installed copy may hold edits
+    /// nobody committed.
+    ///
+    /// OUT of the scanned directory, not renamed inside it. The first cut
+    /// renamed `share-as-page` to `share-as-page.before-tbase` in place, and
+    /// the harness listed "share-as-page.before-tbase" as a skill the same
+    /// minute: every harness loads every subdirectory holding a SKILL.md,
+    /// whatever it is called, so a copy parked beside ours is a second skill
+    /// with a stranger name, which is the duplicate the retirement exists to
+    /// end. `<dir>.before-tbase` is a sibling nobody scans.
     static func retire(_ path: String) -> Bool {
         let fm = FileManager.default
-        var aside = path + ".before-tbase"
+        let dir = (path as NSString).deletingLastPathComponent
+        let name = (path as NSString).lastPathComponent
+        let holding = dir + ".before-tbase"
+        try? fm.createDirectory(atPath: holding, withIntermediateDirectories: true)
+        var aside = holding + "/" + name
         if fm.fileExists(atPath: aside) {
             aside += "-\(Int(Date().timeIntervalSince1970))"
         }
         return (try? fm.moveItem(atPath: path, toPath: aside)) != nil
+    }
+
+    /// Copies the first cut parked INSIDE a scanned directory
+    /// (`<name>.before-tbase*`), moved out to where retirement puts them
+    /// now. Idempotent; a directory with none is untouched.
+    static func sweepParkedCopies(in dir: URL, expecting wanted: [Skill]) -> Int {
+        let fm = FileManager.default
+        guard let names = try? fm.contentsOfDirectory(atPath: dir.path) else { return 0 }
+        var moved = 0
+        for name in names where wanted.contains(where: { name.hasPrefix($0.name + ".before-tbase") }) {
+            if retire(dir.appendingPathComponent(name).path) { moved += 1 }
+        }
+        return moved
     }
 }

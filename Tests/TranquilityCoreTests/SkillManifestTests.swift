@@ -65,8 +65,12 @@ final class SkillManifestTests: XCTestCase {
                            .first { $0.skill.name == "share-as-page" }?.state, .foreign)
         XCTAssertEqual(SkillManifest.repair(target: t, source: source),
                        .repaired(linked: SkillManifest.expected.count, retired: 1))
-        let aside = t.skillsDir.appendingPathComponent("share-as-page.before-tbase/SKILL.md")
+        // OUT of the scanned directory: a copy parked beside ours under any
+        // name is loaded by every harness as a second skill.
+        let aside = URL(fileURLWithPath: t.skillsDir.path + ".before-tbase/share-as-page/SKILL.md")
         XCTAssertEqual(try String(contentsOf: aside, encoding: .utf8), "old words")
+        XCTAssertEqual(Set(try FileManager.default.contentsOfDirectory(atPath: t.skillsDir.path)),
+                       Set(SkillManifest.expected.map(\.name)))
         XCTAssertEqual(try FileManager.default.destinationOfSymbolicLink(atPath: copy.path),
                        source + "/share-as-page")
     }
@@ -103,7 +107,20 @@ final class SkillManifestTests: XCTestCase {
         XCTAssertEqual(SkillManifest.repair(target: t, source: source),
                        .repaired(linked: 3, retired: 1))
         XCTAssertFalse(FileManager.default.fileExists(atPath: legacy.path))
-        XCTAssertTrue(FileManager.default.fileExists(atPath: legacy.path + ".before-tbase"))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: t.legacyDirs[0].path + ".before-tbase/share-as-page"))
+    }
+
+    /// The first cut parked copies inside the scanned directory; a repair
+    /// moves them out, and a second repair finds nothing to move.
+    func testACopyParkedInsideTheScannedDirectoryIsMovedOut() throws {
+        let t = target("claude")
+        let parked = t.skillsDir.appendingPathComponent("hub.before-tbase", isDirectory: true)
+        try FileManager.default.createDirectory(at: parked, withIntermediateDirectories: true)
+        try "x".write(to: parked.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
+        XCTAssertEqual(SkillManifest.repair(target: t, source: source), .repaired(linked: 3, retired: 1))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: parked.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: t.skillsDir.path + ".before-tbase/hub.before-tbase/SKILL.md"))
+        XCTAssertEqual(SkillManifest.repair(target: t, source: source), .healthy)
     }
 
     /// The source is learned from a link that already resolves, then the
@@ -131,7 +148,7 @@ final class SkillManifestTests: XCTestCase {
                        .repaired(linked: SkillManifest.shims.count, retired: 1))
         XCTAssertEqual(try FileManager.default.destinationOfSymbolicLink(atPath: bin.appendingPathComponent("hq-open").path),
                        source + "/bin/hq-open")
-        XCTAssertTrue(FileManager.default.fileExists(atPath: bin.appendingPathComponent("hq-open.before-tbase").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: bin.path + ".before-tbase/hq-open"))
         XCTAssertEqual(SkillManifest.repairShims(bin: bin, source: source), .healthy)
     }
 

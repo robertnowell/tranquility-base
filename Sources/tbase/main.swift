@@ -1257,7 +1257,7 @@ case "reconcile":
         case .healthy: print("\(target.label): already linked at \(target.skillsDir.path)")
         case .repaired(let linked, let retired):
             print("\(target.label): \(linked) linked into \(target.skillsDir.path)"
-                  + (retired > 0 ? "; \(retired) hand-installed copies moved aside (*.before-tbase)" : ""))
+                  + (retired > 0 ? "; \(retired) hand-installed copies moved to a .before-tbase directory beside where they were" : ""))
         case .unavailable(let reason): print("\(target.label): could not link — \(reason)"); failed = true
         }
     }

@@ -44,9 +44,13 @@ recorded, else the bundle's own `Contents/Resources/skills`. The bundle ranks
 last for the reason it does for hooks: a developer's checkout must keep
 winning, or a debug build would repoint every link at a frozen copy.
 
-A real directory at a skill's name is a hand-installed copy and is renamed to
-`<name>.before-tbase`, never deleted. The receipt is a re-audit. The same holds
-for the shims in `~/.local/bin`.
+A real directory at a skill's name is a hand-installed copy and is moved to
+`<skillsDir>.before-tbase/<name>`, never deleted. Out of the scanned directory,
+not renamed inside it: every harness loads every subdirectory holding a
+SKILL.md, so a copy parked beside ours under any name is a second skill (the
+first cut did exactly that, and the harness listed `share-as-page.before-tbase`
+within the minute). The receipt is a re-audit. The same holds for the shims in
+`~/.local/bin`.
 
 ```
 tbase install-skills        # from the main checkout: record skills/, link every harness, put hq on PATH
