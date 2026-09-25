@@ -80,8 +80,12 @@ public struct GatewayVoiceSession: GatewayMeteredSession, Equatable {
     /// PATCHes its ICE candidates. Derived by the Gateway, not by us -- the
     /// convention lives in one place. VOICE.md.
     public let offerUrl: String?
+    /// Where the client may route audio for this session, minted by whoever
+    /// issued it. Absent on older Gateways, which means reflection only.
+    public let iceServers: [IceServer]?
 
     public var isWebRTC: Bool { transport == "webrtc" }
+    public var ice: [IceServer] { iceServers ?? [] }
 
     /// A reply worth acting on: the right account and session, and an address
     /// of the kind this session claims to be. A start with neither is not a

@@ -409,11 +409,17 @@ extension AppDelegate {
             let names = await Self.fleetNames()
             let signaller: ManagerPeer.Signaller
             let label: String?
+            // Where this session may route audio. It comes from whoever issued
+            // the session, because a relay's credentials are short-lived and
+            // must not live in the binary; nothing supplied means reflection
+            // only, which is a home network and nothing harder.
+            var ice: [IceServer] = IceServers.stunOnly
             do {
                 switch source {
                 case .shim(let rtc):
                     Permissions.log("manager: webrtc, starting a session at \(rtc.start.host ?? "?")")
                     let offer = try await Self.startWebRTCSession(rtc, keyterms: names)
+                    if !rtc.iceServers.isEmpty { ice = rtc.iceServers }
                     signaller = Self.directSignaller(offer: offer, bearer: rtc.key)
                     label = offer.pathComponents.dropLast(2).last
                 case .managed(let credits):
@@ -422,6 +428,7 @@ extension AppDelegate {
                     let id = UUID()
                     let bought = try await client.start(id: id, keyterms: names)
                     guard bought.isWebRTC else { throw ManagedSummaryFailure.invalidResponse }
+                    if !bought.ice.isEmpty { ice = bought.ice }
                     let lease = ManagedVoiceLease(client: client, id: id)
                     self.managerLease = lease
                     self.scheduleManagerRenewal(lease, renewBy: bought.renewByDate)
@@ -441,7 +448,8 @@ extension AppDelegate {
                 return
             }
             let peer = ManagerPeer(signal: signaller,
-                                   toolHost: Self.managerToolHost, appVersion: Self.managerAppVersion) { argv in
+                                   toolHost: Self.managerToolHost, appVersion: Self.managerAppVersion,
+                                   iceServers: ice) { argv in
                 await AppDelegate.answerManagerRequest(argv)
             }
             peer.onTrace = { line in Permissions.log("manager wire: \(line)") }

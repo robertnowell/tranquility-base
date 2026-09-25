@@ -139,6 +139,15 @@ public enum ManagerConfig {
         public let start: URL
         /// The public key for that agent, until the Gateway issues these too.
         public let key: String
+        /// Where this session may route audio. Empty means reflection only,
+        /// which is a home network and nothing harder. See IceServers.swift.
+        public let iceServers: [IceServer]
+
+        public init(start: URL, key: String, iceServers: [IceServer] = []) {
+            self.start = start
+            self.key = key
+            self.iceServers = iceServers
+        }
     }
 
     public static func webrtc(config: URL = HubApp.configPath) -> WebRTCManager? {
@@ -148,7 +157,8 @@ public enum ManagerConfig {
               let rtc = manager["webrtc"] as? [String: Any],
               let start = (rtc["start"] as? String).flatMap(URL.init(string:)),
               let key = rtc["key"] as? String, !key.isEmpty else { return nil }
-        return WebRTCManager(start: start, key: key)
+        return WebRTCManager(start: start, key: key,
+                             iceServers: IceServers.parse(rtc["iceServers"]))
     }
 
     public static func command(config: URL = HubApp.configPath) -> [String] {
