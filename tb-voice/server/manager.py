@@ -75,7 +75,8 @@ INTENTS: dict[Intent, str] = {
     Intent.START_AGENT: "Asks to start, spin up, or open a new agent or session",
     Intent.TAKE_NOTE: "Asks to take a note, dictate a note, or put something on the clipboard",
     Intent.SUMMARIZE_RECENT: "Asks what has been going on recently across ALL agents, or what we did today or yesterday; not about one session",
-    Intent.TEACH: "Asks what the manager can do, what this is, or how it works",
+    Intent.TEACH: "Asks what the manager can do, what this is, who it is, or how it works",
+    Intent.FLEET_STATUS: "Asks which agents or sessions are live or waiting on the developer, or to see or list them",
     Intent.SPEAK: "Tells the manager to say something, speak, respond, answer, or prove it is listening",
     Intent.MUTE: "Tells whoever is talking to stop, pause, be quiet, mute, hold on, or that's enough",
     Intent.NONE: "Addressed but nothing to do: an acknowledgement, a compliment, or filler",
@@ -106,23 +107,8 @@ def names_the_manager(text: str) -> bool:
     return len(words) < 2 or words[1] != "base"
 
 
-# Intents that are commands only the manager can carry out. Thinking aloud does
-# not produce "invite the next agent"; a clear one of these is addressed even
-# without the name.
-COMMANDS = {Intent.INVITE_NEXT, Intent.SEND_MESSAGE, Intent.START_AGENT, Intent.TAKE_NOTE,
-            Intent.RUNG_GOAL, Intent.RUNG_FINDINGS, Intent.RUNG_SOLUTION, Intent.RUNG_WHY,
-            Intent.SUMMARIZE_RECENT, Intent.MUTE}
-
 # Intents that take seconds (a tool run, a model call) before anything is heard.
-SLOW_INTENTS = {Intent.SEND_MESSAGE, Intent.SUMMARIZE_RECENT, Intent.CUSTOM, Intent.TEACH, Intent.SPEAK}
-
-# With a session on stage, a confident question about its work is for the manager.
-STAGE_QUESTIONS = {Intent.RUNG_GOAL, Intent.RUNG_FINDINGS, Intent.RUNG_SOLUTION, Intent.RUNG_WHY,
-                   Intent.CUSTOM, Intent.SEND_MESSAGE}
-
-RUNG_FOR = {Intent.RUNG_GOAL: "goal", Intent.RUNG_FINDINGS: "findings",
-            Intent.RUNG_SOLUTION: "solution", Intent.RUNG_WHY: "why"}
-
+SLOW_INTENTS = {Intent.SEND_MESSAGE, Intent.SUMMARIZE_RECENT, Intent.CUSTOM, Intent.SPEAK}
 
 class JevClient:
     def __init__(self, api_key: str):
@@ -143,25 +129,40 @@ class JevClient:
         return answers
 
     async def turn(self, utterance: str, recent: list[str], stage: dict | None):
+        before = [{"who": ln.jev_who, "status": ln.jev_status, "text": ln.jev_text}
+                  for ln in session.current().exchange[-8:]]
+        answers = await self.ask(*self.turn_request(utterance, before, stage))
+        return float(answers["addressed"]["noul"]), answers["intent"]
+
+    @staticmethod
+    def turn_request(utterance: str, before: list[dict], stage: dict | None) -> tuple[dict, dict]:
+        """The state and questions for one turn, apart from the call, so the
+        eval (drills/classifier_eval.py) asks exactly what production asks."""
         ctx = (f"The assistant is a voice manager named {NAME}. It listens to a developer "
                "thinking aloud while supervising a fleet of coding agents, and speaks only "
                "when addressed. Lines marked 'you' are the developer; other lines were spoken "
                "by the assistant or by an agent, and the developer heard them.")
         state = {
             "context": ctx,
-            "conversation_before": [
-                {"who": ln.jev_who, "status": ln.jev_status, "text": ln.jev_text} for ln in session.current().exchange[-8:]
-            ],
-            "agent_on_stage": (stage or {}).get("goal"),
+            "conversation_before": before,
+            "agent_on_stage": " - ".join(x for x in ((stage or {}).get("name"), (stage or {}).get("goal")) if x) or None,
             "text_to_judge": utterance,
             "rules": (
                 "Judge ONLY text_to_judge. conversation_before is context: 'you' is the developer, "
                 "other names are the assistant or an agent speaking; a status of 'acted' or 'spoken' "
                 "means that turn was already handled and must not be acted on again. "
                 f"The transcriber often misspells the name {NAME}: Drinkody, Tranquillity, Tranquilly, "
-                "Tranquil, Trank; a turn opening with such a word is addressed."),
+                "Tranquil, Trank; a turn opening with such a word is addressed. "
+                "A line that repeats what an agent or the assistant just said is the room hearing that "
+                "voice again, not the developer: it is not addressed. Only the assistant can invite the "
+                "next agent, send a message to an agent, start an agent, take a note, or stop the voice: "
+                "a request for one of those is addressed even when it is phrased loosely, misheard, or "
+                "has no name in it."
+                + (" With an agent on stage, a question about its work (status, risks, what would happen "
+                   "if..., is it going well) is addressed even without the name: the assistant answers it "
+                   "from that agent's record." if stage else "")),
         }
-        answers = await self.ask(state, {
+        return state, {
             "addressed": {"type": "noul",
                 "instructions": (f"In text_to_judge, is the developer asking the assistant {NAME} to speak "
                                  "or act RIGHT NOW? Earlier turns do not count; only this text."),
@@ -173,8 +174,7 @@ class JevClient:
             "intent": {"type": "choice",
                 "instructions": "If text_to_judge is a request to the assistant, which kind is it?",
                 "criteria": {i.value: d for i, d in INTENTS.items()}},
-        })
-        return float(answers["addressed"]["noul"]), answers["intent"]
+        }
 
     async def target(self, utterance: str, candidates: list[dict]) -> dict:
         crit = {c["sessionId"]: f"{c.get('name') or ''}: {c.get('goal') or c.get('topic') or c['project']}" for c in candidates}
@@ -184,6 +184,21 @@ class JevClient:
                         "instructions": "Which session is this message meant for, judged by its goal?",
                         "criteria": crit}})
         return answers["target"]
+
+    async def harness(self, utterance: str) -> str:
+        """Which coding agent a start asks for: "codex" or "claude". Asked of the
+        classifier, never found by the word (hf-7); anything else is Claude Code."""
+        try:
+            answers = await self.ask(
+                {"text_to_judge": utterance},
+                {"harness": {"type": "choice",
+                             "instructions": "Which coding agent is the developer asking to start?",
+                             "criteria": {"claude": "Claude Code, Claude, or no agent named",
+                                          "codex": "Codex"}}})
+        except Exception as e:
+            logger.warning(f"harness question failed: {e}; starting Claude Code")
+            return "claude"
+        return "codex" if _chosen(answers["harness"]) == "codex" else "claude"
 
     async def is_action(self, utterance: str, stage_name: str) -> float:
         """A request about the session on stage: is it asking the session to DO
@@ -344,20 +359,6 @@ class Brain:
         return " ".join(text.split())[:600]
 
 
-    async def plain(self, question: str, exchange: list[str]) -> str:
-        """One tool-free answer as the manager itself: who it is, what this is."""
-        from prompt import SYSTEM
-        msgs = [
-            {"role": "system", "content": SYSTEM + "\nAnswer in one sentence, 30 words max, spoken aloud."},
-            {"role": "user", "content": "Exchange so far:\n" + "\n".join(exchange) + f"\n\nQuestion: {question}"},
-        ]
-        body = {"model": self.model, "messages": msgs, "max_tokens": 400, "temperature": 0.3}
-        t0 = time.monotonic()
-        r = await self._client.post("/chat/completions", json=body)
-        r.raise_for_status()
-        record("brain", body, r.json(), ms=int((time.monotonic() - t0) * 1000))
-        return " ".join(((r.json()["choices"][0]["message"].get("content") or "")).split())
-
     async def pick_span(self, request: str, cands: list, agent: str, goal: str | None) -> dict | None:
         """Which of the developer's own lines are the message, or which part of
         the request is (span.py). The model only points; it writes nothing that
@@ -430,6 +431,7 @@ class Manager(FrameProcessor):
             Intent.RUNG_GOAL: self._do_rung_goal, Intent.RUNG_FINDINGS: self._do_rung_findings,
             Intent.RUNG_SOLUTION: self._do_rung_solution, Intent.RUNG_WHY: self._do_rung_why,
             Intent.CUSTOM: self._do_custom, Intent.TEACH: self._do_teach, Intent.SPEAK: self._do_speak,
+            Intent.FLEET_STATUS: self._do_fleet_status,
             Intent.SEND_MESSAGE: self._do_send_message, Intent.START_AGENT: self._do_start_agent,
             Intent.TAKE_NOTE: self._do_take_note,
         }
@@ -637,21 +639,14 @@ class Manager(FrameProcessor):
         p, intent_answer = await self._jev.turn(text, self._recent, self.stage)
         ms = int((time.monotonic() - t0) * 1000)
         jev = dict(self._jev.last)
-        intent = parse_intent(_chosen(intent_answer))
-        if not self.stage and intent in RUNG_FOR:
-            # "What's next?" with nobody on stage is the ⌃⌥ question: the next
-            # agent's update, not a lecture about the stage being empty.
-            intent = Intent.INVITE_NEXT
-        raw_p = p
-        rule = None
-        if names_the_manager(text):
-            p, rule = max(p, 0.95), "named"  # the transcriber's spelling is not a veto
-        elif intent in COMMANDS and float(intent_answer.get("confidence", 0)) >= 0.9 and p >= 0.3:
-            p, rule = max(p, 0.6), "fleet command"  # nobody else can execute it
-        elif (self.stage and intent in STAGE_QUESTIONS
-              and float(intent_answer.get("confidence", 0)) >= 0.8 and p >= 0.3):
-            p, rule = max(p, 0.6), "about the stage"  # a question about the work on stage
-        return p, raw_p, intent, rule, ms, jev
+        # The classifier's answer is the decision. Four rules used to sit on
+        # top of it (the name's sound, a confident fleet command, a question
+        # about the stage, "what's next" with nobody on stage); measured on
+        # 101 labelled real turns, three runs each, two of them never changed
+        # a decision and the others were matched by saying the same things in
+        # the classifier's context, with half the false yeses (hf-7,
+        # drills/classifier_eval.py).
+        return p, parse_intent(_chosen(intent_answer)), ms, jev
 
     async def _look_early(self, text: str):
         """Hear a stop now, not after the turn it is meant to stop (hf-25).
@@ -661,15 +656,14 @@ class Manager(FrameProcessor):
         arrival; if it is addressed and it is a stop, the turn in flight is
         cut and anything still playing is interrupted. It stays queued: when
         reached it is judged again and mutes the app's voice as always."""
-        p, _, intent, _, _, _ = await self._judge(text)
+        p, intent, _, _ = await self._judge(text)
         if p >= THRESHOLD and intent is Intent.MUTE and self._turns.cut("told to stop"):
             await self.broadcast_interruption()
             await emit(self, "listening", p=round(p, 2), intent=intent.value, text=text[:120])
 
     async def _turn(self, text, frame, direction):
-        p, raw_p, intent, rule, ms, jev = await self._judge(text)
-        await emit(self, "jev", ms=jev.get("ms"), state=jev.get("state"),
-                   answers=jev.get("answers"), raw_p=round(raw_p, 2), rule=rule)
+        p, intent, ms, jev = await self._judge(text)
+        await emit(self, "jev", ms=jev.get("ms"), state=jev.get("state"), answers=jev.get("answers"))
         speak = p >= THRESHOLD
         logger.info(f"gate p={p:.2f} {intent.value} {ms}ms {'SPEAK' if speak else 'silent'} :: {text[:80]}")
         note(Line(Role.USER, LineKind.COMMAND if speak else LineKind.TALK, text))
@@ -799,38 +793,26 @@ class Manager(FrameProcessor):
                     "or why. Say tell it to, then your message. Say stop to mute. Say start an agent.")
 
     async def _do_teach(self, text, frame, direction):
-        """Teach without a tool-choosing model: showing means reading the fleet
-        aloud, controls are a fixed line, and 'what is this' is one plain answer."""
-        low = text.lower()
-        if any(w in low for w in ("show", "see", "session", "agent", "who is", "who's", "what's going on", "waiting")):
-            live = await self._targets()
-            waiting = await self._live_waiting()
-            if not live and not waiting:
-                await self._say("I can't see any live sessions right now.")
-                return
-            first = (waiting or live)[0]
-            who = first.get("name") or first.get("project") or "one"
-            line = f"{len(live)} sessions live, {len(waiting)} waiting on you."
-            line += f" First waiting: {who}." if waiting else f" First: {who}."
-            await self._say(line + " Say what's next to hear it.")
+        """Who it is and what it can do: a fixed line, no model. Which question
+        this is was the classifier's to say (TEACH, FLEET_STATUS), not a word
+        list's (hf-7)."""
+        await self._say("I'm Tranquility, the hands-free manager for your coding agents. " + self.CAPABILITIES)
+
+    async def _do_fleet_status(self, text, frame, direction):
+        """Which sessions are live and which are waiting on you, read aloud."""
+        live = await self._targets()
+        waiting = await self._live_waiting()
+        if not live and not waiting:
+            await self._say("I can't see any live sessions right now.")
             return
-        if any(w in low for w in ("control", "what can you", "how do i", "commands", "what do you do",
-                                  "capabilit", "who are you", "what are you", "about you")):
-            await self._say(self.CAPABILITIES)
-            return
-        try:
-            answer = await self._brain.plain(text, exchange_lines())
-        except Exception as e:
-            logger.error(f"teach failed: {e}")
-            answer = ""
-        await self._say(answer or "I'm Tranquility, the hands-free manager for your coding agents. " + self.CAPABILITIES)
+        first = (waiting or live)[0]
+        who = first.get("name") or first.get("project") or "one"
+        line = f"{len(live)} sessions live, {len(waiting)} waiting on you."
+        line += f" First waiting: {who}." if waiting else f" First: {who}."
+        await self._say(line + " Say what's next to hear it.")
 
     async def _do_speak(self, text, frame, direction):
         """Told to speak: one sentence about where things stand, then a door."""
-        low = text.lower()
-        if any(w in low for w in ("who are you", "what are you", "explain", "yourself", "introduce")):
-            await self._do_teach(text, frame, direction)
-            return
         if self.stage:
             await self._say(f"Listening. On stage: {self.stage.get('name') or self.stage.get('goal') or self.stage.get('project')}. Ask for the next step, or say next agent.")
             return
@@ -901,7 +883,7 @@ class Manager(FrameProcessor):
         """Defaults, not a chooser: Claude Code in the default project, started
         now, deterministically, so no breath can cancel it. It takes the stage;
         the brief is said, then sent on request like any message."""
-        harness = "codex" if "codex" in text.lower() else "claude"
+        harness = await self._jev.harness(text)
         # Registration is the proof we need; the first send waits for liveness on
         # its own (tbase send defers). --wait-live is left off: until 21 Sep the
         # CLI read it as a directory and every start died in a second.
