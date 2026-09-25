@@ -139,7 +139,14 @@ to act, not to follow the investigation. If nothing needs them, say that at the
 top too.
 
 ### 3. Author the HTML
-Copy `templates/report.html` to `<project>/index.html`, then:
+**A report Robert reads to act starts from `templates/brief.html`**, and `references/brief.md`
+says how to fill it: one sentence they cannot miss, one row per claim, the artifact (screenshot,
+diff hunk, raw rows, literal prompt) collapsed under each claim. Ruled 25 Sep 2026 after 974
+hub pages were measured: median 908 words, 17% with any visual, and the decision box the only
+rule the old template enforced. `templates/report.html` (the editorial serif page) remains for a
+document meant to be read through, and for anything leaving the building.
+
+Copy the template to `<project>/index.html`, then:
 - **Declare the intranet metadata in `<head>` — mandatory on every page**, same footing as
   the PROVENANCE block. The intranet index parses these deterministically; a page without
   them gets keyword-guessed metadata, which is how work goes missing:
