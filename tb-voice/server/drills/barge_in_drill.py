@@ -47,7 +47,7 @@ def manager(log: list):
 
     async def judge(text):
         await asyncio.sleep(0.05)  # the classifier, quick
-        return 1.0, 1.0, intents.get(text.split()[0], Intent.CUSTOM), None, 50, {}
+        return 1.0, intents.get(text.split()[0], Intent.CUSTOM), 50, {}
 
     async def interrupted():
         log.append(("interruption",))
