@@ -63,6 +63,39 @@ TB_CAPTURE_MARKER="$HOME/Library/Application Support/VoiceDispatch/capturing"
 TB_MIC_STALE_AFTER=20
 TB_MIC_GIVE_UP_AFTER=120
 
+# A hands-free session is up: refuse, do not wait.
+#
+# Its sibling above is a promise measured in seconds, so every reader of it
+# waits for the utterance to land. This one has no bound — a session can run for
+# an hour — and stopping the app during it drops a live call mid-sentence, which
+# is what happened repeatedly on 23 Sep while fixes were being delivered into
+# the middle of the session testing them. So this refuses immediately and says
+# so, and the delivery is retried when the session ends.
+#
+# TB_HANDSFREE_STALE_AFTER mirrors HandsFreeMarker.staleAfter, which bash cannot
+# read. Change both or neither.
+TB_HANDSFREE_MARKER="$HOME/Library/Application Support/VoiceDispatch/hands-free"
+TB_HANDSFREE_STALE_AFTER=20
+
+hands_free_is_live() {
+  [ "${TB_KILL_ANYWAY:-0}" = "1" ] && return 1
+  [ -f "$TB_HANDSFREE_MARKER" ] || return 1
+  local stamped age
+  stamped=$(cat "$TB_HANDSFREE_MARKER" 2>/dev/null || echo 0)
+  case "$stamped" in ''|*[!0-9]*) stamped=0 ;; esac
+  age=$(( $(date +%s) - stamped ))
+  [ "$stamped" -ne 0 ] && [ "$age" -lt "$TB_HANDSFREE_STALE_AFTER" ]
+}
+
+refuse_while_hands_free() {
+  hands_free_is_live || return 0
+  local when="${1:-stopping the app}"
+  echo "deployment deferred: hands-free is live (${when}); the app keeps its current build" >&2
+  echo "  Turn hands-free off and run this again, or TB_KILL_ANYWAY=1 if the marker is wedged." >&2
+  if [ "${TB_DEPLOY_AUTOMATIC:-0}" = "1" ]; then exit 75; fi
+  exit 1
+}
+
 # Wait for the microphone to close, or refuse to proceed.
 #
 # `$1` names the moment, so a log line says which caller is waiting. Refusing
@@ -100,6 +133,7 @@ wait_for_microphone() {
 
 app_stop_path() {
   if app_at_path_running "$1"; then
+    refuse_while_hands_free "stopping $1"
     wait_for_microphone "stopping $1"
     if declare -F tb_before_app_stop >/dev/null; then tb_before_app_stop; fi
     echo "→ stopping $1"
@@ -116,6 +150,7 @@ app_stop_path() {
 # every belt-and-braces call site into a hang.
 app_stop() {
   if app_running; then
+    refuse_while_hands_free "stopping the running instance"
     wait_for_microphone "stopping the running instance"
     if declare -F tb_before_app_stop >/dev/null; then tb_before_app_stop; fi
     echo "→ stopping the running instance"

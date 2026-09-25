@@ -7,12 +7,54 @@ import TranquilityCore
 /// AppDelegate+Permissions.swift's doc comment for why.
 
 extension AppDelegate {
+    /// Typed words, sent: the panel's Send and the manager's `send` tool are
+    /// the same door. No undo window: the click (or the spoken request) is the
+    /// consent. Returns how it ended, nil when it never reached a dispatch.
+    /// `.developer` takes everything staged whichever agent it was staged for,
+    /// the hands-free rule: the tray rides the next send (hf-12).
+    @discardableResult
+    func sendTyped(_ text: String, to sessionId: String,
+                   tray: Coordinator.TrayScope = .session,
+                   provider: String = "typed") async -> Coordinator.ReplyOutcome? {
+        guard let coordinator else { return nil }
+        do {
+            let outcome = try await coordinator.submitTypedReply(
+                text: text, to: sessionId, tray: tray, provider: provider)
+            switch outcome {
+            case .readyToSend(let utteranceId, _, let label, let sessionId):
+                let answering = (try? coordinator.waiting())?
+                    .first { $0.sessionId == sessionId }?.latestId
+                delivering.began(sessionId: sessionId, answering: answering)
+                hud.render()
+                return await withCheckedContinuation { done in
+                    send(utteranceId: utteranceId, label: label, sessionId: sessionId) { done.resume(returning: $0) }
+                }
+            case .noTarget:
+                lastStatusLine = "nothing to send"
+                Permissions.log("\(provider) send: nothing typed and nothing staged")
+                hud.render()
+                return outcome
+            default:
+                Permissions.log("\(provider) send: unexpected outcome \(outcome)")
+                return outcome
+            }
+        } catch {
+            Permissions.log("\(provider) send threw: \(error)")
+            Failures.report(.deliveryFailed, reason: "\(provider) send threw: \(error)")
+            return nil
+        }
+    }
+
     /// Dispatch a transcript whose undo window has closed, and say exactly what
     /// happened. "Couldn't send it" hid a `try?` that swallowed the real outcome —
     /// including the one case that matters most, where the text may have landed but
     /// the read-back could not confirm it.
-    func send(utteranceId: String, label: String, sessionId: String) {
-        guard let coordinator else { return }
+    /// `onOutcome`, when given, hears how it ended: the outcome, or nil when
+    /// the send was superseded or threw. The hands-free manager's `send` tool
+    /// waits on it to tell the bot whether the words landed (hf-12).
+    func send(utteranceId: String, label: String, sessionId: String,
+              onOutcome: (@MainActor (Coordinator.ReplyOutcome?) -> Void)? = nil) {
+        guard let coordinator else { onOutcome?(nil); return }
         let mine = replyGeneration
         let captureID = (try? store?.utterance(id: utteranceId))?.captureId
         Task { @MainActor in
@@ -26,6 +68,8 @@ extension AppDelegate {
             // Same discipline as the first half — one defer, not seven cases.
             var landedOnTheSession = false
             defer { if !landedOnTheSession { delivering.finished(sessionId: sessionId) } }
+            var final: Coordinator.ReplyOutcome?
+            defer { onOutcome?(final) }
             guard mine == replyGeneration else {
                 // Superseded between the timer firing and this running.
                 try? coordinator.cancelSend(utteranceId: utteranceId)
@@ -64,6 +108,7 @@ extension AppDelegate {
                 .first(where: { $0.sessionId == sessionId })?.pid
             do {
                 let outcome = try await coordinator.confirmAndSend(utteranceId: utteranceId)
+                final = outcome
                 Permissions.log("confirmAndSend -> \(outcome)")
                 // The confirm round-trip can outlive the user's attention: they may
                 // already be listening to the NEXT session when this lands. The
@@ -326,6 +371,15 @@ extension AppDelegate {
     /// to nine seconds the agent took to come up, which is precisely the
     /// moment you have one to hand.
     func refreshDropTarget() {
+        let before = dropTarget?.sessionId
+        defer {
+            // Only on a change, so the tick is silent and the next misroute
+            // has a line to find: who the hands address, and since when.
+            if dropTarget?.sessionId != before {
+                Permissions.log("routing: hands address "
+                    + (dropTarget.map { "\($0.sessionId.prefix(8)) (\($0.label))" } ?? "nobody"))
+            }
+        }
         switch replyDestinationNow() {
         case .session(let id):
             if let conversation = activeConversation, conversation.sessionId == id {

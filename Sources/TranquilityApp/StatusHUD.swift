@@ -76,6 +76,8 @@ final class StatusHUD: NSObject {
     /// the grid up and resize the panel on a mouse-over, which is the same
     /// reflow-on-hover the collapsed strip forbids, for the same reason.
     var controlsSticky: ControlsNoteView!
+    /// The note's hands-free twin: the same doors as phrases (19 Sep).
+    var voiceSticky: ControlsNoteView!
     /// The card's copy of the word, in the middle of the action row. The grid's
     /// copy lives in its footer; both drive `setControlsNote(open:above:)`, so
     /// there is one note and one behaviour behind two placements.
@@ -335,7 +337,7 @@ final class StatusHUD: NSObject {
     /// The session is the card's reply target, read now rather than at the
     /// deadline so a face change in between cannot move the draft.
     func scheduleDraftSave() {
-        guard let target = replyTargetForDrop?() else { return }
+        guard let target = handTarget() else { return }
         let session = target.sessionId
         draftSave?.cancel()
         let work = DispatchWorkItem { [weak self] in
@@ -357,7 +359,7 @@ final class StatusHUD: NSObject {
     /// now, not after a debounce a crash could beat.
     func noteDraftCleared() {
         draftSave?.cancel(); draftSave = nil
-        guard let target = replyTargetForDrop?() else { return }
+        guard let target = handTarget() else { return }
         onDraftChanged?(target.sessionId, "")
     }
 
@@ -595,17 +597,22 @@ final class StatusHUD: NSObject {
     }
 
     func setControlsNote(open: Bool, above host: NSView? = nil) {
-        guard let controlsSticky else { return }
+        guard let controlsSticky, let voiceSticky else { return }
+        // Hands-free shows phrases; the chords still work, but the note teaches
+        // the mode you are in.
+        let note = managerOn ? voiceSticky : controlsSticky
+        let other = managerOn ? controlsSticky : voiceSticky
+        other.isHidden = true
         if open { controlsNoteClose?.cancel(); controlsNoteClose = nil }
-        if open, let host, let background = controlsSticky.superview {
+        if open, let host, let background = note.superview {
             NSLayoutConstraint.deactivate(stickyPlacement)
             stickyPlacement = [
-                controlsSticky.centerXAnchor.constraint(equalTo: background.centerXAnchor),
-                controlsSticky.bottomAnchor.constraint(equalTo: host.topAnchor, constant: -8),
+                note.centerXAnchor.constraint(equalTo: background.centerXAnchor),
+                note.bottomAnchor.constraint(equalTo: host.topAnchor, constant: -8),
             ]
             NSLayoutConstraint.activate(stickyPlacement)
         }
-        controlsSticky.isHidden = !open
+        note.isHidden = !open
     }
 
     /// Restore exactly the face arming replaced. No-op unless the panel is
@@ -1157,6 +1164,10 @@ final class StatusHUD: NSObject {
                 onSpeakDoor?()
             } else {
                 let text = trayRow.composedText
+                // The words go to who the card names at THIS press. The
+                // app's cache is refreshed here, before it is read by
+                // `onSendTyped`; see `refreshReplyTarget`.
+                refreshReplyTarget?()
                 releasePaste(because: "sent", repaint: false)
                 trayRow.clearComposed()
                 noteDraftCleared()
@@ -1224,6 +1235,45 @@ final class StatusHUD: NSObject {
         guard line != creditStanding else { return }
         creditStanding = line
         Permissions.log("credits: standing \(line ?? "clear")")
+        render()
+    }
+
+    /// Keep whatever the placard says clear of the controls sharing its row.
+    ///
+    /// The label spans the row; the chevron sits on its left and the gear on
+    /// its right. Each writer used to indent its own string, so only the ones
+    /// that remembered did: the grid title and PAST AGENTS cleared the
+    /// chevron, and the credits line and grid notices painted under it
+    /// (22 Sep, "we should never have messages overlap"). One pass at the end
+    /// of render, over whatever was written, so the next writer inherits it.
+    /// Text too long for the space left truncates instead of running under
+    /// the gear.
+    private func clearPlacardOfControls() {
+        let text = stateLabel.attributedStringValue
+        guard text.length > 0 else { return }
+        var lead: CGFloat = 0
+        if collapseButton?.isHidden == false { lead = 24 }
+        if pastBackButton?.isHidden == false { lead = 30 }
+        let tail: CGFloat = gearButton?.isHidden == false ? 30 : 0
+        let existing = text.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
+        let style = (existing?.mutableCopy() as? NSMutableParagraphStyle) ?? NSMutableParagraphStyle()
+        style.firstLineHeadIndent = max(style.firstLineHeadIndent, lead)
+        style.headIndent = max(style.headIndent, lead)
+        if tail > 0 { style.tailIndent = -tail }
+        style.lineBreakMode = .byTruncatingTail
+        let fitted = NSMutableAttributedString(attributedString: text)
+        fitted.addAttribute(.paragraphStyle, value: style, range: NSRange(location: 0, length: fitted.length))
+        stateLabel.attributedStringValue = fitted
+    }
+
+    /// This Mac has had no network for longer than a blip. Set by the app
+    /// from `Connectivity.observeOffline`; written nowhere else.
+    private(set) var isOffline = false
+
+    func setOffline(_ offline: Bool) {
+        guard offline != isOffline else { return }
+        isOffline = offline
+        Permissions.log("connectivity: \(offline ? "offline" : "online")")
         render()
     }
 
@@ -2444,7 +2494,7 @@ final class StatusHUD: NSObject {
         // The footer belongs to the grid alone, and the sticky dies with it: a
         // note left open while the face changes underneath is exactly the
         // residue class render()'s baseline exists to make impossible.
-        gridFooter.isHidden = true; controlsSticky.isHidden = true
+        gridFooter.isHidden = true; controlsSticky.isHidden = true; voiceSticky.isHidden = true
         stripLabel.stringValue = ""
         voiceList.isHidden = true; waitingRows.isHidden = true
         setupChecklist?.isHidden = true; setupScroll?.isHidden = true
@@ -2710,11 +2760,23 @@ final class StatusHUD: NSObject {
         // The credits standing takes the grid's placard, in amber, for as
         // long as it holds; a transient notice below still wins for its five
         // seconds, because it is newer.
+        // Offline takes the grid's placard in chrome grey: a state, not a
+        // fault, with nothing to press. An actionable credits line below
+        // outranks it, and a notice outranks both, because it is newer.
+        if notice == nil, state.name == "idle", isOffline, creditStanding == nil {
+            stateLabel.isHidden = false
+            stateLabel.textColor = StateLegend.Lens.chrome.color
+            stateLabel.attributedStringValue = Widgets.placardText(
+                StateLegend.offlinePlacard, color: StateLegend.Lens.chrome.color)
+            stateLabel.isADoor = false
+        }
         if notice == nil, state.name == "idle", let creditStanding {
             stateLabel.isHidden = false
             stateLabel.textColor = StateLegend.Lens.fault.color
             stateLabel.attributedStringValue = Widgets.placardText(
-                "\(StateLegend.Glyph.needsYou) \(creditStanding) · Settings ›",
+                // No warning mark (ruled 22 Sep): the line is an action,
+                // not an alarm, and the amber ink already says it is yours.
+                "\(creditStanding) · Settings ›",
                 color: StateLegend.Lens.fault.color)
             stateLabel.isADoor = true
         }
@@ -2731,6 +2793,7 @@ final class StatusHUD: NSObject {
                 stateLabel.attributedStringValue = Widgets.placardText(notice, color: noticeLens.color)
             }
         }
+        clearPlacardOfControls()
 
         // The message tray's chips, derived rather than stored: whatever Core
         // has staged for the session THIS panel would send to. One resolution
@@ -3147,6 +3210,23 @@ final class StatusHUD: NSObject {
 
         // The strip's bottom rule, under "AGENTS ⚙".
         waitingRows.addArrangedSubview(hairline(StateLegend.Palette.hairline))
+        // Manager mode (19 Sep): voice only. The orb takes the grid's place
+        // and the only door left is the one that turns it off; NEW AGENT and
+        // PAST AGENTS are what the voice is for. The fleet is still there,
+        // reached by speaking, and the rows come back when the manager stops.
+        if managerOn {
+            waitingRows.addArrangedSubview(managerOrb)
+            managerOrb.widthAnchor.constraint(equalToConstant: Self.gridWidth).isActive = true
+            waitingRows.addArrangedSubview(hairline(StateLegend.Palette.hairlineSoft))
+            let stopRow = PlacardRowView(
+                width: Self.gridWidth, target: self,
+                title: StateLegend.managerOffTitle, glyph: "■", action: #selector(managerRowTapped))
+            waitingRows.addArrangedSubview(stopRow)
+            stopRow.widthAnchor.constraint(equalToConstant: Self.gridWidth).isActive = true
+            waitingRows.addArrangedSubview(hairline(StateLegend.Palette.hairline))
+            Permissions.log("grid: manager mode, orb in place of \(face.sessionRows.count) rows")
+            return
+        }
         let shown = Self.gridRows(face.sessionRows)
         // ONE callsign column (ruled 05 Aug): sized to the widest callsign on
         // show, capped at 38% of the grid. Per-row widths made every name
@@ -3211,6 +3291,16 @@ final class StatusHUD: NSObject {
             trailing: (StateLegend.pastAgentsTitle, "↺", #selector(pastAgentsRowTapped)))
         waitingRows.addArrangedSubview(newRow)
         newRow.widthAnchor.constraint(equalToConstant: Self.gridWidth).isActive = true
+        waitingRows.addArrangedSubview(hairline(StateLegend.Palette.hairlineSoft))
+        // The manager's door (19 Sep): one placard row, both halves toggle it.
+        // With no manager configured it reads SET UP HANDS-FREE (22 Sep); the
+        // press still goes to the toggle, which says what is missing.
+        let managerRow = PlacardRowView(
+            width: Self.gridWidth, target: self,
+            title: managerAvailable ? StateLegend.managerOnTitle : StateLegend.managerUnsetTitle,
+            glyph: managerAvailable ? "◯" : "◌", action: #selector(managerRowTapped))
+        waitingRows.addArrangedSubview(managerRow)
+        managerRow.widthAnchor.constraint(equalToConstant: Self.gridWidth).isActive = true
         // The key line's top rule; the hint label follows in the outer stack.
         waitingRows.addArrangedSubview(hairline(StateLegend.Palette.hairline))
 
@@ -3239,6 +3329,36 @@ final class StatusHUD: NSObject {
 
     /// Wired by the app onto SessionLauncher.launch().
     var onNewSession: (() -> Void)?
+
+    // MARK: Manager mode (19 Sep)
+
+    /// Whether the orb is on the grid. Flipped by the app when the child
+    /// starts or ends; the grid repaints on the next idle render.
+    var managerOn = false
+    /// False when neither a hosted nor a local manager is configured; the
+    /// placard then reads SET UP HANDS-FREE. Set by the app before the first render.
+    var managerAvailable = true
+    /// One globe, always. The dotted sphere is the manager's face; only its
+    /// colour changes (green while you talk, amber while something speaks).
+    static let orbState = "composing"
+    /// While the child connects: the ring, breathing.
+    static let orbConnecting = "breathing"
+    lazy var managerOrb = ManagerOrbView(frame: .zero)
+    var onManagerToggle: (() -> Void)?
+
+    func setManager(on: Bool) {
+        managerOn = on
+        managerOrb.set(on ? Self.orbConnecting : Self.orbState, line: on ? "connecting" : "off")
+        if case .idle = state { render() }
+    }
+
+    func setManagerState(_ orbState: String, line: String, mood: String = "") {
+        managerOrb.set(orbState, line: line, mood: mood)
+    }
+
+    @objc nonisolated private func managerRowTapped() {
+        MainActor.assumeIsolated { onManagerToggle?() }
+    }
 
     /// Wired by the app: build the list and show it.
     var onOpenPastAgents: (() -> Void)?
@@ -3282,6 +3402,29 @@ final class StatusHUD: NSObject {
     /// the main actor never waits. The app answers from a value it refreshes
     /// on its own tick, never by probing `claude agents --json` here.
     var replyTargetForDrop: (() -> (sessionId: String, label: String)?)?
+
+    /// Asked BEFORE a hand reads `replyTargetForDrop`: arming the typed
+    /// line, pasting, saving or clearing a draft, pressing Send. The app
+    /// re-resolves its cached target so the hand acts on who the card names
+    /// now, not who it named one tick ago.
+    ///
+    /// 23 Sep 2026, 2:41 PM: Robert picked "Build repeatable email planning",
+    /// heard its card, pressed it and typed "mailchimpo too". The card, the
+    /// cursor and the voice path had all moved at the pick; the cache the
+    /// hands read moves only on the ambient tick, and that tick's refresh
+    /// sat behind an awaited voice prefetch until 400 ms after Send. The
+    /// words went to the crobot task he had dismissed twice. The receipt
+    /// said "→ CROBOT" — 90 ms after the fact.
+    ///
+    /// Never called from render(): a paint reads the cache as it stands.
+    var refreshReplyTarget: (() -> Void)?
+
+    /// The target a hand acts on: refreshed, then read. One call, so no
+    /// door can read first and refresh second.
+    func handTarget() -> (sessionId: String, label: String)? {
+        refreshReplyTarget?()
+        return replyTargetForDrop?()
+    }
 
     /// The name a picked row was showing, for the receipt.
     func pastListName(_ id: String) -> String {
@@ -3605,7 +3748,7 @@ final class StatusHUD: NSObject {
     private var pasteNote: String?
 
     func armPaste(via door: String) {
-        guard let panel, let target = replyTargetForDrop?() else { return }
+        guard let panel, let target = handTarget() else { return }
         switch state {
         case .settings, .pastAgents, .hidden: return
         default: break
@@ -3649,7 +3792,7 @@ final class StatusHUD: NSObject {
     /// handler a drop uses, and stay armed: a second paste is a second chip.
     func pasteIntoTray() {
         guard pasteArmed else { return }
-        guard let target = replyTargetForDrop?() else {
+        guard let target = handTarget() else {
             pasteNote = "nothing to attach to yet"
             render(); return
         }

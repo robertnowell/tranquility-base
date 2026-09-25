@@ -57,6 +57,10 @@ restore_if_down() {
 }
 
 automatic_activation_guard() {
+  # Not gated on TB_DEPLOY_AUTOMATIC: a hand-run relaunch ends a live call just
+  # as dead as an automatic one does, and the person running it is usually not
+  # the person mid-conversation.
+  refuse_while_hands_free "before activation"
   [ "${TB_DEPLOY_AUTOMATIC:-0}" = 1 ] || return 0
   if [ -n "${TARGET:-}" ] && [ "$(git rev-parse origin/main)" != "$TARGET" ]; then
     echo "deployment deferred: main advanced while preparing; build the newer target" >&2
@@ -93,6 +97,7 @@ python3 scripts/prepare-dev.py verify "$TARGET" "$CLEAN_WORKTREE"
 # Refresh before owning the app lock. A stale automatic candidate is deferred.
 git fetch -q origin
 automatic_activation_guard
+refuse_while_hands_free "before activation"
 wait_for_microphone "before activation"
 tb_deployment_lock
 # If speech begins after the courtesy wait, defer immediately under the lock.

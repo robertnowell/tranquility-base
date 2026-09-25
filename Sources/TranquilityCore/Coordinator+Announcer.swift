@@ -239,6 +239,8 @@ extension Coordinator {
         /// carrying the reason. A downgrade the user cannot see is a downgrade they
         /// will assume is just how the app sounds now.
         public var degraded: String?
+        /// `degraded` in words for the person, for the panel.
+        public var degradedReason: FallbackReason? = nil
         public var managedReceipt: GatewayReceipt? = nil
         public var managedFailure: ManagedSummaryFailure? = nil
 
@@ -348,7 +350,7 @@ extension Coordinator {
     /// made every falling-back session the same person.
     public func voices(for sessionId: String) -> (cloud: String?, system: String?) {
         (try? store.voices(for: sessionId, roster: VoiceRoster.load(),
-                           systemRoster: VoiceRoster.loadSystem())) ?? (nil, nil)
+                           systemRoster: VoiceRoster.approvedSystem())) ?? (nil, nil)
     }
 
     private func resolveSummary(for event: WaitingSession) async -> Summary {
@@ -644,6 +646,7 @@ extension Coordinator {
         return .spoke(Announcement(
             event: session, brief: summary.brief, spoken: summary.spoken,
             via: spoken.provider, degraded: spoken.degraded,
+            degradedReason: spoken.degradedReason,
             managedReceipt: summary.managedReceipt, managedFailure: summary.managedFailure))
     }
 

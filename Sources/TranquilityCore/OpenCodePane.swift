@@ -59,11 +59,13 @@ public enum OpenCodePane {
         }
         // The same options every local pane gets (SessionLauncher): the
         // server outlives its last session, the pane never resizes itself,
-        // and the mouse reaches the TUI. Plus no status bar: this window is
-        // the agent's screen, and tmux's own furniture is not its chrome.
+        // the mouse reaches the TUI and a drag lands on the Mac clipboard.
+        // Plus no status bar: this window is the agent's screen, and tmux's
+        // own furniture is not its chrome.
         _ = Tmux.run(["set", "-s", "exit-empty", "off"], socket: Tmux.socketName)
         _ = Tmux.run(["set", "-t", name, "window-size", "manual"], socket: Tmux.socketName)
         _ = Tmux.run(["set", "-t", name, "mouse", "on"], socket: Tmux.socketName)
+        _ = Tmux.run(["set", "-s", "copy-command", "pbcopy"], socket: Tmux.socketName)
         _ = Tmux.run(["set", "-t", name, "status", "off"], socket: Tmux.socketName)
         return name
     }

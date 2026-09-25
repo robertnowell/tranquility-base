@@ -29,6 +29,18 @@ final class ChordReleaseTests: XCTestCase {
                                             holdThreshold: threshold, interfered: false), .heldPastTap)
     }
 
+    /// ⇧ alone has no hold meaning, only a pause, so it counts at any length.
+    /// 22 Sep: 40 lone ⇧ presses dropped, median 319 ms, speech kept going.
+    func testALoneShiftCountsAtAnyLength() {
+        for held in [0.05, 0.319, 3.7] {
+            XCTAssertEqual(ChordRelease.verdict(modifiers: 1, duration: held, holdThreshold: threshold,
+                                                interfered: false, hasHoldMeaning: false), .fires)
+        }
+        XCTAssertEqual(ChordRelease.verdict(modifiers: 1, duration: 0.319, holdThreshold: threshold,
+                                            interfered: true, hasHoldMeaning: false), .interfered,
+                       "⇧ plus a letter is still a capital letter")
+    }
+
     /// A key or a click inside the press outranks everything: ⌃⌥ plus a
     /// letter is somebody else's shortcut however long or short it was.
     func testInterferenceWinsOverLength() {

@@ -191,6 +191,19 @@ do
 done
 pass "updater embedded, feed and key pinned, helpers signed"
 
+# The same rule for the WebRTC framework hands-free links. It shipped on the
+# build job's signature and failed notarization on every release from 23 Sep.
+WEBRTC="$APP/Contents/Frameworks/LiveKitWebRTC.framework"
+[ -d "$WEBRTC" ] || fail "LiveKitWebRTC.framework is not embedded; hands-free would die at launch"
+WEBRTC_BINARY=$(cd "$WEBRTC/Versions/Current" 2>/dev/null && pwd -P)/LiveKitWebRTC
+for nested in "$WEBRTC_BINARY" "$WEBRTC"; do
+  [ -e "$nested" ] || fail "LiveKitWebRTC component is missing: ${nested#"$APP/"}"
+  NESTED_SIGNATURE=$(codesign -dv --verbose=4 "$nested" 2>&1)
+  case "$NESTED_SIGNATURE" in *"TeamIdentifier=$TEAM_ID"*) ;; *) fail "${nested#"$APP/"} is not signed by the expected Developer ID team" ;; esac
+  case "$NESTED_SIGNATURE" in *"Timestamp="*) ;; *) fail "${nested#"$APP/"} has no secure timestamp" ;; esac
+done
+pass "LiveKitWebRTC signed with the Developer ID and a timestamp"
+
 ENTITLEMENTS=$(mktemp "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/tb-entitlements.XXXXXX")
 codesign -d --entitlements :- "$APP" >"$ENTITLEMENTS" 2>/dev/null \
   || fail "could not read app entitlements"

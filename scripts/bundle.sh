@@ -58,7 +58,12 @@ APP_NAME="${VD_APP_NAME:-Tranquility Base}"
 BUNDLE_ID="${VD_BUNDLE_ID:-com.robertnowell.voice-dispatch}"
 APP_CHANNEL="${VD_APP_CHANNEL:-production}"
 UPDATES_ENABLED="${VD_UPDATES_ENABLED:-true}"
-DATABASE_SCHEMA_VERSION="${VD_DATABASE_SCHEMA_VERSION:-18}"
+# The schema this build migrates to, read from its own migrations. It was a
+# constant 18 while the code reached v22, so switch-app.sh refused every switch
+# to Dev ("v22 is newer than dev can read (v18)") for a build that could.
+DATABASE_SCHEMA_VERSION="${VD_DATABASE_SCHEMA_VERSION:-$(sed -nE 's/.*registerMigration\("v([0-9]+)_.*/\1/p' \
+  Sources/TranquilityCore/QueueStore.swift | sort -n | tail -1)}"
+[ -n "$DATABASE_SCHEMA_VERSION" ] || { echo "✗ no migrations found in QueueStore.swift" >&2; exit 1; }
 URL_SCHEMES="${VD_URL_SCHEMES:-tranquilitybase voicedispatch}"
 
 case "$UPDATES_ENABLED" in
@@ -104,6 +109,8 @@ BUILD_DIR=$(tb_bundle_dir "$CONFIG")
 
 # shellcheck source=lib/sparkle.sh
 . "$(dirname "$0")/lib/sparkle.sh"
+# shellcheck source=lib/webrtc.sh
+. "$(dirname "$0")/lib/webrtc.sh"
 
 # The update feed, and the key that proves an update came from us.
 #
@@ -148,6 +155,8 @@ fi
 # thing to forget. If these are missing the app still runs; it just goes
 # silent, and Earcons logs "no audio for <cue>".
 cp Resources/Sounds/*.wav "$APP_DIR/Contents/Resources/"
+# The manager orb: a vendored 2D-canvas engine (thinking-orbs, MIT) and its page.
+mkdir -p "$APP_DIR/Contents/Resources/Orb" && cp Resources/Orb/* "$APP_DIR/Contents/Resources/Orb/"
 
 # The Claude Code hooks travel INSIDE the bundle.
 #
@@ -179,6 +188,11 @@ chmod +x "$APP_DIR/Contents/Resources/hooks/"*.sh
 # DMG before audit-release.sh refused it for a missing icon. The audit did its
 # job; the warning did not, because a warning nobody reads is not a signal.
 sparkle_embed "$APP_DIR" "$PRODUCTS_DIR"
+
+# WebRTC, for the same two reasons in the same order: the icon step runs the
+# binary, and the signature seals the bundle. Hands-free over WebRTC is what
+# lets the manager be interrupted; without the framework the app cannot start.
+webrtc_embed "$APP_DIR" "$PRODUCTS_DIR"
 
 # The icon renderer executes this copied binary before the bundle receives its
 # final stable signature below. On macOS 26, the SwiftPM ad-hoc signature is not
@@ -401,6 +415,7 @@ if [ -z "$IDENTITY" ]; then
   echo "   scripts/reset-permissions.sh and grant again."
   echo "   Retry the identity with: scripts/make-signing-identity.sh"
   sparkle_sign "$APP_DIR" - --timestamp=none
+  webrtc_sign "$APP_DIR" - --timestamp=none
   codesign --force --sign - --identifier "$BUNDLE_ID" \
     --entitlements TranquilityBase.entitlements \
     --options runtime --timestamp=none "$APP_DIR"
@@ -411,6 +426,7 @@ else
   # Privacy pane — a completely silent failure.
   # Nested first, outer last, never --deep: see scripts/lib/sparkle.sh.
   sparkle_sign "$APP_DIR" "$IDENTITY" --timestamp=none
+  webrtc_sign "$APP_DIR" "$IDENTITY" --timestamp=none
   codesign --force --sign "$IDENTITY" --identifier "$BUNDLE_ID" \
     --entitlements TranquilityBase.entitlements \
     --options runtime --timestamp=none "$APP_DIR"

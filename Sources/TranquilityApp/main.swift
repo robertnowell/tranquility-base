@@ -31,6 +31,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var pastAgentPreparation: Task<Void, Never>?
     var coordinator: Coordinator?
     var managedCredits: ManagedCreditSession?
+    /// The voice and the transcript, bought on the account. Held so the
+    /// transcription session can be ended when the microphone closes.
+    var managedAudio: ManagedAudio?
     private var creditIdentityObserver: NSObjectProtocol?
     /// The providers this build can drive, kept so New Agent can start one.
     /// The same instance the coordinator and the poller share, by the rule at
@@ -173,6 +176,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var repliedToEventId: String?
     /// The one announcement allowed to exist. See `announceNext`.
     var announceTask: Task<Void, Never>?
+    /// Manager mode (19 Sep): the stdio child, its reader, and its lamp.
+    var managerTransport: ACPProcessTransport?
+    /// Hosted manager (21 Sep): the socket to the bot we host, when
+    /// `manager.hosted` is configured and no local command is.
+    var managerSocket: ManagerSocket?
+    /// Hands-free over WebRTC, when `manager.webrtc` is configured.
+    var managerPeer: ManagerPeer?
+    var managerTask: Task<Void, Never>?
+    var managerLastLine = "listening"
+    /// Who the developer is talking to right now, carried under the orb until
+    /// the stage changes or hands-free ends.
+    ///
+    /// The `stage` event used to paint "on stage: Planning" and the very next
+    /// event — a transcript, a quiet, a tool line — painted over it, so the one
+    /// fact you need in order to answer safely ("who am I about to send this
+    /// to?") was on screen for under a second. It is a prefix now, not a line.
+    var managerStageName: String?
+    /// Hosted: how many times in a row the socket ended without anyone asking.
+    var managerReconnects = 0
+    /// Hosted: the bot ended the session itself (an `idle` line); do not reconnect.
+    var managerEndedByIdle = false
+    /// Managed: the Gateway session this hands-free run is spending, and the
+    /// task that renews it before its block runs out.
+    var managerLease: ManagedVoiceLease?
+    var managerRenewal: Task<Void, Never>?
     /// Where the ⌃⌥ walk over an all-opened stack has got to. Nil means start
     /// at the top. In memory only, and reset by any fresh or named
     /// announcement — a walk is a gesture in progress, not durable state.
@@ -247,7 +275,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// matching latest, and the derived target vanishes — which is why a second
     /// message to the same session was so hard. A conversation is an app-level
     /// fact about your attention, not a log-level fact.
-    var activeConversation: (sessionId: String, label: String, cwd: String?)?
+    var activeConversation: (sessionId: String, label: String, cwd: String?)? {
+        // The hands' cache follows your attention the moment it moves, not
+        // one tick later (23 Sep: a typed line sent to the card dismissed
+        // five seconds earlier). The tick remains as the backstop.
+        didSet { refreshDropTarget() }
+    }
     /// The most recent announcement, kept whole so ⌃⌃ can speak its depth-1
     /// (goal, risk, question) from the already-computed brief — no model call,
     /// and the session itself is never woken.
@@ -335,6 +368,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// What each agent's lamp looked like on the last tick, for the
     /// `agent_lamp_changed` spine (Core `LampWatch`).
     var lampWatch = LampWatch()
+    /// Which rows were amber on the last tick, for the failure spine (Core
+    /// `FaultWatch`): the same rows, once per new reason, into `Failures` and
+    /// so Sentry and Slack.
+    var faultWatch = FaultWatch()
     /// Which agents were live on the last tick, for the exit-reason spine
     /// (Core `ExitWatch`). When one leaves the live set its tmux corpse, if it
     /// left one, is read for why it died and then reaped. See `observeExits`.
@@ -589,10 +626,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Live transcription: one stream per utterance, keyterms from the
             // shared lexicon. Any stream failure returns nil at finish() and the
             // saved file recovers exactly as before — speed only, never risk.
+            // Present before pairing. The session changes accounts; the
+            // coordinator and its immutable provider chain do not need replacing.
+            let managed = ManagedCredits.session(log: { Permissions.log($0) })
+            self.managedCredits = managed
+            // Hearing and speaking on the account, when this Mac is on
+            // credits. Both closures answer nil when it is not, and the
+            // providers then use a key of the person's own exactly as before.
+            let managedAudio = ManagedCredits.audio(managed, log: { Permissions.log($0) })
+            self.managedAudio = managedAudio
             recorder.streamFactory = { [weak self] in
                 guard let store = self?.store else { return nil }
                 let terms = (try? Lexicon.harvest(store: store).terms) ?? []
-                return StreamedUtterance(provider: AssemblyAIStreaming(), lexicon: terms)
+                var streaming = AssemblyAIStreaming()
+                streaming.tokenSource = managedAudio.streamingToken(keyterms: { terms })
+                return StreamedUtterance(provider: streaming, lexicon: terms)
             }
             // The registry is built ONCE and shared: the coordinator answers
             // through it and the poller watches through it, so a reply can
@@ -600,16 +648,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let registry = AgentProviders.registry()
             self.providerRegistry = registry
             let poller = registry.configured().isEmpty ? nil : AgentPoller(registry: registry)
-            // Present before pairing. The session changes accounts; the
-            // coordinator and its immutable provider chain do not need replacing.
-            let managed = ManagedCredits.session(log: { Permissions.log($0) })
-            self.managedCredits = managed
             creditIdentityObserver = ManagedCredits.observeIdentityChanges(managed)
-            Task { await managed.refresh() }
+            // A login launch can beat Wi-Fi by seconds; the check waits for a
+            // network instead of failing, and runs again whenever it returns.
+            let connectivity = Connectivity.start()
+            connectivity.onReconnect { Task { await managed.refresh() } }
+            Task {
+                await connectivity.waitUntilReachable()
+                await managed.refresh()
+            }
+            let premiumVoice = ElevenLabsSpeechProvider()
+            premiumVoice.render = managedAudio.clip()
+            // The fourth and last one: a saved recording recovered on the
+            // account rather than on a key of the person's own. Static,
+            // because the recovery chain builds its own rungs wherever a
+            // recovery starts rather than being handed them.
+            AssemblyAIFileRecovery.managed = managedAudio.recovering()
             self.coordinator = Coordinator(
                 store: store,
                 summarizer: SummarizerChain(providers: [managed, AnthropicSummaryProvider(), DeterministicSummarizer()]),
                 localSummaryOriginId: ManagedCredits.originId(),
+                speech: SpeechChain(preferred: premiumVoice),
                 remoteTransport: poller.map { p in
                     RemoteDispatchTransport(
                         registry: registry,
@@ -749,6 +808,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     self.utteranceWasInFlight = inFlight
                 }
                 CaptureMarker.settle(inFlight: inFlight)
+                // And the other promise: a hands-free session is a live
+                // conversation, and stopping the app ends it. Same timer,
+                // because a marker that depends on somebody remembering to
+                // clear it is a marker that eventually holds off every
+                // install forever.
+                HandsFreeMarker.settle(live: self.managerIsOn)
             }
         }
         // One intake beat: drain the spool, prepare the next brief, repaint
@@ -784,6 +849,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                                   "face": .token(self.hud.state.name)])
                     self.rebuildMenu()
                 }
+                // Who a dropped file would go to, read synchronously by
+                // render(). Refreshed BEFORE anything below is awaited: on 23
+                // Sep this sat at the bottom of the tick, behind a voice
+                // prefetch that took 4.6 s, and a typed Send read the value
+                // from the tick before. It is now also refreshed at every
+                // hand action and every move of attention; this is the
+                // backstop for a cache render() alone reads.
+                self.refreshDropTarget()
                 // Warm the liveness cache off-main first. The probe is a ~0.3s
                 // subprocess; called synchronously from the main actor it froze the
                 // UI on every tick and every press — which also risks the CGEvent
@@ -820,11 +893,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // an expired entry is already invisible to the lamp. This just
                 // stops the map growing across a long-lived app.
                 self.delivering.prune()
-                // Who a dropped file would go to, refreshed on the tick and
-                // read synchronously by render(). Cached rather than resolved
-                // per paint because the panel must never wait, and stale by at
-                // most one tick is exactly as stale as the grid beside it.
-                self.refreshDropTarget()
                 let rows = self.sessionRowsNow()
                 // The lamp spine: one event per agent per change, from the
                 // same rows the grid draws, so the record and the screen
@@ -834,6 +902,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                      read: $0.read.trackName, reason: $0.aux)
                 }) {
                     Track.record(event.name, event.properties)
+                }
+                // The fault spine, beside the lamp spine: every amber, under
+                // its witness's kind, with the row's own words, once per new
+                // reason per agent. A launch that intakes standing faults
+                // stays quiet, like the lamp spine's first tick.
+                for row in self.faultWatch.observe(rows) {
+                    guard let fault = row.fault else { continue }
+                    Failures.report(fault.kind, reason: fault.reason,
+                                    harness: row.harness, session: row.id)
                 }
                 // The exit-reason spine, beside the lamp spine and fed from the
                 // same tick: an agent that left the grid on its own gets its
@@ -1024,6 +1101,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // The separate waiting-list face is gone: the idle grid IS the list.
         hud.onPickWaiting = { [weak self] id in self?.announceNext(only: id) }
         hud.onNewSession = { [weak self] in self?.newSession() }
+        hud.onManagerToggle = { [weak self] in self?.toggleManagerMode() }
+        hud.managerAvailable = ManagerConfig.availability() != .unset
         hud.onContinueWork = { [weak self] id, name in
             self?.continueWork(from: id, name: name)
         }
@@ -1190,6 +1269,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // `claude agents --json` for a pid the tray does not need. Rule 9 —
         // the main actor draws, it does not wait on a subprocess.
         hud.replyTargetForDrop = { [weak self] in self?.dropTarget }
+        // …and a hand may ask for it to be brought current first. Same
+        // ladder, same cache, one sqlite read — on a press, never a paint.
+        hud.refreshReplyTarget = { [weak self] in self?.refreshDropTarget() }
         hud.stagedFragments = { [weak self] session in
             self?.coordinator?.attachments.staged(for: session) ?? []
         }
@@ -1239,32 +1321,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             (try? self?.store?.draft(session: session)) ?? nil
         }
         hud.onSendTyped = { [weak self] text in
-            guard let self, let coordinator, let target = dropTarget else {
-                self?.lastStatusLine = "nothing to send to yet"
+            guard let self else { return }
+            // The write resolves its own target. The panel asked already;
+            // this is the guarantee that does not depend on which door the
+            // words came through.
+            refreshDropTarget()
+            guard let target = dropTarget else {
+                lastStatusLine = "nothing to send to yet"
                 return
             }
-            Task { @MainActor in
-                do {
-                    let outcome = try await coordinator.submitTypedReply(text: text, to: target.sessionId)
-                    switch outcome {
-                    case .readyToSend(let utteranceId, _, let label, let sessionId):
-                        let answering = (try? coordinator.waiting())?
-                            .first { $0.sessionId == sessionId }?.latestId
-                        self.delivering.began(sessionId: sessionId, answering: answering)
-                        self.hud.render()
-                        self.send(utteranceId: utteranceId, label: label, sessionId: sessionId)
-                    case .noTarget:
-                        self.lastStatusLine = "nothing to send"
-                        Permissions.log("typed send: nothing typed and nothing staged")
-                        self.hud.render()
-                    default:
-                        Permissions.log("typed send: unexpected outcome \(outcome)")
-                    }
-                } catch {
-                    Permissions.log("typed send threw: \(error)")
-                    Failures.report(.deliveryFailed, reason: "typed send threw: \(error)")
-                }
-            }
+            Task { @MainActor in _ = await self.sendTyped(text, to: target.sessionId) }
         }
         hud.onItemsStaged = { [weak self] items, via in
             let event: String = {
@@ -1275,11 +1341,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 case .typed: return "typed_line"
                 }
             }()
-            guard let self, let coordinator, let target = dropTarget else {
+            guard let self, let coordinator else { return false }
+            // A picker can sit open for as long as you like, and a drag
+            // began under whatever card was up when it started: resolve at
+            // the moment the file lands.
+            refreshDropTarget()
+            guard let target = dropTarget else {
                 // Refused rather than swallowed. The overlay never appears
                 // without a target, so this is the race where the last
                 // session died mid-drag — say so instead of eating the file.
-                self?.lastStatusLine = "nothing to attach to yet"
+                lastStatusLine = "nothing to attach to yet"
                 Permissions.log("\(via.rawValue): refused, no reply target")
                 Track.record(event, ["count": .int(items.count), "accepted": false, "staged": 0])
                 return false
@@ -1481,6 +1552,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Out of credits with a pasted key is not amber: the key carries on.
             let ownKey = Secrets.read(.anthropicAPIKey) != nil
             DispatchQueue.main.async { self?.hud.setCreditStanding(CreditStanding.current.line(ownKey: ownKey)) }
+        }
+        // Offline, as its own quiet line: grey, not amber, and only after ten
+        // seconds without a network, so a blip shows nothing. Ruled 22 Sep:
+        // offline is not a credits state and has nothing for the person to do.
+        Connectivity.start().observeOffline { [weak self] offline in
+            DispatchQueue.main.async { self?.hud.setOffline(offline) }
         }
         // One door per pane. The panel asks for a tab; the host assembles that
         // tab's data and shows it. Nothing re-renders a pane it has not fed.
@@ -1969,6 +2046,52 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     ("warmAtRest", self.recorder.micStateName == "warm"),
                     ("autoArmOpen", self.recorder.allowsAutoArm),
                 ])
+            }
+
+            // Hands-free audio, on every deploy, because on 23 Sep every one of
+            // its five failures was caught by a person listening after the
+            // build was already on the machine — a chipmunk twice, the wrong
+            // voices twice, and a dead microphone. None of them could fail a
+            // unit test: `swift test` cannot hear, and no self-test touched the
+            // audio path at all. These are the two questions a deploy CAN
+            // answer without opening a session or spending a cent, and each one
+            // is a failure that actually happened.
+            Task { @MainActor in
+                // One: is there an output device, and can we read the rate off
+                // it? The whole chipmunk was a rate that changed under a module
+                // which had read it once, and the log line that finally showed
+                // it named the device but not its rate.
+                let device = OutputRateFollower.defaultOutput()
+                let rate = OutputRateFollower.rate(of: device)
+                // Two: does the voice door answer, and does its answer unwrap
+                // to a voice? On 23 Sep it exited 1 for an hour because the
+                // `tbase` on disk was two days old, and then, once it answered,
+                // the reply was read off the wrapper instead of the payload.
+                // Both were silent: no voice means "speak as the manager", and
+                // that is nobody's error.
+                let (code, out) = await AppDelegate.answerManagerRequest(
+                    ["tbase", "targets", "--json"])
+                let live = (code == 0 ? out.data(using: .utf8) : nil)
+                    .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [[String: Any]] }
+                guard let session = live?.compactMap({ $0["sessionId"] as? String }).first else {
+                    Permissions.log("selftest handsFreeAudio: SKIP — no live session to ask about"
+                                    + " (output device \(device) at \(Int(rate)) Hz)")
+                    return
+                }
+                let (voiceCode, voiceOut) = await AppDelegate.answerManagerRequest(
+                    ["tbase", "voice", session, "--json"])
+                let answer = voiceOut.data(using: .utf8)
+                    .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+                let cloud = answer?["cloud"] as? String
+                SelfTest.report("handsFreeAudio", [
+                    ("anOutputDeviceExists", device != 0),
+                    ("itsRateIsReadable", rate > 0),
+                    ("theVoiceDoorAnswers", voiceCode == 0),
+                    ("andNamesAVoice", !(cloud ?? "").isEmpty),
+                ])
+                Permissions.log("selftest handsFreeAudio: output device \(device)"
+                                + " at \(Int(rate)) Hz · \(session.prefix(8))"
+                                + " speaks as \(cloud ?? "—")")
             }
 
             // The keep-audio data path (ruling-an-open-microphone-is-a-promise),

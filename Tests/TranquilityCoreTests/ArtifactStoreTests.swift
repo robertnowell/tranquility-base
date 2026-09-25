@@ -178,6 +178,54 @@ final class ArtifactStoreTests: XCTestCase {
         XCTAssertEqual(pages.first?.at, Date(timeIntervalSince1970: 9_000))
     }
 
+    /// The report this turn wrote is the NEWEST STAMP, not the last line. A
+    /// page rewritten after a newer page was started sits earlier in the
+    /// history, and reading `.last` offered the hub over it (23 Sep, a Codex
+    /// card on a report the turn had just rewritten).
+    func testTheFreshReportIsTheNewestStampNotTheLastLine() {
+        let a = "/Users/x/Documents/deep-research/a/mirai-audit.html"
+        let b = "/Users/x/Documents/deep-research/a/hands-free.html"
+        ArtifactStore.record(a, session: session, root: root, at: Date(timeIntervalSince1970: 1_000))
+        ArtifactStore.record(b, session: session, root: root, at: Date(timeIntervalSince1970: 5_000))
+        ArtifactStore.record(a, session: session, root: root, at: Date(timeIntervalSince1970: 9_000))
+        let always: (String) -> Bool = { _ in true }
+        XCTAssertEqual(ArtifactStore.freshReport(for: session, root: root,
+                                                 since: Date(timeIntervalSince1970: 7_000),
+                                                 exists: always), a)
+        // Nothing written since the turn began: nil, and the door is the hub.
+        XCTAssertNil(ArtifactStore.freshReport(for: session, root: root,
+                                               since: Date(timeIntervalSince1970: 9_500),
+                                               exists: always))
+        // A page that is gone is not offered, whatever its stamp.
+        XCTAssertEqual(ArtifactStore.freshReport(for: session, root: root,
+                                                 since: Date(timeIntervalSince1970: 4_000),
+                                                 exists: { $0 == b }), b)
+    }
+
+    /// The resolver the card runs: "this turn began" is the PREVIOUS brief,
+    /// because at card time this turn's own brief is already the newest row.
+    func testTheFreshReportBeginsAtThePreviousBrief() throws {
+        let page = "/Users/x/Documents/deep-research/a/report.html"
+        let store = try QueueStore(url: URL(fileURLWithPath: root).appendingPathComponent("q.sqlite"))
+        func brief(_ at: TimeInterval, _ rowid: Int64) throws {
+            try store.saveBrief(SessionBrief(topic: "t", happened: "h"), sessionId: session,
+                                eventRowid: rowid, provider: "test", callsign: nil,
+                                at: Date(timeIntervalSince1970: at))
+        }
+        let always: (String) -> Bool = { _ in true }
+        ArtifactStore.record(page, session: session, root: root, at: Date(timeIntervalSince1970: 9_000))
+        // One brief: the session began at the dawn of time; the page is fresh.
+        try brief(5_000, 1)
+        XCTAssertEqual(ArtifactStore.freshReport(for: session, store: store, root: root, exists: always), page)
+        // This turn's brief lands; the previous one (5_000) is where the turn
+        // began, and the page at 9_000 was written inside it. Still fresh.
+        try brief(9_500, 2)
+        XCTAssertEqual(ArtifactStore.freshReport(for: session, store: store, root: root, exists: always), page)
+        // Another turn: it began at 9_500, after the page. The hub's job now.
+        try brief(9_700, 3)
+        XCTAssertNil(ArtifactStore.freshReport(for: session, store: store, root: root, exists: always))
+    }
+
     /// A regex is not a redirect. `re.sub(r'<[^>]+>', ...)` carries two
     /// greater-than signs and writes nothing; treating them as redirects put
     /// three read-only pages back on a hub minutes after they were pruned.

@@ -105,15 +105,50 @@ public enum GridAssembler {
         // screenshot; that a witness which never spoke can no longer be mistaken
         // for one that did (see `Testimony`); and that the rules are testable as
         // properties rather than only as examples.
+        let verdict = self.verdict(for: evidence, sessionId: sessionId, live: live,
+                                   boundary: boundary, pickedUp: pickedUp,
+                                   isInFlight: isInFlight, harness: harness)
+        return (verdict.lamp, verdict.because, verdict.detail)
+    }
+
+    /// The whole verdict, witness and all. `lampAndReason` is its three
+    /// display fields; the bands call this one so they can also ask
+    /// `harnessFault` about the same verdict, rather than deriving a second
+    /// opinion of it.
+    public static func verdict(
+        for evidence: SessionActivity.Evidence?, sessionId: String,
+        live: LiveSession?, boundary: SessionActivity.TurnBoundary? = nil,
+        pickedUp: Bool = false, isInFlight: Bool, harness: String? = nil
+    ) -> Verdict {
         let resumed = AgentRestart.resumed(
             startedAt: live?.startedAtDate,
             lastWord: AgentRestart.lastWord(observedAt: evidence?.observedAt,
                                             boundary: boundary))
-        let verdict = SessionVerdict.resolve(
+        return SessionVerdict.resolve(
             process: SessionVerdict.testimony(of: live, harness: harness, resumed: resumed),
             file: evidence.map { Testimony.says($0.activity) } ?? .silent,
             resumed: resumed, pickedUp: pickedUp, isInFlight: isInFlight)
-        return (verdict.lamp, verdict.because, verdict.detail)
+    }
+
+    /// What an amber verdict is for the failure stream, or nil when it is
+    /// not amber, or is the one amber not worth a report.
+    ///
+    /// Every amber reports (23 Sep 2026). The KIND is the witness, which the
+    /// arbiter states as a fact about where the evidence came from; nothing
+    /// here reads the sentence. The one exclusion is `.user`: "standing by"
+    /// is a row the person switched on a second ago, with nothing wrong, and
+    /// filing that as a failure would report the person's own tap. `.delivery`
+    /// and `.none` never produce a blocked verdict, so they return nil by
+    /// construction rather than by policy.
+    public static func amber(verdict: Verdict) -> SessionRow.Fault? {
+        guard verdict.state == .blocked else { return nil }
+        let reason = verdict.detail ?? verdict.because ?? "amber, no reason given"
+        switch verdict.witness {
+        case .file: return SessionRow.Fault(kind: .agentFault, reason: reason)
+        case .process: return SessionRow.Fault(kind: .agentWaiting, reason: reason)
+        case .restart: return SessionRow.Fault(kind: .agentRestarted, reason: reason)
+        case .user, .delivery, .none: return nil
+        }
     }
 
     /// The tab's string for a session, or nil while it has none: the

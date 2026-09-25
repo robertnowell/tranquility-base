@@ -73,6 +73,35 @@ public enum FailureKind: String, Codable, CaseIterable, Sendable {
     /// telemetry instead of only from the user's own app.log (11 Sep).
     case updateFailed = "update_failed"
     case reviveFailed = "revive_failed"
+    /// Online, and the credits service gave no answer about the account: the
+    /// gateway or hub errored, timed out, or replied with something we could
+    /// not read. Never shown to the person (nothing for them to do), which is
+    /// exactly why it must be recorded: before 22 Sep it reached only app.log.
+    /// Offline is not this; that is Connectivity's, and not a fault.
+    case creditsService = "credits_service"
+    /// **Every amber lamp is reported** (ruled 23 Sep 2026: "basically every
+    /// amber lamp I want to know about"). Three kinds rather than one, because
+    /// Sentry groups by kind and site, and one kind would fold a dropped
+    /// connection, a permission prompt and a restart into a single issue that
+    /// posts to Slack once and never again. The kind is the verdict's
+    /// WITNESS, which is a fact the arbiter already states, and not a reading
+    /// of the sentence: the same ruling refused text parsing as a way to
+    /// reach a state ("manual string parsing... is just a way to get bugs").
+    /// The row's own words ride along as the reason, whatever harness wrote
+    /// them. Filed by `FaultWatch` from the rows the grid draws, once per new
+    /// sentence per agent. Before this, a fault reached only the lamp spine in
+    /// PostHog: a user sat on "Connection lost mid-response" across two
+    /// sessions and nothing posted anywhere.
+    ///
+    /// The file spoke: an API error the transcript states outright, or a
+    /// stall inferred from its silence.
+    case agentFault = "agent_fault"
+    /// The process spoke: it is holding for a human, at a permission prompt
+    /// or a question.
+    case agentWaiting = "agent_waiting"
+    /// The restart rule spoke: a resumed process that has heard nothing since
+    /// it came up.
+    case agentRestarted = "agent_restarted"
     case persistFailed = "persist_failed"
     case notice = "notice"
 }
@@ -188,6 +217,9 @@ public final class Breadcrumbs: @unchecked Sendable {
         "startup", "hooks", "11labs", "assemblyai", "stream", "chain", "prewarm",
         "selftest", "drop", "permissions", "secrets", "env", "failure", "announce",
         "grid harness", "breadcrumb", "dismissed", "invitation", "homebase",
+        // App words only: standing lines, classified failure reasons, and
+        // online/offline. Added 22 Sep so a credits fault carries its trail.
+        "credits", "connectivity",
     ]
     /// A line that mentions these is about content even under an allowed
     /// category. Belt and braces; the categories above should not produce

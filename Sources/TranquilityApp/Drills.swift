@@ -247,6 +247,58 @@ extension StatusHUD {
         ])
     }
 
+    /// Every writer of the grid's placard clears the chevron and the gear.
+    ///
+    /// 22 Sep: the credits line painted its warning glyph under the collapse
+    /// chevron, and a grid notice did the same, because each writer indented
+    /// its own string and only the title remembered. The pass now lives at
+    /// the end of render; this holds it for the writers that exist and for
+    /// the next one. Measured in window space, like placardClearsChevron.
+    func placardClearsControlsDrill() {
+        showIdle(rows: [SessionRow(id: "p1", name: "p1", aux: "p1", lamp: .ready)])
+        let priorStanding = creditStanding
+        func clears() -> Bool {
+            panel?.contentView?.layoutSubtreeIfNeeded()
+            let text = stateLabel.attributedStringValue
+            guard text.length > 0, let chevron = collapseButton, !chevron.isHidden,
+                  let gear = gearButton, !gear.isHidden else { return false }
+            let style = text.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
+            let label = stateLabel.convert(stateLabel.bounds, to: nil)
+            let textMinX = label.minX + (style?.firstLineHeadIndent ?? 0)
+            let tail = style?.tailIndent ?? 0
+            let textMaxX = tail < 0 ? label.maxX + tail : label.maxX
+            let chevronInkMaxX = chevron.convert(chevron.bounds, to: nil).maxX
+                - chevron.inkOverhang.trailing
+            let gearInkMinX = gear.convert(gear.bounds, to: nil).minX + gear.inkOverhang.leading
+            return textMinX >= chevronInkMaxX && textMaxX <= gearInkMinX
+        }
+        let title = clears()
+        let priorOffline = isOffline
+        setCreditStanding(nil)
+        setOffline(true)
+        let offline = clears()
+        // Offline is a state, not a fault: chrome ink, not amber, no door.
+        let offlineIsQuiet = stateLabel.attributedStringValue.string == StateLegend.offlinePlacard
+            && !stateLabel.isADoor
+        setCreditStanding("Add credits")
+        // Something to act on outranks a state with nothing to do.
+        let creditsOutrankOffline = stateLabel.attributedStringValue.string.contains("Add credits")
+        let credits = clears()
+        flashNotice(StateLegend.noWordsNotice)
+        let notice = clears()
+        clearNoticeForDrill()
+        setOffline(priorOffline)
+        setCreditStanding(priorStanding)
+        SelfTest.report("placardClearsControls", [
+            ("titleClears", title),
+            ("offlineClears", offline),
+            ("offlineIsQuiet", offlineIsQuiet),
+            ("creditsOutrankOffline", creditsOutrankOffline),
+            ("creditsLineClears", credits),
+            ("noticeClears", notice),
+        ])
+    }
+
     /// Quiet rows sink, and the active band keeps the order it arrived in.
     ///
     /// The ordering itself is a pure function on an array, so the interesting
@@ -838,6 +890,89 @@ extension StatusHUD {
             ("clickAwayReleases", clickAwayReleases),
             ("faceChangeReleases", faceChangeReleases),
             ("noTargetNoArm", noTargetNoArm),
+        ])
+    }
+
+    /// The hands ask before they act (23 Sep 2026). A typed line armed on
+    /// card A and sent after attention moved to B goes to B, the card as it
+    /// stands at the press, not to the cache the tick last filled under A.
+    ///
+    /// Modelled exactly as the app has it: a cache the panel reads
+    /// (`replyTargetForDrop`) and a refresh the panel must call before every
+    /// hand action (`refreshReplyTarget`). The cache here moves ONLY when
+    /// asked, so any door that reads without asking sends to A, which is
+    /// what happened live: "mailchimpo too" to the crobot task, the receipt
+    /// naming it 90 ms after the fact.
+    func handsAskFirstDrill() {
+        let priorTarget = replyTargetForDrop, priorRefresh = refreshReplyTarget
+        let priorSend = onSendTyped, priorStaged = stagedFragments, priorItems = onItemsStaged
+        let priorOnDraft = onDraftChanged, priorDraftFor = draftFor
+        let priorBoard = pasteboardForTesting
+        defer {
+            releasePaste(because: "drill done", repaint: false)
+            trayRow.clearComposed()
+            replyTargetForDrop = priorTarget; refreshReplyTarget = priorRefresh
+            onSendTyped = priorSend; stagedFragments = priorStaged; onItemsStaged = priorItems
+            onDraftChanged = priorOnDraft; draftFor = priorDraftFor
+            pasteboardForTesting = priorBoard
+        }
+        guard panel != nil else {
+            SelfTest.report("handsAskFirst", [("panelExists", false)])
+            return
+        }
+
+        var attention = "A"   // where the card, the cursor and the voice are
+        var cache = "A"       // what the panel reads
+        var refreshes = 0
+        refreshReplyTarget = { refreshes += 1; cache = attention }
+        replyTargetForDrop = { (sessionId: cache, label: cache == "A" ? "promotions copy" : "calendar") }
+        stagedFragments = { _ in [] }
+        var kept: [String: String] = [:]
+        onDraftChanged = { session, text in kept[session] = text.isEmpty ? nil : text }
+        draftFor = { kept[$0] }
+        var sentTo: String?
+        onSendTyped = { [weak self] _ in sentTo = self?.replyTargetForDrop?()?.sessionId }
+        var stagedFor: [String] = []
+        onItemsStaged = { [weak self] _, _ in
+            stagedFor.append(self?.replyTargetForDrop?()?.sessionId ?? "-"); return true
+        }
+
+        _ = showAnnouncement(
+            spoken: SpokenTextSanitizer().sanitize("A card you can type to."),
+            sessionId: "A", pid: 1, project: "promotions copy", cwd: "/tmp")
+        armPaste(via: "drill")
+        let armAsks = refreshes == 1 && pasteArmed
+
+        // Attention moves to B while the line is open. No tick runs.
+        attention = "B"
+        trayRow.compose.stringValue = "mailchimp too"
+        scheduleDraftSave(); flushDraftSaveForTesting()
+        let draftFilesUnderTheCurrentCard = kept["B"] == "mailchimp too" && kept["A"] == nil
+
+        let board = NSPasteboard(name: NSPasteboard.Name("tb-hands-ask-first-drill"))
+        defer { board.clearContents() }
+        pasteboardForTesting = board
+        board.clearContents()
+        board.setString("a pasted note", forType: .string)
+        pasteIntoTray()
+        let pasteAsks = stagedFor == ["B"]
+
+        sendTapped()
+        let sendGoesWhereAttentionIs = sentTo == "B"
+        let sentClearsTheDraftThere = kept["B"] == nil && kept["A"] == nil
+
+        // The control, so the drill cannot pass vacuously: a read that does
+        // not ask sees the cache, not attention. That is the live failure.
+        attention = "A"
+        let cacheMovesOnlyWhenAsked = replyTargetForDrop?()?.sessionId == "B"
+
+        SelfTest.report("handsAskFirst", [
+            ("armAsks", armAsks),
+            ("draftFilesUnderTheCurrentCard", draftFilesUnderTheCurrentCard),
+            ("pasteAsks", pasteAsks),
+            ("sendGoesWhereAttentionIs", sendGoesWhereAttentionIs),
+            ("sentClearsTheDraftThere", sentClearsTheDraftThere),
+            ("cacheMovesOnlyWhenAsked", cacheMovesOnlyWhenAsked),
         ])
     }
 

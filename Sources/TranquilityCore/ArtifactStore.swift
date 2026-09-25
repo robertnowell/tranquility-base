@@ -171,6 +171,46 @@ public enum ArtifactStore {
         return order.filter(exists).map { Page(path: $0, at: seen[$0] ?? .distantPast) }
     }
 
+    /// The report THIS TURN wrote, or nil: the page with the newest stamp,
+    /// when that stamp is later than `turnBegan`.
+    ///
+    /// Newest BY STAMP, not the last entry. `history` is ordered by first
+    /// appearance and dated by latest write, so a page rewritten this turn
+    /// after a newer page had been started is never the last entry: on 23 Sep
+    /// a Codex card read Open Hub over a report the turn had just rewritten,
+    /// because a page started later that day held the last line. The card's
+    /// door had read `.last` since 15 Aug; this is the last reader still on
+    /// the first-seen order.
+    ///
+    /// In core rather than the app for the same reason `history` is: the
+    /// rule is about the record, and here it can be tested against one.
+    public static func freshReport(for session: String, root: String,
+                                   since turnBegan: Date,
+                                   exists: (String) -> Bool = {
+                                       FileManager.default.fileExists(atPath: $0)
+                                   }) -> String? {
+        guard let newest = history(for: session, root: root, exists: exists)
+            .max(by: { $0.at < $1.at }) else { return nil }
+        return newest.at > turnBegan ? newest.path : nil
+    }
+
+    /// The same rule with "this turn began" read from the store: the
+    /// PREVIOUS turn's brief. At card time this turn's own brief is the
+    /// newest row, so the second row is where the turn began; a session with
+    /// one brief began at the dawn of time and any page it has is fresh.
+    /// This is the whole of the card's resolver, so the in-app drill and the
+    /// app call one function and cannot drift.
+    public static func freshReport(for session: String, store: QueueStore, root: String,
+                                   exists: (String) -> Bool = {
+                                       FileManager.default.fileExists(atPath: $0)
+                                   }) -> String? {
+        let briefs = (try? store.briefs(for: session, limit: 2)) ?? []
+        let turnBegan = briefs.count > 1
+            ? Date(timeIntervalSince1970: Double(briefs[1].atMs) / 1000)
+            : .distantPast
+        return freshReport(for: session, root: root, since: turnBegan, exists: exists)
+    }
+
     /// The page to offer, or nil — and nil is the common case, so every caller
     /// must render without it.
     ///

@@ -89,7 +89,7 @@ public enum AgentProviders {
             // unfinished.
             built.append(CrobotProvider(
                 transport: CrobotHTTPTransport(base: base, key: key, session: session),
-                me: nil))
+                me: nil, ledger: ledger))
         }
 
         return AgentProviderRegistry(built, spawnable: spawnable)

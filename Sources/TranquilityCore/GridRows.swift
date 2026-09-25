@@ -422,7 +422,7 @@ public extension GridAssembler {
             let evidence = stored.transcriptPath.flatMap {
                 input.evidence($0, input.boundaries[stored.sessionId])
             }
-            let storedLamp = GridAssembler.lampAndReason(
+            let storedLamp = GridAssembler.verdict(
                 for: evidence, sessionId: stored.sessionId, live: live,
                 boundary: input.boundaries[stored.sessionId],
                 pickedUp: input.switchedOn.contains(stored.sessionId),
@@ -430,14 +430,15 @@ public extension GridAssembler {
             rows.append(SessionRow(
                 id: stored.sessionId,
                 name: GridAssembler.tabDisplayName(for: stored, live: live),
-                aux: storedLamp.reason ?? SessionRow.shortId(stored.sessionId),
+                aux: storedLamp.because ?? SessionRow.shortId(stored.sessionId),
                 lamp: storedLamp.lamp, detail: storedLamp.detail, harness: live.harness,
                 // The band an answered session lands in: its turn is no
                 // longer waiting, but it was spoken and the card can read it.
                 hasRecordedTurn: input.recordedTurns.contains(stored.sessionId),
                 // The conversation's clock, then the hook's; never the file's.
                 lastActivity: evidence?.observedAt
-                    ?? Date(timeIntervalSince1970: Double(stored.createdAtMs) / 1000)))
+                    ?? Date(timeIntervalSince1970: Double(stored.createdAtMs) / 1000),
+                fault: GridAssembler.amber(verdict: storedLamp)))
         }
 
         // BAND 3: live sessions with no stored events yet. Nothing to rank them
@@ -454,7 +455,7 @@ public extension GridAssembler {
             guard !input.isHeadless(path) else { continue }
             placed.insert(live.sessionId)
             let evidence = path.flatMap { input.evidence($0, input.boundaries[live.sessionId]) }
-            let liveLamp = GridAssembler.lampAndReason(
+            let liveLamp = GridAssembler.verdict(
                 for: evidence, sessionId: live.sessionId, live: live,
                 boundary: input.boundaries[live.sessionId],
                 pickedUp: input.switchedOn.contains(live.sessionId),
@@ -462,11 +463,12 @@ public extension GridAssembler {
             rows.append(SessionRow(
                 id: live.sessionId,
                 name: GridAssembler.tabDisplayName(live: live, callsign: nil),
-                aux: liveLamp.reason ?? SessionRow.shortId(live.sessionId),
+                aux: liveLamp.because ?? SessionRow.shortId(live.sessionId),
                 lamp: liveLamp.lamp, detail: liveLamp.detail, harness: live.harness,
                 hasRecordedTurn: input.recordedTurns.contains(live.sessionId),
                 // The conversation's clock, then the process start; never the file's.
-                lastActivity: evidence?.observedAt ?? live.startedAtDate))
+                lastActivity: evidence?.observedAt ?? live.startedAtDate,
+                fault: GridAssembler.amber(verdict: liveLamp)))
         }
 
         // BAND 4: the sessions that are not awake (ruled 11 Aug). Everything

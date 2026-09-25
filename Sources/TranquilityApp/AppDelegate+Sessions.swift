@@ -60,6 +60,9 @@ extension AppDelegate {
             case let .home(s, r):    session = s; ref = r
             case let .hear(s):       session = s; ref = nil
             case let .reply(s):      session = s; ref = nil
+            case let .rung(s, _):    session = s; ref = nil
+            case let .say(s, _):     session = s; ref = nil
+            case .mute:              session = nil; ref = nil
             case .show, .connect, .new, .unknown: session = nil; ref = nil
             }
             Permissions.log("deeplink: \(action) session=\(session?.prefix(8) ?? "-")")
@@ -75,7 +78,35 @@ extension AppDelegate {
             case "discuss":
                 discuss(session: session, ref: ref)
             case "hear":
-                announceNext(only: session)
+                // Hands-free: the orb stays and the session speaks its stored brief;
+                // the card is for hands. Prefixes resolve here, since the manager
+                // often has only the first eight characters of an id.
+                if managerIsOn, let session = resolveSession(session), let store,
+                   let announcement = try? ManagerJSON.announcement(store: store, sessionId: session) {
+                    speakForManager(session: session, spoken: announcement.spoken, placard: "HEAR")
+                } else {
+                    announceNext(only: resolveSession(session))
+                }
+            case "rung":
+                // The manager asking for one rung of the ladder, in the
+                // session's own voice. Speak-only, like `hear`.
+                guard case let .rung(_, kind) = parsed, let session = resolveSession(session), let kind,
+                      let store, let rung = try? ManagerJSON.rung(store: store, sessionId: session, kind: kind)
+                else { hud.showResult("That rung is empty for this turn."); break }
+                speakForManager(session: session, spoken: rung.spoken, placard: rung.kind.rawValue)
+            case "mute":
+                // Stop the voice, whoever is speaking. Nothing else changes.
+                announceTask?.cancel()
+                coordinator?.speech.stop()
+                Permissions.log("manager: mute")
+                if managerIsOn { hud.setManagerState(StatusHUD.orbState, line: "listening") }
+            case "say":
+                // The manager handing the session a line to say in its own
+                // voice: a custom answer about its work. Capped and sanitized;
+                // it reaches the synthesizer and nothing else.
+                guard case let .say(_, text) = parsed, let session = resolveSession(session), let text else { break }
+                let spoken = SpokenTextSanitizer().sanitize(text, allowing: [])
+                speakForManager(session: session, spoken: spoken, placard: "SAY")
             case "reply":
                 // A deep link may not record. It is the one rule this surface
                 // has that the others do not need: any page in any browser can
@@ -147,18 +178,15 @@ extension AppDelegate {
     /// The one report this turn just wrote, if any: the newest recorded
     /// artifact, on disk, stamped after the PREVIOUS turn's brief — which is
     /// when this turn began. An artifact from an earlier turn is the hub's
-    /// job; an artifact re-touched but first recorded long ago keeps its
-    /// first stamp and stays with the hub too, deliberately.
+    /// job. A page rewritten this turn counts: its stamp moves with every
+    /// write (the hook's line, or the reconciler's since 23 Sep), and the
+    /// newest stamp wins, not the last line.
     func freshReport(session: String) -> String? {
-        guard let store,
-              let latest = ArtifactStore.history(
-                  for: session, root: QueueStore.supportDirectory.path).last
-        else { return nil }
-        let briefs = (try? store.briefs(for: session, limit: 2)) ?? []
-        let turnBegan = briefs.count > 1
-            ? Date(timeIntervalSince1970: Double(briefs[1].atMs) / 1000)
-            : .distantPast
-        return latest.at > turnBegan ? latest.path : nil
+        guard let store else { return nil }
+        // The rule lives in the store, where it is tested and drilled: newest
+        // by stamp since the previous brief, not the last line (23 Sep).
+        return ArtifactStore.freshReport(for: session, store: store,
+                                         root: QueueStore.supportDirectory.path)
     }
 
     /// The hub, rewritten fresh and then shown. One code path for both of its

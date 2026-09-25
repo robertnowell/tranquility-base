@@ -87,7 +87,7 @@ final class SessionVoicePairTests: XCTestCase {
         let legacy = "com.apple.voice.enhanced.en-US.Allison"
         _ = try store.assignVoice(legacy, to: "mixed")
 
-        let pair = try store.voices(for: "mixed", roster: cloud, systemRoster: system)
+        let pair = try store.voices(for: "mixed", roster: cloud, systemRoster: system + [legacy])
         XCTAssertEqual(pair.system, legacy,
                        "the voice this session has been read in is its fallback, not a discard")
         XCTAssertNotNil(pair.cloud, "and it gains a real ElevenLabs voice")
@@ -102,6 +102,28 @@ final class SessionVoicePairTests: XCTestCase {
         let again = try store.voices(for: "mixed", roster: cloud, systemRoster: system)
         XCTAssertEqual(first.cloud, again.cloud)
         XCTAssertEqual(first.system, again.system)
+    }
+
+    /// A stored system voice that is no longer on the roster is re-picked.
+    /// Ruled 22 Sep: only approved voices are read, and three agents that day
+    /// had been assigned Bad News, Bahh and Albert, which were never checked.
+    func testAStoredSystemVoiceOffTheRosterIsReplaced() throws {
+        let first = try store.voices(for: "s1", roster: cloud,
+                                     systemRoster: ["com.apple.speech.synthesis.voice.BadNews"])
+        XCTAssertEqual(first.system, "com.apple.speech.synthesis.voice.BadNews")
+        let now = try store.voices(for: "s1", roster: cloud, systemRoster: system)
+        XCTAssertEqual(now.cloud, first.cloud, "the cloud voice stays put")
+        XCTAssertEqual(now.system, system[0], "the unapproved fallback does not")
+        let again = try store.voices(for: "s1", roster: cloud, systemRoster: system)
+        XCTAssertEqual(again.system, now.system, "and the replacement sticks")
+    }
+
+    /// With the roster emptied, a stored system voice is dropped rather than
+    /// kept: the provider's own default is what an empty roster means.
+    func testEmptyingTheSystemRosterDropsAStoredVoice() throws {
+        _ = try store.voices(for: "s1", roster: cloud, systemRoster: system)
+        let pair = try store.voices(for: "s1", roster: cloud, systemRoster: [])
+        XCTAssertNil(pair.system)
     }
 
     /// An empty system roster is a decision the user is allowed to make: no

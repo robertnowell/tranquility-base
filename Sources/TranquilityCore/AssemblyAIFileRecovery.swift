@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 
 /// File-based AssemblyAI recovery — the vendor-diversity rung.
@@ -32,6 +33,20 @@ public struct AssemblyAIFileRecovery: RecoveryTranscriptionProvider {
     static let pollInterval: TimeInterval = 3
     static let pollCeiling: TimeInterval = 600
 
+    /// The vendor's documented minimum, 160 ms. Anything shorter is refused
+    /// with "Audio duration is too short." (measured 23 Sep), and the shortest
+    /// capture this app has ever recorded is 546 ms, so nothing legitimate is
+    /// near it -- but nothing caps a recording's length at either end, so a
+    /// clipped capture can reach here.
+    static let minimumSeconds: TimeInterval = 0.16
+
+    /// Duration without decoding the audio. Nil when the file cannot be opened,
+    /// which is a question for the upload to answer, not this guard.
+    static func seconds(of url: URL) -> TimeInterval? {
+        guard let file = try? AVAudioFile(forReading: url), file.fileFormat.sampleRate > 0 else { return nil }
+        return Double(file.length) / file.fileFormat.sampleRate
+    }
+
     var session: URLSession = .shared
     var pollingInterval: TimeInterval = Self.pollInterval
 
@@ -41,7 +56,15 @@ public struct AssemblyAIFileRecovery: RecoveryTranscriptionProvider {
         self.keySource = { keyOverride }
     }
 
-    public var isConfigured: Bool { keySource() != nil }
+    /// Configured when this Mac has credits OR a key of its own. Either is
+    /// enough to recover a recording; the managed path is tried first and
+    /// falls through to the key when it says this Mac is not on credits.
+    public var isConfigured: Bool { Self.managed != nil || keySource() != nil }
+
+    /// The account path, installed by the app when a managed session exists.
+    /// Returns nil for "not on credits, or out of them" -- the same rule the
+    /// voice and the live transcript follow -- and the key path runs instead.
+    public nonisolated(unsafe) static var managed: (@Sendable (Data, Int) async throws -> String?)?
 
     enum TranscriptState: Equatable {
         case processing
@@ -62,22 +85,69 @@ public struct AssemblyAIFileRecovery: RecoveryTranscriptionProvider {
             return .completed(text.trimmingCharacters(in: .whitespacesAndNewlines))
         case "error":
             let reason = (json["error"] as? String) ?? "unspecified"
+            let measured = reason.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             // Measured with a silent WAV on 09 Sep: language detection returns
             // this terminal error instead of a completed empty transcript.
             // Match that observation narrowly; other detection errors remain failures.
-            if reason.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-                == "language_detection cannot be performed on files with no spoken audio." {
+            if measured == "language_detection cannot be performed on files with no spoken audio." {
                 return .noSpeechDetected
             }
+            // Measured 23 Sep against the live API at 100 ms and 150 ms, which
+            // are under the documented 160 ms floor. Both come back with this
+            // exact sentence; 200 ms clears the floor and returns the silent
+            // case above instead. Without this it reads as a service failure,
+            // so the chain retries twice with backoff and then hands the same
+            // impossible file to the next rung. It is not a fault and it will
+            // never succeed: a sixth of a second cannot hold speech.
+            if measured == "audio duration is too short." { return .noSpeechDetected }
             return .failed(reason)
         default:
             return .processing
         }
     }
 
+    /// Compress before uploading, when it can be done. Off by default only in
+    /// tests that want to assert on the exact bytes they handed in.
+    var compress: @Sendable (URL) -> URL? = { CompressedAudio.m4a(from: $0) }
+
     public func transcribe(fileAt url: URL) async throws -> TranscriptionResult {
+        // The vendor's floor, checked before the wire rather than after it:
+        // uploading, creating and polling a file that is known to be under it
+        // costs three round trips and a charge to learn what the duration
+        // already said. Unreadable duration is not a refusal -- let the vendor
+        // decide, and `state(of:)` recognises its answer.
+        if let seconds = Self.seconds(of: url), seconds < Self.minimumSeconds {
+            Self.trace?("\(Int(seconds * 1000)) ms is under the \(Int(Self.minimumSeconds * 1000)) ms floor")
+            throw TranscriptionFailure.noSpeechDetected
+        }
+        // The upload is most of this rung's latency, and the recording is raw
+        // PCM16. Sending AAC instead is the single biggest thing that makes a
+        // long recovery quick. A nil here is not a failure: it means send what
+        // we have, which is what this rung did for its whole life so far.
+        let compressed = compress(url)
+        defer { if let compressed { try? FileManager.default.removeItem(at: compressed) } }
+        guard let audio = try? Data(contentsOf: compressed ?? url) else {
+            throw TranscriptionFailure.fileUnreadable
+        }
+        if let compressed, let raw = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize {
+            Self.trace?("compressed \(raw) bytes to \(audio.count) (\(compressed.pathExtension))")
+        }
+
+        // On credits, this recording is bought on the account and no key of
+        // the person's own is needed. Nil means "not on credits, or out of
+        // them", and the key path below runs exactly as it always has.
+        if let managed = Self.managed {
+            let declared = max(1, Int((Self.seconds(of: url) ?? 0).rounded(.up)))
+            if let text = try await managed(audio, declared) {
+                Self.trace?("recovered on the account: \(text.count) chars")
+                guard !text.isEmpty else { throw TranscriptionFailure.noSpeechDetected }
+                return TranscriptionResult(text: text, finality: .recoveryForcedFinal, provider: name)
+            }
+        }
+
+        // The key path. Reached when this Mac is not on credits, or out of
+        // them, or the app never installed the managed seam at all.
         guard let key = keySource() else { throw TranscriptionFailure.notConfigured }
-        guard let audio = try? Data(contentsOf: url) else { throw TranscriptionFailure.fileUnreadable }
 
         // 1. Upload — the whole file, no slicing. Transport errors map into
         //    the failure taxonomy so the chain's backoff applies, same lesson
