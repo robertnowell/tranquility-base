@@ -282,9 +282,10 @@ LOOP_SYSTEM = (
     "and, for anything the brief does not settle (risks, what would happen if, what it tried, "
     "what it said last, any detail), from its transcript. A question across agents starts "
     "from who is live and who is waiting. For the agent on stage you are already given its "
-    "brief and the end of its transcript: most questions are answered there, so answer from "
-    "them when they settle it. Only when they do not, search the rest of its transcript with "
-    "a query (key words, names, numbers).\n"
+    "brief, the end of its transcript, and the passages anywhere in it that best match the "
+    "question. A question about what happened earlier (what was first asked, an early "
+    "decision) is answered from the matching passages, not from the end. When none of these "
+    "settle it, search the transcript with other key words (names, numbers).\n"
     "- Answer only from what you were given and what the tools returned, with the specifics "
     "that answer it: the number, the name, the reason, what it hangs on. If the record does "
     "not say, say so in one sentence. Never guess, never fill a gap with what is likely, and "
@@ -298,6 +299,7 @@ LOOP_SYSTEM = (
     "file name.\n"
     "- You only read. You cannot send, start, invite or change anything, and never say you did.")
 TAIL_CHARS = 7000  # of the staged agent's transcript, given to the loop up front
+MATCH_CHARS = 6000  # of its passages matching the question, also up front
 SPOKEN_WORDS = 30  # what an answer may run to aloud; longer is cut down by the model once (loop.py)
 LOOP_AS_AGENT = ("\n- You are answering AS the agent on stage, in its own voice: first person "
                  "plural ('we found', 'we propose').")
@@ -859,6 +861,16 @@ class Manager(FrameProcessor):
             tail = await self._transcript(who["sessionId"], TAIL_CHARS)
             if tail:
                 context.append(f"The end of its transcript (last {TAIL_CHARS} characters, newest last):\n{tail}")
+            # And what matches the question anywhere in the session. Given only
+            # the end, the loop answered early-session questions from it,
+            # wrongly and with confidence (15 of 24 on the tuning half); left
+            # to search on its own, it did not always search. Both are in
+            # hand before it answers; the tools go further when these do not
+            # settle it.
+            hits = await self._transcript(who["sessionId"], MATCH_CHARS, question)
+            if hits:
+                context.append("Passages anywhere in its transcript that best match the question, "
+                               f"in the order said:\n{hits}")
         before = exchange_lines()
         if before:
             context.append("What was said just before, oldest first (you = the developer):\n" + "\n".join(before))
