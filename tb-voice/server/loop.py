@@ -96,8 +96,13 @@ class Loop:
             left = deadline - time.monotonic()
             if left <= 0:
                 return done(None, step - 1, "time")
-            # The last step gets no tools: it has to answer from what it has.
+            # The last step gets no tools: it has to answer from what it has,
+            # and is told so; offered none and not told, it wrote the call it
+            # wanted as text and said nothing (25 Sep, 5 of 63 graded runs).
             offer = [t.schema() for t in tools] if step < max_steps else []
+            if not offer:
+                messages.append({"role": "user", "content": "No more reading: answer now, from what you "
+                                 "have read, or say the record does not settle it."})
             body = {"model": self.model, "messages": messages, "max_tokens": 600, "temperature": 0.2}
             if offer:
                 body["tools"] = offer
