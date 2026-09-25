@@ -17,7 +17,11 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 PCC="${PIPECAT_BIN:-$HOME/.local/bin/pipecat}"
-PRODUCTION=(tranquility-manager tranquility-manager-rtc)
+# One agent, since the WebSocket transport went. `tranquility-manager` served
+# it and served nothing else; its last session was 23 Sep and the bot can no
+# longer answer a socket at all, so deploying it would ship something that
+# cannot run. Delete the agent itself once the Gateway is confirmed off it.
+PRODUCTION=(tranquility-manager-rtc)
 
 config_for() {
   case "$1" in

@@ -101,12 +101,13 @@ public enum ManagerConfig {
     ///
     /// In order: a `manager.command` in hq.json is the developer's own bot and
     /// always wins; a signed-in Mac buys a session from the Gateway, which is
-    /// the path every other user has; `manager.hosted` is the dev shim that
-    /// starts a Cloud session with a public key on this Mac and goes when
-    /// nobody needs it; the default checkout's `run.sh` on disk is a local
-    /// manager; and with none of them the placard reads SET UP HANDS-FREE and
-    /// a press says why.
-    public enum Availability: Equatable, Sendable { case local, managed, hosted, unset }
+    /// the path every other user has; `manager.webrtc` is the dev shim that
+    /// starts a Cloud session with a public key on this Mac; the default
+    /// checkout's `run.sh` on disk is a local manager; and with none of them
+    /// the placard reads SET UP HANDS-FREE and a press says why.
+    ///
+    /// `manager.hosted` was a fourth, and went with the WebSocket on 25 Sep.
+    public enum Availability: Equatable, Sendable { case local, managed, unset }
 
     public static func availability(
         config: URL = HubApp.configPath,
@@ -115,18 +116,7 @@ public enum ManagerConfig {
     ) -> Availability {
         if explicitCommand(config: config) != nil { return .local }
         if signedIn() { return .managed }
-        if hostedIsConfigured(config: config) { return .hosted }
         return fileExists(command(config: config)[0]) ? .local : .unset
-    }
-
-    static func hostedIsConfigured(config: URL) -> Bool {
-        guard let data = try? Data(contentsOf: config),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let manager = obj["manager"] as? [String: Any],
-              let hosted = manager["hosted"] as? [String: Any],
-              let start = hosted["start"] as? String, !start.isEmpty,
-              let key = hosted["key"] as? String, !key.isEmpty else { return false }
-        return true
     }
 
     /// The WebRTC media path, the one that lets the manager be interrupted

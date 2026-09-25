@@ -33,9 +33,6 @@ class Session:
     # Manager writes it, the echo gate reads it (see mute.py for why the gate
     # does not key on the frames itself).
     bot_voice: dict = field(default_factory=lambda: {"speaking": False, "stopped_at": 0.0})
-    # Until when the app is speaking a line in a session's voice; its audio is
-    # echo too, and the bot never sees its frames.
-    external_until: dict = field(default_factory=lambda: {"t": 0.0})
     # The Notes agent this session types into. Hosted, a file for this lived in
     # the shared container and outlived the account that created it.
     notes_sid: str | None = None
