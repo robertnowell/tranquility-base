@@ -276,12 +276,24 @@ final class StatusHUD: NSObject {
     /// the hub, and the hub is one click past it via the report's footer).
     enum SecondDoor: Equatable {
         case hub
-        case report(String)
+        /// A page this turn wrote, and where it is read: the hub app, the
+        /// page's own live address, or the file. The label follows the
+        /// destination (ruled 15 Aug; extended 25 Sep, when Open Report
+        /// opened a website's source file as `file://`).
+        case report(String, PageDestination)
     }
     /// Derived from `currentTarget` rather than stored beside it. Storing it
     /// would mean clearing it at all four sites that clear the target, and the
     /// one that got missed would leave a button pointing at the previous
     /// agent's page — the exact confusion this feature exists to end.
+    /// One word for analytics: which kind of place the report door opened.
+    static func kind(_ destination: PageDestination) -> String {
+        switch destination {
+        case .hub: return "hub"
+        case .live: return "live"
+        case .file: return "file"
+        }
+    }
     private var currentDoor: SecondDoor? {
         currentTarget.flatMap { doorForSession?($0.sessionId) }
     }
@@ -313,7 +325,7 @@ final class StatusHUD: NSObject {
     /// doors above it — this one is the project.
     var onOpenRepository: (() -> Void)?
     /// Wired by the app onto the workspace's focus-or-open call.
-    var onOpenReport: ((String) -> Void)?
+    var onOpenReport: ((PageDestination) -> Void)?
     /// The chords' doors. Each is wired by the app to the SAME handler the
     /// key reaches, so a click and a chord cannot mean different things.
     var onNextDoor: (() -> Void)?
@@ -1782,10 +1794,11 @@ final class StatusHUD: NSObject {
                 Permissions.log("openHub: \(id.prefix(8))")
                 Track.record("door_opened", ["door": "hub", "agent_id": Track.hash(id)])
                 onOpenHub?(id)
-            case .report(let path):
-                Permissions.log("openReport: \(path)")
-                Track.record("door_opened", ["door": "report", "agent_id": Track.hash(id)])
-                onOpenReport?(path)
+            case .report(let path, let destination):
+                Permissions.log("openReport: \(path) -> \(destination.url.absoluteString)")
+                Track.record("door_opened", ["door": "report", "agent_id": Track.hash(id),
+                                             "destination": .token(Self.kind(destination))])
+                onOpenReport?(destination)
             }
         }
     }
@@ -2457,8 +2470,14 @@ final class StatusHUD: NSObject {
         let door = currentDoor
         openPageButton.isHidden = door == nil
         if let door {
-            let label = { if case .report = door { return StateLegend.openReportTitle }
-                          return StateLegend.openHubTitle }()
+            let label: String = {
+                switch door {
+                case .hub: return StateLegend.openHubTitle
+                case .report(_, .hub): return StateLegend.openReportTitle
+                case .report(_, .live): return StateLegend.openPageTitle
+                case .report(_, .file): return StateLegend.openFileTitle
+                }
+            }()
             // The words, not the string: the button rebuilds them through the
             // same `BottomLine.door` when the pointer steps its ink.
             openPageButton.wordmark = "\(label) \(StateLegend.Glyph.forward)"

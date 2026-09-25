@@ -1,4 +1,7 @@
 #!/bin/bash
+# Where this hook is, for the embedded Python that has no argv[0] of its own:
+# skills/ sits beside hooks/ in the bundle and in the repo alike.
+export TB_HOOK_PATH="${BASH_SOURCE[0]:-$0}"
 #
 # artifact hook — runs on Claude Code PostToolUse (Write).
 #
@@ -790,7 +793,17 @@ def _vocab():
     import os
     paths = []
     try:
-        sys.path.insert(0, os.path.expanduser("~/.claude/skills/research-hq/scripts"))
+        # Wherever the skill is linked: beside this hook (the bundle and the
+        # repo both keep skills/ next to hooks/), then each harness's own
+        # skills directory. Not one harness's path: this hook runs for Codex
+        # and OpenCode too (ruled 25 Sep, skills ride with the app).
+        here = os.path.dirname(os.path.realpath(os.environ.get("TB_HOOK_PATH") or ""))
+        for base in [os.path.join(here, "..", "skills"),
+                     "~/.claude/skills", "~/.agents/skills", "~/.config/opencode/skills"]:
+            scripts = os.path.join(os.path.expanduser(base), "research-hq", "scripts")
+            if os.path.isfile(os.path.join(scripts, "hqconfig.py")):
+                sys.path.insert(0, scripts)
+                break
         from hqconfig import roots
         paths.append(str(roots.out / "tags.json"))
     except Exception:

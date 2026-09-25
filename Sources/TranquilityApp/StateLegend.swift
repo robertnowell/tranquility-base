@@ -622,6 +622,11 @@ enum StateLegend {
     static let goToAgentTitle = "Go to Agent"
     static let openHubTitle = "Open Hub"
     static let openReportTitle = "Open Report"
+    /// A page read at its own live address (a deployed site), and a page
+    /// only the disk knows. Named for what opens, so the door never says
+    /// Report over a website or a file (ruled 25 Sep).
+    static let openPageTitle = "Open Page"
+    static let openFileTitle = "Open File"
 
     // MARK: - The buttons around the transcription (ruled 14 and 15 Sep 2026)
     //

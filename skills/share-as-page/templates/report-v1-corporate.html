@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title><!-- TITLE: page title --></title>
+<meta name="description" content="">
+<style>
+  /* ============================================================
+     PROVENANCE — REQUIRED. Fill this in before you ship.
+     Brand: <name> (<id or domain>)     |  or: "unbranded — neutral defaults"
+       --color-brand    <value>  rung <n>, <where it came from>
+       --color-accent   <value>  rung <n>, <where>
+       --color-bg       <value>  rung <n>, <where>
+       --color-text     <value>  rung <n>, <where>
+       --color-heading  <value>  rung <n>, <where>
+       --font-heading   <value>  rung <n>, <embedded @font-face? / system stack>
+       --font-body      <value>  rung <n>, <embedded @font-face? / system stack>
+       logo             rung <n>, <where>
+     Rungs: 1 explicit · 2 references/brands.md · 3 Kopi get_context
+            4 site scrape · 5 neutral defaults below.
+     A token with no rung is invented. Invented tokens are a bug — resolve it,
+     or keep the greys and tell the user the page is unbranded.
+     ============================================================ */
+  :root{
+    /* Defaults are intentionally COLOURLESS. A fallback page should look
+       plainly unbranded — never like a brand that was guessed at. Replace
+       these with resolved values, or leave them and say so. */
+    --color-brand:    #3f3f46;   /* primary brand color (bands, rules, links) */
+    --color-accent:   #71717a;   /* secondary accent (highlights, numbers)    */
+    --color-bg:       #ffffff;   /* page background                            */
+    --color-paper:    #f4f4f5;   /* subtle panel / card background             */
+    --color-text:     #27272a;   /* body text                                  */
+    --color-heading:  #18181b;   /* headings (often == brand)                  */
+    --color-muted:    #71717a;   /* secondary text / captions                  */
+    --color-line:     #e4e4e7;   /* hairlines / borders                        */
+    --on-brand:       #ffffff;   /* text ON the brand band (black or white)    */
+
+    --font-heading: "Helvetica Neue", Helvetica, Arial, sans-serif;
+    --font-body:    "Helvetica Neue", Helvetica, Arial, sans-serif;
+
+    --measure: 70ch;             /* readable line length (~66 chars)           */
+  }
+
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0; background:var(--color-bg); color:var(--color-text);
+    font-family:var(--font-body); font-size:17px; line-height:1.6;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:800px; margin:0 auto; padding:0 24px 96px}   /* the column everything shares */
+
+  /* ---------- Header / brand band ---------- */
+  header.masthead{
+    background:var(--color-brand); color:var(--on-brand);
+    margin:0 -24px 44px; padding:34px 36px 30px; border-radius:0 0 16px 16px;
+  }
+  .mast-top{display:flex; align-items:center; gap:16px; flex-wrap:wrap}
+  .mast-logo{width:54px; height:54px; border-radius:12px; object-fit:contain; flex:none;
+    background:rgba(255,255,255,.08)}
+  .mast-brand{flex:1; min-width:180px; font-weight:700; letter-spacing:.04em; font-size:15px;
+    text-transform:uppercase; opacity:.92}
+  .mast-stub{font-size:11px; letter-spacing:.16em; text-transform:uppercase; opacity:.7;
+    text-align:right; line-height:1.7}
+  .mast-stub b{display:block; color:var(--color-accent); font-size:13px}
+  h1.title{font-family:var(--font-heading); font-size:30px; line-height:1.18;
+    margin:24px 0 8px; font-weight:700; letter-spacing:-.01em}
+  .subtitle{font-size:15px; opacity:.85; max-width:60ch; margin:0}
+
+  /* ---------- Long-form content ---------- */
+  /* Content fills the shared --wrap column so the masthead, chips, prose and tables
+     all align to one centered edge. For a pure-prose page (no tables/chips) you can
+     instead narrow the whole page by lowering --wrap toward a 66ch measure. */
+  main{max-width:none}
+  section{margin:0 0 38px}
+  h2{font-family:var(--font-heading); font-size:22px; color:var(--color-heading);
+    margin:0 0 14px; letter-spacing:-.01em; padding-bottom:8px;
+    border-bottom:2px solid var(--color-line)}
+  h3{font-family:var(--font-heading); font-size:17px; color:var(--color-heading); margin:22px 0 6px}
+  p{margin:0 0 14px}
+  a{color:var(--color-brand); font-weight:600}
+  strong{color:var(--color-heading)}
+  ul,ol{margin:0 0 14px; padding-left:22px}
+  li{margin:5px 0}
+  blockquote{margin:0 0 16px; padding:10px 18px; border-left:3px solid var(--color-accent);
+    background:var(--color-paper); color:var(--color-muted); border-radius:0 8px 8px 0}
+
+  /* callout panel */
+  .panel{background:var(--color-paper); border:1px solid var(--color-line);
+    border-radius:12px; padding:18px 20px; margin:0 0 18px}
+  .panel h3{margin-top:0}
+
+  /* metric chips */
+  .chips{display:flex; flex-wrap:wrap; gap:12px; margin:0 0 18px}
+  .chip{flex:1; min-width:150px; background:var(--color-paper); border:1px solid var(--color-line);
+    border-radius:12px; padding:14px 16px}
+  .chip .big{font-size:25px; font-weight:700; color:var(--color-heading); line-height:1}
+  .chip .lbl{font-size:12.5px; color:var(--color-muted); margin-top:6px}
+  .chip .big.accent{color:var(--color-accent)}
+
+  /* tables */
+  table{width:100%; border-collapse:collapse; font-size:15px; margin:4px 0 18px;
+    border-radius:10px; overflow:hidden}
+  thead th{background:var(--color-brand); color:var(--on-brand); text-align:left;
+    padding:11px 14px; font-size:12px; letter-spacing:.05em; text-transform:uppercase}
+  tbody td{padding:11px 14px; border-bottom:1px solid var(--color-line); vertical-align:top}
+  tbody tr:nth-child(even){background:var(--color-paper)}
+  tbody tr:last-child td{border-bottom:0}
+
+  footer{margin-top:48px; padding-top:20px; border-top:1px solid var(--color-line);
+    color:var(--color-muted); font-size:13px; text-align:center}
+
+  @media(max-width:560px){
+    h1.title{font-size:24px}
+    .mast-stub{display:none}
+  }
+
+  /* ---------- Print / PDF (⌘P) ---------- */
+  @media print{
+    @page{ size:A4; margin:18mm 16mm }
+    body{font-size:11pt}
+    .wrap{max-width:none; padding:0}
+    header.masthead{margin:0 0 18pt; border-radius:0; print-color-adjust:exact;
+      -webkit-print-color-adjust:exact}
+    h2,h3{break-after:avoid}
+    section,table,figure,.panel,.chip{break-inside:avoid}
+    p{widows:3; orphans:3}
+    thead th{print-color-adjust:exact; -webkit-print-color-adjust:exact}
+    a{color:var(--color-heading)}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="masthead">
+    <div class="mast-top">
+      <!-- LOGO: <img class="mast-logo" src="data:image/...;base64,..." alt="Brand"> -->
+      <div class="mast-brand"><!-- BRAND NAME --></div>
+      <div class="mast-stub">Prepared<b><!-- DATE --></b></div>
+    </div>
+    <h1 class="title"><!-- TITLE --></h1>
+    <p class="subtitle"><!-- META: one-line description / context --></p>
+  </header>
+
+  <main>
+    <!-- CONTENT: report body as semantic HTML.
+         Use <section><h2>…</h2> … </section> per section.
+         Panels: <div class="panel">. Metrics: <div class="chips"><div class="chip">…
+         Tables: plain <table>. Switch <main> to class="wide" if table-heavy. -->
+  </main>
+
+  <footer>
+    <!-- FOOTER: brand · doc title · date · "Prepared by …" -->
+  </footer>
+
+</div>
+</body>
+</html>

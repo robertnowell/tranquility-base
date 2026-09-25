@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>__TITLE__</title>
+<style>
+:root {
+  --ikb:#002FA7; --ikb-lift:#A8BEF0; --ink:#1B1D22; --ink-hi:#0B0D14;
+  --paper:#F2ECDD; --cream:#EDE6D3; --cream-lo:#CDC7B8;
+  --stone:#6E6C60; --faint:#A29E8C; --orange:#D97757;
+  --mono:"Berkeley Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --sans:"TWK Lausanne", "Lausanne", -apple-system, "Helvetica Neue", sans-serif;
+}
+* { box-sizing:border-box; margin:0; }
+html { background:var(--paper); }
+body { font-family:var(--sans); color:var(--ink); max-width:1060px; margin:0 auto; padding:3rem 2rem 8rem; }
+
+header { border-bottom:3px solid var(--ink-hi); padding-bottom:1.2rem; margin-bottom:1.5rem; }
+.kicker { font-family:var(--mono); font-size:.7rem; letter-spacing:.18em; text-transform:uppercase; color:var(--ikb); }
+h1 { font-size:2.6rem; font-weight:650; letter-spacing:-0.03em; line-height:1; margin:.25em 0 .3em; }
+.sub { font-family:var(--mono); font-size:.72rem; color:var(--stone); }
+
+.controls { display:flex; gap:.8rem; flex-wrap:wrap; align-items:center; margin:1.4rem 0 2.2rem; }
+#q { flex:1; min-width:220px; font-family:var(--mono); font-size:.85rem; padding:.55em .8em;
+  border:1.5px solid var(--ink); background:#FBF7EC; color:var(--ink); outline:none; }
+#q:focus { border-color:var(--ikb); box-shadow:2px 2px 0 var(--ikb-lift); }
+.seg { display:flex; border:1.5px solid var(--ink); }
+.seg button { font-family:var(--mono); font-size:.7rem; letter-spacing:.08em; text-transform:uppercase;
+  background:transparent; color:var(--ink); border:0; padding:.6em .95em; cursor:pointer; }
+.seg button + button { border-left:1.5px solid var(--ink); }
+.seg button.on { background:var(--ikb); color:#fff; }
+.count { font-family:var(--mono); font-size:.72rem; color:var(--stone); margin-left:auto; }
+
+.group { margin-bottom:2.4rem; }
+.group > h2 { font-family:var(--mono); font-size:.78rem; letter-spacing:.14em; text-transform:uppercase;
+  color:var(--ink-hi); border-bottom:1.5px solid var(--ink); padding-bottom:.45em; margin-bottom:.2em;
+  display:flex; justify-content:space-between; align-items:baseline; }
+.group > h2 .n { color:var(--faint); font-size:.68rem; }
+
+.row { display:grid; grid-template-columns:5.6rem 1fr auto; gap:1rem; align-items:baseline;
+  padding:.55em .4em; border-bottom:1px solid var(--cream-lo); }
+.row:hover { background:var(--cream); }
+.row.dim { opacity:.5; }
+.d { font-family:var(--mono); font-size:.7rem; color:var(--stone); white-space:nowrap; }
+.t a { color:var(--ink); text-decoration:none; font-size:.98rem; font-weight:500; }
+.t a:hover { color:var(--ikb); text-decoration:underline; text-underline-offset:3px; }
+.t .dead { color:var(--faint); }
+.tags { display:flex; gap:1rem; align-items:baseline; }
+.taglink { border:0; background:none; padding:0; font:inherit; font-size:.72rem;
+           color:var(--faint,#6e6a63); cursor:pointer; letter-spacing:.02em; }
+.taglink:hover { color:var(--ink,#1f1e1c); text-decoration:underline; }
+.brandlink { font-family:var(--mono); font-size:.66rem; letter-spacing:.08em; text-transform:uppercase;
+  color:var(--stone); background:none; border:0; padding:0; cursor:pointer; white-space:nowrap; }
+.brandlink:hover { color:var(--ikb); text-decoration:underline; text-underline-offset:3px; }
+a.agentlink { font-family:var(--mono); font-size:.66rem; letter-spacing:.06em;
+  color:var(--faint); text-decoration:none; white-space:nowrap; }
+a.agentlink:hover { color:var(--ikb); text-decoration:underline; text-underline-offset:3px; }
+.group.by-agent > h2 { text-transform:none; letter-spacing:.1em; }
+.group > h2 a.hub { font-family:var(--mono); font-size:.68rem; letter-spacing:.06em;
+  color:var(--faint); text-decoration:none; text-transform:none; }
+.group > h2 a.hub:hover { color:var(--ikb); text-decoration:underline; text-underline-offset:3px; }
+.kind { font-family:var(--mono); font-size:.66rem; letter-spacing:.08em; text-transform:uppercase;
+  color:var(--faint); white-space:nowrap; min-width:4.6rem; text-align:right; }
+a.ext { font-family:var(--mono); font-size:.66rem; letter-spacing:.05em; color:var(--ikb);
+  text-decoration:none; white-space:nowrap; }
+a.ext:hover { text-decoration:underline; text-underline-offset:3px; }
+a.ext.dim { color:var(--faint); }
+a.ext.dim:hover { color:var(--ikb); }
+.empty { font-family:var(--mono); font-size:.8rem; color:var(--stone); padding:3rem 0; text-align:center; }
+@media (max-width:640px){ .row{grid-template-columns:1fr; gap:.15rem;} .tags{flex-wrap:wrap;} }
+</style>
+</head>
+<body>
+<header>
+  <div class="kicker">Private Index</div>
+  <h1>__TITLE__</h1>
+  <div class="sub">every page shipped &amp; report researched · built __BUILT__ · <span id="total"></span> entries</div>
+</header>
+
+<div class="controls">
+  <input id="q" type="search" placeholder="filter — title, brand, date…" autofocus>
+  <div class="seg" id="groupseg">
+    <button data-g="recent" class="on">Recent</button>
+    <button data-g="brand">Brand</button>
+    <button data-g="agent">Agent</button>
+    <button data-g="month">Month</button>
+    <button data-g="topic">Topic</button>
+    <button data-g="type">Type</button>
+  </div>
+  <span class="count" id="count"></span>
+</div>
+
+<main id="list"></main>
+
+<script>
+const DATA = /*__DATA__*/[];
+const AGENTS_ROOT = "__AGENTS_ROOT__";
+let groupBy = "recent", query = "";
+
+// An artifact names its author; the author has an address. Both halves have
+// existed for a while and never met, so a page could be traced to an agent only
+// by already knowing the agent. hubHref is that join, rendered.
+const hubHref = s => "file://" + encodeURI(AGENTS_ROOT + "/" + s + "/index.html");
+const UNATTRIBUTED = "Unattributed";
+
+const monthName = d => new Date(d + "T12:00:00").toLocaleString("en-US", {month:"long", year:"numeric"});
+const TYPE_LABEL = {page:"Shipped Pages", research:"Deep Research", episode:"Video Essays"};
+const keyFor = it => groupBy === "recent" ? "All · newest first"
+                  : groupBy === "brand" ? it.brand
+                  : groupBy === "agent" ? (it.session || UNATTRIBUTED)
+                  : groupBy === "month" ? monthName(it.date)
+                  : (TYPE_LABEL[it.type] || it.type);
+
+function render() {
+  const q = query.toLowerCase();
+  const items = DATA.filter(it =>
+    !q || [it.title, it.brand, it.date, it.type, it.question || "", it.status || "",
+           it.session || "", it.summary || "",
+           (it.tags || []).join(" ")].join(" ").toLowerCase().includes(q));
+  const groups = new Map();
+  // Every other grouping puts a page in exactly one place. Topic does not: a
+  // page about send timing on a Klaviyo account belongs under both, and filing
+  // it under one of them is what a tag is FOR. So topic keys are a list.
+  for (const it of items) {
+    const ks = groupBy === "topic"
+      ? ((it.tags || []).length ? it.tags : ["untagged"])
+      : [keyFor(it)];
+    for (const k of ks) {
+      if (!groups.has(k)) groups.set(k, []);
+      groups.get(k).push(it);
+    }
+  }
+  let keys = [...groups.keys()];
+  const unknown = k => k === "Unfiled" || k === UNATTRIBUTED || k === "untagged";
+  if (groupBy === "month") keys.sort((a,b) => new Date(groups.get(b)[0].date) - new Date(groups.get(a)[0].date));
+  else keys.sort((a,b) => unknown(a) - unknown(b) || groups.get(b).length - groups.get(a).length);
+
+  const el = document.getElementById("list");
+  el.innerHTML = "";
+  for (const k of keys) {
+    const g = document.createElement("section");
+    g.className = "group" + (groupBy === "agent" ? " by-agent" : "");
+    const head = groupBy === "agent" && k !== UNATTRIBUTED
+      ? `<span>${esc(k)}</span><a class="hub" href="${esc(hubHref(k))}">open hub &rarr;</a>`
+      : `<span>${esc(k)}</span>`;
+    g.innerHTML = `<h2>${head}<span class="n">${groups.get(k).length}</span></h2>`;
+    for (const it of groups.get(k)) {
+      const local = it.html || it.md;
+      const href = it.href || (local ? "file://" + encodeURI(local) : null);
+      const title = href
+        ? `<a href="${esc(href)}" title="${esc(it.question || "")}">${esc(it.title)}</a>`
+        : `<span class="dead">${esc(it.title)}</span>`;
+      const links = [
+        it.url ? `<a class="ext" href="${esc(it.url)}" target="_blank">hosted ↗</a>` : "",
+        !it.href && it.md && it.html ? `<a class="ext dim" href="file://${encodeURI(it.md)}">src</a>` : "",
+      ].filter(Boolean).join(" ");
+      const kind = (it.status && it.status !== "final" && it.status !== "shipped"
+        ? it.status + " · " : "") + it.type;
+      const row = document.createElement("div");
+      row.className = "row" + (["draft","superseded"].includes(it.status) ? " dim" : "");
+      row.innerHTML = `<span class="d">${it.date}</span>
+        <span class="t">${title}</span>
+        <span class="tags">${links}
+          ${it.session && groupBy !== "agent" ? `<a class="agentlink" href="${esc(hubHref(it.session))}" title="everything this agent made">${esc(it.session)}</a>` : ""}
+          ${groupBy === "brand" ? "" : `<button class="brandlink" data-b="${esc(it.brand)}">${esc(it.brand)}</button>`}
+          ${groupBy === "type" ? "" : `<span class="kind">${esc(kind)}</span>`}
+          ${groupBy === "topic" ? "" : (it.tags || []).map(t =>
+              `<button class="taglink" data-t="${esc(t)}">${esc(t)}</button>`).join("")}
+        </span>`;
+      g.appendChild(row);
+    }
+    el.appendChild(g);
+  }
+  if (!items.length) el.innerHTML = `<div class="empty">nothing matches "${esc(query)}"</div>`;
+  document.getElementById("count").textContent = items.length + " shown";
+  document.getElementById("total").textContent = DATA.length;
+}
+const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+const syncHash = () => history.replaceState(null, "", query ? "#q=" + encodeURIComponent(query) : location.pathname);
+document.getElementById("q").addEventListener("input", e => { query = e.target.value; syncHash(); render(); });
+document.getElementById("list").addEventListener("click", e => {
+  const b = e.target.closest(".brandlink, .taglink"); if (!b) return;
+  query = b.dataset.b ?? b.dataset.t;
+  document.getElementById("q").value = query;
+  syncHash();
+  render();
+});
+document.getElementById("groupseg").addEventListener("click", e => {
+  const b = e.target.closest("button"); if (!b) return;
+  groupBy = b.dataset.g;
+  document.querySelectorAll(".seg button").forEach(x => x.classList.toggle("on", x === b));
+  render();
+});
+if (location.hash.startsWith("#q=")) {
+  query = decodeURIComponent(location.hash.slice(3));
+  document.getElementById("q").value = query;
+}
+render();
+</script>
+</body>
+</html>

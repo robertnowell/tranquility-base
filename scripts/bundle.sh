@@ -172,6 +172,18 @@ mkdir -p "$APP_DIR/Contents/Resources/hooks"
 cp hooks/*.sh "$APP_DIR/Contents/Resources/hooks/"
 chmod +x "$APP_DIR/Contents/Resources/hooks/"*.sh
 
+# The skills travel inside the bundle too (ruled 25 Sep). SkillManifest links
+# each harness's skills directory at these, so they move with the app and a
+# Sparkle update carries every edit to every paired Mac. Copied for the same
+# codesign reason as the hooks. __pycache__ is a build artefact of running
+# the publisher from a checkout and has no place in a sealed bundle.
+mkdir -p "$APP_DIR/Contents/Resources/skills"
+cp -R skills/. "$APP_DIR/Contents/Resources/skills/"
+find "$APP_DIR/Contents/Resources/skills" -name __pycache__ -type d -prune -exec rm -rf {} +
+chmod +x "$APP_DIR/Contents/Resources/skills/bin/"* \
+         "$APP_DIR/Contents/Resources/skills/"*/scripts/*.sh \
+         "$APP_DIR/Contents/Resources/skills/research-hq/scripts/hq-open"
+
 # Sparkle, before anything else touches the bundle.
 #
 # Two constraints, and this is the only point that satisfies both. It has to be

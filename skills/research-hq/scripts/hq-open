@@ -1,0 +1,65 @@
+#!/usr/bin/env python3
+"""Open a page where it is read now: in the Knowledge Base, never as a file.
+
+    hq-open <page.html>
+
+The page must live under ~/Documents/agents/<session>/...; its hub address is
+<app.base_url>/open?session=<session>&slug=<slug>, where slug is the path
+under the agent directory with .html dropped and slashes folded (the same
+rule as the panel's HubApp and the hub's sender). The panel mirrors a new
+page within about twenty seconds, so this waits for the hub to know it
+(when a device token is available to ask with), then opens the address.
+Ruled 12 Sep 2026: sessions no longer open local files.
+
+Without an app address in ~/.claude/hq.json it opens the file, as before.
+"""
+import json, os, subprocess, sys, time, urllib.request
+
+def main():
+    if len(sys.argv) != 2:
+        sys.exit(__doc__)
+    path = os.path.abspath(sys.argv[1])
+    root = os.path.expanduser("~/Documents/agents") + "/"
+    base = ""
+    try:
+        base = (json.load(open(os.path.expanduser("~/.claude/hq.json"))).get("app") or {}).get("base_url", "").rstrip("/ ")
+    except Exception:
+        pass
+    if not base.startswith("http") or not path.startswith(root):
+        subprocess.run(["open", path])
+        print(path)
+        return
+    rel = path[len(root):]
+    session, _, tail = rel.partition("/")
+    if tail == "index.html" or not tail:
+        url = f"{base}/open?session={session}"
+    else:
+        slug = tail[:-5] if tail.endswith(".html") else tail
+        url = f"{base}/open?session={session}&slug={slug.replace('/', '-')}"
+    token = None
+    try:
+        token = open(os.path.expanduser("~/Library/Application Support/hq/token")).read().strip()
+    except Exception:
+        pass
+    if token:
+        deadline = time.time() + 45
+        while time.time() < deadline:
+            req = urllib.request.Request(url, headers={"Authorization": "Bearer " + token}, method="GET")
+            try:
+                class NoRedirect(urllib.request.HTTPRedirectHandler):
+                    def redirect_request(self, *a, **k): return None
+                opener = urllib.request.build_opener(NoRedirect)
+                r = opener.open(req, timeout=10)
+                code = r.getcode()
+            except urllib.error.HTTPError as e:
+                code = e.code
+            except Exception:
+                code = 0
+            if code in (301, 302, 303, 307, 308):
+                break
+            time.sleep(4)
+    subprocess.run(["open", url])
+    print(url)
+
+if __name__ == "__main__":
+    main()
