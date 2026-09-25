@@ -182,10 +182,11 @@ public enum TranscriptTail {
         return ["turns": kept, "total_turns": turns.count]
     }
 
-    /// The turns anywhere in the transcript that share the most words with
-    /// `query`, in the order they were said, within the budget. Each is cut
-    /// to the stretch around its first match. Words under three letters do
-    /// not count.
+    /// The turns anywhere in the transcript that best match `query`, in the
+    /// order they were said, within the budget. A word counts by how rare it
+    /// is in this session (log N/df), so the one turn that says "salary"
+    /// outranks forty that say "raise". Each turn is cut to the stretch
+    /// around its rarest match. Words under three letters do not count.
     public static func search(path: String, query: String, chars: Int) -> [String: Any] {
         guard let turns = turns(path: path, window: nil) else {
             return ["turns": [], "note": "transcript file missing"]
@@ -193,12 +194,19 @@ public enum TranscriptTail {
         let words = Set(query.lowercased().split { !$0.isLetter && !$0.isNumber }
             .map(String.init).filter { $0.count >= 3 })
         guard !words.isEmpty else { return ["turns": [], "total_turns": turns.count, "note": "no words to search for"] }
-        var scored: [(index: Int, score: Int)] = []
-        for (i, t) in turns.enumerated() {
-            let text = (t["text"] ?? "").lowercased()
-            let score = words.filter { text.contains($0) }.count
+        let lows = turns.map { ($0["text"] ?? "").lowercased() }
+        let n = Double(lows.count)
+        var weight: [String: Double] = [:]
+        for w in words {
+            let df = Double(lows.filter { $0.contains(w) }.count)
+            weight[w] = log((n + 1) / (1 + df))
+        }
+        var scored: [(index: Int, score: Double)] = []
+        for (i, text) in lows.enumerated() {
+            let score = words.filter { text.contains($0) }.reduce(0.0) { $0 + (weight[$1] ?? 0) }
             if score > 0 { scored.append((i, score)) }
         }
+        let byRarity = words.sorted { (weight[$0] ?? 0) > (weight[$1] ?? 0) }
         // Best first, the later of two equals first; then kept in the order said.
         scored.sort { $0.score != $1.score ? $0.score > $1.score : $0.index > $1.index }
         let per = 1_500
@@ -209,7 +217,7 @@ public enum TranscriptTail {
             let text = t["text"] ?? ""
             if text.count > per {
                 let lower = text.lowercased()
-                let first = words.compactMap { lower.range(of: $0)?.lowerBound }.min() ?? lower.startIndex
+                let first = byRarity.lazy.compactMap { lower.range(of: $0)?.lowerBound }.first ?? lower.startIndex
                 let offset = max(0, lower.distance(from: lower.startIndex, to: first) - per / 3)
                 let start = text.index(text.startIndex, offsetBy: offset)
                 let end = text.index(start, offsetBy: min(per, text.distance(from: start, to: text.endIndex)))

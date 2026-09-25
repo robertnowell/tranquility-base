@@ -281,11 +281,15 @@ LOOP_SYSTEM = (
     "- Read before you answer. A question about an agent's work is answered from its brief "
     "and, for anything the brief does not settle (risks, what would happen if, what it tried, "
     "what it said last, any detail), from its transcript. A question across agents starts "
-    "from who is live and who is waiting. What an agent said last is in its brief. If what "
-    "you read does not settle it, search its transcript with a query, or read further "
-    "back (the transcript's chars, up to 30000) before you say the record does not say.\n"
-    "- Answer only from what the tools returned. If they do not say, say so in one sentence. "
-    "Never guess, never fill a gap with what is likely, and never give generic advice. A "
+    "from who is live and who is waiting. The brief of the agent on stage is given to you "
+    "already. For anything it does not settle, search that agent's transcript with a query.\n"
+    "- A search that misses proves nothing: the words you chose may not be the ones used. "
+    "Before you say the record does not say, search at least twice more with different words "
+    "(synonyms, the names and numbers involved, what the developer would have typed).\n"
+    "- Answer only from what the tools returned, with the specifics that answer it: the "
+    "number, the name, the reason, what it hangs on. If after those searches the record still "
+    "does not say, say so in one sentence. Never guess, never fill a gap with what is likely, "
+    "and never give generic advice. A "
     "decision the record shows is still open (a question the agent asked the developer) is "
     "open: say so, and say what it hangs on. If a transcript could not be read, say you could "
     "not read it; never take that to mean nothing was said.\n"
@@ -367,21 +371,26 @@ class Brain:
         return "\n".join(f"{who}: {text}" for who, text in Brain._turns(path))[-limit:]
 
     @staticmethod
-    def transcript_search(path: str | None, query: str, limit: int = 7000) -> str:
-        """The turns anywhere in the transcript sharing the most words with the
-        query, in the order said: the same as the Mac's TranscriptTail.search."""
+    def transcript_search(path: str | None, query: str, limit: int = 9000) -> str:
+        """The turns anywhere in the transcript that best match the query, in
+        the order said: the same as the Mac's TranscriptTail.search. A word
+        counts by how rare it is in this session (log N/df), so the one turn
+        with "salary" outranks forty with "the" and "raise"."""
+        import math
         turns = Brain._turns(path, window=None)
         words = {w for w in re.split(r"[^\w]+", query.lower()) if len(w) >= 3}
-        if not words:
+        if not words or not turns:
             return ""
-        scored = [(sum(w in t.lower() for w in words), i) for i, (_, t) in enumerate(turns)]
+        lows = [t.lower() for _, t in turns]
+        weight = {w: math.log((len(lows) + 1) / (1 + sum(w in t for t in lows))) for w in words}
+        scored = [(sum(weight[w] for w in words if w in t), i) for i, t in enumerate(lows)]
         scored = sorted((x for x in scored if x[0] > 0), key=lambda x: (-x[0], -x[1]))
         picked, used = [], 0
         for _, i in scored:
             who, text = turns[i]
             if len(text) > 1500:
-                low = text.lower()
-                first = min((low.find(w) for w in words if w in low), default=0)
+                low = lows[i]
+                first = min((low.find(w) for w in sorted(words, key=lambda w: -weight[w]) if w in low), default=0)
                 start = max(0, first - 500)
                 text = ("…" if start else "") + text[start:start + 1500] + ("…" if start + 1500 < len(text) else "")
             if used + len(text) > limit and picked:
@@ -836,6 +845,13 @@ class Manager(FrameProcessor):
             context.append(f"Agent on stage: {who.get('name') or who.get('project') or 'unnamed'}"
                            f"{' - ' + who['goal'] if who.get('goal') else ''} "
                            f"(agent id {who['sessionId']}, for tools only; never say it)")
+            # Its brief, up front: the old one-shot answer always had it, and
+            # the loop, left to fetch it, sometimes fetched the wrong agent's
+            # (25 Sep graded eval).
+            b = await self._brief(who["sessionId"])
+            if b:
+                context.append("Its brief: " + json.dumps({k: b.get(k) for k in BRIEF_FIELDS if b.get(k)},
+                                                          ensure_ascii=False))
         before = exchange_lines()
         if before:
             context.append("What was said just before, oldest first (you = the developer):\n" + "\n".join(before))
@@ -851,7 +867,31 @@ class Manager(FrameProcessor):
 
     def _loop_tools(self) -> list[Tool]:
         """What the loop may read: all of it on this Mac when hosted (wire v1)."""
-        agent = {"agent": {"type": "string", "description": "the agent's id, from agents or waiting"}}
+        agent = {"agent": {"type": "string", "description": "the agent's id (from agents or waiting); "
+                                                             "leave it out for the agent on stage"}}
+
+        async def resolve(a) -> str | None:
+            """The agent a tool call means: the one on stage when none is named;
+            otherwise an id, a unique id prefix, or a name, never a guess."""
+            want = (a.get("agent") or "").strip()
+            if not want:
+                return (self.stage or {}).get("sessionId")
+            if await self._brief(want):
+                return want
+            live = await self._targets()
+            hits = [t["sessionId"] for t in live if t.get("sessionId", "").startswith(want)]
+            if len(hits) != 1:
+                low = want.lower()
+                hits = [t["sessionId"] for t in live
+                        if low in (t.get("name") or "").lower() or low in (t.get("goal") or "").lower()]
+            if len(hits) == 1:
+                return hits[0]
+            stage = (self.stage or {}).get("sessionId")
+            return stage if stage and stage.startswith(want[:8]) else None
+
+        def unknown(a):
+            return {"error": f"no agent matches {a.get('agent')!r}; use an id from agents, or leave "
+                             "agent out for the agent on stage"}
 
         async def agents(a):
             return [{k: t.get(k) for k in ("sessionId", "name", "goal", "project")} for t in await self._targets()]
@@ -861,11 +901,17 @@ class Manager(FrameProcessor):
                     for w in await self._live_waiting()]
 
         async def brief(a):
-            b = await self._brief(a["agent"])
+            sid = await resolve(a)
+            if not sid:
+                return unknown(a)
+            b = await self._brief(sid)
             return {k: b.get(k) for k in BRIEF_FIELDS} if b else {"error": "no brief stored for that agent"}
 
         async def transcript(a):
-            text = await self._transcript(a["agent"], min(int(a.get("chars") or 7000), 30_000),
+            sid = await resolve(a)
+            if not sid:
+                return unknown(a)
+            text = await self._transcript(sid, min(int(a.get("chars") or 7000), 30_000),
                                           (a.get("query") or "").strip())
             return text or {"error": "could not read a transcript for that agent (none found, or a "
                                      "format this reader does not know); this says nothing about "
@@ -878,7 +924,7 @@ class Manager(FrameProcessor):
             Tool("agents", "The live coding agents: id, name, goal, project.", agents),
             Tool("waiting", "The agents waiting on the developer right now.", waiting),
             Tool("brief", "An agent's latest brief: goal, recap, proposal, findings, solution, why, "
-                          "its last message.", brief, agent, ["agent"]),
+                          "its last message.", brief, agent),
             Tool("transcript", "An agent's own words and the developer's replies to it. Without `query`: "
                                "the most recent, newest last; `chars` (default 7000, up to 30000) reads "
                                "further back. With `query` (a few key words): the turns anywhere in the "
@@ -886,7 +932,7 @@ class Manager(FrameProcessor):
                                "anything that may be from earlier in the session.",
                  transcript, {**agent, "chars": {"type": "integer"},
                               "query": {"type": "string", "description": "key words to search the whole session for"}},
-                 ["agent"], "Reading its transcript."),
+                 [], "Reading its transcript."),
             Tool("said", "What the developer has said aloud since the last message was sent, numbered.", said),
         ]
 
@@ -895,7 +941,7 @@ class Manager(FrameProcessor):
         the Mac when hosted (the file is there, hf-4), from its file when local."""
         if os.getenv("TB_HOSTED"):
             import wire
-            args = {"agent": sid, "chars": chars} | ({"query": query} if query else {})
+            args = {"agent": sid, "chars": max(chars, 9000) if query else chars} | ({"query": query} if query else {})
             r = await wire.call(wire.Tool.TRANSCRIPT, args)
             if r is not None:
                 if not r.get("ok"):
@@ -905,7 +951,7 @@ class Manager(FrameProcessor):
                 return "\n".join((f"[turn {t['turn']}] " if t.get("turn") else "") + f"{t.get('who')}: {t.get('text')}"
                                  for t in turns)[-chars:]
         path = ((await self._brief(sid)) or {}).get("transcriptPath")
-        return Brain.transcript_search(path, query, chars) if query else Brain.transcript_tail(path, chars)
+        return Brain.transcript_search(path, query, max(chars, 9000)) if query else Brain.transcript_tail(path, chars)
 
     CAPABILITIES = ("Say what's next to hear the next agent. Ask for the goal, findings, next step "
                     "or why. Say tell it to, then your message. Say stop to mute. Say start an agent.")
