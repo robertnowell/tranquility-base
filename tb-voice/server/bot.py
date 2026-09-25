@@ -31,7 +31,6 @@ from pipecat.processors.aggregators.llm_response_universal import (
 from pipecat.runner.types import (
     RunnerArguments,
     SmallWebRTCRunnerArguments,
-    WebSocketRunnerArguments,
 )
 from pipecat.runner.utils import create_transport
 from pipecat.services.assemblyai.stt import AssemblyAISTTService
@@ -47,7 +46,6 @@ from pipecat.turns.user_stop.turn_analyzer_user_turn_stop_strategy import (
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from pipecat.workers.runner import WorkerRunner
 
-from echo import EchoGate
 import session
 from llm import RecordedLLMService
 from manager import JevClient, Manager
@@ -162,21 +160,20 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
     # defence. The `aec` session-body flag that a client used to set for
     # itself is gone with the hand-rolled unit that justified it (23 Sep).
     body = session_body(runner_args)
-    cancels_echo = isinstance(runner_args, SmallWebRTCRunnerArguments)
-    if cancels_echo:
-        logger.info("client cancels its own echo: the gate is open and the manager can be interrupted")
 
     context = LLMContext(tools=SCHEMAS)
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
         context,
         user_params=LLMUserAggregatorParams(
             vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=0.2)),
-            # No mute strategy: a strategy is asked only when a frame reaches
-            # the aggregator, and while it is muted the transcriptions that
-            # would bring one are what it drops, so it can stay muted for as
-            # long as nothing else happens (thirty seconds, in a drill on
-            # 22 Sep). EchoGate feeds the transcriber zeros while the manager
-            # speaks, which is asked on every audio frame and cannot stick.
+            # No mute strategy, and now nothing in its place. A strategy is
+            # asked only when a frame reaches the aggregator, and while it is
+            # muted the transcriptions that would bring one are what it drops,
+            # so it can stay muted for as long as nothing else happens (thirty
+            # seconds, in a drill on 22 Sep). What used to stand in for it was
+            # a gate feeding the transcriber zeros while the manager spoke;
+            # the client's own canceller does that job now, in the only place
+            # it can be done without going deaf.
             # A turn starts on words, not on VAD: in a loud room VAD fired 300 ms
             # into every answer and cancelled it before TTS.
             #
@@ -222,13 +219,6 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
     pipeline = Pipeline(
         [
             transport.input(),
-            # The client says whether its microphone is already free of the
-            # manager's voice. When it is, the gate passes everything through
-            # and the user can talk over the manager: their words reach the
-            # transcriber while it is still speaking, which is what an
-            # interruption is made of. When it is not, the gate is the only
-            # defence and stays.
-            EchoGate(cancels_own_voice=cancels_echo),
             stt,
             user_aggregator,
             gate,
@@ -314,32 +304,6 @@ async def bot(runner_args: RunnerArguments):
             await run_bot(transport, runner_args)
         finally:
             _RTC_SESSION_OVER.set()  # release the platform's session call
-        return
-    if isinstance(runner_args, WebSocketRunnerArguments):
-        # Hosted (Pipecat Cloud or our own machine): the app is on the other end of
-        # one WebSocket. Audio both ways as PCM16, events and door requests as JSON
-        # lines; see wire.py. TB_HOSTED is set in the deployed image's environment.
-        from pipecat.transports.websocket.fastapi import (
-            FastAPIWebsocketParams,
-            FastAPIWebsocketTransport,
-        )
-        import wire
-        from wire import TBSerializer
-
-        w = wire.bind()  # this session's queue and reply table; see Wire
-
-        transport = FastAPIWebsocketTransport(
-            websocket=runner_args.websocket,
-            params=FastAPIWebsocketParams(
-                audio_in_enabled=True,
-                audio_out_enabled=True,
-                audio_in_sample_rate=16000,
-                audio_out_sample_rate=24000,
-                serializer=TBSerializer(w),
-                session_timeout=int(os.getenv("TB_SESSION_TIMEOUT", "14400")),
-            ),
-        )
-        await run_bot(transport, runner_args)
         return
     transport_params = {
         "webrtc": lambda: TransportParams(

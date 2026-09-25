@@ -25,7 +25,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import events  # noqa: E402
 import session  # noqa: E402
 import wire  # noqa: E402
-from echo import EchoGate  # noqa: E402
 from manager import exchange_lines, note  # noqa: E402
 from vocab import Line, LineKind, Role  # noqa: E402
 
@@ -51,15 +50,15 @@ async def a_session(name: str, lines: int, hold: asyncio.Event | None = None) ->
             note(Line(Role.USER, LineKind.TALK, f"{name} line {i}"))
             if hold is not None:
                 await asyncio.sleep(0)  # interleave with the other session
+        # A is mid-sentence, B is not. The gate that used to read this is
+        # gone with the socket transport; the fact still has to be per
+        # session, which is what this drill is about.
         s.bot_voice["speaking"] = name == "A"
-        # A: the app is mid-line in a session's voice. B: the app never spoke
-        # (0, not "just now": a tail follows app speech since #598).
-        s.external_until["t"] = time.monotonic() + 60 if name == "A" else 0.0
         s.notes_sid = f"notes-{name}"
 
     await asyncio.create_task(handler())
     return {"start": seen_at_start, "end": list(exchange_lines(12)), "session": s,
-            "gated": EchoGate().gated(), "said": s.said}
+            "speaking": s.bot_voice["speaking"], "said": s.said}
 
 
 async def main():
@@ -74,7 +73,7 @@ async def main():
     check(b["start"] == [], "B starts with an empty exchange after A ran in the same process")
     check(all("A line" not in x for x in b["end"]), "B never sees A's turns")
     check(b["said"] == 2, "B numbers its own lines from 1")
-    check(a["gated"] and not b["gated"], "A's voice does not gate B's microphone")
+    check(a["speaking"] and not b["speaking"], "A's voice is not B's voice")
     check(b["session"].notes_sid == "notes-B", "B has its own Notes agent")
 
     # At the same time, as concurrent sessions on one instance would.
