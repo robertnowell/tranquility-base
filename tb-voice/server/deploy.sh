@@ -23,6 +23,8 @@ PCC="${PIPECAT_BIN:-$HOME/.local/bin/pipecat}"
 # cannot run. Delete the agent itself once the Gateway is confirmed off it.
 PRODUCTION=(tranquility-manager-rtc)
 
+# The production manager has its own config; everything else is a drill agent
+# and gets the other one, which keeps no warm instance.
 config_for() {
   case "$1" in
     tranquility-manager-rtc) echo "pcc-deploy-rtc.toml" ;;
