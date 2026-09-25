@@ -1,0 +1,5 @@
+#!/bin/sh
+# Installed on PATH by Tranquility Base beside the skills it carries. Resolves
+# its own directory so a link into any source (bundle or checkout) works.
+here=$(cd "$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")" && pwd)
+exec python3 "$here/../research-hq/scripts/hqtags.py" "$@"

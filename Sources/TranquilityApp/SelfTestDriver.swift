@@ -330,7 +330,7 @@ extension StatusHUD {
             try brief(now, 2)
             let resolver: (String) -> SecondDoor? = { id in
                 if let report = ArtifactStore.freshReport(for: id, store: store, root: root) {
-                    return .report(report)
+                    return .report(report, HubApp.destination(forReportPath: report))
                 }
                 return .hub
             }
@@ -348,7 +348,11 @@ extension StatusHUD {
             render()
             let rewrittenOpens = !openPageButton.isHidden
                 && openPageButton.attributedTitle.string.contains(StateLegend.openReportTitle)
-            let doorIsThePage = resolver(session) == .report(ArtifactStore.canonical(page.path))
+            let expectedPath = ArtifactStore.canonical(page.path)
+            let doorIsThePage: Bool = {
+                if case .report(let p, _)? = resolver(session) { return p == expectedPath }
+                return false
+            }()
             doorForSession = priorResolver
             SelfTest.report("cardDoor", [
                 ("untouchedIsTheHub", untouchedIsTheHub),
@@ -2094,12 +2098,26 @@ extension StatusHUD {
         render()
         let hubOpensADoor = !openPageButton.isHidden
             && openPageButton.attributedTitle.string.contains(StateLegend.openHubTitle)
-        doorForSession = { _ in .report("/tmp/tb-drill-report.html") }
+        doorForSession = { _ in .report("/tmp/tb-drill-report.html", .hub(URL(string: "https://hub.example.test/open?session=drill&slug=tb-drill-report")!)) }
         render()
         let reportNamesItself = !openPageButton.isHidden
             && openPageButton.attributedTitle.string.contains(StateLegend.openReportTitle)
+        // A page the hub cannot hold is read at its own address, and the
+        // door says Page; one that declares none is a file, and the door
+        // says so (ruled 25 Sep, after Open Report opened a website's
+        // source as file://).
+        doorForSession = { _ in .report("/tmp/tb-drill-site.html", .live(URL(string: "https://tranquilitybase.dev/")!)) }
+        render()
+        let liveSaysPage = !openPageButton.isHidden
+            && openPageButton.attributedTitle.string.contains(StateLegend.openPageTitle)
+        doorForSession = { _ in .report("/tmp/tb-drill-plain.html", .file("/tmp/tb-drill-plain.html")) }
+        render()
+        let fileSaysFile = !openPageButton.isHidden
+            && openPageButton.attributedTitle.string.contains(StateLegend.openFileTitle)
         doorForSession = priorResolver
         SelfTest.report("openHub", [
+            ("liveSaysPage", liveSaysPage),
+            ("fileSaysFile", fileSaysFile),
             ("noHubNoDoor", noHubNoDoor),
             ("hubOpensADoor", hubOpensADoor),
             ("reportNamesItself", reportNamesItself),

@@ -1226,7 +1226,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         hud.doorForSession = { [weak self] session in
             if let report = self?.freshReport(session: session) {
-                return .report(report)
+                return .report(report, HubApp.destination(forReportPath: report))
             }
             return HomeBase.existingPage(sessionId: session) != nil ? .hub : nil
         }
@@ -1240,12 +1240,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hud.onOpenHub = { [weak self] session in
             _ = self?.openHub(session: session)
         }
-        hud.onOpenReport = { page in
+        hud.onOpenReport = { destination in
             // The report is read in the hub app when one is configured
             // (hq.json app.base_url): the app already holds the page, so the
             // door lands on it there, at an address that works from any
-            // device. Without an app, the file, as before. Ruled 10 Sep.
-            let url = HubApp.openURL(forReportPath: page) ?? URL(fileURLWithPath: page)
+            // device. Ruled 10 Sep. A page the hub cannot hold (outside the
+            // agents tree) is read at the address it declares for itself,
+            // and only a page that declares none is opened as a file. Ruled
+            // 25 Sep, after the door opened the website's source as file://.
+            // `PageDestination` is the one resolver; the door resolved it
+            // when it was built, so the label and the click cannot disagree.
+            let url = destination.url
             if BrowserFocus.reveal(url, app: HubApp.baseURL) == .notFound {
                 NSWorkspace.shared.open(url)
             }
@@ -1821,6 +1826,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     Track.record("hooks_state", ["harness": .token(harness.id), "state": "not_repaired",
                                                  "reason": .prose(reason)])
                     hud.note("\(harness.label) hooks need attention: \(reason)")
+                }
+            }
+            // THE SKILLS, the same way. A session relies on share-as-page,
+            // research-hq (hq-open) and the hub skill to write a page the
+            // hub can show and to open it there; until 25 Sep those lived
+            // only in one Mac's ~/.claude/skills, edited by hand, and the
+            // other Mac kept opening reports as file:// through the hq-open
+            // it still had. The app is the courier now (ruled 25 Sep), to
+            // every harness on this Mac, and says per harness what it did.
+            for (target, outcome) in SkillManifest.repairAll() {
+                switch outcome {
+                case .healthy:
+                    Track.record("skills_state", ["harness": .token(target.id), "state": "healthy"])
+                case .repaired(let linked, let retired):
+                    Permissions.log("startup: \(target.id) skills linked — "
+                        + "\(linked) linked, \(retired) copies moved aside")
+                    Track.record("skills_state", ["harness": .token(target.id), "state": "repaired",
+                                                  "linked": .int(linked), "retired": .int(retired)])
+                case .unavailable(let reason):
+                    Permissions.log("startup: \(target.id) skills NOT linked: \(reason)")
+                    Track.record("skills_state", ["harness": .token(target.id), "state": "not_repaired",
+                                                  "reason": .prose(reason)])
+                    hud.note("\(target.label) skills need attention: \(reason)")
+                }
+            }
+            if let source = try? String(contentsOf: SkillManifest.recordedDirectoryURL, encoding: .utf8) {
+                switch SkillManifest.repairShims(source: source.trimmingCharacters(in: .whitespacesAndNewlines)) {
+                case .healthy: break
+                case .repaired(let linked, let retired):
+                    Permissions.log("startup: \(linked) hq command(s) linked on PATH, \(retired) moved aside")
+                case .unavailable(let reason):
+                    Permissions.log("startup: hq commands NOT linked: \(reason)")
                 }
             }
             if !repairedHarnesses.isEmpty {

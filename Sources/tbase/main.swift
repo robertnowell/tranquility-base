@@ -18,6 +18,7 @@ func usage() -> Never {
       tbase reconcile           run the boot reconciliation sweep
       tbase reap [hours]        delete audio for confirmed/discarded rows (default 72h)
       tbase install-hooks       merge the hooks into ~/.claude/settings.json (backup kept)
+      tbase install-skills      link skills/ into every harness and put hq on PATH
       tbase hook-config         print the settings.json snippet to install the hook
       tbase paths               show where everything lives
       tbase hooks               which hooks are wired, broken, or missing\n  tbase approve-hooks       answer a hooks-review prompt, once
@@ -1223,6 +1224,50 @@ case "reconcile":
         }
     }
     print("restart your agent sessions to load them")
+    if failed { exit(1) }
+
+    case "install-skills":
+    // The skills' twin of install-hooks: run from the repo root, record
+    // skills/ as the source, link every harness on this Mac to it, and put
+    // the hq commands on PATH. A worktree is refused for the reason
+    // install-hooks refuses one: the recorded path is what the launch repair
+    // falls back to, and a worktree's dies with its branch.
+    let skillsDir = FileManager.default.currentDirectoryPath + "/skills"
+    guard SkillManifest.directoryHoldsEverySkill(skillsDir) else {
+        print("run from the repo root: skills/<name>/SKILL.md not found for every skill"); exit(1)
+    }
+    let cwd = FileManager.default.currentDirectoryPath
+    if case .linkedWorktree(let mainCheckout) = HookManifest.checkoutKind(at: cwd),
+       !CommandLine.arguments.contains("--from-worktree") {
+        print("refusing: this is a git worktree, and skills recorded from one "
+              + "break when the branch is removed.")
+        if let mainCheckout { print("run it from the main checkout instead:\n  cd \(mainCheckout) && tbase install-skills") }
+        print("(--from-worktree overrides, for testing only)")
+        exit(1)
+    }
+    try? skillsDir.write(to: SkillManifest.recordedDirectoryURL, atomically: true, encoding: .utf8)
+    let outcomes = SkillManifest.repairAll()
+    guard !outcomes.isEmpty else {
+        print("no agent directories found (~/.claude, ~/.codex, ~/.config/opencode); nothing to link")
+        exit(1)
+    }
+    var failed = false
+    for (target, outcome) in outcomes {
+        switch outcome {
+        case .healthy: print("\(target.label): already linked at \(target.skillsDir.path)")
+        case .repaired(let linked, let retired):
+            print("\(target.label): \(linked) linked into \(target.skillsDir.path)"
+                  + (retired > 0 ? "; \(retired) hand-installed copies moved aside (*.before-tbase)" : ""))
+        case .unavailable(let reason): print("\(target.label): could not link — \(reason)"); failed = true
+        }
+    }
+    switch SkillManifest.repairShims(source: skillsDir) {
+    case .healthy: print("PATH: hq commands already linked in \(SkillManifest.binDirectory.path)")
+    case .repaired(let linked, let retired):
+        print("PATH: \(linked) command(s) linked in \(SkillManifest.binDirectory.path)"
+              + (retired > 0 ? "; \(retired) moved aside" : ""))
+    case .unavailable(let reason): print("PATH: could not link — \(reason)"); failed = true
+    }
     if failed { exit(1) }
 
     case "hook-config":
