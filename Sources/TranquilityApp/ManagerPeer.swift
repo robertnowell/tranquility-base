@@ -6,8 +6,8 @@ import TranquilityCore
 /// Hands-free over WebRTC: the media path Pipecat prescribes for a device
 /// client, and the one that lets the manager be interrupted.
 ///
-/// The difference from `ManagerSocket` is not the wire, it is what the wire
-/// brings. WebRTC carries echo cancellation, so the microphone reaching the
+/// The difference from the WebSocket this replaced was never the wire, it was
+/// what the wire brings. WebRTC carries echo cancellation, so the microphone reaching the
 /// transcriber no longer contains the manager's own voice, so the bot no longer
 /// has to feed its transcriber silence while it speaks, so a word said over the
 /// manager is heard. Measured 22 Sep on the real acoustic path, laptop speakers
@@ -112,7 +112,7 @@ final class ManagerPeer: NSObject, ManagerTransport, @unchecked Sendable {
         onTrace?("manager: \(IceServers.describe(iceServers))")
         let constraints = LKRTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)
         guard let peer = factory.peerConnection(with: config, constraints: constraints, delegate: self) else {
-            throw ManagerSocketError.closed
+            throw ManagerTransportError.closed
         }
         connection = peer
 

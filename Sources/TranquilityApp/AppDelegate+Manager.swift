@@ -82,7 +82,7 @@ extension AppDelegate {
 
 extension AppDelegate {
 
-    var managerIsOn: Bool { managerTransport != nil || managerSocket != nil || managerPeer != nil }
+    var managerIsOn: Bool { managerTransport != nil || managerPeer != nil }
 
     @objc func toggleManagerMode() {
         if managerIsOn { stopManager() } else { startManager() }
@@ -93,26 +93,23 @@ extension AppDelegate {
     func startManager() {
         // A hosted manager when configured and no local command is: the same
         // event lines arrive over a socket instead of a pipe, and the bot asks
-        // this process for its doors (ManagerSocket.swift).
         // WebRTC first when it is configured, whatever else is: it is the
         // only path where talking over the manager reaches it.
         if let rtc = ManagerConfig.webrtc() { startWebRTCManager(rtc); return }
         switch ManagerConfig.availability() {
         case .managed:
             // Signed in: the Gateway sells the session, starts the bot, and
-            // settles by the second. No key on this Mac (VOICE.md).
-            if let credits = managedCredits { startHostedManager(.managed(credits)); return }
-            if let hosted = ManagerSessionStarter.hosted() { startHostedManager(.hosted(hosted)); return }
+            // settles by the second. No key on this Mac (VOICE.md). It answers
+            // with a peer connection and its relay; the dev shim above is the
+            // same transport with the session bought differently.
+            if let credits = managedCredits { startWebRTCManager(.managed(credits)); return }
             hud.showResult("Hands-free could not reach your account.")
-            return
-        case .hosted:
-            if let hosted = ManagerSessionStarter.hosted() { startHostedManager(.hosted(hosted)) }
             return
         case .unset:
             // Nothing to start. The managed path (a session issued by the
             // Gateway to a signed-in account) fills this slot when it lands.
             hud.showResult("Hands-free is not set up on this Mac: no manager is configured.")
-            Permissions.log("manager: not configured (no manager.hosted, no manager.command, no local checkout)")
+            Permissions.log("manager: not configured (not signed in, no manager.webrtc, no manager.command, no local checkout)")
             return
         case .local:
             break
@@ -158,8 +155,6 @@ extension AppDelegate {
         managerTask = nil
         if let transport = managerTransport { Task { await transport.close() } }
         managerTransport = nil
-        if let socket = managerSocket { Task { await socket.close() } }
-        managerSocket = nil
         if let peer = managerPeer { Task { await peer.close() } }
         managerPeer = nil
         endManagerLease()
@@ -170,139 +165,6 @@ extension AppDelegate {
         // would be a lie about who a send is going to.
         managerStageName = nil
         Permissions.log("manager: stopped")
-    }
-
-    /// Where a hosted session comes from: bought from the Gateway for a
-    /// signed-in account, or started directly with the dev shim's key.
-    enum ManagerSource {
-        case managed(ManagedCreditSession)
-        case hosted(ManagerSessionStarter.Hosted)
-    }
-
-    /// The Gateway's session, while it is ours to renew and end.
-    struct ManagedVoiceLease {
-        let client: ManagedVoiceClient
-        let id: UUID
-    }
-
-    @MainActor
-    private func startHostedManager(_ source: ManagerSource) {
-        hud.setManager(on: true)  // breathing until the bot says ready
-        managerEndedByIdle = false
-        managerTask = Task { @MainActor [weak self] in
-            guard let self else { return }
-            // The fleet's names go with the start so the transcriber can spell
-            // them; a read at the bot's end would wait on a pipeline that does
-            // not exist yet (5 s, every start, 22 Sep).
-            let names = await Self.fleetNames()
-            let started = Date()
-            let session: ManagerSession
-            var lease: ManagedVoiceLease?
-            do {
-                switch source {
-                case .managed(let credits):
-                    Permissions.log("manager: managed, buying a session from the Gateway")
-                    let client = try await credits.voice()
-                    let id = UUID()
-                    let bought = try await client.start(id: id, keyterms: names)
-                    // The Gateway decides what carries the audio, and only its
-                    // answer says which. A peer connection is a different
-                    // client entirely, so hand the session we have just paid
-                    // for to that one rather than buying a second.
-                    if bought.isWebRTC {
-                        self.startWebRTCManager(.bought(ManagedVoiceLease(client: client, id: id),
-                                                        renewBy: bought.renewByDate))
-                        return
-                    }
-                    guard let url = bought.wsUrl.flatMap(URL.init(string:)) else {
-                        throw ManagedSummaryFailure.invalidResponse
-                    }
-                    session = ManagerSession(url: url, token: bought.token, sessionId: id.uuidString.lowercased())
-                    lease = ManagedVoiceLease(client: client, id: id)
-                    self.managerLease = lease
-                    self.scheduleManagerRenewal(lease!, renewBy: bought.renewByDate)
-                case .hosted(let hosted):
-                    Permissions.log("manager: hosted, starting a session at \(hosted.start.host ?? "?")")
-                    session = try await ManagerSessionStarter.start(hosted, keyterms: names)
-                }
-            } catch {
-                self.hud.showResult(Self.managerStartMessage(for: error))
-                Permissions.log("manager: hosted start failed \(error)")
-                self.hud.setManager(on: false)
-                return
-            }
-            // The WebSocket path has no echo cancellation, and cannot: the
-            // bot's gate is its only defence, which is why nothing said over
-            // the manager reaches it here. That is what `manager.webrtc` is
-            // for, and what this path is being retired in favour of.
-            let socket = ManagerSocket(session: session, audio: ManagerMicrophone(), player: PCMPlayer(),
-                                       toolHost: Self.managerToolHost, appVersion: Self.managerAppVersion) { argv in
-                await AppDelegate.answerManagerRequest(argv)
-            }
-            do { try socket.start() } catch {
-                self.hud.showResult("Hands-free could not open the microphone: \(error.localizedDescription)")
-                Permissions.log("manager: hosted mic failed \(error)")
-                self.hud.setManager(on: false)
-                return
-            }
-            self.managerSocket = socket
-            socket.onTrace = { line in Permissions.log("manager wire: \(line)") }
-            socket.onLevel = { level, bytes in
-                Permissions.log(String(format: "manager mic: rms %.4f, %d bytes sent", level, bytes))
-            }
-            Permissions.log("manager: hosted session \(session.sessionId ?? "?") (start \(Int(Date().timeIntervalSince(started) * 1000)) ms)")
-            // Hosted, the bot keeps nothing on disk; the app keeps the stream
-            // here so the viewer (tb-voice/server/tail.py) can read it.
-            let eventsFile = QueueStore.supportDirectory.appendingPathComponent("manager-events.jsonl")
-            let eventsHandle: FileHandle? = {
-                if !FileManager.default.fileExists(atPath: eventsFile.path) {
-                    FileManager.default.createFile(atPath: eventsFile.path, contents: nil)
-                }
-                let h = try? FileHandle(forWritingTo: eventsFile); h?.seekToEndOfFile(); return h
-            }()
-            defer { try? eventsHandle?.close() }
-            for await line in socket.lines() {
-                eventsHandle?.write(line + Data([0x0A]))
-                Self.managerLedger.enqueue(line: line, session: session.sessionId)
-                guard let event = ManagerEvent.parse(line) else { continue }
-                if event.event == .ready {
-                    Permissions.log("manager: ready \(Int(Date().timeIntervalSince(started) * 1000)) ms after start")
-                }
-                self.handle(event)
-            }
-            guard self.managerSocket === socket else { return }  // stopped by the chord
-            Permissions.log("manager: hosted socket ended (\(socket.closeReason ?? "closed"))")
-            self.managerSocket = nil
-            // The socket is the session's life: end it so the Gateway settles
-            // by the seconds we actually used rather than the block we held.
-            self.endManagerLease()
-            if self.managerEndedByIdle {
-                // The bot ended it on purpose and the orb already says so; a
-                // chord starts a fresh session. Reconnecting would just bill.
-                self.managerEndedByIdle = false
-                self.hud.setManager(on: false)
-                self.rebuildMenu()
-                return
-            }
-            // Anything else (the network, the 4 h cap, the bot's own rotation
-            // before it) is a fresh session with backoff: 1, 2, 4 s, then give
-            // up and say so.
-            self.managerReconnects += 1
-            guard self.managerReconnects <= 3 else {
-                Permissions.log("manager: hosted reconnect gave up after 3 tries")
-                self.hud.showResult("Hands-free lost its connection three times; press the chord to try again.")
-                self.managerReconnects = 0
-                self.hud.setManager(on: false)
-                self.rebuildMenu()
-                return
-            }
-            let wait = UInt64(1 << (self.managerReconnects - 1)) * 1_000_000_000
-            self.hud.setManagerState(StatusHUD.orbState, line: "reconnecting")
-            Permissions.log("manager: hosted reconnect \(self.managerReconnects) in \(wait / 1_000_000_000) s")
-            try? await Task.sleep(nanoseconds: wait)
-            guard self.managerSocket == nil, self.managerTask != nil else { return }  // stopped meanwhile
-            self.startHostedManager(source)
-        }
     }
 
     /// What a refused start says out loud. A 402 is the credit standing the
@@ -319,9 +181,12 @@ extension AppDelegate {
         }
     }
 
-    /// Renew a few minutes before the block runs out. A renewal opens the next
-    /// window where this one ends, so an early one costs nothing; a missed one
-    /// ends the session, which the socket then reports as any other drop.
+    /// The Gateway's session, while it is ours to renew and end.
+    struct ManagedVoiceLease {
+        let client: ManagedVoiceClient
+        let id: UUID
+    }
+
     @MainActor
     private func scheduleManagerRenewal(_ lease: ManagedVoiceLease, renewBy: Date?) {
         managerRenewal?.cancel()
@@ -534,7 +399,7 @@ extension AppDelegate {
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let session = obj["sessionId"] as? String else {
-            throw ManagerSocketError.closed
+            throw ManagerTransportError.closed
         }
         let base = rtc.start.deletingLastPathComponent()   // .../<agent>
         return base.appendingPathComponent("sessions").appendingPathComponent(session)

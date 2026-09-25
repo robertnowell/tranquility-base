@@ -180,7 +180,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var managerTransport: ACPProcessTransport?
     /// Hosted manager (21 Sep): the socket to the bot we host, when
     /// `manager.hosted` is configured and no local command is.
-    var managerSocket: ManagerSocket?
     /// Hands-free over WebRTC, when `manager.webrtc` is configured.
     var managerPeer: ManagerPeer?
     var managerTask: Task<Void, Never>?
