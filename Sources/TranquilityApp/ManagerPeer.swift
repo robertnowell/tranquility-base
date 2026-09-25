@@ -57,8 +57,15 @@ final class ManagerPeer: NSObject, ManagerTransport, @unchecked Sendable {
 
     var onTrace: (@Sendable (String) -> Void)?
 
+    /// Where this session may route audio. Handed in rather than hardcoded:
+    /// a relay needs credentials, credentials are short-lived, and short-lived
+    /// things arrive with the session. See IceServers.swift.
+    private let iceServers: [IceServer]
+
     init(signal: @escaping Signaller, toolHost: ManagerToolHost? = nil, appVersion: String = "",
+         iceServers: [IceServer] = IceServers.stunOnly,
          onRequest: @escaping RequestHandler) {
+        self.iceServers = iceServers.isEmpty ? IceServers.stunOnly : iceServers
         self.signal = signal
         self.toolHost = toolHost
         self.appVersion = appVersion
@@ -99,7 +106,10 @@ final class ManagerPeer: NSObject, ManagerTransport, @unchecked Sendable {
         follower.start()
         let config = LKRTCConfiguration()
         config.sdpSemantics = .unifiedPlan
-        config.iceServers = [LKRTCIceServer(urlStrings: ["stun:stun.l.google.com:19302"])]
+        config.iceServers = iceServers.map {
+            LKRTCIceServer(urlStrings: $0.urls, username: $0.username, credential: $0.credential)
+        }
+        onTrace?("manager: \(IceServers.describe(iceServers))")
         let constraints = LKRTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)
         guard let peer = factory.peerConnection(with: config, constraints: constraints, delegate: self) else {
             throw ManagerSocketError.closed
