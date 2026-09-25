@@ -157,7 +157,9 @@ async def main(questions_path, snap_dir, runs=3, which="all", out_path=None):
     gc = httpx.AsyncClient(base_url=os.getenv("GC_BASE_URL", "https://api.generalcompute.com/v1"),
                            headers={"Authorization": f"Bearer {os.environ['GC_API_KEY']}"})
     oa = httpx.AsyncClient(headers={"Authorization": f"Bearer {os.environ['OPENAI_API_KEY']}"})
-    sem = asyncio.Semaphore(4)
+    # One question at a time: four at once ran into the provider's rate limit
+    # and 73 of 120 loop runs ended in a 429 (25 Sep), which measures nothing.
+    sem = asyncio.Semaphore(int(os.getenv("EVAL_PARALLEL", "1")))
     rows = []
 
     async def one(q, r):

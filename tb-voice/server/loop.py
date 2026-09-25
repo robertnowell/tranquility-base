@@ -104,6 +104,16 @@ class Loop:
             try:
                 c0 = time.monotonic()
                 r = await self._client.post("/chat/completions", json=body, timeout=left)
+                if r.status_code == 429:
+                    # Rate-limited: every tool here only reads, so asking again
+                    # is safe; once, after the wait the provider names, if the
+                    # budget has it (25 Sep: a 429 ended 73 of 120 eval runs).
+                    wait = min(float(r.headers.get("retry-after") or 1.0), 2.0)
+                    if deadline - time.monotonic() > wait + 0.5:
+                        logger.warning(f"loop step {step}: rate-limited; asking again in {wait:.1f} s")
+                        await asyncio.sleep(wait)
+                        r = await self._client.post("/chat/completions", json=body,
+                                                    timeout=max(0.1, deadline - time.monotonic()))
                 r.raise_for_status()
                 reply = r.json()
                 record("loop", body, reply, ms=int((time.monotonic() - c0) * 1000))
