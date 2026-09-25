@@ -22,6 +22,7 @@ from pipecat.frames.frames import (
     EndWorkerFrame,
     Frame,
     InputTransportMessageFrame,
+    InterruptionFrame,
     LLMContextFrame,
     StartFrame,
     TTSSpeakFrame,
@@ -34,7 +35,7 @@ from events import emit, line
 import session
 import span
 from vocab import Intent, Line, LineKind, Role, line_from_transcript, parse_intent
-from turns import TurnQueue
+from turns import TurnQueue, effect
 from spoken import spoken
 from tools import _json_or_text, _run
 
@@ -447,6 +448,7 @@ class Manager(FrameProcessor):
         # Every turn, in the order said, decided one at a time (turns.py, hf-13).
         self._turns = TurnQueue(self._dispatch)
         self._turns_task: asyncio.Task | None = None
+        self._early: set[asyncio.Task] = set()  # stops heard while a turn is in flight
 
     async def _say_and_wait(self, text: str, timeout: float = 8.0):
         await self._say(text)  # _say already waits for its own voice to stop
@@ -531,6 +533,8 @@ class Manager(FrameProcessor):
                     message = None
             if isinstance(message, dict):
                 _wire.take_reply(message)
+        if isinstance(frame, InterruptionFrame):
+            self._interrupted()
         if isinstance(frame, BotStartedSpeakingFrame):
             session.current().bot_voice["speaking"] = True  # the echo gate reads this
         if isinstance(frame, BotStoppedSpeakingFrame):
@@ -572,9 +576,26 @@ class Manager(FrameProcessor):
             wait = HOLD_NAMED_SECS if names_the_manager(text) or only_the_name(text) else HOLD_SECS
             self._held_task = asyncio.create_task(self._release_held(frame, direction, wait))
             return
+        self._enqueue(text, frame, direction)
+
+    def _interrupted(self):
+        """Talked over: the voice stops (Pipecat's own interruption, which only
+        a client that cancels its echo lets through) and so does the turn it
+        belonged to, so the rest of that turn is never said. Every turn start
+        is an interruption frame; only one said over the manager's voice is a
+        barge-in."""
+        if session.current().bot_voice.get("speaking"):
+            self._turns.cut("talked over")
+
+    def _enqueue(self, text, frame, direction):
         self.heard += 1
+        busy = self._turns.busy
         self._turns.put((text, frame, direction))
         self._recent.append(text)
+        if busy:
+            task = asyncio.create_task(self._look_early(text))
+            self._early.add(task)
+            task.add_done_callback(self._early.discard)
 
     async def _release_held(self, frame, direction, wait: float):
         await asyncio.sleep(wait)
@@ -591,9 +612,7 @@ class Manager(FrameProcessor):
             await asyncio.sleep(0.1)
         text, self._held = self._held, None
         if text:
-            self.heard += 1
-            self._turns.put((text, frame, direction))
-            self._recent.append(text)
+            self._enqueue(text, frame, direction)
 
     async def _dispatch(self, turn: tuple):
         """One turn, when every turn before it has finished."""
@@ -611,10 +630,13 @@ class Manager(FrameProcessor):
             logger.exception(f"manager turn failed: {e}")
             await emit(self, "error", reason=str(e)[:160])
 
-    async def _turn(self, text, frame, direction):
+    async def _judge(self, text: str):
+        """Is this turn for the manager, and what does it want? One judgement,
+        whether the turn is handled now or looked at early (`_look_early`)."""
         t0 = time.monotonic()
         p, intent_answer = await self._jev.turn(text, self._recent, self.stage)
         ms = int((time.monotonic() - t0) * 1000)
+        jev = dict(self._jev.last)
         intent = parse_intent(_chosen(intent_answer))
         if not self.stage and intent in RUNG_FOR:
             # "What's next?" with nobody on stage is the ⌃⌥ question: the next
@@ -629,8 +651,25 @@ class Manager(FrameProcessor):
         elif (self.stage and intent in STAGE_QUESTIONS
               and float(intent_answer.get("confidence", 0)) >= 0.8 and p >= 0.3):
             p, rule = max(p, 0.6), "about the stage"  # a question about the work on stage
-        await emit(self, "jev", ms=self._jev.last.get("ms"), state=self._jev.last.get("state"),
-                   answers=self._jev.last.get("answers"), raw_p=round(raw_p, 2), rule=rule)
+        return p, raw_p, intent, rule, ms, jev
+
+    async def _look_early(self, text: str):
+        """Hear a stop now, not after the turn it is meant to stop (hf-25).
+        Turns are handled in order, so "stop" said while the manager thinks
+        about the last one used to wait behind it and the answer was spoken
+        anyway. While a turn is in flight, each new one is also judged on
+        arrival; if it is addressed and it is a stop, the turn in flight is
+        cut and anything still playing is interrupted. It stays queued: when
+        reached it is judged again and mutes the app's voice as always."""
+        p, _, intent, _, _, _ = await self._judge(text)
+        if p >= THRESHOLD and intent is Intent.MUTE and self._turns.cut("told to stop"):
+            await self.broadcast_interruption()
+            await emit(self, "listening", p=round(p, 2), intent=intent.value, text=text[:120])
+
+    async def _turn(self, text, frame, direction):
+        p, raw_p, intent, rule, ms, jev = await self._judge(text)
+        await emit(self, "jev", ms=jev.get("ms"), state=jev.get("state"),
+                   answers=jev.get("answers"), raw_p=round(raw_p, 2), rule=rule)
         speak = p >= THRESHOLD
         logger.info(f"gate p={p:.2f} {intent.value} {ms}ms {'SPEAK' if speak else 'silent'} :: {text[:80]}")
         note(Line(Role.USER, LineKind.COMMAND if speak else LineKind.TALK, text))
@@ -664,9 +703,12 @@ class Manager(FrameProcessor):
 
     async def _do_mute(self, text, frame, direction):
         """Stop whoever is talking: the app's voice via the mute verb, and the
-        manager's own by not saying anything."""
+        manager's own by interrupting it. An answer from the model is spoken
+        outside any turn (the LLM service, then TTS), so ending the turn that
+        asked for it stops nothing; only an interruption reaches it (hf-25)."""
+        await self.broadcast_interruption()
         await emit(self, "tool", argv=["open", f"{SCHEME}://mute"])
-        await _run("open", f"{SCHEME}://mute")
+        await effect(_run("open", f"{SCHEME}://mute"))
 
     async def _do_none(self, text, frame, direction):
         pass  # the activation cue already played; nothing to add
@@ -716,7 +758,7 @@ class Manager(FrameProcessor):
 
     async def _do_custom(self, text, frame, direction):
         if not self.stage:
-            await self._llm(frame, direction, text, "custom")
+            await self._llm(frame, direction, text, Intent.CUSTOM)
             return
         # An instruction to the session on stage is typed in; a question is answered.
         try:
@@ -827,7 +869,7 @@ class Manager(FrameProcessor):
         self.stage = agent
         await emit(self, "stage", session=agent["sessionId"], goal=agent.get("goal"),
                    name=agent.get("name"), project=agent.get("project"))
-        await _run(TBASE, "enroll", agent["sessionId"], timeout=10)
+        await effect(_run(TBASE, "enroll", agent["sessionId"], timeout=10))
 
     async def _send_to(self, agent: dict, request: str):
         name = agent.get("name") or agent.get("project") or "the agent"
@@ -874,17 +916,25 @@ class Manager(FrameProcessor):
         name = "Codex" if harness == "codex" else "Claude Code"
         await self._earcon("listening")
         await self._say(f"Starting {name}.")
+        # Started and staged as one act: a stop mid-start never leaves an
+        # agent running that nobody is talking to.
+        reg = await effect(self._new_agent(argv, name))
+        if not reg:
+            await self._earcon("needsYou")
+            await self._say("I couldn't start the agent.")
+            return
+        await self._earcon("returned")
+        await self._say(f"Started {name}. Say the brief, then ask me to send it.")
+
+    async def _new_agent(self, argv: list[str], name: str) -> str | None:
         code, out = await _run(*argv, timeout=75)
         reg = next((ln.split(":", 1)[1].strip() for ln in out.splitlines() if ln.startswith("registered:")), None)
         if code != 0 or not reg:
             await emit(self, "tool", argv=["tbase", "new"], exit=code, meaning="failed", text=out[-200:])
             logger.error(f"tbase new failed ({code}): {out[-400:]}")
-            await self._earcon("needsYou")
-            await self._say("I couldn't start the agent.")
-            return
-        await self._earcon("returned")
+            return None
         await self._take_stage({"sessionId": reg, "name": name, "project": "", "goal": ""})
-        await self._say(f"Started {name}. Say the brief, then ask me to send it.")
+        return reg
 
     async def _do_take_note(self, text, frame, direction):
         """Notes are a destination like any agent: a session named Notes that
@@ -923,6 +973,9 @@ class Manager(FrameProcessor):
         if sid and sid in live:
             return {"kind": "agent", "sessionId": sid, "name": "Notes"}
         await self._say("Starting a notes agent.")
+        return await effect(self._new_notes_agent(hosted))
+
+    async def _new_notes_agent(self, hosted: bool) -> dict | None:
         await emit(self, "tool", argv=["tbase", "new"])
         code, out = await _run(TBASE, "new", timeout=75)
         reg = next((ln.split(":", 1)[1].strip() for ln in out.splitlines() if ln.startswith("registered:")), None)
@@ -942,9 +995,9 @@ class Manager(FrameProcessor):
         # A spoken send goes through the app's own Send, so the tray rides
         # with it (hf-12). Quiet sends (notes, seeding) stay on `tbase send`:
         # the developer's tray is not theirs to take.
-        meaning = None if quiet else await self._send_through_app(session_id, text)
+        meaning = None if quiet else await effect(self._send_through_app(session_id, text))
         if meaning is None:
-            code, out = await _run(TBASE, "send", session_id, text)
+            code, out = await effect(_run(TBASE, "send", session_id, text))
             meaning = {0: "sent", 2: "not dispatched", 3: "deferred", 4: "ambiguous", 5: "failed"}.get(code, "unknown")
             await emit(self, "tool", argv=["tbase", "send", session_id[:8]], exit=code, meaning=meaning)
             if quiet:
@@ -1046,7 +1099,7 @@ class Manager(FrameProcessor):
         canceller's reference like everything else we play, which is why the
         microphone can stay open through it, and why you can now talk over an
         announcement at all."""
-        await _run("open", url)
+        await effect(_run("open", url))
         await self._say(text, voice="agent", session=session_id,
                         voice_id=await self._voice_for(session_id))
 
