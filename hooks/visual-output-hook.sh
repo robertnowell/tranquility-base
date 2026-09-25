@@ -136,10 +136,21 @@ print("\n".join(out))
 ' 2>/dev/null || true)
 fi
 
-python3 - "$DIR" "$WHOSE" "${AGENT:-<your session id>}" "$HUBLINES" <<'PYCTX' 2>/dev/null || true
+# The template and its brief sit beside this hook: skills/ next to hooks/, in the
+# bundle and in the repo alike. Named in full, never described (see DIR above).
+HERE=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]:-$0}" 2>/dev/null || echo "${BASH_SOURCE[0]:-$0}")")" 2>/dev/null && pwd)
+SKILLDIR=$(cd "$HERE/../skills/share-as-page" 2>/dev/null && pwd)
+BRIEF_TEMPLATE="${SKILLDIR:-$HOME/.claude/skills/share-as-page}/templates/brief.html"
+BRIEF_DOC="${SKILLDIR:-$HOME/.claude/skills/share-as-page}/references/brief.md"
+[ -f "$BRIEF_TEMPLATE" ] || BRIEF_TEMPLATE="$HOME/.claude/skills/share-as-page/templates/brief.html"
+[ -f "$BRIEF_DOC" ] || BRIEF_DOC="$HOME/.claude/skills/share-as-page/references/brief.md"
+
+python3 - "$DIR" "$WHOSE" "${AGENT:-<your session id>}" "$HUBLINES" "$BRIEF_TEMPLATE" "$BRIEF_DOC" <<'PYCTX' 2>/dev/null || true
 import json, sys
 directory, whose, agent = sys.argv[1], sys.argv[2], sys.argv[3]
 hublines = sys.argv[4] if len(sys.argv) > 4 else ""
+brief_template = sys.argv[5] if len(sys.argv) > 5 else "~/.claude/skills/share-as-page/templates/brief.html"
+brief_doc = sys.argv[6] if len(sys.argv) > 6 else "~/.claude/skills/share-as-page/references/brief.md"
 # Where the page is read decides what the session is told to do after
 # writing it. With a hub app configured (hq.json app.base_url), the app
 # mirrors the page and announces it, so the session leaves a pointer at the
@@ -202,6 +213,23 @@ text = (
     "If the page is also going OUTSIDE -- to a customer or a prospect -- build it "
     "with the share-as-page skill instead, which deploys it, and still write or link "
     "it under your agent directory so it is on your hub.\n\n"
+    "THE SHAPE OF THE PAGE. Three levels, far apart. (1) One sentence at headline size "
+    "with a verb, the thing they cannot miss; a lede; then a dark block saying what needs "
+    "them, or that nothing does. (2) One row per claim, a full sentence each, with a "
+    "status dot and one figure: reading only the rows gives the argument. (3) Under each "
+    "claim, collapsed, the artifact: the screenshot of the real UI, the diff hunk, the raw "
+    "rows, the literal prompt. Prose ABOUT the evidence is not evidence. Start from the "
+    "template at " + brief_template + " and read " + brief_doc + " first; replace its :root "
+    "with `hq-theme " + agent + "`. No paragraph over 80 words; a decision that exists only "
+    "in prose is a red flag. The worked example is "
+    "agents/a8e3f054-8583-45f2-8bc0-3dfe55d47a06/uvape-what-is-different-redone.html.\n\n"
+    "SHOW IT, DO NOT DESCRIBE IT. A claim about a UI carries a screenshot of that UI, taken "
+    "this session, before and after when something changed. A claim about data carries the "
+    "rows. A claim about code carries the hunk. A login is not a reason to skip it: for "
+    "Kopi, promotions/scripts/render-authed.ts signs in as a real user and screenshots any "
+    "trykopi.ai path; for a local page, headless Chrome --screenshot. The only honest gap is "
+    "a before that nobody captured at the time, and the page says so where the image would "
+    "sit. Look at every screenshot before you embed it.\n\n"
     "What does NOT need a page: conversational replies, progress narration, a "
     "one-line answer, and your own intermediate reasoning. When in doubt, ask "
     "whether you would be happy for them to miss it entirely -- if not, it is a page."
