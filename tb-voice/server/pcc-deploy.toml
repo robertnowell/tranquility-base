@@ -1,8 +1,14 @@
-agent_name = "tranquility-manager"
+# Anything that is not the production manager, which in practice means a drill
+# agent (drills/isolation). It named `tranquility-manager` until 25 Sep, when
+# the WebSocket transport was retired and that agent was deleted; the name was
+# overridden by the one deploy.sh passes anyway, so it described nothing.
+agent_name = "tranquility-drill"
 secret_set = "tranquility-manager-secrets"
 agent_profile = "agent-1x"
 region = "us-west"
-websocket_auth = "token"
 
 [scaling]
-min_agents = 1
+# Zero, unlike production: a drill agent is deployed for one run and a warm
+# instance between runs is a bill for nothing. Production keeps one warm
+# because a cold start is fourteen seconds of somebody waiting.
+min_agents = 0
