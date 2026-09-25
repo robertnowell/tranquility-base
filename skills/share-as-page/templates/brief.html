@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<!-- brief.html: the house template for a report one person reads to act.
+     Three levels, far apart. The message they cannot miss. The claims they can
+     skim. The artifact they open only to check. Read references/brief.md first.
+     Worked example: agents/a8e3f054-8583-45f2-8bc0-3dfe55d47a06/uvape-what-is-different-redone.html -->
+<meta name="intranet:session" content="<!-- FULL SESSION ID -->">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title><!-- TITLE: two to five words, the message, not the topic --></title>
+<meta name="description" content="<!-- one sentence -->">
+<meta name="intranet:brand" content="<!-- BRAND -->">
+<meta name="intranet:type" content="<!-- research|page|runbook|plan|audit|design -->">
+<meta name="intranet:summary" content="<!-- the answer in one sentence, not the topic -->">
+<meta name="intranet:tags" content="<!-- 2 to 4 tags from hq-tags -->">
+<meta name="intranet:status" content="final">
+<meta name="intranet:visibility" content="local">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22%3E%3Crect width=%2232%22 height=%2232%22 rx=%226%22 fill=%22%234a5a2b%22/%3E%3Ccircle cx=%2216%22 cy=%2216%22 r=%226%22 fill=%22%23fcfbf8%22/%3E%3C/svg%3E">
+<style>
+/* TOKENS. Replace this whole :root block with the output of
+   `hq-theme <your session id>` (or `hq-theme --brand=NAME` for a brand page).
+   The block below is the house default so the file renders before you do. */
+:root{--bg:#fcfbf8;--paper:#f4f2ec;--ink:#1f1e1c;--heading:#141312;--muted:#57534c;--faint:#6e6a63;--line:#ddd9cf;--accent:#4a5a2b;--brand:#1a1a1a;--amber:#a8762a;--serif:'Iowan Old Style','Palatino Linotype',Palatino,Georgia,serif;--sans:ui-sans-serif,-apple-system,'Helvetica Neue',sans-serif;--mono:'Berkeley Mono',ui-monospace,SFMono-Regular,Menlo,monospace;--red:#9a3b2e}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--bg:#131310;--paper:#1c1b18;--ink:#eceae2;--heading:#f3f1e9;--muted:#a5a196;--faint:#77746c;--line:#33322d}}
+:root[data-theme="dark"]{--bg:#131310;--paper:#1c1b18;--ink:#eceae2;--heading:#f3f1e9;--muted:#a5a196;--faint:#77746c;--line:#33322d}
+
+/* LEVEL 1: the message. One sentence at 54px, one lede, one dark block for what needs them. */
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:16px;line-height:1.4;-webkit-font-smoothing:antialiased}
+main{max-width:760px;margin:0 auto;padding:56px 20px 96px}
+.k{font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint)}
+h1{font-size:clamp(34px,6vw,54px);line-height:1.02;letter-spacing:-.025em;font-weight:700;color:var(--heading);margin:14px 0 22px;max-width:19ch}
+.lede{font-size:21px;line-height:1.35;color:var(--ink);max-width:34ch;margin:0}
+.lede b{color:var(--heading)}
+.you{margin:44px 0 0;padding:22px 24px;border-radius:12px;background:var(--heading);color:var(--bg)}
+.you .k{color:#b9c48f}
+.you p{font-size:22px;line-height:1.3;margin:6px 0 0;font-weight:600}
+.you small{display:block;font-size:14px;margin-top:8px;opacity:.75;font-weight:400}
+.you ol{margin:10px 0 0;padding-left:22px;font-size:17px;line-height:1.4}
+.you li{margin:4px 0}
+.you li.rec{font-weight:600}
+.you li.rec::after{content:" · recommended";font-weight:400;font-family:var(--mono);font-size:11px;opacity:.7}
+
+/* LEVEL 2: the claims. A section label, then rows. Each row is a claim in one sentence, a status dot and its figure. */
+h2{font-size:13px;font-family:var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--faint);font-weight:500;margin:72px 0 6px;padding-bottom:10px;border-bottom:1px solid var(--line)}
+details{border-bottom:1px solid var(--line)}
+summary{list-style:none;cursor:pointer;display:grid;grid-template-columns:34px 1fr auto;gap:14px;align-items:baseline;padding:20px 0}
+summary::-webkit-details-marker{display:none}
+summary .n{font-family:var(--mono);font-size:13px;color:var(--faint);padding-top:4px}
+summary .c{font-size:21px;line-height:1.25;font-weight:600;color:var(--heading);letter-spacing:-.01em}
+summary .c em{font-style:normal;color:var(--muted);font-weight:400;display:block;font-size:15px;margin-top:5px}
+summary .s{font-family:var(--mono);font-size:12px;color:var(--muted);text-align:right;white-space:nowrap;padding-top:4px}
+summary .s::after{content:'+';display:inline-block;margin-left:12px;color:var(--faint);font-size:14px;width:10px}
+details[open] summary .s::after{content:'–'}
+summary .s i{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:7px;vertical-align:0;background:var(--accent)}
+summary .s i.w{background:var(--amber)}summary .s i.o{background:transparent;border:1.5px solid var(--faint);width:7px;height:7px}
+summary:hover .c{color:var(--accent)}
+details[open] summary .c{color:var(--accent)}
+.small summary{padding:14px 0}
+.small summary .c{font-size:16px;font-weight:500}
+
+/* LEVEL 3: the artifacts, collapsed under their claim. A screenshot, a diff hunk, raw rows, a quote. Never prose about them. */
+.d{padding:0 0 26px 48px;display:grid;gap:14px}
+.art{border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--paper)}
+.art .l{font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--faint);padding:7px 12px;border-bottom:1px solid var(--line)}
+.art pre{margin:0;padding:12px;font-family:var(--mono);font-size:12px;line-height:1.5;white-space:pre-wrap;word-break:break-word;color:var(--ink)}
+.art pre b{color:var(--red);font-weight:600}.art pre s{color:var(--faint)}
+.art img{display:block;width:100%;height:auto}
+.art .cap{font-size:12.5px;color:var(--muted);padding:8px 12px;border-top:1px solid var(--line)}
+.art .ph{padding:18px 12px;font-size:13px;color:var(--faint);font-style:italic}
+.d p{margin:0;font-size:14px;color:var(--muted)}
+.d p b{color:var(--ink)}
+.pair{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.pair .art .l::before{content:attr(data-side) ' · ';color:var(--ink)}
+
+.tail{margin-top:72px;border-top:1px solid var(--line);padding-top:24px}
+.tail p{font-size:14px;color:var(--muted);margin:0 0 8px}
+@media (max-width:640px){.d{padding-left:0}summary{grid-template-columns:28px 1fr}summary .s{grid-column:2;text-align:left;padding-top:0}.pair{grid-template-columns:1fr}}
+</style></head><body><main>
+
+<div class="k"><!-- KICKER: brand · what kind of turn · date · the refs (PR numbers, session) --></div>
+<h1><!-- TITLE: the one sentence they cannot miss. A finding with a verb, not a topic. --></h1>
+<p class="lede"><!-- LEDE: two or three sentences. What happened, what changed, what did not. <b>Bold the one clause that matters most.</b> --></p>
+
+<!-- NEEDS YOU. Always present, directly under the lede. If nothing needs them, say that in the same block. -->
+<div class="you"><div class="k">Needs you · <!-- one thing | two decisions | nothing to decide --></div>
+<p><!-- The decision or the action, as one sentence. --></p>
+<!-- Options, only when there is a choice:
+<ol><li class="rec">Option A, and what it costs</li><li>Option B</li></ol> -->
+<small><!-- One line of context: why now, what is already true. --></small></div>
+
+<h2><!-- SECTION LABEL: e.g. "Five things changed · open one to check it" --></h2>
+
+<!-- ONE ROW PER CLAIM. The claim is a full sentence with a verb. The em is one line of how.
+     The status: a filled dot for done or verified, a .w amber dot for partial, an .o hollow dot for not done.
+     The figure: one number with its unit, or a count with its denominator. -->
+<details><summary><span class="n">1</span><span class="c"><!-- CLAIM --><em><!-- how, in one line --></em></span><span class="s"><i></i><!-- figure --></span></summary><div class="d">
+
+  <!-- ARTIFACTS. Each one is the thing itself. Label says what it is, where it came from, and when. -->
+  <div class="art"><div class="l"><!-- what · where · when --></div><img src="data:image/jpeg;base64,<!-- SCREENSHOT -->" alt=""><div class="cap"><!-- what to look at in it --></div></div>
+
+  <!-- A before/after pair, when a behaviour changed: -->
+  <div class="pair">
+    <div class="art"><div class="l" data-side="Before"><!-- where · when --></div><img src="data:image/jpeg;base64,<!-- -->" alt=""></div>
+    <div class="art"><div class="l" data-side="After"><!-- where · when --></div><img src="data:image/jpeg;base64,<!-- -->" alt=""></div>
+  </div>
+
+  <!-- Raw rows, a diff hunk, a literal prompt. <b> marks the value the claim rests on. <s> marks a removed line. -->
+  <div class="art"><div class="l"><!-- e.g. The live row · get_calendar U Vape 2026-09 · 25 Sep --></div><pre><!-- verbatim --></pre></div>
+
+  <!-- When an artifact genuinely cannot be captured, say so where it would sit, and why. A login is not a reason; a "before" nobody shot at the time is. -->
+  <div class="art"><div class="l"><!-- what is missing --></div><div class="ph"><!-- why, and what stands in for it --></div></div>
+
+  <p><b><!-- Optional one-line reading of the artifact. --></b> <!-- What the reader should notice that the artifact does not say by itself. --></p>
+</div></details>
+
+<h2><!-- SECOND SECTION LABEL, e.g. "Six things did not · by design". Optional. --></h2>
+<details class="small"><summary><span class="n">·</span><span class="c"><!-- claim --></span><span class="s"><i class="o"></i><!-- figure, or empty --></span></summary><div class="d"><p><!-- one line why --></p></div></details>
+
+<div class="tail"><p><b><!-- What they will notice first. --></b> <!-- One or two sentences. --></p><p><!-- Where this came from: what was read, what was run, what was shot, and when. --></p></div>
+
+</main></body></html>

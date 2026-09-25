@@ -864,6 +864,73 @@ def _tag_ask(path):
 
 TAG_ASK = _tag_ask(path)
 
+# ---------------------------------------------------------------------------
+# THE SHAPE (advisory, every page, never a gate).
+#
+# Ruled 25 Sep 2026: "It's fine if you do a lint, but just set a target as an
+# advisory. It shouldn't be a hard gate. We should solve this problem through
+# context, not through a gate." So this reads the page just written and says
+# what it found against the target, at the moment the writer still has the page
+# open: the same reason the tag ask lives here and not at turn 0.
+#
+# Four things a parser can honestly count. Total words; the longest paragraph
+# (target: none over 80, and 150 is a red flag); how many headings carry a verb
+# (a heading is a claim, not a topic); and how many artifacts the page holds
+# (img, pre, table, svg) against how many claims it makes. Nothing here can see
+# whether the verdict is conclusive or the screenshot is the right one; those
+# stay judgment, and the sentence says so by naming only what it measured.
+def _shape_ask(path):
+    try:
+        with open(path, "r", encoding="utf-8", errors="ignore") as fh:
+            src = fh.read()
+    except Exception:
+        return ""
+    if not re.search(r"<html\b|<body\b", src, re.I):
+        return ""
+    body = re.sub(r"<(script|style)\b[^>]*>.*?</\1>", " ", src, flags=re.S | re.I)
+    def words(fragment):
+        return len(re.sub(r"<[^>]+>", " ", fragment).split())
+    total = words(body)
+    paras = [words(m) for m in re.findall(r"<p\b[^>]*>(.*?)</p>", body, flags=re.S | re.I)]
+    longest = max(paras) if paras else 0
+    heads = [re.sub(r"<[^>]+>", " ", h).strip()
+             for h in re.findall(r"<h[1-3]\b[^>]*>(.*?)</h[1-3]>", body, flags=re.S | re.I)]
+    heads += [re.sub(r"<[^>]+>", " ", h).strip()
+              for h in re.findall(r'<span class="c">(.*?)(?:<em>|</span>)', body, flags=re.S | re.I)]
+    verb = re.compile(r"\b(is|are|was|were|has|have|had|did|does|do|will|can|cannot|not|never|"
+                      r"needs?|went|fails?|failed|broke|shipped|ships|wins?|lost|holds?|means|"
+                      r"beats?|costs?|works?|reads?|says?|stays?|keeps?|makes?|gets?|comes|came|"
+                      r"shows?|owes?|lands?|drops?|missed|found|left|hides?|moved|sits?|still|"
+                      r"changed|exists|stored|carries|prints?|sent|opens?|blocks?|counts?)\b", re.I)
+    claims = [h for h in heads if h]
+    verbs = sum(1 for h in claims if verb.search(h))
+    arts = sum(len(re.findall(r"<%s\b" % t, body, flags=re.I)) for t in ("img", "pre", "table", "svg"))
+    shots = len(re.findall(r"<img\b", body, flags=re.I))
+    if total < 120:
+        return ""
+    parts = ["%s words" % "{:,}".format(total)]
+    parts.append("longest paragraph %d" % longest)
+    if claims:
+        parts.append("%d of %d headings carry a verb" % (verbs, len(claims)))
+    parts.append("%d artifact%s (%d screenshot%s)" % (arts, "" if arts == 1 else "s",
+                                                     shots, "" if shots == 1 else "s"))
+    flags = []
+    if longest > 150:
+        flags.append("a paragraph over 150 words is a wall; break it or move it under its claim")
+    elif longest > 80:
+        flags.append("target is no paragraph over 80 words")
+    if claims and verbs < len(claims) * 0.6:
+        flags.append("headings should be claims with a verb, not topics")
+    if claims and arts < max(1, len(claims) // 2):
+        flags.append("fewer artifacts than claims: a screenshot, the rows, or the diff under each")
+    if shots == 0:
+        flags.append("no screenshot: if any claim is about a UI, open the browser and shoot it")
+    return ("\n\nSHAPE OF THIS PAGE (advisory, not a gate): " + " · ".join(parts) + "."
+            + (" " + "; ".join(flags) + "." if flags else " Within target.")
+            + " The target and the worked example are in share-as-page/references/brief.md.")
+
+SHAPE_ASK = _shape_ask(path)
+
 # A misfile is louder than anything else this hook says, because it is the one
 # failure that makes the archive assert something untrue about who did the work.
 MISFILE_ASK = ("\n\nWRONG DIRECTORY. You wrote this page into agent {other}'s hub "
@@ -955,12 +1022,12 @@ if stamp == "1":
             "The agent footer was stamped into {path} automatically: session "
             "id, Open hub, and Discuss with agent. Do not add another one, and "
             "do not hand-roll a footer of your own on HQ pages."
-        ).format(path=path) + MISFILE_ASK + TAG_ASK,
+        ).format(path=path) + MISFILE_ASK + TAG_ASK + SHAPE_ASK,
     }}))
 else:
     print(json.dumps({"hookSpecificOutput": {
         "hookEventName": "PostToolUse",
-        "additionalContext": context + MISFILE_ASK + TAG_ASK,
+        "additionalContext": context + MISFILE_ASK + TAG_ASK + SHAPE_ASK,
     }}))
 PY
 
