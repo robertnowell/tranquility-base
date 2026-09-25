@@ -865,14 +865,24 @@ class Manager(FrameProcessor):
         # CLI read it as a directory and every start died in a second.
         argv = [TBASE, "new"] + (["--codex"] if harness == "codex" else [])
         await emit(self, "tool", argv=["tbase", "new"] + argv[2:])
+        # Starting an agent is the one thing here that takes long enough to
+        # doubt: `tbase new` is allowed seventy-five seconds, and until it
+        # returned the room was silent, so there was no way to tell a start
+        # that was working from one that had not heard you. Two cues: this one
+        # the moment the attempt begins, and "returned" when the agent is
+        # actually registered and on stage.
+        name = "Codex" if harness == "codex" else "Claude Code"
+        await self._earcon("listening")
+        await self._say(f"Starting {name}.")
         code, out = await _run(*argv, timeout=75)
         reg = next((ln.split(":", 1)[1].strip() for ln in out.splitlines() if ln.startswith("registered:")), None)
         if code != 0 or not reg:
             await emit(self, "tool", argv=["tbase", "new"], exit=code, meaning="failed", text=out[-200:])
             logger.error(f"tbase new failed ({code}): {out[-400:]}")
+            await self._earcon("needsYou")
             await self._say("I couldn't start the agent.")
             return
-        name = "Codex" if harness == "codex" else "Claude Code"
+        await self._earcon("returned")
         await self._take_stage({"sessionId": reg, "name": name, "project": "", "goal": ""})
         await self._say(f"Started {name}. Say the brief, then ask me to send it.")
 

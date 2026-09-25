@@ -185,6 +185,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var managerPeer: ManagerPeer?
     var managerTask: Task<Void, Never>?
     var managerLastLine = "listening"
+    /// Who the developer is talking to right now, carried under the orb until
+    /// the stage changes or hands-free ends.
+    ///
+    /// The `stage` event used to paint "on stage: Planning" and the very next
+    /// event — a transcript, a quiet, a tool line — painted over it, so the one
+    /// fact you need in order to answer safely ("who am I about to send this
+    /// to?") was on screen for under a second. It is a prefix now, not a line.
+    var managerStageName: String?
     /// Hosted: how many times in a row the socket ended without anyone asking.
     var managerReconnects = 0
     /// Hosted: the bot ended the session itself (an `idle` line); do not reconnect.
