@@ -281,15 +281,14 @@ LOOP_SYSTEM = (
     "- Read before you answer. A question about an agent's work is answered from its brief "
     "and, for anything the brief does not settle (risks, what would happen if, what it tried, "
     "what it said last, any detail), from its transcript. A question across agents starts "
-    "from who is live and who is waiting. The brief of the agent on stage is given to you "
-    "already. For anything it does not settle, search that agent's transcript with a query.\n"
-    "- A search that misses proves nothing: the words you chose may not be the ones used. "
-    "Before you say the record does not say, search at least twice more with different words "
-    "(synonyms, the names and numbers involved, what the developer would have typed).\n"
-    "- Answer only from what the tools returned, with the specifics that answer it: the "
-    "number, the name, the reason, what it hangs on. If after those searches the record still "
-    "does not say, say so in one sentence. Never guess, never fill a gap with what is likely, "
-    "and never give generic advice. A "
+    "from who is live and who is waiting. For the agent on stage you are already given its "
+    "brief and the end of its transcript: most questions are answered there, so answer from "
+    "them when they settle it. Only when they do not, search the rest of its transcript with "
+    "a query (key words, names, numbers).\n"
+    "- Answer only from what you were given and what the tools returned, with the specifics "
+    "that answer it: the number, the name, the reason, what it hangs on. If the record does "
+    "not say, say so in one sentence. Never guess, never fill a gap with what is likely, and "
+    "never give generic advice. A "
     "decision the record shows is still open (a question the agent asked the developer) is "
     "open: say so, and say what it hangs on. If a transcript could not be read, say you could "
     "not read it; never take that to mean nothing was said.\n"
@@ -298,6 +297,7 @@ LOOP_SYSTEM = (
     "markdown, no quotation marks around names, and never an id, hash, path, URL, branch or "
     "file name.\n"
     "- You only read. You cannot send, start, invite or change anything, and never say you did.")
+TAIL_CHARS = 7000  # of the staged agent's transcript, given to the loop up front
 SPOKEN_WORDS = 30  # what an answer may run to aloud; longer is cut down by the model once (loop.py)
 LOOP_AS_AGENT = ("\n- You are answering AS the agent on stage, in its own voice: first person "
                  "plural ('we found', 'we propose').")
@@ -852,6 +852,13 @@ class Manager(FrameProcessor):
             if b:
                 context.append("Its brief: " + json.dumps({k: b.get(k) for k in BRIEF_FIELDS if b.get(k)},
                                                           ensure_ascii=False))
+            # And the end of its transcript: what the one-shot answer always
+            # had, and where most answers are. Left for the loop to fetch, it
+            # searched instead and answered in part: 0 of 12 recent held-out
+            # questions right against 7 (25 Sep). The tools reach beyond this.
+            tail = await self._transcript(who["sessionId"], TAIL_CHARS)
+            if tail:
+                context.append(f"The end of its transcript (last {TAIL_CHARS} characters, newest last):\n{tail}")
         before = exchange_lines()
         if before:
             context.append("What was said just before, oldest first (you = the developer):\n" + "\n".join(before))
@@ -925,11 +932,11 @@ class Manager(FrameProcessor):
             Tool("waiting", "The agents waiting on the developer right now.", waiting),
             Tool("brief", "An agent's latest brief: goal, recap, proposal, findings, solution, why, "
                           "its last message.", brief, agent),
-            Tool("transcript", "An agent's own words and the developer's replies to it. Without `query`: "
-                               "the most recent, newest last; `chars` (default 7000, up to 30000) reads "
-                               "further back. With `query` (a few key words): the turns anywhere in the "
-                               "whole session that match them best, in the order said. Use a query for "
-                               "anything that may be from earlier in the session.",
+            Tool("transcript", "An agent's own words and the developer's replies to it. With `query` (a few "
+                               "key words): the turns anywhere in the whole session that match them best, "
+                               "in the order said; use this for anything earlier than what you were given. "
+                               "Without `query`: the most recent, newest last; `chars` (default 7000, up to "
+                               "30000) reads further back.",
                  transcript, {**agent, "chars": {"type": "integer"},
                               "query": {"type": "string", "description": "key words to search the whole session for"}},
                  [], "Reading its transcript."),
