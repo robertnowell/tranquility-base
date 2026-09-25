@@ -35,7 +35,6 @@ from pipecat.runner.types import (
 )
 from pipecat.runner.utils import create_transport
 from pipecat.services.assemblyai.stt import AssemblyAISTTService
-from pipecat.services.openai.llm import OpenAILLMService
 from pipecat.transports.base_transport import BaseTransport, TransportParams
 from turn_start import InterruptOrCommandStrategy
 from pipecat.turns.user_stop.speech_timeout_user_turn_stop_strategy import (
@@ -49,10 +48,7 @@ from pipecat.workers.runner import WorkerRunner
 
 from echo import EchoGate
 import session
-from llm import RecordedLLMService
 from manager import JevClient, Manager
-from prompt import SYSTEM
-from tools import SCHEMAS
 import build_stamp
 from tts import SpokenTTSService
 
@@ -145,16 +141,6 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
             voice=os.getenv("ELEVENLABS_VOICE_ID", "SAz9YHcvj6GT2YYXdXww"),  # River: neutral, calm
         ),
     )
-    llm = RecordedLLMService(
-        api_key=os.environ["GC_API_KEY"],
-        base_url=os.getenv("GC_BASE_URL", "https://api.generalcompute.com/v1"),
-        settings=OpenAILLMService.Settings(
-            model=os.getenv("GC_MODEL", "minimax-m2.7"),
-            system_instruction=SYSTEM,
-            max_tokens=200,
-        ),
-    )
-
     # A WebRTC client cancels echo in the engine, so what reaches us has the
     # manager's own voice removed already and the gate can stay open, which is
     # what lets the manager be interrupted. Nothing else may assume it: a
@@ -166,7 +152,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
     if cancels_echo:
         logger.info("client cancels its own echo: the gate is open and the manager can be interrupted")
 
-    context = LLMContext(tools=SCHEMAS)
+    context = LLMContext()
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
         context,
         user_params=LLMUserAggregatorParams(
@@ -231,8 +217,9 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
             EchoGate(cancels_own_voice=cancels_echo),
             stt,
             user_aggregator,
+            # The manager answers every turn itself (loop.py, hf-6): there is no
+            # LLM stage after it any more, only its voice.
             gate,
-            llm,
             tts,
             transport.output(),
             assistant_aggregator,
