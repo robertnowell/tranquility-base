@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# Ask the hub, from any Mac that is connected to it.
+#
+# The one command the read API was built for. It carries this Mac's own device
+# key, so it answers about this account and nothing else, and it prints json so
+# an agent can pipe it and a person can read it.
+#
+#   hq ask                         what is everyone working on
+#   hq find "pairing phrase"       search turns and pages
+#   hq turns <session>             one agent's own words, newest first
+#   hq page <session> <slug>       one page, as text
+#
+# The key comes from the panel's secrets, else HQ_TOKEN. The address comes from
+# ~/.claude/hq.json, else the built-in default, and never from an argument.
+set -euo pipefail
+
+base=$(python3 - <<'PY' 2>/dev/null || true
+import json, os
+try:
+    with open(os.path.expanduser("~/.claude/hq.json")) as f:
+        print(((json.load(f).get("app") or {}).get("base_url") or "").rstrip("/ "))
+except Exception:
+    pass
+PY
+)
+base=${base:-https://hq.tranquilitybase.dev}
+
+token=${HQ_TOKEN:-}
+if [ -z "$token" ]; then
+  token=$(security find-generic-password -s voice-dispatch -a hub-token -w 2>/dev/null || true)
+fi
+if [ -z "$token" ]; then
+  token=$(cat "$HOME/Library/Application Support/hq/token" 2>/dev/null || true)
+fi
+[ -n "$token" ] || { echo "This Mac is not connected to the hub. Open Setup and press Sign in." >&2; exit 2; }
+
+# A timeout, because one caller is a session-start hook that must never hang.
+get() { curl -sS --max-time "${HQ_TIMEOUT:-10}" -H "authorization: Bearer $token" "$base$1"; }
+enc() { python3 -c 'import sys,urllib.parse;print(urllib.parse.quote(sys.argv[1], safe=""))' "$1"; }
+
+case "${1:-ask}" in
+  ask)   get "/api/agents?active=${2:-7d}&limit=${3:-10}" ;;
+  find)  [ $# -ge 2 ] || { echo 'hq find "<query>"' >&2; exit 2; }
+         get "/api/search?q=$(enc "$2")&limit=${3:-10}" ;;
+  turns) [ $# -ge 2 ] || { echo "hq turns <session>" >&2; exit 2; }
+         get "/api/turns?session=$(enc "$2")&limit=${3:-10}" ;;
+  page)  [ $# -ge 3 ] || { echo "hq page <session> <slug>" >&2; exit 2; }
+         get "/api/page?session=$(enc "$2")&slug=$(enc "$3")" ;;
+  *)     sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//' ;;
+esac

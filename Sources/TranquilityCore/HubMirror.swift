@@ -67,6 +67,27 @@ public final class HubMirror: @unchecked Sendable {
         var assets: [String: String] = [:]
         var lastHeartbeatAt: Date?
         var lastHeartbeatNote: String?
+        /// Pages recorded OUTSIDE the agents tree, by the record file they
+        /// came from: what the record looked like when it was last read, and
+        /// the linked rows it yielded. A record whose size and mtime have
+        /// not moved is not re-read, which keeps the 20 s pass to one stat
+        /// per session rather than a head read per page.
+        var linked: [String: LinkedRecord] = [:]
+    }
+    struct LinkedRecord: Codable {
+        var size: Int64
+        var mtimeMs: Int64
+        var rows: [LinkedPage]
+    }
+    /// One page the hub cannot hold, read at its own address. The stub the
+    /// hub receives is built from these four fields, so the hash of the stub
+    /// is stable across passes and `sent` dedups it like any page.
+    struct LinkedPage: Codable {
+        var path: String
+        var session: String
+        var url: String
+        var title: String
+        var firstWriteMs: Int64
     }
 
     public struct Report: Sendable, Equatable {
@@ -256,7 +277,13 @@ public final class HubMirror: @unchecked Sendable {
 
     // MARK: - Documents
 
-    struct Candidate { let path: String; let session: String; let hash: String; let mtime: Date }
+    struct Candidate {
+        let path: String; let session: String; let hash: String; let mtime: Date
+        /// Set for a page the tree does not hold: the stub sent in its place
+        /// and the slug it is filed under. Nil for a page read from disk.
+        var stub: String? = nil
+        var slug: String? = nil
+    }
 
     static let sessionDir = try! NSRegularExpression(pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", options: .caseInsensitive)
 
@@ -295,6 +322,7 @@ public final class HubMirror: @unchecked Sendable {
             }
         }
         sync { state.files = marks }
+        candidates += linkedCandidates()
 
         // Ask once which of the unsent hashes the hub already holds.
         let sentBefore = sync { state.sent }
@@ -315,8 +343,8 @@ public final class HubMirror: @unchecked Sendable {
 
         let firstWrites = firstWriteTimes(for: Set(unsent.map(\.session)))
         for c in unsent.filter({ !known.contains($0.hash) }).sorted(by: { $0.mtime < $1.mtime }) {
-            guard let html = try? String(contentsOfFile: c.path, encoding: .utf8) else { continue }
-            let slug = Self.slug(path: c.path, base: agentsRoot + "/" + c.session)
+            guard let html = c.stub ?? (try? String(contentsOfFile: c.path, encoding: .utf8)) else { continue }
+            let slug = c.slug ?? Self.slug(path: c.path, base: agentsRoot + "/" + c.session)
             var json: [String: Any] = [
                 "session_id": c.session, "slug": slug, "title": Self.title(of: html, slug: slug),
                 "html": html, "device": device,
@@ -345,6 +373,100 @@ public final class HubMirror: @unchecked Sendable {
 
     /// Every .html under a session directory, to a sane depth, skipping the
     /// panel's own hub and anything hidden or archived.
+    // MARK: - Pages the tree does not hold
+
+    /// A page an agent recorded OUTSIDE the agents tree, read at its own
+    /// address.
+    ///
+    /// The mirror walks the agents tree and nothing else, so a page written
+    /// anywhere else never reached the hosted hub: the local hub listed the
+    /// website's own index.html on 24 Sep and the hosted one had no row for
+    /// it. Ruled 25 Sep: the hub gets a pointer to the thing you should see.
+    /// Not the page's body, which is the project's business and may carry
+    /// relative assets the hub cannot serve, but a link-only row whose
+    /// `published_url` IS the page's live address, so the hub shows it the
+    /// way it shows any published page. A page that declares no address is
+    /// not sent: a row that opens nothing is worse than no row.
+    ///
+    /// Read from the artifact records, the same log the card door reads, so
+    /// the hosted hub and the card cannot disagree about what a session
+    /// wrote. One stat per record per pass; the heads are read only when a
+    /// record has changed since the last pass.
+    func linkedCandidates() -> [Candidate] {
+        guard let artifactRoot else { return [] }
+        let fm = FileManager.default
+        let dir = ArtifactStore.directory(root: artifactRoot)
+        guard let names = try? fm.contentsOfDirectory(atPath: dir) else { return [] }
+        let treePrefix = agentsRoot.hasSuffix("/") ? agentsRoot : agentsRoot + "/"
+        var out: [Candidate] = []
+        var fresh: [String: LinkedRecord] = [:]
+        for session in names where ArtifactStore.isPlausibleSession(session) {
+            let record = dir + "/" + session
+            guard let attrs = try? fm.attributesOfItem(atPath: record),
+                  let size = attrs[.size] as? Int64,
+                  let mtime = attrs[.modificationDate] as? Date else { continue }
+            let mtimeMs = Int64(mtime.timeIntervalSince1970 * 1000)
+            var rows: [LinkedPage]
+            if let old = sync({ state.linked[record] }), old.size == size, old.mtimeMs == mtimeMs {
+                rows = old.rows
+            } else {
+                rows = []
+                for page in ArtifactStore.history(for: session, root: artifactRoot)
+                where !page.path.hasPrefix(treePrefix) {
+                    guard let live = ArtifactStore.liveAddress(of: page.path) else { continue }
+                    let head = (try? String(contentsOfFile: page.path, encoding: .utf8)) ?? ""
+                    let title = Self.title(of: head, slug: Self.linkedSlug(for: page.path))
+                    rows.append(LinkedPage(path: page.path, session: session,
+                                           url: live.absoluteString, title: title,
+                                           firstWriteMs: Int64(page.at.timeIntervalSince1970 * 1000)))
+                }
+            }
+            fresh[record] = LinkedRecord(size: size, mtimeMs: mtimeMs, rows: rows)
+            for row in rows where fm.fileExists(atPath: row.path) {
+                let stub = Self.linkStub(row)
+                out.append(Candidate(path: row.path, session: session, hash: Self.sha256(stub),
+                                     mtime: Date(timeIntervalSince1970: Double(row.firstWriteMs) / 1000),
+                                     stub: stub, slug: Self.linkedSlug(for: row.path)))
+            }
+        }
+        sync { state.linked = fresh }
+        return out
+    }
+
+    /// `~/Projects/tranquilitybase-site/index.html` -> `tranquilitybase-site-index`:
+    /// the directory names the project, the file names the page.
+    static func linkedSlug(for path: String) -> String {
+        let file = ((path as NSString).lastPathComponent as NSString).deletingPathExtension
+        let dir = ((path as NSString).deletingLastPathComponent as NSString).lastPathComponent
+        let raw = (dir.isEmpty ? file : dir + "-" + file).lowercased()
+        let cleaned = raw.map { $0.isLetter || $0.isNumber ? String($0) : "-" }.joined()
+            .replacingOccurrences(of: "-+", with: "-", options: .regularExpression)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+        return cleaned.isEmpty ? "page" : String(cleaned.prefix(80))
+    }
+
+    /// The row the hub holds for a page it cannot: a title, the session,
+    /// the live address in the same `intranet:url` tag share-as-page writes
+    /// (so `published_url` is filled by the ordinary path), and one link.
+    static func linkStub(_ page: LinkedPage) -> String {
+        func e(_ s: String) -> String {
+            s.replacingOccurrences(of: "&", with: "&amp;")
+                .replacingOccurrences(of: "<", with: "&lt;")
+                .replacingOccurrences(of: "\"", with: "&quot;")
+        }
+        return """
+        <!doctype html><html lang="en"><head><meta charset="utf-8">
+        <title>\(e(page.title))</title>
+        <meta name="intranet:session" content="\(e(page.session))">
+        <meta name="intranet:url" content="\(e(page.url))">
+        <meta name="intranet:summary" content="A page this agent wrote outside its archive; it is read at its own address.">
+        </head><body>
+        <p>This page is read at <a href="\(e(page.url))">\(e(page.url))</a>.</p>
+        <p><small>On the Mac that wrote it: <code>\(e(page.path))</code></small></p>
+        </body></html>
+        """
+    }
+
     static func walk(_ base: String, depth: Int = 0) -> [String] {
         guard depth <= 6, let names = try? FileManager.default.contentsOfDirectory(atPath: base) else { return [] }
         var out: [String] = []

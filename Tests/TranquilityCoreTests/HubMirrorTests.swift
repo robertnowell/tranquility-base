@@ -127,6 +127,55 @@ final class HubMirrorTests: XCTestCase {
         XCTAssertEqual(now.timeIntervalSince1970, before.timeIntervalSince1970, accuracy: 1)
     }
 
+    /// A page the tree does not hold, recorded by the hook (the website's
+    /// own index.html on 24 Sep), reaches the hub as a link-only row whose
+    /// published address is the page's own. Sent once; a page that declares
+    /// no address is not sent at all.
+    func testAPageOutsideTheTreeIsSentAsALinkOnlyRow() async throws {
+        let hub = FakeHub()
+        // Not under the temp directory: the artifact record refuses /var/folders
+        // and /tmp by design, and a fixture there passes vacuously (see
+        // ArtifactStore.excluded). Somewhere the record accepts, cleaned up here.
+        let home = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Caches/tb-tests/mirror-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: home) }
+        let site = home.appendingPathComponent("Projects/tranquilitybase-site/index.html")
+        let plain = home.appendingPathComponent("Projects/other/plain.html")
+        for f in [site, plain] {
+            try FileManager.default.createDirectory(at: f.deletingLastPathComponent(), withIntermediateDirectories: true)
+        }
+        try "<html><head><title>Tranquility Base: talk to your agents</title><link rel=\"canonical\" href=\"https://tranquilitybase.dev/\"></head><body>site</body></html>"
+            .write(to: site, atomically: true, encoding: .utf8)
+        try "<html><head><title>nothing</title></head></html>".write(to: plain, atomically: true, encoding: .utf8)
+        let artifacts = tmp.appendingPathComponent("support").path
+        XCTAssertTrue(ArtifactStore.record(site.path, session: session, root: artifacts))
+        XCTAssertTrue(ArtifactStore.record(plain.path, session: session, root: artifacts))
+
+        let m = HubMirror(transport: hub, agentsRoot: tmp.appendingPathComponent("agents").path,
+                          stateURL: tmp.appendingPathComponent("state.json"), device: "test-mac",
+                          store: nil, artifactRoot: artifacts)
+        m.liveSessions = { [:] }
+        let first = await m.run(docs: true, turns: false)
+        XCTAssertEqual(first.documents, 1)
+        let sent = hub.last("api/ingest")!
+        XCTAssertEqual(sent["session_id"] as? String, session)
+        XCTAssertEqual(sent["slug"] as? String, "tranquilitybase-site-index")
+        XCTAssertEqual(sent["title"] as? String, "Tranquility Base: talk to your agents")
+        XCTAssertEqual(sent["published_url"] as? String, "https://tranquilitybase.dev/")
+        let html = (sent["html"] as? String) ?? ""
+        XCTAssertTrue(html.contains("href=\"https://tranquilitybase.dev/\""), html)
+        XCTAssertFalse(html.contains("<body>site</body>"), "the page's body is the project's, not the hub's")
+        // Again: the record has not moved, nothing goes.
+        let second = await m.run(docs: true, turns: false)
+        XCTAssertEqual(second.documents, 0)
+        XCTAssertEqual(hub.count("api/ingest"), 1)
+    }
+
+    func testTheLinkedSlugNamesTheProjectAndThePage() {
+        XCTAssertEqual(HubMirror.linkedSlug(for: "/Users/x/Projects/tranquilitybase-site/index.html"), "tranquilitybase-site-index")
+        XCTAssertEqual(HubMirror.linkedSlug(for: "/Users/x/Projects/Contract Proof/brief-coframe.html"), "contract-proof-brief-coframe")
+    }
+
     func testTheSlugIsThePathUnderTheAgentWithSlashesFolded() {
         XCTAssertEqual(HubMirror.slug(path: "/a/agents/S/2026-09-07-x/index.html", base: "/a/agents/S"), "2026-09-07-x-index")
         XCTAssertEqual(HubMirror.slug(path: "/a/agents/S/plan.html", base: "/a/agents/S"), "plan")

@@ -667,6 +667,23 @@ public enum HomeBase {
         return published[(file as NSString).deletingPathExtension]
     }
 
+    /// Where a hub row sends the reader.
+    ///
+    /// A page in the agents tree opens as the file: the local hub is the
+    /// offline export, and the file is the copy that is always current. A
+    /// page anywhere else opens at the address it declares for itself, when
+    /// it declares one -- on 24 Sep the website's own index.html, which is
+    /// read at https://tranquilitybase.dev/ and nowhere else (ruled 25 Sep:
+    /// the pointer is to the thing you should see). `PageDestination` holds
+    /// the rule; this only asks it.
+    static func readHref(for page: ArtifactStore.Page, root: URL = HomeBase.root) -> String {
+        let inTree = page.path.hasPrefix(root.path.hasSuffix("/") ? root.path : root.path + "/")
+        if !inTree, let live = ArtifactStore.liveAddress(of: page.path) {
+            return live.absoluteString
+        }
+        return "file://" + page.path
+    }
+
     static func pageItems(_ pages: [ArtifactStore.Page],
                           e: (String) -> String,
                           published: [String: String]) -> String {
@@ -693,7 +710,7 @@ public enum HomeBase {
             let live = publishedURL(for: page, in: published).map {
                 "<a class=\"live\" href=\"\(e($0))\" target=\"_blank\" rel=\"noopener\">published</a>"
             } ?? ""
-            return "<li><a class=\"page\" href=\"file://\(e(page.path))\""
+            return "<li><a class=\"page\" href=\"\(e(readHref(for: page)))\""
                 + " target=\"_blank\" rel=\"noopener\"\(blurb)>"
                 + "\(e(name))</a>\(live)\(on)</li>"
         }.joined()
@@ -764,7 +781,7 @@ public enum HomeBase {
                 ? "<span class=\"tags none\">untagged</span>"
                 : "<span class=\"tags\">"
                     + summary.tags.map { "<span>\(e($0))</span>" }.joined() + "</span>"
-            rows += "<li data-tags=\"\(key)\"><a class=\"page\" href=\"file://\(e(page.path))\""
+            rows += "<li data-tags=\"\(key)\"><a class=\"page\" href=\"\(e(readHref(for: page)))\""
                 + " target=\"_blank\" rel=\"noopener\"\(blurb)>\(e(name))</a>"
                 + "\(live)\(on)\(shown)</li>"
         }

@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Agents</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='88'>🛰️</text></svg>">
+<style>
+/* NO HUE HERE, DELIBERATELY.
+   In this system colour is state, not identity. StateLegend rules three lamps
+   with measured contrast and a doctrine behind them: green is "go" and is the
+   brightest because it is the rare one that wants you, blue is "working" and is
+   the DIMMEST on purpose, amber is "stopped, needs you". A dark panel means all
+   is nominal.
+   A column of 460 coloured dots standing for identity puts greens and ambers in
+   front of a reader who has been taught those mean go and fault. Identity is
+   carried by the NAME, which every agent has. */
+:root{
+  --bg:#fcfbf8; --paper:#f4f2ec; --ink:#1f1e1c; --heading:#141312;
+  --muted:#57534c; --faint:#6e6a63; --line:#ddd9cf; --rule:#1a1a1a;
+  --serif:'Iowan Old Style','Palatino Linotype',Palatino,Georgia,serif;
+  --sans:ui-sans-serif,-apple-system,'Helvetica Neue',sans-serif;
+  --mono:'Berkeley Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+@media(prefers-color-scheme:dark){
+  :root{--bg:#131310;--paper:#1c1b18;--ink:#eceae2;--heading:#f3f1e9;
+        --muted:#a5a196;--faint:#77746c;--line:#33322d;--rule:#eceae2;}
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);
+     font-size:15px;line-height:1.5;-webkit-font-smoothing:antialiased}
+.shell{display:grid;grid-template-columns:310px 1fr;height:100vh}
+
+aside{border-right:1px solid var(--line);background:var(--paper);
+      display:flex;flex-direction:column;min-height:0}
+aside header{padding:20px 20px 10px}
+/* The app's own mark, drawn rather than linked: this page is opened from the
+   filesystem and must carry everything it needs. The two inks are the icon's
+   own (#2a2c28 ground, #b4b3a9 mark) and are the ONLY hard-coded colours here —
+   they belong to the logo, not to the palette, and the state legend still owns
+   every other colour on the page. */
+.mark{display:flex;align-items:center;gap:8px}
+.mark svg{flex:none;display:block}
+.mark .ground{fill:#2a2c28}
+.mark .glyph{stroke:#b4b3a9} .mark .bar{fill:#b4b3a9}
+/* On a dark ground the icon's own tile all but disappears — measured, not
+   assumed: rendered at 4x, #2a2c28 on #1c1b18 reads as a smudge with the ring
+   floating in it. So on dark the tile goes and the mark becomes a glyph in the
+   page's own ink, which is how a wordmark behaves in a dark UI anyway. */
+@media(prefers-color-scheme:dark){
+  .mark .ground{fill:none}
+  .mark .glyph{stroke:var(--ink)} .mark .bar{fill:var(--ink)}
+}
+.kicker{font-family:var(--mono);font-size:10px;letter-spacing:.14em;
+        text-transform:uppercase;color:var(--faint)}
+aside h1{font-family:var(--serif);font-size:23px;font-weight:600;margin:4px 0 0;
+         letter-spacing:-.01em;color:var(--heading)}
+aside .sub{font-family:var(--mono);font-size:10px;color:var(--faint);margin-top:5px}
+#q{margin:10px 20px 12px;padding:7px 10px;font-family:var(--mono);font-size:12px;
+   background:var(--bg);color:var(--ink);border:1px solid var(--line);
+   border-radius:3px;width:calc(100% - 40px)}
+#q:focus{outline:none;border-color:var(--rule)}
+#agents{overflow-y:auto;flex:1;padding:0 10px 20px}
+
+/* A row is a NAME. The id is the handle underneath it, for when you need to
+   type it; it is never the thing you read first. */
+.agent{display:block;width:100%;text-align:left;border:0;background:none;
+       color:inherit;font:inherit;cursor:pointer;padding:8px 10px;border-radius:4px}
+.agent:hover{background:var(--bg)}
+.agent[aria-current="true"]{background:var(--bg);box-shadow:inset 2px 0 0 var(--rule)}
+.agent .nm{display:block;font-size:13.5px;line-height:1.35;color:var(--heading);
+           overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.agent[aria-current="true"] .nm{font-weight:600}
+.agent .sub2{display:flex;gap:8px;margin-top:2px;font-family:var(--mono);
+             font-size:9.5px;color:var(--faint)}
+.agent .sub2 .n{margin-left:auto}
+
+main{min-height:0;display:flex;flex-direction:column}
+main .bar{display:flex;gap:14px;align-items:baseline;padding:14px 22px;
+          border-bottom:1px solid var(--line);flex-wrap:wrap}
+main .bar h2{font-family:var(--serif);font-size:19px;font-weight:600;margin:0;
+             color:var(--heading);flex:1;min-width:0}
+main .bar .id{font-family:var(--mono);font-size:10.5px;color:var(--faint)}
+main .bar a{font-family:var(--mono);font-size:10.5px;color:var(--muted);
+            text-decoration:none;border:1px solid var(--line);padding:4px 10px;
+            border-radius:4px}
+main .bar a:hover{border-color:var(--rule);color:var(--ink)}
+/* THE PANE IS THE HUB. Not a second listing of the same links in a worse
+   layout: the hub is already the page that answers "what has this agent done",
+   so this frames it rather than paraphrasing it. */
+iframe{flex:1;width:100%;border:0;background:var(--bg)}
+.none{font-family:var(--mono);font-size:12px;color:var(--faint);padding:40px 22px}
+@media(max-width:820px){.shell{grid-template-columns:1fr;height:auto}
+  aside{border-right:0;border-bottom:1px solid var(--line)}
+  #agents{max-height:40vh} iframe{height:70vh;flex:none}}
+</style>
+</head>
+<body>
+<div class="shell">
+  <aside>
+    <header>
+      <div class="mark">
+        <svg viewBox="0 0 32 32" width="22" height="22" aria-hidden="true">
+          <rect class="ground" width="32" height="32" rx="7.2"/>
+          <circle class="glyph" cx="16" cy="13.4" r="4.4" stroke-width="2.2" fill="none"/>
+          <rect class="bar" x="9.2" y="20.3" width="13.6" height="2" rx="0.5"/>
+        </svg>
+        <span class="kicker">Tranquility Base</span>
+      </div>
+      <h1>Agents</h1>
+      <div class="sub">__BUILT__</div>
+    </header>
+    <input id="q" type="search" placeholder="filter by name, id, or work…" autocomplete="off">
+    <div id="agents" role="listbox" aria-label="Agents"></div>
+  </aside>
+  <main>
+    <div class="bar" id="bar"></div>
+    <iframe id="pane" title="The selected agent's hub"></iframe>
+  </main>
+</div>
+<script>
+const AGENTS = /*__AGENTS__*/[];
+const ROOT = "__AGENTS_ROOT__";
+let current = AGENTS[0]?.id || null, query = "";
+
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const hub = id => "file://" + encodeURI(ROOT + "/" + id + "/index.html");
+const hay = a => (a.id + " " + (a.name || "") + " " + (a.terms || "")).toLowerCase();
+const visible = () => { const q = query.trim().toLowerCase();
+  return q ? AGENTS.filter(a => hay(a).includes(q)) : AGENTS; };
+
+function drawSidebar() {
+  const list = visible();
+  document.getElementById("agents").innerHTML = list.map(a => `
+    <button class="agent" data-id="${esc(a.id)}" aria-current="${a.id === current}">
+      <span class="nm">${esc(a.name || ("Agent " + a.id))}</span>
+      <span class="sub2"><span title="${esc(a.id)}">${esc(a.id.slice(0, 8))}</span>${a.last ? `<span>${esc(a.last)}</span>` : ""}
+        <span class="n">${a.pages}</span></span>
+    </button>`).join("") || `<div class="none">Nothing matches.</div>`;
+  if (list.length && !list.some(a => a.id === current)) { current = list[0].id; drawPane(); }
+}
+
+function drawPane() {
+  const a = AGENTS.find(x => x.id === current);
+  const bar = document.getElementById("bar"), pane = document.getElementById("pane");
+  if (!a) { bar.innerHTML = ""; pane.removeAttribute("src"); return; }
+  bar.innerHTML = `<h2>${esc(a.name || ("Agent " + a.id))}</h2>
+    <span class="id" title="${esc(a.id)}">${esc(a.id.slice(0, 8))}${a.pages ? " · " + a.pages + " page" + (a.pages === 1 ? "" : "s") : ""}</span>
+    <a href="${esc(hub(a.id))}" target="_blank" rel="noopener">Open on its own &rarr;</a>`;
+  pane.src = hub(a.id);
+}
+
+document.getElementById("agents").addEventListener("click", e => {
+  const b = e.target.closest(".agent"); if (!b) return;
+  current = b.dataset.id; drawSidebar(); drawPane();
+});
+document.getElementById("q").addEventListener("input", e => { query = e.target.value; drawSidebar(); });
+drawSidebar(); drawPane();
+</script>
+</body>
+</html>

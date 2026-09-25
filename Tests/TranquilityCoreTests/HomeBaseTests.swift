@@ -269,6 +269,31 @@ final class HomeBaseTests: XCTestCase {
             .contains("published"))
     }
 
+    /// A page the tree does not hold is read at the address it declares;
+    /// a page in the tree is read as the file (the offline export). Ruled
+    /// 25 Sep after the hub linked the website's source as file://.
+    func testAPageOutsideTheTreeLinksItsOwnAddress() throws {
+        let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("tb-homebase-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let root = tmp.appendingPathComponent("agents", isDirectory: true)
+        let site = tmp.appendingPathComponent("site/index.html")
+        let inTree = root.appendingPathComponent("s/report.html")
+        for f in [site, inTree] {
+            try FileManager.default.createDirectory(at: f.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try "<html><head><link rel=\"canonical\" href=\"https://tranquilitybase.dev/\"></head></html>"
+                .write(to: f, atomically: true, encoding: .utf8)
+        }
+        XCTAssertEqual(HomeBase.readHref(for: ArtifactStore.Page(path: site.path, at: Date()), root: root),
+                       "https://tranquilitybase.dev/")
+        XCTAssertEqual(HomeBase.readHref(for: ArtifactStore.Page(path: inTree.path, at: Date()), root: root),
+                       "file://" + inTree.path)
+        let html = HomeBase.pageItems([ArtifactStore.Page(path: site.path, at: Date())],
+                                      e: HomeBase.escape, published: [:])
+        XCTAssertTrue(html.contains("href=\"https://tranquilitybase.dev/\""), html)
+        XCTAssertFalse(html.contains("file://"), html)
+    }
+
     /// Site furniture is what repeats. One title cannot say which half is the
     /// brand; a list can.
     func testTheSharedAffixIsStrippedFromPageTitles() {
