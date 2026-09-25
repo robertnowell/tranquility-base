@@ -271,6 +271,40 @@ final class ManagerToolHostTests: XCTestCase {
         XCTAssertEqual(tail["total_turns"] as? Int, 3)
     }
 
+    /// "What did I ask you for?" is at the start of a long session, far
+    /// before any tail: a query finds it anywhere, in the order said (hf-6).
+    func testATranscriptSearchFindsTheStartOfALongSessionInOrder() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("t-\(UUID().uuidString).jsonl")
+        defer { try? FileManager.default.removeItem(at: url) }
+        var lines = [#"{"type":"user","message":{"content":"Build a landing page. Inspiration: technical manuals, clean type."}}"#]
+        for i in 0..<200 { lines.append(#"{"type":"assistant","message":{"content":[{"type":"text","text":"working step \#(i)"}]}}"#) }
+        lines.append(#"{"type":"assistant","message":{"content":[{"type":"text","text":"Used the manuals inspiration for the hero."}]}}"#)
+        try lines.joined(separator: "\n").write(to: url, atomically: true, encoding: .utf8)
+        XCTAssertFalse((TranscriptTail.read(path: url.path, chars: 2000)["turns"] as? [[String: String]] ?? [])
+            .contains { $0["text"]?.contains("Build a landing page") == true }, "the tail cannot reach it")
+        let found = TranscriptTail.search(path: url.path, query: "landing page inspiration", chars: 2000)
+        let turns = try XCTUnwrap(found["turns"] as? [[String: String]])
+        XCTAssertEqual(turns.first?["text"], "Build a landing page. Inspiration: technical manuals, clean type.")
+        XCTAssertEqual(turns.first?["turn"], "1")
+        XCTAssertEqual(turns.count, 2, "the two turns that match, and none of the rest")
+        XCTAssertEqual(turns.last?["who"], "assistant")
+    }
+
+    /// A Codex session read as empty: its turns are response_item messages.
+    func testACodexTranscriptIsReadAsTurns() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("t-\(UUID().uuidString).jsonl")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let lines = [
+            #"{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"summarize the meeting"}]}}"#,
+            #"{"type":"response_item","payload":{"type":"reasoning","summary":[]}}"#,
+            #"{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Eight decisions to review."}]}}"#,
+        ]
+        try lines.joined(separator: "\n").write(to: url, atomically: true, encoding: .utf8)
+        let turns = try XCTUnwrap(TranscriptTail.read(path: url.path, chars: 1000)["turns"] as? [[String: String]])
+        XCTAssertEqual(turns.map { $0["who"] ?? "" }, ["user", "assistant"])
+        XCTAssertEqual(turns.last?["text"], "Eight decisions to review.")
+    }
+
     func testAMissingTranscriptSaysSoRatherThanLookingEmpty() {
         let tail = TranscriptTail.read(path: "/nonexistent/\(UUID().uuidString).jsonl", chars: 100)
         XCTAssertEqual(tail["note"] as? String, "transcript file missing")
