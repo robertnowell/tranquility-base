@@ -303,8 +303,15 @@ extension StatusHUD {
         let root = base.appendingPathComponent("support").path
         let page = dir.appendingPathComponent("report.html")
         let now = Date()
+        // The page declares its own address, as a deployed page does: the
+        // drill's fixture lives under Caches, not the agents tree, so its
+        // door is read at that address and the label says Open Page. A
+        // fixture with no address would say Open File, and the first run
+        // of this drill after 25 Sep failed exactly there, still asking for
+        // Open Report over a page the hub could not hold.
+        let live = "https://drill.example.test/card-door/"
         func write(_ body: String, at: Date) throws {
-            try "<html><head></head><body>\(body)</body></html>"
+            try "<html><head><link rel=\"canonical\" href=\"\(live)\"></head><body>\(body)</body></html>"
                 .write(to: page, atomically: true, encoding: .utf8)
             try fm.setAttributes([.modificationDate: at], ofItemAtPath: page.path)
         }
@@ -346,11 +353,18 @@ extension StatusHUD {
             try write("v2", at: now.addingTimeInterval(-30 * 60))
             reconcile()
             render()
+            // The label follows the destination (ruled 15 Aug, extended
+            // 25 Sep): this page is read at its own address, so Open Page.
             let rewrittenOpens = !openPageButton.isHidden
-                && openPageButton.attributedTitle.string.contains(StateLegend.openReportTitle)
+                && openPageButton.attributedTitle.string.contains(StateLegend.openPageTitle)
             let expectedPath = ArtifactStore.canonical(page.path)
+            let door = resolver(session)
             let doorIsThePage: Bool = {
-                if case .report(let p, _)? = resolver(session) { return p == expectedPath }
+                if case .report(let p, _)? = door { return p == expectedPath }
+                return false
+            }()
+            let doorIsTheAddress: Bool = {
+                if case .report(_, .live(let url))? = door { return url.absoluteString == live }
                 return false
             }()
             doorForSession = priorResolver
@@ -358,6 +372,7 @@ extension StatusHUD {
                 ("untouchedIsTheHub", untouchedIsTheHub),
                 ("rewrittenOpens", rewrittenOpens),
                 ("doorIsThePage", doorIsThePage),
+                ("doorIsTheAddress", doorIsTheAddress),
             ])
         } catch {
             SelfTest.skipped("cardDoor", because: "fixture: \(error)")
