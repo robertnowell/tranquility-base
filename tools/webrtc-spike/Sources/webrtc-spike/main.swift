@@ -179,7 +179,34 @@ final class Spike: NSObject, LKRTCPeerConnectionDelegate {
     func start() {
         let config = LKRTCConfiguration()
         config.sdpSemantics = .unifiedPlan
-        config.iceServers = [LKRTCIceServer(urlStrings: ["stun:stun.l.google.com:19302"])]
+        // TB_ICE_SERVERS is the same JSON a relay's credential API answers
+        // with, so the spike can be pointed at exactly what the app will use.
+        // TB_RELAY_ONLY then refuses every direct path, which is the only way
+        // to prove a relay works: leave both policies open and the connection
+        // succeeds directly and tells you nothing.
+        let env = ProcessInfo.processInfo.environment
+        if let raw = env["TB_ICE_SERVERS"], let data = raw.data(using: .utf8),
+           let list = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+            config.iceServers = list.compactMap { entry in
+                let urls = (entry["urls"] as? [String]) ?? (entry["urls"] as? String).map { [$0] }
+                guard let urls else { return nil }
+                return LKRTCIceServer(urlStrings: urls,
+                                      username: entry["username"] as? String,
+                                      credential: entry["credential"] as? String)
+            }
+            let relays = list.filter { entry in
+                let urls = (entry["urls"] as? [String]) ?? (entry["urls"] as? String).map { [$0] } ?? []
+                return urls.contains { $0.hasPrefix("turn:") || $0.hasPrefix("turns:") }
+            }
+            print("ice: \(config.iceServers.count) server(s), \(relays.count) that can relay")
+        } else {
+            config.iceServers = [LKRTCIceServer(urlStrings: ["stun:stun.l.google.com:19302"])]
+            print("ice: the shipped stun server, which cannot relay")
+        }
+        if env["TB_RELAY_ONLY"] != nil {
+            config.iceTransportPolicy = .relay
+            print("ice: RELAY ONLY — a direct path is refused, so connecting proves the relay")
+        }
         let constraints = LKRTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)
         guard let pc = factory.peerConnection(with: config, constraints: constraints, delegate: self) else {
             print("no peer connection"); exit(1)
