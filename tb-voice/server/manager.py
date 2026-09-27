@@ -178,15 +178,6 @@ class JevClient:
                 "criteria": {i.value: d for i, d in INTENTS.items()}},
         }
 
-    async def target(self, utterance: str, candidates: list[dict]) -> dict:
-        crit = {c["sessionId"]: f"{c.get('name') or ''}: {c.get('goal') or c.get('topic') or c['project']}" for c in candidates}
-        answers = await self.ask(
-            {"utterance": utterance, "sessions": crit},
-            {"target": {"type": "choice",
-                        "instructions": "Which session is this message meant for, judged by its goal?",
-                        "criteria": crit}})
-        return answers["target"]
-
     async def harness(self, utterance: str) -> str:
         """Which coding agent a start asks for: "codex" or "claude". Asked of the
         classifier, never found by the word (hf-7); anything else is Claude Code."""
@@ -202,18 +193,6 @@ class JevClient:
             return "claude"
         return "codex" if _chosen(answers["harness"]) == "codex" else "claude"
 
-    async def is_action(self, utterance: str, stage_name: str) -> float:
-        """A request about the session on stage: is it asking the session to DO
-        something, or asking about its work? An action is typed in; a question is
-        answered from the record. 17:21: 'can you open that in the browser?' was
-        answered with a promise the brain could not keep."""
-        answers = await self.ask(
-            {"agent_on_stage": stage_name, "text_to_judge": utterance},
-            {"action": {"type": "noul",
-                        "instructions": "Is the developer asking the agent on stage to perform an action (open, run, create, change, send, fix, deploy, show), rather than asking a question about its work?",
-                        "criteria": {"true": "An instruction or request for the agent to do something",
-                                     "false": "A question about what the agent did, found, proposes, or why"}}})
-        return float(answers["action"]["noul"])
 
 
 
@@ -298,6 +277,25 @@ LOOP_SYSTEM = (
     "markdown, no quotation marks around names, and never an id, hash, path, URL, branch or "
     "file name.\n"
     "- You only read. You cannot send, start, invite or change anything, and never say you did.")
+# What the loop is told when the developer asks it to send (hf-6 step 2). It
+# points; it never writes: the words sent are copied from what was said, and
+# span.check refuses anything else. The four examples are the span picker's,
+# measured on 12 real sends (23 Sep) before the picker was folded in here.
+LOOP_ACT = (
+    f"You are {NAME}, the hands-free manager of a developer's coding agents. The developer "
+    "asked you to send a message to one of them (or to take a note). You decide WHETHER to "
+    "send and TO WHOM; which of their words are the message is picked after you, by the "
+    "app, from what they said. You never write the message.\n"
+    "You are given the numbered lines they said since the last message was sent, the request, "
+    "who is on stage, and the active agents. End with exactly one act:\n"
+    "- send(agent) when the message is in those lines or in the request itself. Leave `agent` "
+    "out for the agent on stage; otherwise the id of the agent the request names.\n"
+    "- ask(question) when you cannot tell which agent it is for: nobody is on stage and the "
+    "request names no agent, or it could mean two. One short question.\n"
+    "- wait() when they have not said the message yet ('send a message to it' with nothing "
+    "said): the manager keeps listening.\n"
+    "Never pick an agent by guessing from what the message is about.")
+
 TAIL_CHARS = 7000  # of the staged agent's transcript, given to the loop up front
 MATCH_CHARS = 6000  # of its passages matching the question, also up front
 SPOKEN_WORDS = 30  # what an answer may run to aloud; longer is cut down by the model once (loop.py)
@@ -447,6 +445,7 @@ class Brain:
             record("brain", body, r.json(), ms=int((time.monotonic() - t0) * 1000))
             return span.parse_answer(r.json()["choices"][0]["message"].get("content") or "")
         return None
+
 
 
 class Manager(FrameProcessor):
@@ -816,16 +815,8 @@ class Manager(FrameProcessor):
         if not self.stage:
             await self._ask_loop(text)
             return
-        # An instruction to the session on stage is typed in; a question is answered.
-        try:
-            p_action = await self._jev.is_action(text, self.stage.get("name") or self.stage.get("goal") or "")
-        except Exception as e:
-            logger.warning(f"is_action failed: {e}")
-            p_action = 0.0
-        if p_action >= 0.5:
-            await emit(self, "addressed", p=1.0, intent=Intent.SEND_MESSAGE.value, ms=0, text=text[:120])
-            await self._do_send_message(text, frame, direction)
-            return
+        # A question is answered, never sent: an instruction for the agent is
+        # the classifier's SEND_MESSAGE, and goes to _act (hf-6 step 2).
         await self._answer_about_stage(text, await self._brief(self.stage["sessionId"]))
 
     async def _answer_about_stage(self, question: str, brief: dict | None):
@@ -913,23 +904,7 @@ class Manager(FrameProcessor):
                                                              "leave it out for the agent on stage"}}
 
         async def resolve(a) -> str | None:
-            """The agent a tool call means: the one on stage when none is named;
-            otherwise an id, a unique id prefix, or a name, never a guess."""
-            want = (a.get("agent") or "").strip()
-            if not want:
-                return (self.stage or {}).get("sessionId")
-            if await self._brief(want):
-                return want
-            live = await self._targets()
-            hits = [t["sessionId"] for t in live if t.get("sessionId", "").startswith(want)]
-            if len(hits) != 1:
-                low = want.lower()
-                hits = [t["sessionId"] for t in live
-                        if low in (t.get("name") or "").lower() or low in (t.get("goal") or "").lower()]
-            if len(hits) == 1:
-                return hits[0]
-            stage = (self.stage or {}).get("sessionId")
-            return stage if stage and stage.startswith(want[:8]) else None
+            return await self._resolve_agent(a.get("agent"))
 
         def unknown(a):
             return {"error": f"no agent matches {a.get('agent')!r}; use an id from agents, or leave "
@@ -986,6 +961,25 @@ class Manager(FrameProcessor):
             Tool("said", "What the developer has said aloud since the last message was sent, numbered.", said),
         ]
 
+    async def _resolve_agent(self, want: str | None) -> str | None:
+        """The agent a tool call means: the one on stage when none is named;
+        otherwise an id, a unique id prefix, or a name, never a guess."""
+        want = (want or "").strip()
+        if not want:
+            return (self.stage or {}).get("sessionId")
+        if await self._brief(want):
+            return want
+        live = await self._targets()
+        hits = [t["sessionId"] for t in live if t.get("sessionId", "").startswith(want)]
+        if len(hits) != 1:
+            low = want.lower()
+            hits = [t["sessionId"] for t in live
+                    if low in (t.get("name") or "").lower() or low in (t.get("goal") or "").lower()]
+        if len(hits) == 1:
+            return hits[0]
+        stage = (self.stage or {}).get("sessionId")
+        return stage if stage and stage.startswith(want[:8]) else None
+
     async def _transcript(self, sid: str, chars: int, query: str = "") -> str:
         """The agent's own words, its latest or those matching `query`: from
         the Mac when hosted (the file is there, hf-4), from its file when local."""
@@ -1041,22 +1035,113 @@ class Manager(FrameProcessor):
 
     async def _do_send_message(self, text, frame, direction):
         """A send is a request to the manager, never a verdict read off a
-        fragment of dictation (compose mode is gone, 24 Sep): the words sent
-        are the developer's own, picked from what they said (span.py). With
-        nothing to send, the target is set and the manager keeps listening; a
-        later "send that" goes there."""
-        if self.stage:
-            await self._send_to(self.stage, text)
+        fragment of dictation (compose mode is gone, 24 Sep). The loop decides
+        where and which words, pointing at what was said; the app copies them."""
+        await self._act(text)
+
+    async def _act(self, request: str, notes: dict | None = None):
+        """Send (or note) by pointing (hf-6 step 2): the loop ends in one act,
+        send, ask or wait, and nothing it writes is ever the message. The send
+        itself happens here, after the loop, through the app's own Send."""
+        cands = await span.candidates()
+        who = self.stage or {}
+        context = []
+        if notes:
+            context.append("Destination: the Notes agent, which keeps the developer's notes. "
+                           "Leave `agent` out.")
+        elif who:
+            context.append(f"Agent on stage: {who.get('name') or who.get('project') or 'unnamed'}"
+                           f"{' - ' + who['goal'] if who.get('goal') else ''} "
+                           f"(agent id {who['sessionId']})")
+        else:
+            context.append("Nobody is on stage: the request says who it is for.")
+        if not notes:
+            # Who could receive it, up front: left to look, it asked instead
+            # (2 of 3 runs of "send that to the Mailchimp agent", 26 Sep).
+            live = await self._targets()
+            if live:
+                context.append("Active agents (lamp on): " + "; ".join(
+                    f"{t.get('name') or t.get('project') or 'unnamed'} - {t.get('goal') or ''} (id {t['sessionId']})"
+                    for t in live[:20]))
+        before = exchange_lines()
+        if before:
+            context.append("What was said just before, oldest first (you = the developer):\n" + "\n".join(before))
+        context.append("Their lines since the last message was sent (oldest first):\n"
+                       + ("\n".join(f"[{c.n}] {c.text}" for c in cands) or "(none)"))
+        context.append(f"Request: {request}")
+
+        async def send(a):
+            if notes:
+                target = notes
+            else:
+                sid = await self._resolve_agent(a.get("agent"))
+                live = {t["sessionId"]: t for t in await self._targets()}
+                target = live.get(sid) or (self.stage if sid and sid == who.get("sessionId") else None)
+                if not target:
+                    return {"error": f"no active agent matches {a.get('agent')!r}; use agents, or ask"}
+            # The words: the span picker, unchanged from main, measured on 12
+            # real sends (0 wrong in 60, 23 Sep). Asked to point at the words
+            # itself, the loop sent something that was not the message 8 times
+            # in 85 (26 Sep, drills/send_eval.py): whether and to whom are the
+            # loop's; which words stay the picker's.
+            name = "Notes" if notes else (target.get("name") or target.get("project") or "the agent")
+            try:
+                answer = await self._brain.pick_span(request, cands, name,
+                                                     "keeping the developer's notes" if notes else target.get("goal"))
+            except Exception as e:
+                logger.error(f"span pick failed: {e}")
+                answer = None
+            pick = span.check(answer, cands, request)
+            logger.info(f"span: {len(cands)} candidate lines; answer {answer}; pick {pick}")
+            if not pick:
+                return {"done": True, "waited": True, "target": target}
+            return {"done": True, "target": target, "text": span.text_of(pick, cands)}
+
+        async def ask(a):
+            q = " ".join((a.get("question") or "").split())
+            return {"done": True, "question": q} if q else {"error": "ask needs a question"}
+
+        async def wait(a):
+            return {"done": True}
+
+        reads = [t for t in self._loop_tools() if t.name in ("agents", "waiting", "brief")]
+        acts = [
+            Tool("send", "Send their message: to the agent on stage when `agent` is left out, otherwise to "
+                         "the agent with this id. Their own words are picked after you.", send,
+                 {"agent": {"type": "string"}}, terminal=True),
+            Tool("ask", "Ask the developer one short question (at most 15 words) when the agent or the "
+                        "words are unclear.", ask, {"question": {"type": "string"}}, ["question"], terminal=True),
+            Tool("wait", "They have not said the message yet: keep listening.", wait, terminal=True),
+        ]
+        outcome = await self._loop.run(LOOP_ACT, "\n\n".join(context), reads + acts)
+        act = outcome.action or {"tool": "wait"}
+        await emit(self, "loop", mode="act", act=act["tool"], steps=outcome.steps, ms=outcome.ms,
+                   stopped=outcome.stopped, calls=[{"tool": c["tool"], "ms": c["ms"]} for c in outcome.calls])
+        logger.info(f"loop act: {act['tool']} after {outcome.steps} steps, {outcome.ms} ms, "
+                    f"calls {[c['tool'] for c in outcome.calls]}")
+        if act["tool"] == "ask":
+            await self._say(spoken(act["question"]))
             return
-        live = await self._targets()
-        if not live:
-            await self._say("I see no live sessions to send to.")
+        if act["tool"] != "send" or act.get("waited"):
+            # Nothing said yet to send: keep listening. A named agent still
+            # takes the stage, so a later "send that" goes there.
+            if act.get("waited") and not notes and act["target"]["sessionId"] != who.get("sessionId"):
+                await self._take_stage(act["target"])
+            await self._earcon("listening")
             return
-        choice = await self._jev.target(text, live)
-        sid = _chosen(choice)
-        c = next((x for x in live if x["sessionId"] == sid), live[0])
-        await self._take_stage(c)
-        await self._send_to(c, text)
+        target, message = act["target"], act["text"]
+        if notes:
+            note(Line(Role.MANAGER, LineKind.ACTION, message, target=target["sessionId"], target_name="Notes"))
+            await self._send(target["sessionId"], message, quiet=True)
+            await self._say("Noted.")
+            return
+        if target["sessionId"] != who.get("sessionId"):
+            await self._take_stage(target)
+        name = target.get("name") or target.get("project") or "the agent"
+        await emit(self, "speaking", voice="manager", text=f"message: {message[:160]}")
+        note(Line(Role.MANAGER, LineKind.ACTION, message, target=target["sessionId"],
+                  target_name=target.get("name") or target.get("goal") or name))
+        await self._send(target["sessionId"], message)
 
     async def _take_stage(self, agent: dict):
         """This agent is who the developer is talking to now. The app enrols a
@@ -1066,32 +1151,6 @@ class Manager(FrameProcessor):
         await emit(self, "stage", session=agent["sessionId"], goal=agent.get("goal"),
                    name=agent.get("name"), project=agent.get("project"))
         await effect(_run(TBASE, "enroll", agent["sessionId"], timeout=10))
-
-    async def _send_to(self, agent: dict, request: str):
-        name = agent.get("name") or agent.get("project") or "the agent"
-        try:
-            message = await self._span_message(request, name, agent.get("goal"))
-        except Exception as e:
-            logger.error(f"span pick failed: {e}")
-            await emit(self, "error", reason=f"span: {str(e)[:120]}")
-            message = None
-        if not message:
-            # Nothing said yet to send: keep listening, target kept.
-            await self._earcon("listening")
-            return
-        await emit(self, "speaking", voice="manager", text=f"message: {message[:160]}")
-        note(Line(Role.MANAGER, LineKind.ACTION, message, target=agent["sessionId"],
-                  target_name=agent.get("name") or agent.get("goal") or name))
-        await self._send(agent["sessionId"], message)
-
-    async def _span_message(self, request: str, agent: str, goal: str | None) -> str | None:
-        """The developer's own words for this send, copied, or None when there
-        is nothing to send yet (span.py)."""
-        cands = await span.candidates()
-        answer = await self._brain.pick_span(request, cands, agent, goal)
-        pick = span.check(answer, cands, request)
-        logger.info(f"span: {len(cands)} candidate lines; answer {answer}; pick {pick}")
-        return span.text_of(pick, cands) if pick else None
 
     async def _do_start_agent(self, text, frame, direction):
         """Defaults, not a chooser: Claude Code in the default project, started
@@ -1142,17 +1201,7 @@ class Manager(FrameProcessor):
         if not dest:
             await self._say("I couldn't start the notes agent.")
             return
-        try:
-            message = await self._span_message(text, "Notes", "keeping the developer's notes")
-        except Exception as e:
-            logger.error(f"span pick failed: {e}")
-            message = None
-        if not message:
-            await self._say("Say the note, then ask me to note it.")
-            return
-        note(Line(Role.MANAGER, LineKind.ACTION, message, target=dest["sessionId"], target_name="Notes"))
-        await self._send(dest["sessionId"], message, quiet=True)
-        await self._say("Noted.")
+        await self._act(text, notes=dest)
 
     async def _notes_session(self) -> dict | None:
         live = {t["sessionId"] for t in await self._targets()}

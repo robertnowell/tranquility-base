@@ -44,6 +44,11 @@ class Tool:
     params: dict = field(default_factory=dict)  # JSON schema properties
     required: list[str] = field(default_factory=list)
     holding: str = "Checking."  # said once when this tool starts late
+    # An act that ends the loop: send, ask, wait. When the model calls one and
+    # it succeeds (returns {"done": True, ...}), the loop stops there with the
+    # result as its action; nothing after it is asked of the model. When it
+    # fails (anything else), the model hears why and may try again.
+    terminal: bool = False
 
     def schema(self) -> dict:
         return {"type": "function", "function": {
@@ -58,6 +63,7 @@ class Outcome:
     calls: list[dict]
     stopped: str | None = None  # "steps" | "time" | "error" when there is no answer
     ms: int = 0
+    action: dict | None = None  # the terminal tool's result, when one ended the loop
 
 
 _THINK = re.compile(r"<think>.*?</think>", re.S)
@@ -89,8 +95,8 @@ class Loop:
         calls: list[dict] = []
         held = False
 
-        def done(answer, steps, stopped=None):
-            return Outcome(answer, steps, calls, stopped, int((time.monotonic() - t0) * 1000))
+        def done(answer, steps, stopped=None, action=None):
+            return Outcome(answer, steps, calls, stopped, int((time.monotonic() - t0) * 1000), action)
 
         for step in range(1, max_steps + 1):
             left = deadline - time.monotonic()
@@ -165,7 +171,26 @@ class Loop:
                     text = text[-RESULT_CAP:] + " [cut: earlier part left out]"
                 return {"role": "tool", "tool_call_id": call["id"], "content": text}
 
-            messages.extend(await asyncio.gather(*(one(c) for c in wanted)))
+            # Reads run together; an act runs after them, alone, and at most
+            # one per step: the first the model asked for.
+            acts = [c for c in wanted if (by_name.get(c["function"]["name"]) or Tool("", "", None)).terminal]
+            reads = [c for c in wanted if c not in acts]
+            results = list(await asyncio.gather(*(one(c) for c in reads)))
+            for c in acts[:1]:
+                msg_out = await one(c)
+                results.append(msg_out)
+                try:
+                    result = json.loads(msg_out["content"])
+                except ValueError:
+                    result = None
+                if isinstance(result, dict) and result.get("done") is True:
+                    return done(None, step, action={"tool": c["function"]["name"], **result})
+            for c in acts[1:]:
+                results.append({"role": "tool", "tool_call_id": c["id"],
+                                "content": json.dumps({"error": "one act per step; this one was not run"})})
+            # Every call the model made gets its result, in the order it asked.
+            order = {c["id"]: i for i, c in enumerate(wanted)}
+            messages.extend(sorted(results, key=lambda m: order.get(m["tool_call_id"], 0)))
         return done(None, max_steps, "steps")
 
     async def _shorten(self, messages: list[dict], answer: str, max_words: int, deadline: float) -> str | None:
