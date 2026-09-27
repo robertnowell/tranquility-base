@@ -76,9 +76,16 @@ public struct GatewayVoiceSession: GatewayMeteredSession, Equatable {
     /// Present on a websocket start: the socket, and its token.
     public let wsUrl: String?
     public let token: String?
-    /// Present on a webrtc start: where the client POSTs its SDP offer and
-    /// PATCHes its ICE candidates. Derived by the Gateway, not by us -- the
-    /// convention lives in one place. VOICE.md.
+    /// Where the host's own offer endpoint lives -- and NOT something a
+    /// managed session is given. The Gateway withholds it on purpose
+    /// (`Sessions.visible`: "the host's offer endpoint is not theirs to call,
+    /// so it never leaves this service"), because that endpoint answers 401 to
+    /// anything without the vendor's public key and this Mac holds no vendor
+    /// keys. The app signals THROUGH the Gateway instead, which is what
+    /// `managedSignaller` does and has always done.
+    ///
+    /// Kept optional and still checked when present: a future issuer that does
+    /// hand one over should not be believed about a malformed one.
     public let offerUrl: String?
     /// Where the client may route audio for this session, minted by whoever
     /// issued it. Absent on older Gateways, which means reflection only.
@@ -88,13 +95,29 @@ public struct GatewayVoiceSession: GatewayMeteredSession, Equatable {
     public var ice: [IceServer] { iceServers ?? [] }
 
     /// A reply worth acting on: the right account and session, and an address
-    /// of the kind this session claims to be. A start with neither is not a
-    /// session.
+    /// of the kind this session claims to be.
+    ///
+    /// **A WebRTC session has no address to check, and that is the contract
+    /// rather than an omission.** This demanded an `offerUrl` until 27 Sep and
+    /// so refused every managed hands-free session the Gateway ever issued
+    /// -- `ManagedSummaryFailure error 6` on the panel, the only error that
+    /// path has ever produced, because the paid path had never once been
+    /// exercised. The app's own comment two files away said what it should
+    /// have been: "the managed path buys one from the Gateway, which carries
+    /// the signalling afterwards because this Mac holds no vendor key." The
+    /// code below asked for the key's address anyway, and nothing it did with
+    /// the reply ever read `offerUrl`.
+    ///
+    /// The session id IS the address on this transport: every offer and every
+    /// candidate goes to the Gateway under that id. So validity here is the
+    /// meter and nothing else. A malformed `offerUrl`, if some issuer sends
+    /// one, is still refused -- absence is the contract, nonsense is not.
     func isValid(account: UUID, id: UUID, expectEndpoint: Bool) -> Bool {
         guard meterIsValid(account: account, id: id) else { return false }
         guard expectEndpoint else { return true }
         if isWebRTC {
-            guard let offerUrl, let url = URL(string: offerUrl),
+            guard let offerUrl else { return true }
+            guard let url = URL(string: offerUrl),
                   url.scheme == "https", url.host != nil else { return false }
             return true
         }

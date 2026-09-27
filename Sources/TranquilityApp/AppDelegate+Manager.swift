@@ -344,7 +344,20 @@ extension AppDelegate {
                                    iceServers: ice) { argv in
                 await AppDelegate.answerManagerRequest(argv)
             }
-            peer.onTrace = { line in Permissions.log("manager wire: \(line)") }
+            peer.onTrace = { [weak self] line in
+                Permissions.log("manager wire: \(line)")
+                // A microphone that stops without saying so is indistinguishable
+                // from a person who has stopped talking, and on 27 Sep that is
+                // exactly what it looked like: two sentences cut in half, the
+                // orb still reading "listening". The rebuild puts the
+                // microphone back (AudioEngineRebuild); this is the half that
+                // makes the panel admit it happened.
+                guard line.contains("MICROPHONE DROPPED") else { return }
+                Task { @MainActor in
+                    self?.hud.setManagerState(StatusHUD.orbState,
+                                              line: "microphone came back")
+                }
+            }
             do { try peer.start() } catch {
                 self.hud.showResult("Hands-free could not open the microphone: \(error.localizedDescription)")
                 Permissions.log("manager: webrtc peer failed \(error)")

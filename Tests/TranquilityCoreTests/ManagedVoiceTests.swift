@@ -117,9 +117,41 @@ final class SessionShapeTests: XCTestCase {
         XCTAssertNil(s.wsUrl)
     }
 
-    func testAWebRTCSessionWithNoOfferAddressIsNotASession() throws {
-        let s = try decode(GatewayVoiceSession.self, ["transport": "webrtc"])
-        XCTAssertFalse(s.isValid(account: account, id: id, expectEndpoint: true))
+    /// This test used to assert the opposite, and it is why the paid path had
+    /// never once started (27 Sep).
+    ///
+    /// `{"transport": "webrtc"}` with nothing else in it is EXACTLY what the
+    /// Gateway sends. `Sessions.visible` strips the address on purpose -- "the
+    /// host's offer endpoint is not theirs to call, so it never leaves this
+    /// service" -- because that endpoint answers 401 without the vendor's
+    /// public key and this Mac holds none. So the reply this refused was the
+    /// only reply the Gateway has ever made, and every managed hands-free
+    /// press since the route existed died here as `ManagedSummaryFailure
+    /// error 6`, on a panel that said "Hands-free could not start a session".
+    ///
+    /// The fixture was written from the shape we imagined rather than from the
+    /// one the service sends, and nothing compared the two: the managed path
+    /// is the one path a drill cannot reach and a person had never pressed.
+    func testTheGatewaysOwnWebRTCReplyIsASession() throws {
+        let asTheGatewaySendsIt = try decode(GatewayVoiceSession.self, ["transport": "webrtc"])
+        XCTAssertTrue(asTheGatewaySendsIt.isWebRTC)
+        XCTAssertNil(asTheGatewaySendsIt.offerUrl)
+        XCTAssertNil(asTheGatewaySendsIt.wsUrl)
+        XCTAssertTrue(asTheGatewaySendsIt.isValid(account: account, id: id, expectEndpoint: true),
+                      "the session id IS the address: every offer and candidate "
+                      + "goes to the Gateway under it")
+    }
+
+    /// Absence is the contract; nonsense is not. An issuer that does send an
+    /// address is still held to it, so a typo cannot pass as "the Gateway
+    /// withheld it".
+    func testAMalformedOfferAddressIsStillRefused() throws {
+        for bad in ["", "not a url", "http://plain.example/offer", "ws://host.example/x"] {
+            let s = try decode(GatewayVoiceSession.self,
+                               ["transport": "webrtc", "offerUrl": bad])
+            XCTAssertFalse(s.isValid(account: account, id: id, expectEndpoint: true),
+                           "offerUrl \(bad.isEmpty ? "(empty)" : bad) should not pass")
+        }
     }
 
     func testASocketVoiceSessionStillNeedsItsSocketAndToken() throws {
@@ -140,10 +172,10 @@ final class SessionShapeTests: XCTestCase {
     /// both decoded one struct, relaxing the guard for voice would have
     /// relaxed it here too, and this would have passed.
     func testATranscriptRefusesTheWebRTCShapeThatAVoiceSessionAccepts() throws {
-        let webrtcShaped: [String: Any] = [
-            "transport": "webrtc",
-            "offerUrl": "https://api.pipecat.daily.co/v1/public/agent/sessions/abc/api/offer",
-        ]
+        // The shape the Gateway actually sends, address and all withheld --
+        // which is what makes this split worth testing: voice accepts the bare
+        // tag now, and a transcript must still refuse it.
+        let webrtcShaped: [String: Any] = ["transport": "webrtc"]
         let asVoice = try decode(GatewayVoiceSession.self, webrtcShaped)
         XCTAssertTrue(asVoice.isValid(account: account, id: id, expectEndpoint: true),
                       "the bot may legitimately be carried this way")

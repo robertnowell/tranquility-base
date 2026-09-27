@@ -6,11 +6,11 @@ Ruled 25 Sep 2026 after a deep research pass (agent a8e3f054, `2026-09-25-inform
 
 ## The shape: three levels, far apart
 
-1. **The message.** One sentence at headline size, with a verb. A lede of two or three sentences. Then the dark block: what needs them, or "nothing to decide".
+1. **The message.** Three to six words at seven times body size: "Two chips moved." Then the lede, whose first sentence, in bold, is the one-sentence claim with a verb; two more sentences at most. Then the dark block: what needs them, or "nothing to decide". The scale is measured, not felt: typesafe.ai sets a four-word headline at 140px over 17px body, an eight-to-one jump; a sentence at 54px over 16px was called "relatively indistinguished" (27 Sep).
 2. **The claims.** One row per claim, a full sentence each, with a status dot and one figure. Read only the rows and the argument survives. Five to seven rows; a second, smaller list for what deliberately did not change.
 3. **The artifacts.** Collapsed under their claim, never in a separate section. The thing itself: the screenshot, the diff hunk, the raw rows, the literal prompt. A one-line caption saying what to look at.
 
-Start from `templates/brief.html`. Replace the `:root` block with `hq-theme <session id>`. The worked example is `agents/a8e3f054-8583-45f2-8bc0-3dfe55d47a06/uvape-what-is-different-redone.html`: a real report, five claims, the signed-in app under each.
+Start with `hq-page new <slug> --session=<your full session id>` (add `--brand=NAME` for a brand page). It writes `templates/brief.html` into your hub directory with the session line, the kicker and the `:root` tokens filled in, binds the brand to your session, and refuses to overwrite. Ruled 27 Sep 2026 after two hours of watching: sessions copy their own last page because it is the cheapest start; this makes the template cheaper. The worked example is `agents/a8e3f054-8583-45f2-8bc0-3dfe55d47a06/uvape-what-is-different-redone.html`: a real report, five claims, the signed-in app under each.
 
 ## The six rules, each with what it rests on
 
