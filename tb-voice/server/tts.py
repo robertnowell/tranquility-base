@@ -53,8 +53,12 @@ class SpokenTTSService(ElevenLabsTTSService):
         """
         if isinstance(frame, AggregatedTextProgressFrame):
             from events import emit
-            await emit(None, "spoke", upTo=len(frame.accumulated_text),
-                       text=frame.text)
+            # `upTo` and nothing else. The card already holds the line -- the
+            # highlight is a character count into text the panel painted when
+            # the `speaking` event arrived -- so sending the sentence again with
+            # every word is the same paragraph on the wire eight times for an
+            # eight-word line, and the viewer printed all eight (27 Sep).
+            await emit(None, "spoke", upTo=len(frame.accumulated_text))
         await super().push_frame(frame, direction)
 
     async def run_tts(self, text: str, context_id: str):

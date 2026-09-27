@@ -46,7 +46,7 @@ public enum HubRead {
 
         let range = NSRange(trimmed.startIndex..., in: trimmed)
         if Self.uuid.firstMatch(in: trimmed, range: range) != nil {
-            return base.appendingPathComponent("d").appendingPathComponent(trimmed)
+            return raw(base.appendingPathComponent("d").appendingPathComponent(trimmed))
         }
 
         guard let url = URL(string: trimmed), let host = url.host?.lowercased() else { return nil }
@@ -54,7 +54,22 @@ public enum HubRead {
         // hand the token to `hq.tranquilitybase.dev.evil.example`.
         guard url.scheme?.lowercased() == "https", host == baseHost,
               url.user == nil, url.password == nil else { return nil }
-        return url
+        return raw(url)
+    }
+
+    /// The bytes, not the wrapper.
+    ///
+    /// Since 13 Sep `/d/<id>` is the app's own page around an iframe; the
+    /// document itself is served at `/d/<id>/raw`. A read that asked for the
+    /// wrapper got React markup and no report (found 27 Sep, hq-app-9d9.4).
+    /// Only that one shape is rewritten; `/open?…` redirects to `/d/<id>` and
+    /// comes back through here on the next hop.
+    static func raw(_ url: URL) -> URL {
+        let parts = url.pathComponents
+        guard parts.count == 3, parts[1] == "d",
+              Self.uuid.firstMatch(in: parts[2], range: NSRange(parts[2].startIndex..., in: parts[2])) != nil
+        else { return url }
+        return url.appendingPathComponent("raw")
     }
 
     /// How many hops a read will follow. `/open?session=&slug=` is one

@@ -106,9 +106,14 @@ extension AppDelegate {
 
 extension AppDelegate {
 
-    var managerIsOn: Bool { managerTransport != nil || managerPeer != nil }
+    var managerIsOn: Bool { managerTransport != nil || managerPeer != nil || managerStarting }
 
     @objc func toggleManagerMode() {
+        // `managerStarting` is in `managerIsOn` deliberately: a start in flight
+        // IS hands-free being on, as far as the person pressing the chord is
+        // concerned, and the alternative is buying a second session. A press
+        // during the purchase now stops it, which is what a second press has
+        // always meant.
         if managerIsOn { stopManager() } else { startManager() }
         rebuildMenu()
     }
@@ -177,6 +182,7 @@ extension AppDelegate {
     func stopManager() {
         managerTask?.cancel()
         managerTask = nil
+        managerStarting = false
         if let transport = managerTransport { Task { await transport.close() } }
         managerTransport = nil
         if let peer = managerPeer { Task { await peer.close() } }
@@ -199,7 +205,15 @@ extension AppDelegate {
             return "Hands-free could not start a session: \(error.localizedDescription)"
         }
         switch code {
-        case "insufficient_credit": return "Hands-free needs credit: your balance is spent."
+        // NOT "your balance is spent": the Gateway refuses this whenever it
+        // cannot reserve the next block, and a balance of zero is only one
+        // reason. On 27 Sep it said this over a balance of $4.99, because a
+        // session bought 1.5 seconds earlier by a double chord press was
+        // holding the reservation. Telling somebody their money is gone when
+        // it is not sends them to a billing page to fix a bug in the panel.
+        case "insufficient_credit":
+            return "Hands-free could not reserve credit for a session. "
+                + "Check the balance in Setup."
         case "service_unavailable", "not_connected": return "Hands-free is unavailable right now."
         default: return "Hands-free could not start a session (\(code))."
         }
@@ -295,8 +309,12 @@ extension AppDelegate {
     private func startWebRTCManager(_ source: WebRTCSource) {
         hud.setManager(on: true)
         managerEndedByIdle = false
+        // Claimed BEFORE the await, so the second press of a double press finds
+        // hands-free on and stops it instead of buying another session.
+        managerStarting = true
         managerTask = Task { @MainActor [weak self] in
             guard let self else { return }
+            defer { self.managerStarting = false }
             let started = Date()
             let names = await Self.fleetNames()
             let signaller: ManagerPeer.Signaller
