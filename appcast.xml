@@ -6,6 +6,14 @@
     <description>Updates for Tranquility Base.</description>
     <language>en</language>
     <item>
+      <title>Version 0.3.1370</title>
+      <sparkle:version>1370</sparkle:version>
+      <sparkle:shortVersionString>0.3.1370</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <pubDate>Sun, 27 Sep 2026 18:26:16 +0000</pubDate>
+      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1370-cfc837457/TranquilityBase-0.3.1370.dmg" type="application/octet-stream" length="34219135" sparkle:edSignature="vz/y+KRl/eu4KgVEK2+Oudb8HwFf0JQDomzPZS0gDhrcRT1DDe1MIqaH2yvpCqePUF60W+1Lodj3tvrKbcyjAg==" />
+    </item>
+    <item>
       <title>Version 0.3.1369</title>
       <sparkle:version>1369</sparkle:version>
       <sparkle:shortVersionString>0.3.1369</sparkle:shortVersionString>
@@ -77,16 +85,8 @@
       <pubDate>Fri, 25 Sep 2026 23:43:54 +0000</pubDate>
       <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1360-25ea6cbdf/TranquilityBase-0.3.1360.dmg" type="application/octet-stream" length="34178494" sparkle:edSignature="6jul2Pzbg1Qj1HmZYsAIegURKGo8yOFVv7tGRD7o+Y67PqzIIi9I4mty+p9w8zIFnZEzYJOy5iqXcQV0GdnPBw==" />
     </item>
-    <item>
-      <title>Version 0.3.1359</title>
-      <sparkle:version>1359</sparkle:version>
-      <sparkle:shortVersionString>0.3.1359</sparkle:shortVersionString>
-      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <pubDate>Fri, 25 Sep 2026 23:16:55 +0000</pubDate>
-      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1359-bb57ec247/TranquilityBase-0.3.1359.dmg" type="application/octet-stream" length="34648301" sparkle:edSignature="BKpxnJkA3ynRLm6rPiZyISUNkkxuM+k2LaxSHTH+Mp1tLdj7ZFLaop4aIy+yxpg16UWvsd0xFb4snGJLTq1uBw==" />
-    </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: qFuwy4D46f4zQxZJpX8UiszF+sV1VrachYl8xgloSnwK4xj0NWJrlIIoF07yzSFQJIzS7r1juPU5ECCUBLMaBg==
+edSignature: APPWvTMgp2yptB0wrad7Hq2q13oUo+y1Vd4Gn2F4dbNW/cXx1EZrYWahBAEGkfjkH4DoVzImtfZ9UqWVt+vpBg==
 length: 6457
 -->
