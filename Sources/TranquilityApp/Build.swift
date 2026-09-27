@@ -713,7 +713,15 @@ extension StatusHUD {
         // with it, and the readback that names them both renders in the strip
         // directly above. Same downward-growth as the strip — a drop extends
         // the panel, it never moves the card.
-        let stack = NSStackView(views: [backButton, stateLabel, titleLabel,
+        // The orb is the FIRST thing in the stack, above the card's own
+        // placard, and it is in the main stack rather than inside `waitingRows`
+        // for one reason: `waitingRows` belongs to the grid face, so an orb
+        // living there vanished the instant anything else took the stage. An
+        // announcement in hands-free therefore showed the agent's card with no
+        // sign that hands-free was on at all — which is what happened on
+        // 26 Sep. Hands-free is a mode, not a face; its one indicator outranks
+        // every face and is baselined by `managerOn` alone (render()).
+        let stack = NSStackView(views: [managerOrb, backButton, stateLabel, titleLabel,
                                         waitingRows, pastList, bodyLabel,
                                         stripRule, stripLabel, trayRow, gridFooter,
                                         countdownBar, micRow, meter,
@@ -725,6 +733,10 @@ extension StatusHUD {
         stack.edgeInsets = NSEdgeInsets(top: 12, left: 14, bottom: 12, right: 14)
         assert(stack.edgeInsets.left == StatusHUD.contentColumn)
         stack.translatesAutoresizingMaskIntoConstraints = false
+        // Once, here, rather than on every grid rebuild: the orb is a permanent
+        // member of the stack now, so its width is a build-time fact.
+        managerOrb.widthAnchor.constraint(equalToConstant: StatusHUD.gridWidth).isActive = true
+        managerOrb.isHidden = true
 
         background.addSubview(stack)
         background.addSubview(gearButton)

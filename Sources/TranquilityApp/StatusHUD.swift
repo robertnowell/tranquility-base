@@ -755,6 +755,37 @@ final class StatusHUD: NSObject {
         return true
     }
 
+    /// The manager's OWN line, on the same card every agent gets.
+    ///
+    /// Added 27 Sep, and it is the other half of putting the orb above the
+    /// card. The orb used to be the whole of hands-free's display, so when the
+    /// manager spoke, the line under the orb read "speaking" and the words
+    /// themselves appeared nowhere — there was no card to put them on. There is
+    /// now, and the rule Robert set is the simple one: the text being spoken is
+    /// on screen, highlighted as it is said, EVERY time something speaks. Not
+    /// only when the speaker is an agent.
+    ///
+    /// No session, deliberately, and therefore no doors: the manager is not a
+    /// session, and a GO TO AGENT on its card would be a door to nowhere (the
+    /// same reasoning as `showGreeting`). `currentSpoken` is nil for the same
+    /// reason it is nil there — the manager's lines are composed to be spoken
+    /// and hold nothing redacted, so `highlight(upTo:)`'s character count maps
+    /// straight through.
+    @discardableResult
+    func showManagerLine(_ text: String) -> Bool {
+        guard !text.isEmpty else { return false }
+        awaitingGreetingBinding = false
+        guard transition(to: .speaking(eventId: nil), because: "the manager is speaking")
+        else { return false }
+        currentEventId = nil
+        currentSpoken = nil
+        currentTarget = nil
+        face = Face(title: StateLegend.managerOnTitle, body: text,
+                    placardOverride: "\(StateLegend.Glyph.speaking) \(StateLegend.managerOnTitle)")
+        render()
+        return true
+    }
+
     /// The card a launch paints before there is a session to hang it on.
     ///
     /// Ruled 18 Aug: the card comes FIRST. Everything else about starting an
@@ -2516,6 +2547,12 @@ final class StatusHUD: NSObject {
         gridFooter.isHidden = true; controlsSticky.isHidden = true; voiceSticky.isHidden = true
         stripLabel.stringValue = ""
         voiceList.isHidden = true; waitingRows.isHidden = true
+        // The one widget the baseline does NOT hide by default. Every other view
+        // here belongs to a face; the orb belongs to the mode, so it is visible
+        // on the grid, on a card, on settings, on a failure — anywhere, for as
+        // long as hands-free is on. Painted from `managerOn` and nothing else so
+        // no face can take it away by omission.
+        managerOrb.isHidden = !managerOn
         setupChecklist?.isHidden = true; setupScroll?.isHidden = true
         pastList?.isHidden = true
         pastBackButton?.isHidden = true
@@ -3234,9 +3271,8 @@ final class StatusHUD: NSObject {
         // PAST AGENTS are what the voice is for. The fleet is still there,
         // reached by speaking, and the rows come back when the manager stops.
         if managerOn {
-            waitingRows.addArrangedSubview(managerOrb)
-            managerOrb.widthAnchor.constraint(equalToConstant: Self.gridWidth).isActive = true
-            waitingRows.addArrangedSubview(hairline(StateLegend.Palette.hairlineSoft))
+            // The orb itself is in the main stack above this (Build.swift), so
+            // the grid keeps only the door that turns hands-free off.
             let stopRow = PlacardRowView(
                 width: Self.gridWidth, target: self,
                 title: StateLegend.managerOffTitle, glyph: "■", action: #selector(managerRowTapped))
@@ -3368,7 +3404,11 @@ final class StatusHUD: NSObject {
     func setManager(on: Bool) {
         managerOn = on
         managerOrb.set(on ? Self.orbConnecting : Self.orbState, line: on ? "connecting" : "off")
-        if case .idle = state { render() }
+        // Unconditional now the orb belongs to the mode rather than the grid:
+        // hands-free can be turned on or off with a card on stage, and the orb
+        // has to appear or go away either way. render() is a rebuild from the
+        // face, so calling it here cannot disturb the face that is up.
+        render()
     }
 
     func setManagerState(_ orbState: String, line: String, mood: String = "") {

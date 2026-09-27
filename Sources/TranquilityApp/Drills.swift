@@ -3021,3 +3021,65 @@ extension StatusHUD {
         returnToTheGrid(because: "selftest dismissKeepsTheTurn")
     }
 }
+
+extension StatusHUD {
+
+    /// Hands-free is the same panel: the orb above, the card below (27 Sep).
+    ///
+    /// Two failures from one session, both of them PR 638's, and both of a kind
+    /// `swift test` cannot see (CLAUDE.md rule 7) because they are about which
+    /// views are on screen at once.
+    ///
+    /// The orb lived inside `waitingRows`, which belongs to the grid face. So
+    /// the instant an announcement took the stage, the orb went with the grid
+    /// and hands-free had no indicator at all — the screenshot showed an
+    /// agent's card and nothing to say the mode was on. The orb is in the main
+    /// stack now and baselined from `managerOn`, so `orbSurvivesTheCard` is the
+    /// whole point of the change.
+    ///
+    /// And the manager's own voice painted no card. An agent's line arrives by
+    /// URL and gets `showAnnouncement`; the manager's arrives only as a
+    /// `speaking` event, so the panel said the word "speaking" while the
+    /// sentence it was saying appeared nowhere. `managerLinePaintsTheCard` and
+    /// `highlightFollowsTheVoice` hold the rule Robert set: the words are on
+    /// screen, lighting as they are said, whoever is talking.
+    func handsFreePanelDrill() {
+        let wasOn = managerOn
+        setManager(on: true)
+        showIdle(rows: [])
+        let orbOnTheGrid = managerOrb.isHidden == false
+
+        _ = showManagerLine("Inviting promotions copy to speak.")
+        let orbOnACard = managerOrb.isHidden == false
+        let bodyIsTheSentence = bodyLabel.stringValue == "Inviting promotions copy to speak."
+        let titled = titleLabel.stringValue.contains(StateLegend.managerOnTitle)
+
+        // Eight characters is "Inviting"; the card counts in the same
+        // characters the bot counts in, which is why `spoke` needs no mapping
+        // for a line the manager composed itself.
+        highlight(upTo: 8)
+        let cursorFollowed = face.spokenUpTo == 8
+
+        // An AGENT's line, the richer card, and the orb must outlive that too.
+        _ = showAnnouncement(
+            spoken: SpokenTextSanitizer().sanitize("The audit is ready to review."),
+            sessionId: "handsfree-drill", pid: 1, project: "promotions copy", cwd: "/tmp")
+        let orbSurvivesTheCard = managerOrb.isHidden == false
+        let agentCardKeptItsDoors = bodyLabel.stringValue == "The audit is ready to review."
+
+        setManager(on: false)
+        let orbGoesWithTheMode = managerOrb.isHidden
+
+        SelfTest.report("handsFreePanel", [
+            ("orbOnTheGrid", orbOnTheGrid),
+            ("orbOnACard", orbOnACard),
+            ("managerLinePaintsTheCard", bodyIsTheSentence),
+            ("managerCardIsTitled", titled),
+            ("highlightFollowsTheVoice", cursorFollowed),
+            ("orbSurvivesTheCard", orbSurvivesTheCard),
+            ("agentCardStillPaints", agentCardKeptItsDoors),
+            ("orbGoesWithTheMode", orbGoesWithTheMode),
+        ])
+        setManager(on: wasOn)
+    }
+}
