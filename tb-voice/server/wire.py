@@ -56,6 +56,7 @@ class Wire:
         self.calls: dict[str, asyncio.Future] = {}
         self.mac_events: asyncio.Queue = asyncio.Queue()
         self.born = time.monotonic()
+        self.tz: str | None = None  # the Mac's time zone, from its hello
 
 
 _current: contextvars.ContextVar[Wire | None] = contextvars.ContextVar("tb_wire", default=None)
@@ -119,10 +120,11 @@ class Tool(Enum):
     TRANSCRIPT = "transcript"
     LEDGER = "ledger"
     SEND = "send"
+    NOTES = "notes"
 
 
 HELLO_GRACE_S = 1.5
-DEADLINES_MS = {Tool.AGENTS: 3000, Tool.WAITING: 3000, Tool.BRIEF: 3000, Tool.TRANSCRIPT: 5000, Tool.LEDGER: 2000,
+DEADLINES_MS = {Tool.AGENTS: 3000, Tool.WAITING: 3000, Tool.BRIEF: 3000, Tool.TRANSCRIPT: 5000, Tool.LEDGER: 2000, Tool.NOTES: 4000,
                 # The app's Send types, then watches the agent take it.
                 Tool.SEND: 20000}
 
@@ -181,6 +183,7 @@ def _take_wire(obj: dict, w: "Wire") -> bool:
             except ValueError:
                 logger.warning(f"wire: the Mac offers {name!r}, which this bot does not know; ignored")
         w.tools = offered
+        w.tz = obj.get("tz") if isinstance(obj.get("tz"), str) else None
         w.hello_seen.set()
         logger.info(f"wire: hello, protocol {obj.get('protocol')}, app {obj.get('app_version')}, "
                     f"tools {sorted(t.value for t in offered)}")

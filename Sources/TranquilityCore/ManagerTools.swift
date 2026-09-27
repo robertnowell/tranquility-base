@@ -74,6 +74,14 @@ public enum ManagerTools {
             })
         }
         if let ledger {
+            // Everything the developer has said, hands-free and dictated, over
+            // any stretch of time or matching words (ManagerNotes): the manager
+            // answers from it and sends a range of it. Read-only; a large
+            // history takes a moment, so it has longer than a read of the ledger.
+            let directory = ledger.directory
+            tools.append(ManagerTool(name: .notes, deadlineMs: 4000, capBytes: 48 * 1024, keep: .newest) { args in
+                ManagerNotes.answer(args: args, ledgerDirectory: directory, database: QueueStore.databaseURL)
+            })
             // What the developer (and the manager, and the agents) said, on
             // this Mac, numbered (hf-5). Newest last; a cut drops the oldest.
             tools.append(ManagerTool(name: .ledger, deadlineMs: 2000, capBytes: 32 * 1024, keep: .newest) { args in
