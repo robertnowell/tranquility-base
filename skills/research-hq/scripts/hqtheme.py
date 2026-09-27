@@ -91,14 +91,50 @@ def theme_for_brand(brand, cfg):
     for needle, name in cfg.get("brand_map", []):
         if needle in key:
             return cfg["themes"][name]
-    return cfg["themes"]["editorial"]
+    # THE FALLBACK IS THE HOUSE, AND IT IS NAMED. A brand nobody has recorded
+    # gets the editorial theme, which is the right outcome and was already the
+    # behaviour; what was missing was the sentence saying so. A silent fallback
+    # reads as "this is Coframe's page" to a reader who cannot see the table.
+    # Ruled 26 Sep 2026: the page wears the brand it is about, falls to the
+    # house when the brand has none, and tells the reader which happened.
+    t = dict(cfg["themes"]["editorial"])
+    if key:
+        t["_fallback_for"] = brand
+    return t
 
 
-def resolve(session=None, brand=None):
+BINDINGS = Path.home() / "Library/Application Support/VoiceDispatch/brands"
+
+
+def bound_brand(session):
+    """The brand this session decided on, if it has decided.
+
+    Per agent session, by ruling: a session names its brand once, at its first
+    page, and every later page it writes wears the same one without the agent
+    having to remember. The binding is a file named by the full session id.
+    """
+    try:
+        return (BINDINGS / session).read_text(encoding="utf-8").strip() or None
+    except OSError:
+        return None
+
+
+def bind_brand(session, brand):
+    BINDINGS.mkdir(parents=True, exist_ok=True)
+    (BINDINGS / session).write_text(brand.strip() + "\n", encoding="utf-8")
+
+
+def resolve(session=None, brand=None, bind=False):
     cfg = load()
-    t = dict(theme_for_brand(brand, cfg))
     if session:
         session = full_session(session)
+    if session and brand and bind:
+        bind_brand(session, brand)
+    if session and not brand:
+        brand = bound_brand(session)
+    t = dict(theme_for_brand(brand, cfg))
+    if brand and not t.get("_fallback_for"):
+        t["_brand_asked"] = brand
     if session and t.get("takes_agent_ink"):
         t["accent"] = agent_ink(session, cfg["agent_inks"])
     t.pop("_", None)
@@ -118,9 +154,14 @@ def css(t):
     def block(sel, src, keys):
         rows = "\n".join(f"  --{k}: {src[k]};" for k in keys if src.get(k))
         return f"{sel} {{\n{rows}\n}}"
-    out = [f"/* {t['nameplate']} · theme {t['id']}"
-           + (f" · agent {t['_session']}" if t["_session"] else "") + " */",
-           block(":root", t, VARS)]
+    head = f"/* {t['nameplate']} · theme {t['id']}"
+    if t.get("_fallback_for"):
+        head += (f" · NO THEME ON RECORD FOR {t['_fallback_for']!r}, this is the house fallback."
+                 f" Record one from a real source with: hq-theme --learn {t['_fallback_for']!r}"
+                 f" --accent=#hex [--brand=#hex] --from='where the colour came from'")
+    if t["_session"]:
+        head += f" · agent {t['_session']}"
+    out = [head + " */", block(":root", t, VARS)]
     # THE LANGUAGE, NOT ONLY THE INKS. A brand that carries a `type` block gets
     # its scale as variables and its rules as a comment, so a page set from
     # this output has the brand's hierarchy, not just its colours. Ratios are
@@ -152,21 +193,107 @@ def css(t):
     return "\n".join(out)
 
 
+HEX = __import__("re").compile(r"^#[0-9a-fA-F]{6}$")
+
+
+def learn(name, opts):
+    """Record a brand's theme from a stated source, or say why not.
+
+    "Automatically detect the target brand; if there is not one known, do a
+    quick research on it, give a little information to the user, but not
+    necessarily ask for permission" (ruled 26 Sep 2026). The research is the
+    agent's (Kopi's brand record, the site, the logo); this is where it lands.
+
+    Two rules from the table's own header. NEVER INVENT: a colour comes in as
+    --accent/--brand from a named source, or is read off the site's declared
+    <meta name="theme-color">; a frequency count of hexes in a stylesheet is
+    not a brand. NO FACE WITHOUT ITS FILE: fonts the site names are recorded as
+    fonts_seen for a human to ship later, never applied, because naming a font
+    without its woff2 renders system sans and claims an identity the page does
+    not carry. Everything else is the house editorial, so a learned brand is
+    the house with its colour, which is exactly what a hub page should be.
+    """
+    import re, time, urllib.request
+    src = opts.get("from") or ""
+    accent = opts.get("accent")
+    brandc = opts.get("brand")
+    seen = []
+    url = opts.get("url")
+    if url:
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 hq-theme"})
+            html = urllib.request.urlopen(req, timeout=8).read(400_000).decode("utf-8", "ignore")
+        except Exception as e:
+            print(f"hq-theme: could not read {url}: {e}", file=sys.stderr)
+            html = ""
+        tc = (re.findall(r'<meta[^>]*name="theme-color"[^>]*content="([^"]+)"', html)
+              + re.findall(r'<meta[^>]*content="([^"]+)"[^>]*name="theme-color"', html))
+        tc = [c for c in tc if HEX.match(c.strip())]
+        if tc and not accent:
+            accent = tc[0].strip()
+            src = src or f"theme-color declared at {url}"
+        seen = list(dict.fromkeys(
+            f.replace("+", " ").split(":")[0]
+            for f in re.findall(r'fonts\.googleapis\.com/css2?\?family=([^&"\')]+)', html)))
+    if not accent:
+        print(f"hq-theme: {name!r} declares no colour I can read"
+              + (f" at {url}" if url else "")
+              + "; nothing recorded, pages stay on the house theme. Pass --accent=#hex "
+                "--from='source' when a real source (a Kopi brand record, a logo) gives one.",
+              file=sys.stderr)
+        return 1
+    if not HEX.match(accent) or (brandc and not HEX.match(brandc)):
+        print("hq-theme: colours are six-digit hex (#ff6699)", file=sys.stderr)
+        return 2
+    if not src:
+        print("hq-theme: --from='where the colour came from' is required; a token with no "
+              "source is a guess with a :root block around it.", file=sys.stderr)
+        return 2
+    cfg = load()
+    slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+    t = dict(cfg["themes"]["editorial"])
+    t.pop("_", None)
+    t.update({"id": slug, "nameplate": name, "accent": accent, "brand": brandc or accent,
+              "heading": brandc or t["heading"], "takes_agent_ink": False,
+              "learned_from": src, "learned_at": time.strftime("%Y-%m-%d"),
+              "fonts_seen": seen})
+    cfg["themes"][slug] = t
+    needle = name.lower()
+    if [needle, slug] not in cfg.get("brand_map", []):
+        cfg.setdefault("brand_map", []).append([needle, slug])
+    tmp = THEMES.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    tmp.replace(THEMES)
+    print(f"recorded {name!r}: accent {accent}, brand {brandc or accent}, from {src}."
+          + (f" Fonts seen, not applied (no file on disk): {', '.join(seen)}." if seen else "")
+          + " Everything else is the house theme. Pages for this brand now wear it.")
+    return 0
+
+
 def main(argv):
     args = [a for a in argv[1:] if not a.startswith("--")]
     flags = {a for a in argv[1:] if a.startswith("--")}
-    brand = None
-    if "--brand" in flags:
-        sys.exit("hq-theme: use --brand=NAME")
+    opts = {}
     for f in flags:
-        if f.startswith("--brand="):
-            brand = f.split("=", 1)[1]
+        if "=" in f:
+            k, v = f[2:].split("=", 1)
+            opts[k] = v
+    for bare in ("--brand", "--learn", "--accent", "--from", "--url"):
+        if bare in flags:
+            sys.exit(f"hq-theme: use {bare}=VALUE")
+    if "learn" in opts:
+        return learn(opts["learn"], opts)
+    brand = opts.get("brand")
     session = args[0] if args else None
     if not session and not brand:
-        print("usage: hq-theme <session-id> [--brand=NAME] [--json]", file=sys.stderr)
+        print("usage: hq-theme <session-id> [--brand=NAME] [--json]\n"
+              "       hq-theme --learn=NAME --accent=#hex [--brand=#hex] --from='source' [--url=URL]",
+              file=sys.stderr)
         return 2
     try:
-        t = resolve(session, brand)
+        # A session that names a brand binds to it: its later pages resolve the
+        # same brand from the session id alone (per agent session, ruled 26 Sep).
+        t = resolve(session, brand, bind=bool(session and brand))
     except UnknownSession as e:
         print(f"hq-theme: {e}", file=sys.stderr)
         return 1

@@ -16,8 +16,12 @@
 <meta name="intranet:visibility" content="local">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22%3E%3Crect width=%2232%22 height=%2232%22 rx=%226%22 fill=%22%234a5a2b%22/%3E%3Ccircle cx=%2216%22 cy=%2216%22 r=%226%22 fill=%22%23fcfbf8%22/%3E%3C/svg%3E">
 <style>
-/* TOKENS. Replace this whole :root block with the output of
-   `hq-theme <your session id>` (or `hq-theme --brand=NAME` for a brand page).
+/* TOKENS. Replace this whole :root block with the output of hq-theme.
+   The page wears the brand it is about: `hq-theme <session> --brand=NAME` once
+   per session binds it, and `hq-theme <session>` keeps it on every later page.
+   A page about nobody wears the house. If the header says NO THEME ON RECORD,
+   research the brand (Kopi record, site) and `hq-theme --learn=NAME --accent=#hex
+   --from='source'`; say in one line what you recorded; never ask permission.
    The block below is the house default so the file renders before you do. */
 :root{--bg:#fcfbf8;--paper:#f4f2ec;--ink:#1f1e1c;--heading:#141312;--muted:#57534c;--faint:#6e6a63;--line:#ddd9cf;--accent:#4a5a2b;--brand:#1a1a1a;--amber:#a8762a;--serif:'Iowan Old Style','Palatino Linotype',Palatino,Georgia,serif;--sans:ui-sans-serif,-apple-system,'Helvetica Neue',sans-serif;--mono:'Berkeley Mono',ui-monospace,SFMono-Regular,Menlo,monospace;--red:#9a3b2e}
 @media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--bg:#131310;--paper:#1c1b18;--ink:#eceae2;--heading:#f3f1e9;--muted:#a5a196;--faint:#77746c;--line:#33322d}}
