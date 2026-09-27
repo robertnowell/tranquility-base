@@ -84,23 +84,53 @@ final class ManagerPeer: NSObject, ManagerTransport, @unchecked Sendable {
     /// not again, so: stop, init, start. Called only from the follower's
     /// queue, and never after `stop()`, which is the follower's contract; the
     /// module itself marshals every call onto its own worker thread.
-    private struct Playout: @unchecked Sendable {
+    ///
+    /// **The microphone is on the other end of the same engine.** This was the
+    /// thing that had to be understood before 27 Sep made sense. There is one
+    /// `LKRTCAudioDeviceModule`, and its `engineState` is a single struct with
+    /// `outputEnabled`, `outputRunning`, `inputEnabled` and `inputRunning` in
+    /// it — playout and recording are two halves of one AVAudioEngine, not two
+    /// devices. So the output device's sample rate is the ENGINE's rate, and
+    /// stopping playout to pick up a new one restarts the graph the microphone
+    /// is feeding. Pinning capture to the built-in microphone, which we do,
+    /// does not make it a separate object; it only decides which device that
+    /// one engine reads from.
+    ///
+    /// That is why AirPods were implicated in a microphone fault by a Mac
+    /// whose microphone is not the AirPods. AirPods are the only output here
+    /// that changes rate mid-session (48k A2DP to 24k and back), so they are
+    /// the only output that makes this code restart the engine at all — twice
+    /// in the 76-second session on 27 Sep, after which the transcriber
+    /// received 41 seconds of audio and cut two sentences in half.
+    ///
+    /// So the rebuild now owns both halves. `recordingAlwaysPreparedMode` asks
+    /// the module to keep the input path prepared across engine restarts, and
+    /// after every rebuild the recording half is read back and re-armed if the
+    /// restart dropped it. It says so in the log when it does, loudly, because
+    /// a microphone that silently stops is the failure this whole file exists
+    /// downstream of and the panel gave no sign of it at the time.
+    private struct Engine: @unchecked Sendable {
         let adm: LKRTCAudioDeviceModule
-        func rebuild() -> String {
-            let stopped = adm.stopPlayout()
-            let inited = adm.initPlayout()
-            let started = adm.startPlayout()
-            return String(format: "stop %ld, init %ld, start %ld, playing %@",
-                          stopped, inited, started, adm.playing ? "yes" : "no")
+
+        /// Ask the module to keep the input path prepared across the engine
+        /// restarts `rebuild()` causes. Best-effort: a non-zero return is
+        /// reported and changes nothing, because the read-back inside
+        /// `AudioEngineRebuild` is the guard that actually holds.
+        func prepare() -> String {
+            let code = adm.setRecordingAlwaysPreparedMode(true)
+            return "recording always prepared: " + (code == 0 ? "on" : "refused (\(code))")
         }
+
+        func rebuild() -> String { AudioEngineRebuild.rebuild(adm).line }
     }
 
-    // MARK: - ManagerTransport
+        // MARK: - ManagerTransport
 
     func start() throws {
-        let playout = Playout(adm: factory.audioDeviceModule)
+        let engine = Engine(adm: factory.audioDeviceModule)
+        onTrace?("manager audio: " + engine.prepare())
         let follower = OutputRateFollower(log: { [weak self] in self?.onTrace?($0) }) {
-            playout.rebuild()
+            engine.rebuild()
         }
         outputRate = follower
         follower.start()
@@ -378,3 +408,6 @@ extension ManagerPeer: LKRTCPeerConnectionDelegate {
     func peerConnection(_ pc: LKRTCPeerConnection, didChange newState: LKRTCIceGatheringState) {}
     func peerConnection(_ pc: LKRTCPeerConnection, didRemove candidates: [LKRTCIceCandidate]) {}
 }
+
+/// The module already has every call the rule needs, under the same names.
+extension LKRTCAudioDeviceModule: AudioEngineRebuild.Halves {}
