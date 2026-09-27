@@ -197,6 +197,22 @@ final class TrayLineField: NSTextField {
         get { TrayLineCell.self }
         set {}
     }
+
+    /// A press on the line while it is NOT editing: the keyboard left (you
+    /// copied a file in Finder, which took the keys) and the line still
+    /// shows your words, so it looks live and is dead. Ruled 27 Sep, from
+    /// "paste while I've inputted text does nothing": the click on the line
+    /// arms the card, the same as a click anywhere else on it. While the
+    /// line IS editing its field editor sits over it and takes the clicks
+    /// itself, so this never fires mid-edit.
+    var onPress: (() -> Void)?
+    /// The panel is never key at rest, so every click on it is a first click.
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    /// No `super`: arming puts the editor up and the caret is hidden by
+    /// ruling, so there is no caret to place. A tracking loop started on a
+    /// field that is about to hand off to its editor is one more thing to
+    /// go wrong.
+    override func mouseDown(with event: NSEvent) { onPress?() }
 }
 
 final class TrayLineCell: NSTextFieldCell {

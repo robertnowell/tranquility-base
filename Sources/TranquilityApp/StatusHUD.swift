@@ -3856,27 +3856,45 @@ final class StatusHUD: NSObject {
     /// handler a drop uses, and stay armed: a second paste is a second chip.
     func pasteIntoTray() {
         guard pasteArmed else { return }
+        // Every way out of here says why, on the card and in the log. Ruled
+        // 27 Sep after a paste "did nothing": three of the four exits below
+        // wrote no line, so the log could not say which one it took.
         guard let target = handTarget() else {
             pasteNote = "nothing to attach to yet"
+            Permissions.log("paste: refused, no target")
             render(); return
         }
         let board = pasteboardForTesting ?? NSPasteboard.general
         let reading = DropSurfaceView.read(board, acceptsText: true)
         if let refusal = reading.refusal {
             pasteNote = refusal
+            Permissions.log("paste: refused, \(refusal)")
             Track.record("pasted", ["accepted": false, "reason": "too_large"])
             render(); return
         }
         guard !reading.items.isEmpty else {
             pasteNote = "nothing to paste"
+            let offered = board.types?.map(\.rawValue).joined(separator: ", ") ?? "no types"
+            Permissions.log("paste: nothing to paste; the board offers \(offered)")
             Track.record("pasted", ["accepted": false, "reason": "empty"])
             render(); return
         }
         pasteNote = nil
         // One rule (re-ruled 15 Sep, second pass): a paste is an attachment,
         // words included. The typed line is for typing only.
+        let before = stagedFragments?(target.sessionId).count ?? 0
         _ = onItemsStaged?(reading.items, .paste)
-        Permissions.log("paste: \(reading.items.count) item(s) for \(target.sessionId.prefix(8))")
+        let after = stagedFragments?(target.sessionId).count ?? 0
+        if after == before {
+            // Taken and nothing new: the same chip is not two chips. Said on
+            // the card, because a paste that changes nothing looks exactly
+            // like a paste that went nowhere.
+            pasteNote = "already attached"
+            Permissions.log("paste: \(reading.items.count) item(s) already attached for \(target.sessionId.prefix(8))")
+        } else {
+            Permissions.log("paste: \(reading.items.count) item(s) for \(target.sessionId.prefix(8)) "
+                            + "(\(after) staged)")
+        }
         render()
     }
 
