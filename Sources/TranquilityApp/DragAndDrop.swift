@@ -10,6 +10,10 @@ import TranquilityCore
 /// the two references inside this file simplified to the bare name.
 enum DroppedItem {
     case file(String)
+    /// A folder out of Finder. Its own case rather than a file that happens
+    /// to be a directory: what rides is a path, not a thing, and both the
+    /// chip and the receipt line word it as one (ruled 26 Sep).
+    case directory(String)
     case imageData(Data, suggestedName: String)
     /// Clipboard prose, staged verbatim. Only a paste produces this: a drag
     /// keeps its file-then-image reading, because a browser image drag also
@@ -133,11 +137,24 @@ final class DropSurfaceView: NSView {
     ///
     /// One reader for both doors: a drag pasteboard and the clipboard are the
     /// same class, so paste is this function pointed at `.general`.
+    /// Finder marks a dragged folder's URL as a directory; a path written by
+    /// some other app may not carry the mark, so the disk is asked too. A
+    /// path that exists nowhere is a file: the only honest reading of a
+    /// string with no evidence behind it.
+    static func item(for url: URL) -> DroppedItem {
+        var isDirectory: ObjCBool = false
+        let onDisk = FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory)
+        if url.hasDirectoryPath || (onDisk && isDirectory.boolValue) {
+            return .directory(url.path)
+        }
+        return .file(url.path)
+    }
+
     static func read(_ board: NSPasteboard, acceptsText: Bool) -> PasteboardReading {
         if let urls = board.readObjects(forClasses: [NSURL.self],
                                         options: [.urlReadingFileURLsOnly: true]) as? [URL],
            !urls.isEmpty {
-            return PasteboardReading(items: urls.map { .file($0.path) })
+            return PasteboardReading(items: urls.map { Self.item(for: $0) })
         }
         if acceptsText, let raw = board.string(forType: .string) {
             let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)

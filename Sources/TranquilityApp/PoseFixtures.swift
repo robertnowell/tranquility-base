@@ -252,6 +252,20 @@ extension StatusHUD {
             receiptFade?.cancel(); receiptFade = nil
             return true
 
+        case "tray-folder":
+            // A folder dropped on a card (ruled 26 Sep, "it should paste the
+            // path, not the directory name"): its chip is the whole path with
+            // the trailing slash, next to a file chip that is still its name,
+            // so the two rules can be looked at together.
+            _ = pose("speaking")
+            replyTargetForDrop = { (sessionId: "pose", label: callsign) }
+            stagedFragments = { _ in [
+                AttachmentTray.quotedDirectory(NSHomeDirectory() + "/Documents/747 el camino"),
+                AttachmentTray.quoted(NSHomeDirectory() + "/Desktop/kitchen.png"),
+            ] }
+            render()
+            return true
+
         case "receipt-sent", "receipt-sending":
             // The send receipt over the grid it lands on — the ordinary case,
             // since a send resolves after the panel has returned home. The

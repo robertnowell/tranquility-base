@@ -646,11 +646,15 @@ extension StatusHUD {
         }
         trayRow.apply([
             AttachmentTray.quoted("/tmp/a file.png"),
+            AttachmentTray.quotedDirectory("/Users/r/Documents/747 el camino"),
             "Please continue the work of \u{201C}search indexing\u{201D}.\n\nMore context",
         ])
+        // A file chip is its name; a folder chip is its whole path (ruled
+        // 26 Sep); prose is cut and counted.
         let genericFragmentsHaveUsefulPreviews =
             trayRow.displayedNamesForTesting
-                == ["a file.png", "Please continue the work of \u{201C}search indexing\u{201D}. +14 chars"]
+                == ["a file.png", "/Users/r/Documents/747 el camino/",
+                    "Please continue the work of \u{201C}search indexing\u{201D}. +14 chars"]
         trayRow.apply([])
 
         SelfTest.report("tray-teardown-churn", [
@@ -706,6 +710,13 @@ extension StatusHUD {
         board.setString("one.png", forType: .string)
         var fileOutranksText = false
         if case .file("/tmp/one.png")? = read().items.first { fileOutranksText = true }
+        // A folder reads as a place, not a file: the home directory exists
+        // on every Mac the drill runs on, and Finder's directory mark is not
+        // relied on (a bare fileURLWithPath carries none).
+        board.clearContents()
+        board.writeObjects([URL(fileURLWithPath: NSHomeDirectory()) as NSURL])
+        var folderReadsAsAPlace = false
+        if case .directory(NSHomeDirectory())? = read().items.first { folderReadsAsAPlace = true }
         board.clearContents()
         board.setData(png, forType: .png)
         var imageReads = false
@@ -865,6 +876,7 @@ extension StatusHUD {
         SelfTest.report("cardPaste", [
             ("textReads", textReads),
             ("fileOutranksText", fileOutranksText),
+            ("folderReadsAsAPlace", folderReadsAsAPlace),
             ("imageReads", imageReads),
             ("textOutranksImage", textOutranksImage),
             ("dragIgnoresText", dragIgnoresText),
