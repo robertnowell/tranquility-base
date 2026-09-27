@@ -915,6 +915,10 @@ def _shape_ask(path):
     # block, the lede, and claim rows as <details>. Absent all three, the page
     # is on something else, and the advisory says so and names the template.
     on_template = ('class="you"' in body and 'class="lede"' in body and "<details" in body.lower())
+    # The 25 Sep boxes. A page on the brief shape but drawing its evidence as
+    # class="art" boxes predates the 27 Sep blocks; say so, since the shape
+    # check alone passes it.
+    old_boxes = on_template and 'class="art"' in body and not re.search(r'class="(shot|code|quote|tbl)"', body)
     parts = ["%s words" % "{:,}".format(total)]
     parts.append("longest paragraph %d" % longest)
     if claims:
@@ -933,6 +937,11 @@ def _shape_ask(path):
     if shots == 0:
         flags.append("no screenshot: if any claim is about a UI, open the browser and shoot it")
     tpl = ""
+    if old_boxes:
+        tpl = (" OLD ARTIFACT BOXES: the beige class=\"art\" boxes were replaced on 27 Sep 2026. "
+               "A quote gets a left rule, code gets the light neutral panel, a screenshot gets a "
+               "hairline with the passage marked and a sentence caption below; labels are captions. "
+               "Copy the blocks from the current templates/brief.html and read brief.md, Artifacts.")
     if not on_template:
         import os as _os
         here = _os.path.dirname(_os.path.realpath(_os.environ.get("TB_HOOK_PATH") or ""))
