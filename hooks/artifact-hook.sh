@@ -908,6 +908,13 @@ def _shape_ask(path):
     shots = len(re.findall(r"<img\b", body, flags=re.I))
     if total < 120:
         return ""
+    # ON THE TEMPLATE OR NOT. The counts above passed the old editorial pages
+    # (26 Sep: 736 words, 48-word paragraphs, 3 of 5 verb headings) and said
+    # nothing about the one thing that was wrong with them. The brief template
+    # has a structural signature no editorial page has: the dark needs-you
+    # block, the lede, and claim rows as <details>. Absent all three, the page
+    # is on something else, and the advisory says so and names the template.
+    on_template = ('class="you"' in body and 'class="lede"' in body and "<details" in body.lower())
     parts = ["%s words" % "{:,}".format(total)]
     parts.append("longest paragraph %d" % longest)
     if claims:
@@ -925,8 +932,27 @@ def _shape_ask(path):
         flags.append("fewer artifacts than claims: a screenshot, the rows, or the diff under each")
     if shots == 0:
         flags.append("no screenshot: if any claim is about a UI, open the browser and shoot it")
+    tpl = ""
+    if not on_template:
+        import os as _os
+        here = _os.path.dirname(_os.path.realpath(_os.environ.get("TB_HOOK_PATH") or ""))
+        skill = None
+        for cand in (_os.path.join(here, "..", "skills", "share-as-page"),
+                     _os.path.expanduser("~/.claude/skills/share-as-page")):
+            if _os.path.exists(_os.path.join(cand, "templates", "brief.html")):
+                skill = _os.path.realpath(cand)
+                break
+        skill = skill or _os.path.expanduser("~/.claude/skills/share-as-page")
+        tpl = (" NOT ON THE BRIEF TEMPLATE: since 25 Sep 2026 a report starts from "
+               + _os.path.join(skill, "templates", "brief.html")
+               + " (one sentence at headline size, a dark needs-you block, one row per claim "
+               "with its artifact collapsed under it) and reads "
+               + _os.path.join(skill, "references", "brief.md")
+               + " first. The worked example is "
+               "agents/a8e3f054-8583-45f2-8bc0-3dfe55d47a06/uvape-what-is-different-redone.html.")
     return ("\n\nSHAPE OF THIS PAGE (advisory, not a gate): " + " · ".join(parts) + "."
             + (" " + "; ".join(flags) + "." if flags else " Within target.")
+            + tpl
             + " The target and the worked example are in share-as-page/references/brief.md.")
 
 SHAPE_ASK = _shape_ask(path)
