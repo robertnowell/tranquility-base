@@ -78,6 +78,15 @@ again (19 Sep, 17:26:12).
 **Decision.** `OpenAILLMService(base_url="https://api.generalcompute.com/v1",
 model="minimax-m2.7")` for tool selection and the one-sentence reply.
 
+**Superseded in part, 25 Sep (hf-6).** Pipecat's LLM stage is gone from the
+pipeline. Every question is answered by the manager's own loop (`server/loop.py`):
+the same model, called directly with tools that only read (agents, waiting, brief,
+transcript with search, what was said), several steps, capped at six and 8 s, with
+a holding line past 1.5 s and a spoken-length check. Nothing the loop does can type
+into an agent. Measured on 12 real questions about real agents (`drills/loop_eval.py`),
+two runs each: the one-shot answer over a pre-fetched tail missed everything said
+early in a session ("what inspiration did I give you?"); the loop searched for it.
+
 **Measured (19 Sep, 12:40), same tool-call request, same endpoint.**
 
 | model | tool call | time to first token | tok/s after first | total |

@@ -37,6 +37,16 @@ Red flags that zero a page whatever else it does: a paragraph over 150 words; a 
 - **The only honest gap is a "before" nobody shot at the time.** Say so where the screenshot would sit, and show the nearest raw substitute.
 - **Look at what you shot before you embed it.** A crop can miss the popover; a selector can open the wrong panel.
 
+## The page wears the brand it is about
+
+The shape never changes. The skin is one `:root` block, and it belongs to the subject of the page, not to the agent. Ruled 26 Sep 2026.
+
+- **Decide the brand once per session**, from the conversation, at the first page: `hq-theme <session> --brand=NAME`. That binds it; every later `hq-theme <session>` resolves the same brand. A page about you, or about nobody, wears the house theme and takes the agent's ink.
+- **An unknown brand falls to the house, and says so.** The header reads `NO THEME ON RECORD FOR 'X', this is the house fallback`. That is a correct page, not a failure.
+- **Then do the quick research yourself, and record it.** A Kopi customer has a brand record (`set_active_brand` then `get_context`: `colors.primary`, `colors.textHeading`); a site may declare `theme-color`; a logo gives one or two real colours. `hq-theme --learn=NAME --accent=#hex [--brand=#hex] --from='the source' [--url=…]` writes the row. Colours only: a font the site names is recorded as seen and never applied, because a face without its file renders system sans.
+- **Tell the user in one line, do not ask.** "Recorded U Vape from its Kopi brand record, accent #FF6699" or "Coframe declares no colour; its pages stay on the house theme." Permission is not needed; a wrong colour is one `--learn` away from right and the source is on the row.
+- **Never invent a token.** The frequency of hexes in a stylesheet is not a brand. If no source gives a colour, the house is the honest answer.
+
 ## What stays out
 
 Methodology, agent counts, source tiers, the order you did the work in, and findings that are true but bear on no decision. They belong in the record (a `report.md` beside the page, or the transcript), not on the page. The page cites the record in one line at the bottom.

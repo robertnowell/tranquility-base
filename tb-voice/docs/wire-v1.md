@@ -50,7 +50,7 @@ Error codes: `unknown_tool`, `bad_args`, `not_found`, `refused`, `timeout`,
 | `agents` | | `tbase targets --json` | 3 s | 16 KB |
 | `waiting` | | `tbase status --json` | 3 s | 16 KB |
 | `brief` | `agent` | `tbase brief <agent> --json` | 3 s | 8 KB |
-| `transcript` | `agent`, `chars` (≤ 30 000, default 7 000) | `{turns: [{who, text}], total_turns}`, newest last | 5 s | 32 KB |
+| `transcript` | `agent`, `chars` (≤ 30 000, default 7 000), `query` (optional) | `{turns: [{who, text}], total_turns}`, newest last; with `query`, the turns anywhere in the session sharing most words with it, in the order said, each with its `turn` number, plus `matched` | 5 s | 32 KB |
 
 | `send` | `agent`, `text`; `idem` required | `{outcome}`: `typed`, `queued`, `not_dispatched` or `ambiguous` | 20 s | 1 KB |
 
@@ -68,6 +68,6 @@ does not offer `send`.
   WebSocket (`ManagerSocket`) and WebRTC (`ManagerPeer`) transports both send
   `hello` and hand `wire` frames to one host.
 - Bot: `wire.call()` and `take_reply` in `wire.py`; `tools._run` routes the
-  three reads through v1 when offered; `Brain.tail` reads the transcript.
+  three reads through v1 when offered; the loop's `transcript` tool (`Manager._transcript`) reads the transcript, latest or by query. Claude Code and Codex files are both read.
 - Proof: `ManagerToolHostTests` (15), `drills/isolation_drill.py` (wire
   checks), `drills/wire_v1_drill.py` (end to end, with and without hello).
