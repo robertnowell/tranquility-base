@@ -425,6 +425,9 @@ extension StatusHUD {
         trayRow.onComposeEscape = { [weak self] in
             self?.releasePaste(because: "escape", repaint: true)
         }
+        // The line's own click, when it is not editing, arms the card like
+        // any other press on the surface (27 Sep).
+        trayRow.compose.onPress = { [weak self] in self?.armPaste(via: "line") }
         trayRow.onRemove = { [weak self] path in
             guard let self, let session = currentTarget?.sessionId else { return }
             onUnstage?(session, path)

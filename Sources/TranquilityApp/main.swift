@@ -1409,6 +1409,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             ])
             guard staged > 0 else {
                 lastStatusLine = "already attached"
+                Permissions.log("\(via.rawValue): nothing new, \(items.count) item(s) already attached")
                 return true    // taken, just nothing new — never an error badge
             }
             let total = coordinator.attachments.staged(for: target.sessionId).count
