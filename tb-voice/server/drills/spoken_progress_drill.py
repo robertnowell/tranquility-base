@@ -51,8 +51,13 @@ async def main() -> int:
     check("one event per word spoken", len(progress) == 3)
     check("counted in characters, which is what the card takes",
           [e["upTo"] for e in progress] == [len(s) for s in ("It", "It is", "It is done.")])
-    check("and it carries the line being spoken, so the card can check itself",
-          all(e["text"] == LINE for e in progress))
+    # Reversed 27 Sep. It carried the whole line with every word, so an
+    # eight-word sentence put the same paragraph on the wire eight times and
+    # the viewer printed all eight -- a screen of one repeated sentence where
+    # a progress bar belonged. The card already has the line from the
+    # `speaking` event that preceded this; progress is a number.
+    check("it carries progress and nothing else",
+          all("text" not in e for e in progress))
     check("the frame still goes on down the pipeline", len(pushed) == 3)
 
     # Anything else passes through untouched and says nothing.
