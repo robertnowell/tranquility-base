@@ -912,12 +912,17 @@ class Manager(FrameProcessor):
             return {"error": f"no agent matches {a.get('agent')!r}; use an id from agents, or leave "
                              "agent out for the agent on stage"}
 
+        # Active means a lamp on: a live session, heard or not (ruled 26 Sep).
+        # Everything the panel knows about each, so a question about the fleet
+        # ("which one runs on Codex?") is answered from the list, not guessed.
         async def agents(a):
-            return [{k: t.get(k) for k in ("sessionId", "name", "goal", "project")} for t in await self._targets()]
+            return [{k: t.get(k) for k in ("sessionId", "name", "goal", "project", "harness", "status",
+                                           "waiting", "topic") if t.get(k) is not None}
+                    for t in await self._targets()]
 
         async def waiting(a):
-            return [{k: w.get(k) for k in ("sessionId", "name", "goal", "project", "heard")}
-                    for w in await self._live_waiting()]
+            return [{k: w.get(k) for k in ("sessionId", "name", "goal", "project", "harness", "topic", "heard")
+                     if w.get(k) is not None} for w in await self._live_waiting()]
 
         async def brief(a):
             sid = await resolve(a)
@@ -940,8 +945,11 @@ class Manager(FrameProcessor):
             return [f"[{c.n}] {c.text}" for c in await span.candidates()]
 
         return [
-            Tool("agents", "The live coding agents: id, name, goal, project.", agents),
-            Tool("waiting", "The agents waiting on the developer right now.", waiting),
+            Tool("agents", "Every active agent (lamp on, live, heard or not): id, name, goal, project, "
+                           "harness (claude-code, codex, ...), status (busy, idle, ...), whether it is "
+                           "waiting on the developer, and the topic of its latest turn.", agents),
+            Tool("waiting", "The active agents waiting on the developer right now, with their topic and "
+                            "whether the developer has heard them yet.", waiting),
             Tool("brief", "An agent's latest brief: goal, recap, proposal, findings, solution, why, "
                           "its last message.", brief, agent),
             Tool("transcript", "An agent's own words and the developer's replies to it. With `query` (a few "
