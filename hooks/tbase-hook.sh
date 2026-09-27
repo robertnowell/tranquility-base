@@ -142,7 +142,13 @@ if event == "UserPromptSubmit":
         told = False
         if tp and os.path.exists(tp):
             with open(tp, "rb") as fh:
-                told = b"THE SHAPE OF THE PAGE" in fh.read()
+                # The marker is the NEWEST sentence in the shape text, not the
+                # oldest: a session told the 25 Sep version wrote new beige boxes
+                # on 27 Sep (8592f355, sharing-spec-v1) because the grep found
+                # the old paragraph and stayed quiet. Keying on the latest
+                # ruling means one repeat of the whole text per session per
+                # change, which is the cost of a ruling actually arriving.
+                told = b"Artifacts are not boxes" in fh.read()
         if not told:
             here = os.path.dirname(os.path.realpath(os.environ.get("TB_HOOK_PATH") or sys.argv[0] or ""))
             skill = None
