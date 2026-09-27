@@ -743,7 +743,17 @@ extension StatusHUD {
         var received: [(items: [DroppedItem], via: StagingSource)] = []
         onItemsStaged = { items, via in
             received.append((items, via))
-            for item in items { if case .text(let text) = item { tray.append(text) } }
+            // The spy keeps the tray's one rule: the same fragment is one chip.
+            for item in items {
+                let fragment: String
+                switch item {
+                case .text(let text): fragment = text
+                case .file(let path): fragment = AttachmentTray.quoted(path)
+                case .directory(let path): fragment = AttachmentTray.quotedDirectory(path)
+                case .imageData: fragment = "image \(tray.count)"
+                }
+                if !tray.contains(fragment) { tray.append(fragment) }
+            }
             return true
         }
         replyTargetForDrop = { (sessionId: "A", label: "promotions copy") }
@@ -846,6 +856,19 @@ extension StatusHUD {
         if let letterA { panel.sendEvent(letterA) }
         let strayKeyReleases = pasteArmed && panel.acceptsKey
             && trayRow.compose.stringValue == "a"
+        // Command-V AFTER typing (27 Sep, "paste while I've inputted text
+        // does nothing"): the words stay on the line and the paste is a chip.
+        board.clearContents()
+        board.writeObjects([URL(fileURLWithPath: "/tmp/pasted-after-typing.png") as NSURL])
+        let beforeTyped = received.count
+        if let commandV { panel.sendEvent(commandV) }
+        let pasteAfterTypingIsAChip = received.count == beforeTyped + 1
+            && trayRow.compose.stringValue == "a" && pasteArmed
+        // The same file again is one chip, and the card says so rather than
+        // taking it silently.
+        if let commandV { panel.sendEvent(commandV) }
+        let repeatSaysAlreadyAttached = received.count == beforeTyped + 2
+            && pasteHintForTesting == "already attached"
         // The draft (17 Sep): what was typed is kept per session as you
         // type, comes back when the card is selected again, and goes when
         // sent. An in-memory store stands in for the queue store so the
@@ -866,14 +889,32 @@ extension StatusHUD {
         onDraftChanged = savedOnDraft; draftFor = savedDraftFor
         if let escape { panel.sendEvent(escape) }
         let escapeReleases = !pasteArmed
+        let beforeReleased = received.count
         pasteIntoTray()
-        let releasedPastesNothing = received.count == 3
+        let releasedPastesNothing = received.count == beforeReleased
         armPaste(via: "drill")
         if let escape { panel.sendEvent(escape) }
         let escapeReleasesAgain = !pasteArmed
         armPaste(via: "drill")
         panel.resignKey()
         let clickAwayReleases = !pasteArmed && !panel.acceptsKey
+        // Coming back (27 Sep): you copied a file in Finder, which took the
+        // keys, and the line still shows your words. A click on the line
+        // arms the card again, and Command-V is a chip again.
+        trayRow.compose.stringValue = "words left on the line"
+        let click = NSEvent.mouseEvent(
+            with: .leftMouseDown, location: .zero, modifierFlags: [], timestamp: 0,
+            windowNumber: panel.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)
+        if let click { trayRow.compose.mouseDown(with: click) }
+        let lineClickRearms = pasteArmed && panel.acceptsKey
+            && trayRow.compose.currentEditor() is TrayLineEditor
+        board.clearContents()
+        board.writeObjects([URL(fileURLWithPath: "/tmp/pasted-after-return.png") as NSURL])
+        let beforeReturn = received.count
+        if let commandV { panel.sendEvent(commandV) }
+        let pasteAfterReturnIsAChip = received.count == beforeReturn + 1
+            && trayRow.compose.stringValue == "words left on the line"
+        trayRow.compose.stringValue = ""
         armPaste(via: "drill")
         showPastAgents(items: [])
         let faceChangeReleases = !pasteArmed
@@ -908,6 +949,10 @@ extension StatusHUD {
             ("lineRefusesDrops", lineRefusesDrops),
             ("pasteOnTheLineIsAChip", pasteOnTheLineIsAChip),
             ("typedKeyLandsOnTheLine", strayKeyReleases),
+            ("pasteAfterTypingIsAChip", pasteAfterTypingIsAChip),
+            ("repeatSaysAlreadyAttached", repeatSaysAlreadyAttached),
+            ("lineClickRearms", lineClickRearms),
+            ("pasteAfterReturnIsAChip", pasteAfterReturnIsAChip),
             ("draftIsKept", draftIsKept),
             ("draftComesBack", draftComesBack),
             ("sentClearsTheDraft", sentClearsTheDraft),
