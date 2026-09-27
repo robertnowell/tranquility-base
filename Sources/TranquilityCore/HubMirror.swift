@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import GRDB
 import SystemConfiguration
 
 /// The mirror: every page and every turn, into the hub, from the panel itself.
@@ -24,6 +25,7 @@ import SystemConfiguration
 /// The routes and the shapes are exactly the script's (hq-app scripts/upload.mjs
 /// was the spec): /api/ingest/known, /api/ingest, /api/ingest/turns,
 /// /api/ingest/names, /api/heartbeat, and /api/ingest/assets for images.
+/// Notes (/api/ingest/notes) came later and have no script behind them.
 public final class HubMirror: @unchecked Sendable {
 
     // MARK: - Transport
@@ -73,6 +75,30 @@ public final class HubMirror: @unchecked Sendable {
         /// not moved is not re-read, which keeps the 20 s pass to one stat
         /// per session rather than a head read per page.
         var linked: [String: LinkedRecord] = [:]
+        /// Notes. Optional, every one: a state file written before notes
+        /// existed has none of these keys, and a synthesized decoder refuses
+        /// a missing non-optional key -- which would reset the whole state
+        /// and resend every page and turn this Mac has ever mirrored.
+        var notesLedger: LedgerMark?
+        var notesDictation: DictationCursor?
+        var notesRecent: [String: RecentMark]?
+    }
+    /// Where the ledger pass stopped: a byte offset into `ledger.jsonl`, and
+    /// the hash of that file's first line, which is how a rotated or replaced
+    /// file is told apart from the same file grown longer.
+    struct LedgerMark: Codable, Equatable {
+        var offset: Int64
+        var head: String
+    }
+    /// The last dictation the forward pass sent, in the order it reads them.
+    struct DictationCursor: Codable, Equatable {
+        var ms: Int64
+        var id: String
+    }
+    /// What a recent dictation looked like when it was last sent.
+    struct RecentMark: Codable, Equatable {
+        var ms: Int64
+        var hash: String
     }
     struct LinkedRecord: Codable {
         var size: Int64
@@ -91,7 +117,7 @@ public final class HubMirror: @unchecked Sendable {
     }
 
     public struct Report: Sendable, Equatable {
-        public var documents = 0, turns = 0, renamed = 0, images = 0
+        public var documents = 0, turns = 0, renamed = 0, images = 0, notes = 0
         public var failed = 0
         /// The hub refused this Mac's token. Kept apart from `failed` because
         /// it is not a bad run, it is a machine that is no longer connected:
@@ -127,6 +153,9 @@ public final class HubMirror: @unchecked Sendable {
     public let store: QueueStore?
     /// Where the artifact hook's records live (first-write times for pages).
     public let artifactRoot: String?
+    /// The hands-free ledger's directory (`ManagerLedger.directory`). Nil
+    /// sends no hands-free notes; dictations need only the store.
+    public var ledgerDirectory: URL?
     /// Live sessions, for the harness's own name. Injectable; the default asks
     /// the CLI, which caches for six seconds.
     public var liveSessions: @Sendable () -> [String: LiveSession] = {
@@ -184,6 +213,7 @@ public final class HubMirror: @unchecked Sendable {
             store: store,
             artifactRoot: support.path)
         mirror.hubBase = base
+        mirror.ledgerDirectory = support.appendingPathComponent("ledger", isDirectory: true)
         return mirror
     }
 
@@ -261,9 +291,10 @@ public final class HubMirror: @unchecked Sendable {
         var report = Report()
         if docs { await mirrorDocuments(&report) }
         if turns, store != nil { await mirrorTurns(&report) }
+        if turns { await mirrorNotes(&report) }
         if names, store != nil { await mirrorNames(&report) }
         report.note = report.failed == 0
-            ? "ok: \(report.documents) documents, \(report.turns) turns"
+            ? "ok: \(report.documents) documents, \(report.turns) turns, \(report.notes) notes"
             : "failed: \(report.failed) request(s); last: \(report.note)"
         let status = await heartbeat(report.note)
         if status == 401 || status == 403 {
@@ -749,6 +780,265 @@ public final class HubMirror: @unchecked Sendable {
     func knownSessions() -> [String: WaitingSession] {
         guard let store, let rows = try? store.allKnownSessions(limit: 20_000) else { return [:] }
         return Dictionary(rows.map { ($0.sessionId, $0) }, uniquingKeysWith: { a, _ in a })
+    }
+
+    // MARK: - Notes
+
+    /// Everything the developer said, for the hub's Notes page: the lines they
+    /// spoke in hands-free (the ledger) and every dictation the panel
+    /// transcribed (the store's utterances). Their words only, verbatim: a
+    /// manager's or an agent's line is never a note.
+    ///
+    /// The hub keys a note on its source (`ledger:<session>:<n>`,
+    /// `dictation:<id>`), so anything here may be sent twice. That is what
+    /// lets both cursors be simple and lets a first run backfill everything.
+    /// A refused batch ends the pass where it stands, with the cursor where
+    /// the last accepted batch left it.
+    func mirrorNotes(_ report: inout Report) async {
+        if let dir = ledgerDirectory {
+            guard await mirrorLedger(dir, &report) else { return }
+        }
+        if store != nil { _ = await mirrorDictations(&report) }
+    }
+
+    /// The most notes in one request; the hub refuses more.
+    static let notesBatch = 500
+
+    /// Send in batches. False at the first batch the hub did not accept.
+    func postNotes(_ notes: [[String: Any]], _ report: inout Report) async -> Bool {
+        for start in stride(from: 0, to: notes.count, by: Self.notesBatch) {
+            let batch = Array(notes[start..<min(start + Self.notesBatch, notes.count)])
+            do {
+                let (status, body) = try await transport.post("api/ingest/notes", json: ["notes": batch, "device": device])
+                // A hub from before notes has no such route. That is not a
+                // failed sweep, and counting it as one would paint this Mac's
+                // mirror red on every pass until the hub caught up. The
+                // cursors stay put, so the backfill happens when it does.
+                if status == 404 {
+                    Self.trace?("notes: this hub has no notes route yet")
+                    return false
+                }
+                guard (200..<300).contains(status) else {
+                    report.failed += 1
+                    report.note = "notes: HTTP \(status) \(String(decoding: body.prefix(120), as: UTF8.self))"
+                    return false
+                }
+            } catch { report.failed += 1; report.note = "notes: \(error.localizedDescription)"; return false }
+            report.notes += batch.count
+        }
+        return true
+    }
+
+    // Hands-free.
+
+    /// The ledger's new lines, sent, then the mark moved past them.
+    ///
+    /// The ledger appends to `ledger.jsonl` and, past 8 MB, renames it to
+    /// `ledger.1.jsonl` and starts again, so it is append-only between
+    /// rotations and nothing more. A pass reads from its byte offset while
+    /// the file is the one it was reading; when it is not -- rotated,
+    /// replaced, or shorter than the offset -- it reads both files from the
+    /// start, which picks up the tail the old file took with it, and the
+    /// hub's keys absorb the lines it already has.
+    func mirrorLedger(_ dir: URL, _ report: inout Report) async -> Bool {
+        let mark = sync { state.notesLedger }
+        let read = Self.readLedger(directory: dir, after: mark)
+        let notes = read.lines.compactMap(Self.notePayload)
+        if !notes.isEmpty {
+            guard await postNotes(notes, &report) else { return false }
+        }
+        if read.mark != mark {
+            sync { state.notesLedger = read.mark }
+            save()
+        }
+        return true
+    }
+
+    struct LedgerRead {
+        var lines: [ManagerLedger.Line]
+        var mark: LedgerMark
+    }
+
+    static func readLedger(directory: URL, after mark: LedgerMark?) -> LedgerRead {
+        let current = directory.appendingPathComponent("ledger.jsonl")
+        let previous = directory.appendingPathComponent("ledger.1.jsonl")
+        let head = ledgerHead(current)
+        let size = ((try? FileManager.default.attributesOfItem(atPath: current.path))?[.size] as? NSNumber)?.int64Value ?? 0
+        // Offset 0 has read nothing of the current file, so which file it is
+        // does not matter: the previous one was read on the pass that set it.
+        if let mark, size >= mark.offset, mark.offset == 0 || mark.head == head {
+            let (data, used) = completeLines(current, from: mark.offset)
+            return LedgerRead(lines: decodeLedger(data), mark: LedgerMark(offset: mark.offset + used, head: head))
+        }
+        let (old, _) = completeLines(previous, from: 0)
+        let (data, used) = completeLines(current, from: 0)
+        return LedgerRead(lines: decodeLedger(old) + decodeLedger(data), mark: LedgerMark(offset: used, head: head))
+    }
+
+    /// The file's identity: a hash of its first line, or of its first 4 KB
+    /// when that line is longer. Empty while it has no whole first line yet.
+    static func ledgerHead(_ url: URL) -> String {
+        guard let h = try? FileHandle(forReadingFrom: url) else { return "" }
+        defer { try? h.close() }
+        let bytes = (try? h.read(upToCount: 4096)) ?? Data()
+        if let nl = bytes.firstIndex(of: 0x0A) { return sha256(bytes[bytes.startIndex..<nl]) }
+        return bytes.count == 4096 ? sha256(bytes) : ""
+    }
+
+    /// The bytes from `offset` through the last newline, and how many that
+    /// is. A line the ledger is still writing waits for the next pass.
+    static func completeLines(_ url: URL, from offset: Int64) -> (Data, Int64) {
+        guard let h = try? FileHandle(forReadingFrom: url) else { return (Data(), 0) }
+        defer { try? h.close() }
+        guard (try? h.seek(toOffset: UInt64(max(0, offset)))) != nil,
+              let data = try? h.readToEnd(), let nl = data.lastIndex(of: 0x0A) else { return (Data(), 0) }
+        let used = data[data.startIndex...nl]
+        return (Data(used), Int64(used.count))
+    }
+
+    static func decodeLedger(_ data: Data) -> [ManagerLedger.Line] {
+        let decoder = JSONDecoder()
+        return data.split(separator: 0x0A).compactMap { try? decoder.decode(ManagerLedger.Line.self, from: Data($0)) }
+    }
+
+    /// A ledger line as a note, or nil when it is not the developer's words.
+    /// The text goes as the ledger holds it; only emptiness is judged.
+    static func notePayload(_ line: ManagerLedger.Line) -> [String: Any]? {
+        guard line.role == .user,
+              !line.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        var json: [String: Any] = [
+            "source_key": "ledger:\(line.session ?? "-"):\(line.n)",
+            "at": iso(Date(timeIntervalSince1970: line.t)),
+            "source": "handsfree",
+            "kind": line.kind.rawValue,
+            "text": line.text,
+        ]
+        if let t = line.target, !t.isEmpty { json["agent_session"] = t }
+        if let t = line.targetName, !t.isEmpty { json["agent_name"] = t }
+        return json
+    }
+
+    // Dictations.
+
+    /// One utterance with words, as the notes pass reads it.
+    struct Dictation: Equatable {
+        let id: String
+        let createdAtMs: Int64
+        let status: String
+        let text: String
+        let target: String?
+    }
+
+    /// How far back a pass looks again for dictations that changed.
+    ///
+    /// The forward cursor passes an utterance that has no words yet -- it is
+    /// still being transcribed, or waiting for a retry -- as soon as a later
+    /// one has words, and a status moves after the words arrive (ready, then
+    /// confirmed). So every pass also re-reads the last day and resends what
+    /// differs from what was sent. A transcription that lands later than a
+    /// day never reaches the hub; the words are still in Recents.
+    static let recheckWindowMs: Int64 = 24 * 3_600_000
+
+    /// Forward from the cursor in batches, then the last day again.
+    @discardableResult
+    func mirrorDictations(_ report: inout Report, now: Date = Date()) async -> Bool {
+        guard let store else { return true }
+        let floor = Int64(now.timeIntervalSince1970 * 1000) - Self.recheckWindowMs
+        var cursor = sync { state.notesDictation }
+        var recent = sync { state.notesRecent ?? [:] }
+        var named: [String: WaitingSession]? = nil
+        var live: [String: LiveSession] = [:]
+        let payloads: ([Dictation]) -> [[String: Any]] = { rows in
+            if named == nil { named = self.knownSessions(); live = self.liveSessions() }
+            return rows.map { d in
+                let name = d.target.flatMap { t in
+                    Self.displayName(session: named?[t], live: live[t], sessionId: t, callsign: nil)
+                }
+                return Self.notePayload(d, agentName: name)
+            }
+        }
+        while true {
+            guard let batch = try? Self.dictations(in: store, after: cursor, limit: Self.notesBatch),
+                  !batch.isEmpty else { break }
+            guard await postNotes(payloads(batch), &report) else { return false }
+            cursor = DictationCursor(ms: batch.last!.createdAtMs, id: batch.last!.id)
+            for d in batch where d.createdAtMs >= floor {
+                recent[d.id] = RecentMark(ms: d.createdAtMs, hash: Self.dictationHash(d))
+            }
+            sync { state.notesDictation = cursor; state.notesRecent = recent }
+            save()
+            if batch.count < Self.notesBatch { break }
+        }
+        if let cursor, let rows = try? Self.dictations(in: store, since: floor, through: cursor) {
+            let changed = Self.needsResend(rows, recent: recent)
+            for start in stride(from: 0, to: changed.count, by: Self.notesBatch) {
+                let batch = Array(changed[start..<min(start + Self.notesBatch, changed.count)])
+                guard await postNotes(payloads(batch), &report) else { return false }
+                for d in batch { recent[d.id] = RecentMark(ms: d.createdAtMs, hash: Self.dictationHash(d)) }
+                sync { state.notesRecent = recent }
+            }
+        }
+        sync { state.notesRecent = Self.pruned(recent, before: floor) }
+        return true
+    }
+
+    static let dictationColumns = "id, createdAtMs, status, transcriptText, targetSessionId"
+    static let hasWords = "transcriptText IS NOT NULL AND trim(transcriptText) != ''"
+
+    /// Utterances with words after the cursor, oldest first.
+    static func dictations(in store: QueueStore, after c: DictationCursor?, limit: Int) throws -> [Dictation] {
+        try store.dbQueue.read { db in
+            try Row.fetchAll(db, sql: """
+                SELECT \(dictationColumns) FROM utterances
+                WHERE \(hasWords) AND (createdAtMs > ? OR (createdAtMs = ? AND id > ?))
+                ORDER BY createdAtMs, id LIMIT ?
+                """, arguments: [c?.ms ?? Int64.min, c?.ms ?? Int64.min, c?.id ?? "", limit]).map(dictation)
+        }
+    }
+
+    /// Utterances with words from `ms` up to and including the cursor.
+    static func dictations(in store: QueueStore, since ms: Int64, through c: DictationCursor) throws -> [Dictation] {
+        try store.dbQueue.read { db in
+            try Row.fetchAll(db, sql: """
+                SELECT \(dictationColumns) FROM utterances
+                WHERE \(hasWords) AND createdAtMs >= ?
+                  AND (createdAtMs < ? OR (createdAtMs = ? AND id <= ?))
+                ORDER BY createdAtMs, id
+                """, arguments: [ms, c.ms, c.ms, c.id]).map(dictation)
+        }
+    }
+
+    private static func dictation(_ r: Row) -> Dictation {
+        Dictation(id: r["id"], createdAtMs: r["createdAtMs"], status: r["status"],
+                  text: r["transcriptText"], target: r["targetSessionId"])
+    }
+
+    /// A dictation as a note. `kind` is the utterance's status, so the page
+    /// can say which ones never reached their agent.
+    static func notePayload(_ d: Dictation, agentName: String?) -> [String: Any] {
+        var json: [String: Any] = [
+            "source_key": "dictation:\(d.id)",
+            "at": iso(Date(timeIntervalSince1970: Double(d.createdAtMs) / 1000)),
+            "source": "dictation",
+            "kind": d.status,
+            "text": d.text,
+        ]
+        if let t = d.target, !t.isEmpty { json["agent_session"] = t }
+        if let n = agentName, !n.isEmpty { json["agent_name"] = n }
+        return json
+    }
+
+    /// Everything about a dictation that the hub stores and the Mac can change.
+    static func dictationHash(_ d: Dictation) -> String {
+        sha256([d.text, d.status, d.target ?? ""].joined(separator: "\u{1F}"))
+    }
+
+    static func needsResend(_ rows: [Dictation], recent: [String: RecentMark]) -> [Dictation] {
+        rows.filter { recent[$0.id]?.hash != dictationHash($0) }
+    }
+
+    static func pruned(_ recent: [String: RecentMark], before ms: Int64) -> [String: RecentMark] {
+        recent.filter { $0.value.ms >= ms }
     }
 
     // MARK: - Names
