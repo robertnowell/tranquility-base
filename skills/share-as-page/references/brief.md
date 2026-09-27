@@ -25,6 +25,23 @@ Start from `templates/brief.html`. Replace the `:root` block with `hq-theme <ses
 
 Red flags that zero a page whatever else it does: a paragraph over 150 words; a decision that exists only in prose; a chart headed by a topic instead of a finding.
 
+## Artifacts: whitespace first, a rule second, a box only for code
+
+Ruled 27 Sep 2026 after the beige boxes were called "not doing it": the reader could not tell a quote from a table from a code block, and the labels were muted uppercase above a fill the same colour as the page. The evidence (Palmer 1992, NN/g on common region, Material's divider rule, GOV.UK inset text, Primer's diff tokens, the display-polarity studies) is in `2026-09-27-artifact-blocks-contrast/report.md`.
+
+| Artifact | Treatment |
+|---|---|
+| Any block | Whitespace separates it. A single rule when whitespace is not enough. A filled box only for code, where the boundary means "verbatim". |
+| Quote | A 3px left rule and an indent, one size step down, no quotation marks, no fill. Under fifty words. Who, where and when in the caption. |
+| Code, diff, raw rows, prompts | Dark text on the light neutral panel (`--panel`), hairline, radius 4. Never dark on light: dark-on-light wins for precision reading in every polarity study. Diff rows use Primer's tints, contrast in the text colour. |
+| Screenshot | A hairline, no shadow, no device frame. The passage the claim rests on is marked on the image (`.mark`). A sentence caption below saying what to look at, where, when, and a link to the live page. |
+| Before and after | Two screenshots side by side, captions carrying Before and After. |
+| Table | Hairlines only, title above as the caption, header sentence case at full weight, numbers right-aligned in tabular figures. Stripes only when rows are long. |
+| Caption, not label | Every artifact carries a caption below, in a sentence, at full ink. No label bar above. Uppercase tracked mono is for the kicker, the section labels and the status figure, nothing longer. |
+| Gap | Plain italic text with a faint left rule, where the artifact would sit. |
+
+Three page rules came with it. The kicker is two items, brand and date; refs and "follows" go in the tail as links. The lede is under 45 words with one bold clause. Options in the needs-you block are regular weight, one line each; the recommendation is marked with a filled dot and the word, not bolded.
+
 ## The screenshot discipline
 
 "Showing is always better than telling. If there's a QA element to this, show it. Open up the browser, take a screenshot." That is a process rule as much as a design one.
