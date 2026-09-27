@@ -6,7 +6,7 @@ Ruled 25 Sep 2026 after a deep research pass (agent a8e3f054, `2026-09-25-inform
 
 ## The shape: three levels, far apart
 
-1. **The message.** One sentence at headline size, with a verb. A lede of two or three sentences. Then the dark block: what needs them, or "nothing to decide".
+1. **The message.** Three to six words at seven times body size: "Two chips moved." Then the lede, whose first sentence, in bold, is the one-sentence claim with a verb; two more sentences at most. Then the dark block: what needs them, or "nothing to decide". The scale is measured, not felt: typesafe.ai sets a four-word headline at 140px over 17px body, an eight-to-one jump; a sentence at 54px over 16px was called "relatively indistinguished" (27 Sep).
 2. **The claims.** One row per claim, a full sentence each, with a status dot and one figure. Read only the rows and the argument survives. Five to seven rows; a second, smaller list for what deliberately did not change.
 3. **The artifacts.** Collapsed under their claim, never in a separate section. The thing itself: the screenshot, the diff hunk, the raw rows, the literal prompt. A one-line caption saying what to look at.
 
