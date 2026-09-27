@@ -958,6 +958,13 @@ def _shape_ask(path):
         flags.append("fewer artifacts than claims: a screenshot, the rows, or the diff under each")
     if shots == 0:
         flags.append("no screenshot: if any claim is about a UI, open the browser and shoot it")
+    # The headline is the message in three to six words; a sentence up there is
+    # the pre-27-Sep shape ("how long that headline is").
+    h1 = re.search(r"<h1\b[^>]*>(.*?)</h1>", body, flags=re.S | re.I)
+    if h1:
+        hw = len(re.sub(r"<[^>]+>", " ", h1.group(1)).split())
+        if hw > 7:
+            flags.append("the headline is %d words; it is three to six, the claim sentence goes bold in the lede" % hw)
     tpl = ""
     if old_boxes:
         tpl = (" OLD ARTIFACT BOXES: the beige class=\"art\" boxes were replaced on 27 Sep 2026. "
