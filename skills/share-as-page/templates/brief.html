@@ -42,15 +42,20 @@
 
 /* LEVEL 1: the message. One sentence at 54px, one lede, one dark block for what needs them. */
 *{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:16px;line-height:1.4;-webkit-font-smoothing:antialiased}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:17px;line-height:1.45;-webkit-font-smoothing:antialiased}
 main{max-width:760px;margin:0 auto;padding:56px 20px 96px}
 .k{font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
-h1{font-size:clamp(34px,6vw,54px);line-height:1.02;letter-spacing:-.025em;font-weight:700;color:var(--heading);margin:14px 0 22px;max-width:19ch}
-.lede{font-size:21px;line-height:1.35;color:var(--ink);max-width:34ch;margin:0}
-.lede b{color:var(--heading)}
+/* THE HEADLINE IS THREE TO SIX WORDS AT SEVEN TIMES BODY SIZE. Measured 27 Sep on
+   typesafe.ai: h1 140px Medium in four words, h2 64px, body 17px. A sentence at 54px
+   over 16px body was "how long that headline is, how relatively indistinguished".
+   The sentence moves to the lede, in bold. The headline is the message in the fewest
+   words that still say it: "Two chips moved." "Told is not adopted." */
+h1{font-size:clamp(56px,11.5vw,112px);line-height:.95;letter-spacing:-.035em;font-weight:600;color:var(--heading);margin:18px 0 28px;max-width:none}
+.lede{font-size:24px;line-height:1.3;color:var(--muted);max-width:30ch;margin:0}
+.lede b{color:var(--heading);font-weight:600}
 .you{margin:44px 0 0;padding:22px 24px;border-radius:12px;background:var(--heading);color:var(--bg)}
 .you .k{color:#b9c48f}
-.you p{font-size:22px;line-height:1.3;margin:6px 0 0;font-weight:600}
+.you p{font-size:28px;line-height:1.2;margin:6px 0 0;font-weight:600;letter-spacing:-.015em}
 .you small{display:block;font-size:14px;margin-top:8px;opacity:.75;font-weight:400}
 /* Options are regular weight, one line each. The recommendation is MARKED, not bolded:
    a bold option list is a wall (Butterick: if everything is emphasized, nothing is). */
@@ -67,8 +72,8 @@ details{border-bottom:1px solid var(--line)}
 summary{list-style:none;cursor:pointer;display:grid;grid-template-columns:34px 1fr auto;gap:14px;align-items:baseline;padding:20px 0}
 summary::-webkit-details-marker{display:none}
 summary .n{font-family:var(--mono);font-size:13px;color:var(--faint);padding-top:4px}
-summary .c{font-size:21px;line-height:1.25;font-weight:600;color:var(--heading);letter-spacing:-.01em}
-summary .c em{font-style:normal;color:var(--muted);font-weight:400;display:block;font-size:15px;margin-top:5px}
+summary .c{font-size:24px;line-height:1.18;font-weight:600;color:var(--heading);letter-spacing:-.02em}
+summary .c em{font-style:normal;color:var(--muted);font-weight:400;display:block;font-size:16px;margin-top:6px;letter-spacing:0}
 summary .s{font-family:var(--mono);font-size:12px;color:var(--muted);text-align:right;white-space:nowrap;padding-top:4px}
 summary .s::after{content:'+';display:inline-block;margin-left:12px;color:var(--faint);font-size:14px;width:10px}
 details[open] summary .s::after{content:'–'}
@@ -120,8 +125,8 @@ figcaption .src{color:var(--muted)}
 </style></head><body><main>
 
 <div class="k"><!-- KICKER: two items, brand and date. Nothing else. --></div>
-<h1><!-- TITLE: the one sentence they cannot miss. A finding with a verb, not a topic. --></h1>
-<p class="lede"><!-- LEDE: under 45 words. <b>Bold one clause.</b> --></p>
+<h1><!-- TITLE: three to six words, the message. "Two chips moved." The full claim goes in the lede, in bold. --></h1>
+<p class="lede"><b><!-- The one-sentence claim with a verb. --></b> <!-- Two more sentences at most, under 45 words in all. --></p>
 
 <!-- NEEDS YOU. Always present, directly under the lede. If nothing needs them, say that in the same block. -->
 <div class="you"><div class="k">Needs you · <!-- one thing | two decisions | nothing to decide --></div>
