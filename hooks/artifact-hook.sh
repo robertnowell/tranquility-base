@@ -127,6 +127,23 @@ def _written_paths(cmd):
     """
     pat = r"(?:~|/Users/[^/\s'\"]+)/Documents/agents/[0-9a-f-]{8,36}/[^\s'\"<>|;)]+\.html"
     out = re.findall(r">>?\s*['\"]?(" + pat + r")", cmd)
+    # A RELATIVE TARGET AFTER A cd IS THE SAME WRITE. `cd <hub> && cat >
+    # page.html <<EOF` is the most common shape a heredoc page takes (62e11d90,
+    # 27 Sep: half its pages), and it named no absolute path, so the hook saw
+    # nothing and said nothing. The directory is the last `cd` in the command,
+    # else the payload's cwd. Only a target that then lands in the agents tree
+    # counts, same rule as an absolute one.
+    # The payload's cwd reaches this function through a module global rather
+    # than an argument: scripts/test-attribution.sh lifts the function out of
+    # this file by its exact signature and calls it with one argument.
+    base = globals().get("_HOOK_CWD") or ""
+    for m in re.finditer(r"\bcd\s+['\"]?(~?/[^\s'\"&;|]+)", cmd):
+        base = os.path.expanduser(m.group(1))
+    if base:
+        for rel in re.findall(r">>?\s*['\"]?([^\s'\"<>|;)/~][^\s'\"<>|;)]*\.html)", cmd):
+            cand = os.path.normpath(os.path.join(base, rel))
+            if re.fullmatch(r"/Users/[^/]+/Documents/agents/[0-9a-f-]{8,36}/[^/]+\.html", cand):
+                out.append(cand)
     out += re.findall(r"\b(?:cp|mv|install)\s+[^|;&]*?\s(" + pat + r")\b", cmd)
     out += re.findall(r"\btee\s+(?:-\S+\s+)*['\"]?(" + pat + r")", cmd)
     # AND THE FILE HAS TO BE THERE. A command that merely quotes a write —
@@ -175,6 +192,7 @@ declared = bool(path)
 if not path:
     _cmd = (p.get("tool_input") or {}).get("command") or ""
     if isinstance(_cmd, str):
+        _HOOK_CWD = p.get("cwd") or ""
         _found = _written_paths(_cmd)
         if _found:
             path = os.path.expanduser(_found[-1])
@@ -885,7 +903,11 @@ def _shape_ask(path):
             src = fh.read()
     except Exception:
         return ""
-    if not re.search(r"<html\b|<body\b", src, re.I):
+    # A page is anything that declares itself one. Gating on <html> or <body>
+    # alone skipped every page that opens with a doctype and a <meta> line and
+    # never writes either tag, which is how a session (54b7b257, 27 Sep) wrote
+    # pages for two weeks and received this advisory zero times.
+    if not re.search(r"<!doctype\s+html|<html\b|<head\b|<body\b|<meta\b", src, re.I):
         return ""
     body = re.sub(r"<(script|style)\b[^>]*>.*?</\1>", " ", src, flags=re.S | re.I)
     def words(fragment):
