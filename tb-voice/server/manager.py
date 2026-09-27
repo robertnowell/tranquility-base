@@ -746,7 +746,11 @@ class Manager(FrameProcessor):
         pass  # the activation cue already played; nothing to add
 
     async def _do_invite_next(self, text, frame, direction):
-        nxt = await self._next_session()
+        # The name first, if the sentence carries one. "Invite the SambaNova
+        # agent" and "invite the next agent" are the same intent to the gate --
+        # there is one invite verb -- and the difference between them is in the
+        # words, which this is handed and used to throw away.
+        nxt = await self._named_session(text) or await self._next_session()
         if not nxt:
             await self._say("Nobody is waiting, and I see no live sessions.")
             return
@@ -781,7 +785,13 @@ class Manager(FrameProcessor):
         await asyncio.sleep(0.2)  # a breath between the manager's voice and the agent's
         brief = await self._brief(nxt["sessionId"])
         spoken = " ".join(x for x in ((brief or {}).get("recap"), (brief or {}).get("proposal")) if x)
-        await emit(self, "speaking", voice="agent", session=nxt["sessionId"], text=spoken)
+        # No `speaking` emit here. `_app_speaks` -> `_say` emits one for this
+        # same line a breath later, and both were going out: 27 Sep 22:39:47.386
+        # and .968, identical, 0.58s apart, so the panel announced every agent
+        # twice. This one is the older of the two, from when saying who was
+        # coming and letting them speak were separate steps; the one inside
+        # `_say` is the real one, because it fires when the voice actually
+        # starts and carries the voice id that will read it.
         note(Line(Role.AGENT, LineKind.SPOKEN, spoken or "(no brief stored)",
                   speaker=nxt.get("name") or nxt.get("goal") or nxt["sessionId"][:8]))
         await self._app_speaks(f"{SCHEME}://hear?session={nxt['sessionId']}", spoken or "x " * 20,
@@ -1379,18 +1389,68 @@ class Manager(FrameProcessor):
         return out
 
     async def _next_session(self) -> dict | None:
-        """Grid order: unheard waiting rows first, then the rest of the live list;
-        never the session already on stage."""
+        """The first agent on the grid that is not already on stage.
+
+        Ruled 27 Sep: "it should be the same rules as for the grid today, bring
+        next agent." So there is no ordering here any more. `tbase targets`
+        returns the grid's own order -- the lamps that ask for you, newest
+        first, then the ones working, then the merely alive (ManagerJSON.
+        gridBand) -- and this takes the first row of it.
+
+        What it replaces re-sorted the waiting list by `(heard, -eventId)` and
+        then fell through to the live list in whatever order the door happened
+        to return, which was alphabetical by working directory. Both halves
+        were wrong. Sorting unheard first meant hearing an agent changed who
+        was next, which the panel itself reverted on the day it was tried
+        (#439: "hearing a row must not move it"). And the fallback picked a
+        project name, not an agent: on 27 Sep at 22:39 it staged an idle
+        session nobody was waiting on, because its directory sorted first.
+
+        The waiting rows are still joined on, for `topic` and `heard`, which
+        the announcement reads. They no longer decide the order."""
         current = (self.stage or {}).get("sessionId")
-        waiting = [w for w in await self._waiting() if w["sessionId"] != current]
-        live = {t["sessionId"]: t for t in await self._targets()}
-        for w in sorted(waiting, key=lambda w: (w.get("heard", True), -w.get("eventId", 0))):
-            if w["sessionId"] in live:
-                return {**live[w["sessionId"]], **w}
-        for t in live.values():
+        waiting = {w["sessionId"]: w for w in await self._waiting()}
+        for t in await self._targets():
             if t["sessionId"] != current:
-                return t
+                return {**t, **waiting.get(t["sessionId"], {})}
         return None
+
+    async def _named_session(self, text: str) -> dict | None:
+        """The agent the sentence names, if it names one.
+
+        Added 27 Sep, after "Can you invite the SambaNova agent?" invited
+        something else entirely and said nothing about it. The gate classifies
+        that as `invite_next` -- there is no invite-by-name intent and there
+        does not need to be, because the handler is already given the sentence
+        and simply never read it.
+
+        Matching is on the words of the name, not the whole string: an agent
+        called "AI Voice Hackathon SambaNova planning" is asked for as "the
+        SambaNova agent", and nobody says a callsign in full. A word must be
+        four characters or more to count, so "the", "AI" and "agent" cannot
+        match, and the agent sharing the most words wins. One match or none;
+        two agents tied on the same word is not a name, it is an ambiguity, and
+        the queue is a better answer than a coin flip."""
+        said = {w.strip(",.!?;:'\"").lower() for w in text.split()}
+        said = {w for w in said if len(w) >= 4}
+        if not said:
+            return None
+        current = (self.stage or {}).get("sessionId")
+        best, score = None, 0
+        for t in await self._targets():
+            if t["sessionId"] == current:
+                continue
+            words = {w.strip(",.!?;:").lower()
+                     for w in f"{t.get('name') or ''} {t.get('project') or ''}".split()}
+            hits = len(said & {w for w in words if len(w) >= 4})
+            if hits > score:
+                best, score = t, hits
+            elif hits == score and hits > 0:
+                best = None  # a tie names nobody
+        if not best:
+            return None
+        waiting = {w["sessionId"]: w for w in await self._waiting()}
+        return {**best, **waiting.get(best["sessionId"], {})}
 
 
 def _last_user_text(frame: LLMContextFrame) -> str:

@@ -72,8 +72,22 @@ public enum ManagerJSON {
         store: QueueStore, live: [LiveSession],
         isEnrolled: (String, String?) -> Bool
     ) -> [Target] {
-        let waiting = Set((try? store.waitingSessions().map(\.sessionId)) ?? [])
-        return live.sorted { ($0.cwd ?? "") < ($1.cwd ?? "") }.map { s in
+        let open = (try? store.waitingSessions()) ?? []
+        let waiting = Set(open.map(\.sessionId))
+        // Newest turn first within the asking band, which is what the grid
+        // means by recency. `latestId` is monotonic, so it is the same order
+        // `SessionRow.quietRowsLast` gets from `lastActivity`.
+        let askedAt = Dictionary(open.map { ($0.sessionId, $0.latestId) },
+                                 uniquingKeysWith: max)
+        return live.sorted { a, b in
+            let (x, y) = (Self.gridBand(a, waiting: waiting), Self.gridBand(b, waiting: waiting))
+            if x != y { return x < y }
+            if x == 0 {
+                let (i, j) = (askedAt[a.sessionId] ?? 0, askedAt[b.sessionId] ?? 0)
+                if i != j { return i > j }
+            }
+            return (a.cwd ?? "") < (b.cwd ?? "")
+        }.map { s in
             let stop = try? store.latestStop(for: s.sessionId)
             let brief = stop.flatMap { e in
                 try? store.storedBrief(sessionId: s.sessionId, eventRowid: e.latestId)
@@ -87,6 +101,31 @@ public enum ManagerJSON {
                 goal: brief?.goal, topic: brief?.topic ?? stop?.briefTopic,
                 waiting: waiting.contains(s.sessionId))
         }
+    }
+
+    /// The grid's bands, on the data this door has.
+    ///
+    /// Ruled 27 Sep: "it should be the same rules as for the grid today, bring
+    /// next agent." The grid orders by LAMP and then by recency
+    /// (`SessionRow.quietRowsLast`): the lamps that ask for you, then the ones
+    /// working on their own, then the merely alive. This door used to sort by
+    /// working directory, alphabetically, which is how "invite the next agent"
+    /// came to mean "whichever project sorts first" — measured 27 Sep 22:39,
+    /// when it staged an idle agent nobody was waiting on.
+    ///
+    /// Read-state is deliberately NOT consulted, for the grid's own reason:
+    /// hearing a row must not move it (#439). The manager used to sort unheard
+    /// rows first, so hearing an agent changed who was "next" — the exact
+    /// behaviour the panel reverted on the day it was tried.
+    ///
+    /// A mapping rather than a call to `quietRowsLast`, because that takes
+    /// `[SessionRow]` and this door holds `LiveSession` plus the store; the
+    /// honest fix is to assemble rows here, and this is the same order until
+    /// somebody does.
+    static func gridBand(_ s: LiveSession, waiting: Set<String>) -> Int {
+        if waiting.contains(s.sessionId) { return 0 }   // asks for you
+        if s.status == "busy" { return 1 }              // working on its own
+        return 2                                        // merely alive
     }
 
     public static func status(store: QueueStore) throws -> Status {
