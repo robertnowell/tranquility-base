@@ -1,4 +1,5 @@
 #!/bin/bash
+export TB_HOOK_PATH="${BASH_SOURCE[0]:-$0}"
 #
 # voice-dispatch hook. Runs on Claude Code Stop / Notification, and on the
 # Codex events that mean the same things (Stop / PermissionRequest).
@@ -123,6 +124,46 @@ record = {
 
 if not record["sessionId"]:
     sys.exit(0)
+
+# A SESSION FORKED BEFORE THE SHAPE EXISTED LEARNS IT AT ITS NEXT PROMPT.
+#
+# Measured 26 Sep 2026: every page written in the old style since the 25 Sep
+# deploy came from a session started days before it (14, 19 and 22 Sep). The
+# SessionStart text never reaches a running session, and the write-time
+# advisory only reported what it could count. So on UserPromptSubmit, if the
+# session's own transcript does not yet carry the shape text, it is handed the
+# same two paragraphs SessionStart gives a new session, resolved from the same
+# file. Once said, the transcript carries it and this stays silent: the grep is
+# the memory, and nothing is repeated. Claude Code only; Codex's turn events do
+# not carry a transcript path and are not UserPromptSubmit.
+if event == "UserPromptSubmit":
+    tp = record.get("transcriptPath") or ""
+    try:
+        told = False
+        if tp and os.path.exists(tp):
+            with open(tp, "rb") as fh:
+                told = b"THE SHAPE OF THE PAGE" in fh.read()
+        if not told:
+            here = os.path.dirname(os.path.realpath(os.environ.get("TB_HOOK_PATH") or sys.argv[0] or ""))
+            skill = None
+            for cand in (os.path.join(here, "..", "skills", "share-as-page"),
+                         os.path.expanduser("~/.claude/skills/share-as-page")):
+                if os.path.exists(os.path.join(cand, "references", "shape-context.txt")):
+                    skill = os.path.realpath(cand)
+                    break
+            if skill:
+                with open(os.path.join(skill, "references", "shape-context.txt"), encoding="utf-8") as fh:
+                    shape = fh.read().strip()
+                shape = (shape.replace("{template}", os.path.join(skill, "templates", "brief.html"))
+                              .replace("{brief}", os.path.join(skill, "references", "brief.md"))
+                              .replace("{agent}", record["sessionId"]))
+                print(json.dumps({"hookSpecificOutput": {
+                    "hookEventName": "UserPromptSubmit",
+                    "additionalContext": (
+                        "This session started before the house style for pages changed "
+                        "(25 Sep 2026), so it is told here, once.\n\n" + shape)}}))
+    except Exception:
+        pass
 
 line = json.dumps(record, ensure_ascii=True) + "\n"
 
