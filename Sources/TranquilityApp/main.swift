@@ -182,6 +182,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// `manager.hosted` is configured and no local command is.
     /// Hands-free over WebRTC, when `manager.webrtc` is configured.
     var managerPeer: ManagerPeer?
+    /// True from the moment a start begins until a peer exists or it fails.
+    ///
+    /// `managerIsOn` reads the peer, and on the managed path the peer does not
+    /// exist until the Gateway has sold a session — a second or two of network.
+    /// A chord press inside that window found hands-free "off" and started a
+    /// SECOND one. Measured 27 Sep 22:59:52.676 and 22:59:54.299: two presses,
+    /// two purchases, and the second was refused `insufficient_credit` because
+    /// the first had already reserved the block. Two real sessions, real money,
+    /// from one gesture.
+    var managerStarting = false
     var managerTask: Task<Void, Never>?
     var managerLastLine = "listening"
     /// Who the developer is talking to right now, carried under the orb until
