@@ -43,12 +43,36 @@ extension AppDelegate {
             // already cancelled, the microphone stays open through it, and you
             // can talk over an announcement — which was never possible before.
             //
-            // The card and the words under the orb still belong here. Only the
-            // sound moved.
+            // The card belongs here too, and it is the SAME card.
+            //
+            // Manager mode took the card away on 19 Sep — "voice only", the orb
+            // in place of the grid and one line of text under it. That made
+            // hands-free a different product from the rest of the panel: no
+            // name for whoever is speaking, no Open Report, no highlight
+            // following the words, none of the treatment every other
+            // announcement gets. There was never a reason for the difference
+            // beyond the orb needing somewhere to go, and it goes above.
+            //
+            // So this shows what a stop always shows, and the only thing that
+            // moved is which mouth reads it aloud.
             returnToGridWork?.cancel()
             announceTask?.cancel()
             coordinator.speech.stop()
-            hud.setManagerState(StatusHUD.orbState, line: spoken.text, mood: "speaking")
+            announceTask = Task { @MainActor in
+                let event = try? self.store?.latestStop(for: session)
+                let live = ((ClaudeAgentsCLI().sessions() ?? [])
+                    + FileSessionOwnershipStore.shared.liveNonRegistrySessions())
+                    .first { $0.sessionId == session }
+                self.hud.showAnnouncement(
+                    spoken: spoken,
+                    sessionId: session,
+                    pid: live?.pid,
+                    project: event.map { self.tabDisplayName(for: $0, live: live) }
+                        ?? (live?.cwd as NSString?)?.lastPathComponent ?? "",
+                    cwd: event?.cwd ?? live?.cwd,
+                    eventId: session,
+                    placard: "\(StateLegend.Glyph.speaking) \(placard)")
+            }
             return
         }
         returnToGridWork?.cancel()
