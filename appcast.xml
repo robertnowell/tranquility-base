@@ -6,6 +6,14 @@
     <description>Updates for Tranquility Base.</description>
     <language>en</language>
     <item>
+      <title>Version 0.3.1374</title>
+      <sparkle:version>1374</sparkle:version>
+      <sparkle:shortVersionString>0.3.1374</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <pubDate>Sun, 27 Sep 2026 19:15:00 +0000</pubDate>
+      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1374-f294e2253/TranquilityBase-0.3.1374.dmg" type="application/octet-stream" length="34243921" sparkle:edSignature="1WnpFWHcURC395KA6kci8qig4pYwqQYxbV/cj7ZbyJwUe8kKU0dQJ5IWXIuzmgRirqX/gO1tYt8ZMRsJXh5xCA==" />
+    </item>
+    <item>
       <title>Version 0.3.1372</title>
       <sparkle:version>1372</sparkle:version>
       <sparkle:shortVersionString>0.3.1372</sparkle:shortVersionString>
@@ -77,16 +85,8 @@
       <pubDate>Sun, 27 Sep 2026 02:17:05 +0000</pubDate>
       <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1363-deb8515fd/TranquilityBase-0.3.1363.dmg" type="application/octet-stream" length="34176491" sparkle:edSignature="k4J+lgI31r/nyW1O0x2pir5qRaLUj7rzo0iBLPWIpeJRj79bdXpZRZJ4tq10MnV51nWe55zDlYov9VBwCM0oDQ==" />
     </item>
-    <item>
-      <title>Version 0.3.1362</title>
-      <sparkle:version>1362</sparkle:version>
-      <sparkle:shortVersionString>0.3.1362</sparkle:shortVersionString>
-      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <pubDate>Sun, 27 Sep 2026 02:01:40 +0000</pubDate>
-      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1362-c1f97c61d/TranquilityBase-0.3.1362.dmg" type="application/octet-stream" length="34176459" sparkle:edSignature="ulA/hTrboE2TOXyZEozCmdDJ56KL1OILd9z5USGBDN4UsOQlnzOOi8Exx/tDcjOIM9/BUjpzzNkJnOeLYeLxBg==" />
-    </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: Jl4j/r2L1f+tQ06gRzSrx1NhtKaoyQKbIZk4Rn51bNwTZ70pKcZ0Mv9T7nvzL+9BiEAaRMqy1zqxLF27kiIMCQ==
+edSignature: Bnx+JsStwoEZbXIHCj05mxK8clbt4mo8rlTRF9z99x2Gux1Kqe0JfQ/T8Jgf5JHdmpZHOIm9oBNCCVRX9C5nCg==
 length: 6457
 -->
