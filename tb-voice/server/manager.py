@@ -274,7 +274,8 @@ LOOP_SYSTEM = (
     "- Read before you answer. A question about an agent's work is answered from its brief "
     "and, for anything the brief does not settle (risks, what would happen if, what it tried, "
     "what it said last, any detail), from its transcript. A question across agents starts "
-    "from who is live and who is waiting. For the agent on stage you are already given its "
+    "from who is live and who is waiting. A question about what the developer said, at any "
+    "time, is answered from notes. For the agent on stage you are already given its "
     "brief, the end of its transcript, and the passages anywhere in it that best match the "
     "question. A question about what happened earlier (what was first asked, an early "
     "decision) is answered from the matching passages, not from the end. When none of these "
@@ -303,18 +304,51 @@ LOOP_ACT = (
     "You are given the numbered lines they said since the last message was sent, the request, "
     "who is on stage, and the active agents. End with exactly one act:\n"
     "- send(agent) when the message is in those lines or in the request itself. Leave `agent` "
-    "out for the agent on stage; otherwise the id of the agent the request names.\n"
+    "out for the agent on stage; otherwise the id of the agent the request names. When the "
+    "request names a stretch of what they said beyond those lines ('what I said about "
+    "pricing', 'the last ten minutes'), pass `range` with key words or minutes.\n"
     "- ask(question) when you cannot tell which agent it is for: nobody is on stage and the "
     "request names no agent, or it could mean two. One short question.\n"
     "- wait() when they have not said the message yet ('send a message to it' with nothing "
     "said): the manager keeps listening.\n"
+    "`range` is only for a request that names a topic or a time to take from their whole "
+    "record ('what I said about pricing', 'this morning', 'the last ten minutes', 'everything "
+    "today'): that is a range, never a wait, even when no lines are listed above. 'That', "
+    "'it', 'that message', 'what I just said' mean the lines listed above: no range.\n"
+    "The agent the request names wins over the one on stage: 'send what I said about pricing to "
+    "the site agent', with Mailchimp on stage, is send(agent=<the site agent's id>, "
+    "range={query: 'pricing'}).\n"
     "Never pick an agent by guessing from what the message is about.")
+
+# How much of a range may be sent in one go (ruled 27 Sep): past this the loop
+# asks the developer to narrow it rather than sending a wall of text.
+RANGE_LINES = 60
+RANGE_CHARS = 8000
 
 TAIL_CHARS = 7000  # of the staged agent's transcript, given to the loop up front
 MATCH_CHARS = 6000  # of its passages matching the question, also up front
 SPOKEN_WORDS = 30  # what an answer may run to aloud; longer is cut down by the model once (loop.py)
 LOOP_AS_AGENT = ("\n- You are answering AS the agent on stage, in its own voice: first person "
                  "plural ('we found', 'we propose').")
+
+
+def _now_line() -> str:
+    """The time, so 'yesterday' and 'the last ten minutes' can become a window.
+    In the Mac's zone (its hello says), else TB_TZ, else UTC, named."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    tz = os.getenv("TB_TZ") or "UTC"
+    if os.getenv("TB_HOSTED"):
+        import wire
+        try:
+            tz = wire.current().tz or tz
+        except Exception:
+            pass
+    try:
+        now = datetime.now(ZoneInfo(tz))
+    except Exception:
+        now, tz = datetime.now(ZoneInfo("UTC")), "UTC"
+    return now.strftime(f"%A %d %B %Y, %H:%M ({tz})")
 
 
 def _chosen(choice: dict) -> str:
@@ -912,6 +946,7 @@ class Manager(FrameProcessor):
         before = exchange_lines()
         if before:
             context.append("What was said just before, oldest first (you = the developer):\n" + "\n".join(before))
+        context.append(f"It is now {_now_line()}.")
         context.append(f"Question: {question}")
         outcome = await self._loop.run(LOOP_SYSTEM + (LOOP_AS_AGENT if as_stage and who else ""),
                                        "\n\n".join(context), self._loop_tools(), on_hold=on_hold,
@@ -966,6 +1001,10 @@ class Manager(FrameProcessor):
         async def said(a):
             return [f"[{c.n}] {c.text}" for c in await span.candidates()]
 
+        async def notes_read(a):
+            return await self._notes((a.get("query") or "").strip(), a.get("since_minutes"),
+                                     a.get("until_minutes"), min(int(a.get("limit") or 80), 200), a.get("day"))
+
         return [
             Tool("agents", "Every active agent (lamp on, live, heard or not): id, name, goal, project, "
                            "harness (claude-code, codex, ...), status (busy, idle, ...), whether it is "
@@ -983,7 +1022,32 @@ class Manager(FrameProcessor):
                               "query": {"type": "string", "description": "key words to search the whole session for"}},
                  [], "Reading its transcript."),
             Tool("said", "What the developer has said aloud since the last message was sent, numbered.", said),
+            Tool("notes", "Everything the developer has said, any time: hands-free lines and dictations "
+                          "(with the agent each went to), oldest first. `query`: key words to find; "
+                          "`day`: a calendar day as YYYY-MM-DD ('yesterday', 'on Tuesday'); or "
+                          "`since_minutes` / `until_minutes`: a recent window, in minutes ago; `limit` (default 80).",
+                 notes_read, {"query": {"type": "string"}, "day": {"type": "string"},
+                              "since_minutes": {"type": "integer"}, "until_minutes": {"type": "integer"},
+                              "limit": {"type": "integer"}}),
         ]
+
+    async def _notes(self, query: str = "", since_minutes: int | None = None,
+                     until_minutes: int | None = None, limit: int = 80, day: str | None = None) -> dict:
+        """Everything the developer said, hands-free and dictated, from the Mac
+        (ManagerNotes, wire v1 `notes`): the same record as the hub's Notes."""
+        if not os.getenv("TB_HOSTED"):
+            return {"error": "notes are read on the Mac; this bot is not hosted"}
+        import wire
+        args = {"limit": limit} | ({"query": query} if query else {}) \
+            | ({"since_minutes": since_minutes} if since_minutes is not None else {}) \
+            | ({"until_minutes": until_minutes} if until_minutes is not None else {}) \
+            | ({"day": day} if day else {})
+        r = await wire.call(wire.Tool.NOTES, args)
+        if r is None:
+            return {"error": "this Mac does not offer notes yet"}
+        if not r.get("ok"):
+            return {"error": (r.get("error") or {}).get("message") or "notes could not be read"}
+        return r.get("data") or {}
 
     async def _resolve_agent(self, want: str | None) -> str | None:
         """The agent a tool call means: the one on stage when none is named;
@@ -1091,10 +1155,40 @@ class Manager(FrameProcessor):
         if before:
             context.append("What was said just before, oldest first (you = the developer):\n" + "\n".join(before))
         context.append("Their lines since the last message was sent (oldest first):\n"
-                       + ("\n".join(f"[{c.n}] {c.text}" for c in cands) or "(none)"))
+                       + ("\n".join(f"[{c.n}] {c.text}" for c in cands)
+                          or "(none since the last send; anything said earlier is reached with `range`)"))
+        context.append(f"It is now {_now_line()}.")
         context.append(f"Request: {request}")
 
         async def send(a):
+            words, request_on_top = cands, False
+            rng = a.get("range") or {}
+            if rng:
+                # A stretch of what they said, not just since the last send:
+                # the same picker chooses the words from it, and handed to the
+                # Notes agent the request goes on top, as they said it.
+                got = await self._notes((rng.get("query") or "").strip(), rng.get("since_minutes"),
+                                        rng.get("until_minutes"), 200, rng.get("day"))
+                if got.get("error"):
+                    return {"error": got["error"]}
+                found = got.get("notes") or []
+                if not found:
+                    return {"error": "nothing they said matches that range; ask, or wait"}
+                if len(found) > RANGE_LINES or sum(len(n.get("text") or "") for n in found) > RANGE_CHARS:
+                    return {"error": f"that range is {len(found)} lines; ask them to narrow it "
+                                     f"(at most {RANGE_LINES} lines or {RANGE_CHARS} characters)"}
+                # The range ADDS to the lines since the last send, it never
+                # replaces them: reached for when it was not needed ("send that
+                # message as well"), a range that returned two of the three
+                # lines let the picker send part of the message (3 of 5 runs,
+                # 27 Sep). Older lines first, as said; a line in both, once.
+                seen, merged = set(), []
+                for t in [n["text"] for n in found] + [c.text for c in cands]:
+                    if t not in seen:
+                        seen.add(t)
+                        merged.append(t)
+                words = [span.Candidate(n=i + 1, text=t) for i, t in enumerate(merged)]
+                request_on_top = bool(notes)
             if notes:
                 target = notes
             else:
@@ -1110,16 +1204,19 @@ class Manager(FrameProcessor):
             # loop's; which words stay the picker's.
             name = "Notes" if notes else (target.get("name") or target.get("project") or "the agent")
             try:
-                answer = await self._brain.pick_span(request, cands, name,
+                answer = await self._brain.pick_span(request, words, name,
                                                      "keeping the developer's notes" if notes else target.get("goal"))
             except Exception as e:
                 logger.error(f"span pick failed: {e}")
                 answer = None
-            pick = span.check(answer, cands, request)
-            logger.info(f"span: {len(cands)} candidate lines; answer {answer}; pick {pick}")
+            pick = span.check(answer, words, request)
+            logger.info(f"span: {len(words)} candidate lines; answer {answer}; pick {pick}")
             if not pick:
                 return {"done": True, "waited": True, "target": target}
-            return {"done": True, "target": target, "text": span.text_of(pick, cands)}
+            text = span.text_of(pick, words)
+            if request_on_top and pick.lines is not None:
+                text = f"{request.strip()}\n\n{text}"
+            return {"done": True, "target": target, "text": text}
 
         async def ask(a):
             q = " ".join((a.get("question") or "").split())
@@ -1131,8 +1228,16 @@ class Manager(FrameProcessor):
         reads = [t for t in self._loop_tools() if t.name in ("agents", "waiting", "brief")]
         acts = [
             Tool("send", "Send their message: to the agent on stage when `agent` is left out, otherwise to "
-                         "the agent with this id. Their own words are picked after you.", send,
-                 {"agent": {"type": "string"}}, terminal=True),
+                         "the agent with this id. Their own words are picked after you. `range` when "
+                         "the request names a stretch of what they said beyond the lines you were given "
+                         "('what I said about pricing', 'the last ten minutes'): `query` key words, or "
+                         "`since_minutes`.", send,
+                 {"agent": {"type": "string"},
+                  "range": {"type": "object", "properties": {"query": {"type": "string"},
+                                                             "day": {"type": "string"},
+                                                             "since_minutes": {"type": "integer"},
+                                                             "until_minutes": {"type": "integer"}}}},
+                 terminal=True),
             Tool("ask", "Ask the developer one short question (at most 15 words) when the agent or the "
                         "words are unclear.", ask, {"question": {"type": "string"}}, ["question"], terminal=True),
             Tool("wait", "They have not said the message yet: keep listening.", wait, terminal=True),

@@ -127,7 +127,15 @@ async def loop_act(case, cands):
     async def nothing(*a, **k):
         return None
 
+    async def notes(query="", since_minutes=None, until_minutes=None, limit=80, day=None):
+        # The Mac's record, as it would answer: here, the lines of the case.
+        words = {w for w in query.lower().split() if len(w) >= 3}
+        rows = [c for c in cands if not words or any(w in c.text.lower() for w in words)]
+        return {"notes": [{"id": f"n{c.n}", "source": "handsfree", "text": c.text} for c in rows],
+                "matched": len(rows)}
+
     m._targets, m._waiting, m._brief, m._send, m._say = targets, waiting, brief, send, say
+    m._notes = notes
     m._take_stage = lambda a: nothing()
     m._earcon = nothing
     span.candidates = cands_now

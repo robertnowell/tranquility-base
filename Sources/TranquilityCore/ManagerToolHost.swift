@@ -23,6 +23,8 @@ public enum ManagerWireKind: String, Sendable {
 /// The tools wire v1 knows. A name outside this list is refused at the door.
 public enum ManagerToolName: String, CaseIterable, Sendable {
     case agents, waiting, brief, transcript, ledger
+    /// Everything the developer said, hands-free and dictated (ManagerNotes).
+    case notes
     /// The app's own Send, tray and all (hf-12). Effectful: needs `idem`.
     case send
 }
@@ -102,7 +104,10 @@ public actor ManagerToolHost {
 
     /// The first frame on every connection: what this Mac offers.
     public func hello(appVersion: String) -> Data {
+        // The Mac's time zone, so "yesterday" and "this morning" mean the
+        // developer's day and not the cloud's (27 Sep).
         Self.encode(["wire": ManagerWireKind.hello.rawValue, "protocol": Self.protocolVersion, "app_version": appVersion,
+                     "tz": TimeZone.current.identifier,
                      "tools": order.compactMap { tools[$0] }.map { ["name": $0.name.rawValue, "version": $0.version] }])
     }
 
