@@ -715,6 +715,29 @@ class Manager(FrameProcessor):
         self.stage = nxt
         await emit(self, "stage", session=nxt["sessionId"], goal=nxt.get("goal"),
                    name=nxt.get("name"), project=nxt.get("project"))
+        # Shielded from the announcement onward, which is the whole point.
+        #
+        # 27 Sep 01:39, from the app's log: the stage was taken, "Inviting
+        # Tranquility base architecture review to speak" was said, `hearing`
+        # fired 1.7 s later WHILE that sentence was still playing, and the
+        # invitation died there. The panel sat on the promise with nobody
+        # speaking and no error anywhere, because a cancelled task is not a
+        # failure.
+        #
+        # Shielding only the half after the announcement would not have saved
+        # it: the breath that cancels lands during the sentence, not after it.
+        # So the promise and everything that keeps it are one act. An
+        # interruption may stop the manager TALKING — the TTS hears that
+        # directly — but it must not undo something the manager has already
+        # said it is doing.
+        #
+        # turns.py named this before it happened again: "an invite that died
+        # between 'Inviting…' and the hear verb once left nobody speaking".
+        # Starting an agent was shielded for it; inviting one was not.
+        await effect(self._invite(nxt))
+
+    async def _invite(self, nxt: dict):
+        """Say who is coming, then let them speak. One act, once begun."""
         who = nxt.get("name") or nxt.get("project") or "the next agent"
         await self._say_and_wait(f"Inviting {who} to speak.")
         await asyncio.sleep(0.2)  # a breath between the manager's voice and the agent's
