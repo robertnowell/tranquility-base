@@ -113,7 +113,7 @@ except Exception:
     sys.exit(0)
 session = p.get("session_id") or ""      # who ran the tool: the full id
 owner = session                          # who the page belongs to
-def _written_paths(cmd, cwd=""):
+def _written_paths(cmd):
     """Paths this command actually WRITES.
 
     The earlier version asked two questions separately — does this look like a
@@ -133,7 +133,10 @@ def _written_paths(cmd, cwd=""):
     # nothing and said nothing. The directory is the last `cd` in the command,
     # else the payload's cwd. Only a target that then lands in the agents tree
     # counts, same rule as an absolute one.
-    base = cwd or ""
+    # The payload's cwd reaches this function through a module global rather
+    # than an argument: scripts/test-attribution.sh lifts the function out of
+    # this file by its exact signature and calls it with one argument.
+    base = globals().get("_HOOK_CWD") or ""
     for m in re.finditer(r"\bcd\s+['\"]?(~?/[^\s'\"&;|]+)", cmd):
         base = os.path.expanduser(m.group(1))
     if base:
@@ -189,7 +192,8 @@ declared = bool(path)
 if not path:
     _cmd = (p.get("tool_input") or {}).get("command") or ""
     if isinstance(_cmd, str):
-        _found = _written_paths(_cmd, p.get("cwd") or "")
+        _HOOK_CWD = p.get("cwd") or ""
+        _found = _written_paths(_cmd)
         if _found:
             path = os.path.expanduser(_found[-1])
 
