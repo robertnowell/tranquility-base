@@ -3,6 +3,8 @@ sentence it speaks written to the transcript as the manager's own line. This is
 the one place all of the manager's speech passes, whichever path produced it."""
 
 from loguru import logger
+from pipecat.frames.frames import AggregatedTextProgressFrame, Frame
+from pipecat.processors.frame_processor import FrameDirection
 from pipecat.services.elevenlabs.tts import ElevenLabsTTSService
 
 from spoken import spoken
@@ -33,6 +35,27 @@ class SpokenTTSService(ElevenLabsTTSService):
         logger.info(f"voice: {self._settings.voice} -> {voice_id}")
         await self._update_settings(self.Settings(voice=voice_id))
         logger.info(f"voice: now {self._settings.voice} at {self._output_format}")
+
+    async def push_frame(self, frame: Frame, direction: FrameDirection = FrameDirection.DOWNSTREAM):
+        """Say how far along the voice is, so the panel can follow the words.
+
+        The card highlights each word as it is spoken, and always has — driven
+        by the local synthesiser's own callbacks. Hands-free moved the speaking
+        to the bot, so those callbacks stopped existing and the card showed the
+        words without ever lighting them up. The timings did not disappear;
+        they moved here. ElevenLabs sends alignment as it plays, Pipecat turns
+        it into one of these frames per word, and it carries exactly the thing
+        the panel needs: the text spoken so far.
+
+        A character count rather than a word index, because that is what the
+        panel's `highlight(upTo:)` has taken since long before any of this and
+        it does not have to learn a second way to be told.
+        """
+        if isinstance(frame, AggregatedTextProgressFrame):
+            from events import emit
+            await emit(None, "spoke", upTo=len(frame.accumulated_text),
+                       text=frame.text)
+        await super().push_frame(frame, direction)
 
     async def run_tts(self, text: str, context_id: str):
         clean = spoken(text)
