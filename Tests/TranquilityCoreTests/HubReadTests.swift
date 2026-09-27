@@ -22,18 +22,19 @@ final class HubReadTests: XCTestCase {
     }
 
     func testTheShapesSomebodyActuallyHasInHand() {
+        // Every shape lands on the BYTES, /d/<id>/raw: since 13 Sep /d/<id>
+        // is the app's page around an iframe, and a read that asked for it
+        // got markup and no report.
         XCTAssertEqual(HubRead.resolve("https://hq.tranquilitybase.dev/d/\(doc)", base: hub)?.absoluteString,
-                       "https://hq.tranquilitybase.dev/d/\(doc)")
+                       "https://hq.tranquilitybase.dev/d/\(doc)/raw")
         XCTAssertEqual(HubRead.resolve(doc, base: hub)?.absoluteString,
-                       "https://hq.tranquilitybase.dev/d/\(doc)", "a bare document id")
+                       "https://hq.tranquilitybase.dev/d/\(doc)/raw", "a bare document id")
         XCTAssertEqual(HubRead.resolve("  \(doc)\n", base: hub)?.absoluteString,
-                       "https://hq.tranquilitybase.dev/d/\(doc)", "pasted with its whitespace")
-        XCTAssertEqual(
-            HubRead.resolve("https://hq.tranquilitybase.dev/open?session=abc&slug=plan", base: hub)?
-                .absoluteString,
-            "https://hq.tranquilitybase.dev/open?session=abc&slug=plan", "a page footer's address")
-        XCTAssertNil(HubRead.resolve("not-a-thing", base: hub))
-        XCTAssertNil(HubRead.resolve("", base: hub))
+                       "https://hq.tranquilitybase.dev/d/\(doc)/raw", "pasted with its whitespace")
+        XCTAssertEqual(HubRead.resolve("https://hq.tranquilitybase.dev/d/\(doc)/raw", base: hub)?.absoluteString,
+                       "https://hq.tranquilitybase.dev/d/\(doc)/raw", "already the bytes: unchanged")
+        XCTAssertEqual(HubRead.resolve("https://hq.tranquilitybase.dev/open?session=s&slug=p", base: hub)?.absoluteString,
+                       "https://hq.tranquilitybase.dev/open?session=s&slug=p", "an /open address is left for the redirect")
     }
 
     func testAMissingCredentialIsNotAFetchFailure() async {
@@ -57,7 +58,7 @@ final class HubReadTests: XCTestCase {
         })
         XCTAssertEqual(r, .success("<h1>hello</h1>"))
         XCTAssertEqual(seen?.value(forHTTPHeaderField: "authorization"), "Bearer sekret")
-        XCTAssertEqual(seen?.url?.path, "/d/\(doc)")
+        XCTAssertEqual(seen?.url?.path, "/d/\(doc)/raw", "the bytes, not the wrapper")
     }
 
     func testAnUnhappyStatusIsReportedWithItsCode() async {
@@ -135,7 +136,7 @@ extension HubReadTests {
                     : self.reply(req, 200, body: "<h1>the plan</h1>")
             })
         XCTAssertEqual(r, .success("<h1>the plan</h1>"))
-        XCTAssertEqual(hops.map(\.0), ["/open", "/d/cf2833fa-e988-4bcd-bbef-1e1dc0f9a6b7"])
+        XCTAssertEqual(hops.map(\.0), ["/open", "/d/cf2833fa-e988-4bcd-bbef-1e1dc0f9a6b7/raw"])
         XCTAssertEqual(hops.map(\.1), ["Bearer sekret", "Bearer sekret"],
                        "the credential must survive the hop, which is the whole bug")
     }
