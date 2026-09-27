@@ -22,6 +22,13 @@ public enum FragmentPreview {
             candidate = candidate.replacingOccurrences(of: "\\\"", with: "\"")
         }
         if candidate.hasPrefix("/") {
+            // A folder keeps its whole path (ruled 26 Sep, from seeing a
+            // dropped folder ride as "747 el camino": "it should paste the
+            // path, not the directory name"). The message already carried
+            // the path; the chip said otherwise. A filename names a thing an
+            // agent can open; a folder name names nothing on its own, and
+            // the path is the whole point of dragging one.
+            if candidate.hasSuffix("/") { return candidate }
             return (candidate as NSString).lastPathComponent
         }
         let shown = String(candidate.prefix(limit))

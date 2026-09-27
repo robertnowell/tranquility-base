@@ -218,6 +218,16 @@ public struct AttachmentTray: Equatable, Sendable {
         "\"" + path.replacingOccurrences(of: "\"", with: "\\\"") + "\""
     }
 
+    /// A folder as it appears inside the typed message: quoted like a file,
+    /// and ending in "/" so the string itself says it is a place rather than
+    /// a thing. The tray carries no kind tag, so the slash is the tag, and it
+    /// is the one every shell and every agent already reads that way. The
+    /// chip reads it too (ruled 26 Sep: "it should paste the path, not the
+    /// directory name").
+    public static func quotedDirectory(_ path: String) -> String {
+        quoted(path.hasSuffix("/") ? path : path + "/")
+    }
+
     /// The one place staged fragments and transcript become a message. Every
     /// fragment precedes the user's explicit words, in insertion order.
     /// Composed late, never by mutating a buffer, so there is nothing to

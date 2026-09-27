@@ -215,6 +215,15 @@ final class AttachmentTrayTests: XCTestCase {
                        "\"/a/say \\\"hi\\\".png\"")
     }
 
+    /// A folder fragment ends in one slash, however it was handed in: the
+    /// slash is the kind tag the chip and the agent both read (ruled 26 Sep).
+    func testAFolderIsQuotedWithOneTrailingSlash() {
+        XCTAssertEqual(AttachmentTray.quotedDirectory("/Users/r/Documents/747 el camino"),
+                       "\"/Users/r/Documents/747 el camino/\"")
+        XCTAssertEqual(AttachmentTray.quotedDirectory("/Users/r/Documents/747 el camino/"),
+                       "\"/Users/r/Documents/747 el camino/\"")
+    }
+
     func testComposedTextSurvivesFlatten() {
         // The transport deliberately collapses the visual paragraph boundaries
         // before typing into a TUI whose Return key submits.

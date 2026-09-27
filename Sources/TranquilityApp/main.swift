@@ -1361,12 +1361,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             var staged = 0
             var images = 0
+            var folders = 0
             for item in items {
                 switch item {
                 case .file(let path):
                     let fragment = AttachmentTray.quoted(path)
                     if coordinator.attachments.stage(fragment, session: target.sessionId) {
                         staged += 1
+                    }
+                case .directory(let path):
+                    // The path is what rides, whole, with a trailing slash
+                    // that the chip and the agent both read as "folder".
+                    let fragment = AttachmentTray.quotedDirectory(path)
+                    if coordinator.attachments.stage(fragment, session: target.sessionId) {
+                        staged += 1
+                        folders += 1
                     }
                 case .text(let text):
                     // Already send-ready: the tray stores what will be typed.
@@ -1394,7 +1403,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             Track.record(event, [
                 "count": .int(items.count), "accepted": true, "staged": .int(staged),
-                "images": .int(images),
+                "images": .int(images), "folders": .int(folders),
                 "during_undo_window": .bool(hud.pendingSendUtteranceId != nil),
                 "agent_id": Track.hash(target.sessionId),
             ])
@@ -1403,9 +1412,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 return true    // taken, just nothing new — never an error badge
             }
             let total = coordinator.attachments.staged(for: target.sessionId).count
+            // A folder is not a file, and the receipt says which it took.
+            let noun = folders == staged ? "folder" : "file"
             lastStatusLine = via == .paste
                 ? "pasted to \(target.label)"
-                : "\(staged) file\(staged == 1 ? "" : "s") attached to \(target.label)"
+                : "\(staged) \(noun)\(staged == 1 ? "" : "s") attached to \(target.label)"
             // The RESOLVED session, so a drop in the seconds after a launch
             // registers logs the agent it actually reached rather than the
             // retired `launch:` key it was addressed to.

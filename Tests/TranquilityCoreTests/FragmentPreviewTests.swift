@@ -11,6 +11,17 @@ final class FragmentPreviewTests: XCTestCase {
                        "a \"b\".png")
     }
 
+    /// Ruled 26 Sep, from a dropped folder riding as "747 el camino": a
+    /// folder chip is its whole path. The slash is what tells it from a
+    /// file, whose chip stays the filename.
+    func testAFolderShowsItsWholePath() {
+        let folder = AttachmentTray.quotedDirectory("/Users/r/Documents/747 el camino")
+        XCTAssertEqual(FragmentPreview.preview(folder), "/Users/r/Documents/747 el camino/")
+        XCTAssertEqual(FragmentPreview.preview("/Users/r/Documents/747 el camino/"),
+                       "/Users/r/Documents/747 el camino/")
+        XCTAssertEqual(FragmentPreview.preview("/Users/r/Documents/747 el camino"), "747 el camino")
+    }
+
     func testShortProseIsShownWhole() {
         XCTAssertEqual(FragmentPreview.preview("ship it on Tuesday"), "ship it on Tuesday")
         let exactly = String(repeating: "x", count: FragmentPreview.defaultLimit)
