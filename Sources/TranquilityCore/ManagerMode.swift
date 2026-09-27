@@ -44,6 +44,11 @@ public struct ManagerEvent: Codable, Equatable, Sendable {
         /// One line of the exchange, whole, with its role and kind (hf-20,
         /// hf-26). The ledger records it; the orb has nothing to show for it.
         case said
+        /// How far through the line the voice has got, as a character count of
+        /// what has been spoken. The card has highlighted words as they are
+        /// said since long before hands-free; this is the same fact arriving
+        /// from the bot instead of from a synthesiser on this Mac.
+        case spoke
     }
     public var event: Kind
     public var t: Double?
@@ -60,6 +65,8 @@ public struct ManagerEvent: Codable, Equatable, Sendable {
     public var meaning: String?
     public var reason: String?
     public var secs: Int?
+    /// `spoke`: characters of `text` said so far.
+    public var upTo: Int?
 
     public static func parse(_ line: Data) -> ManagerEvent? {
         try? JSONDecoder().decode(ManagerEvent.self, from: line)

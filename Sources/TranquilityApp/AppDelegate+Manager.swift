@@ -539,7 +539,12 @@ extension AppDelegate {
         case .addressed:
             hud.setManagerState(StatusHUD.orbState, line: orbLine(Self.intentLine(e.intent)))
         case .speaking:
-            managerLastLine = e.text ?? (e.voice == "agent" ? "the agent is speaking" : "speaking")
+            // The orb says WHAT is happening; the card says what was said. It
+            // used to carry the whole spoken line, because there was no card in
+            // manager mode to carry it — now there is, with the words and the
+            // highlight following them, so repeating the sentence under the orb
+            // would be the same text twice on one small panel.
+            managerLastLine = e.voice == "agent" ? "the agent is speaking" : "speaking"
             hud.setManagerState(StatusHUD.orbState, line: orbLine(managerLastLine), mood: "speaking")
         case .reloading:
             hud.setManagerState(StatusHUD.orbState, line: "reloading")
@@ -558,6 +563,11 @@ extension AppDelegate {
         case .idle:
             managerEndedByIdle = true
             hud.setManagerState(StatusHUD.orbState, line: "paused after \((e.secs ?? 0) / 60) quiet minutes")
+        case .spoke:
+            // The same highlight the card has always used, told from the other
+            // end of the connection. The card is showing the line already; this
+            // only says how much of it has been heard.
+            if let upTo = e.upTo { hud.highlight(upTo: upTo) }
         case .said:
             break  // the ledger has it (managerLedger); nothing to paint
         case .rotate:
