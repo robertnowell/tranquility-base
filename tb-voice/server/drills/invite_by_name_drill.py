@@ -70,9 +70,15 @@ async def main() -> int:
     check("the agent on stage is skipped", nxt["sessionId"] == "bbbb2222")
     mgr.stage = None
 
-    # Short words cannot match: "the", "next", "agent" are in every sentence.
-    check("short and common words do not name an agent",
-          await M.Manager._named_session(mgr, "invite the next one") is None)
+    # The words of the request are not the words of a name, however long they
+    # are. "next", "speaker" and "agent" are six and seven characters, so the
+    # length filter alone let them through and sent the manager to the roster
+    # for a match it could never make -- which is what hung
+    # `invite_survives_drill`, whose fixture stubs the queue and not the roster.
+    for asked in ("invite the next one", "can you invite the next speaker",
+                  "bring the next agent please", "who's up"):
+        check(f"the request's own words name nobody: {asked!r}",
+              await M.Manager._named_session(mgr, asked) is None)
 
     # Two agents share "kopi" as a project; a tie is an ambiguity, not a pick.
     tied = await M.Manager._named_session(mgr, "invite the kopi agent")

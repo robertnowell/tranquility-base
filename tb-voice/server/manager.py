@@ -89,6 +89,20 @@ INTENTS: dict[Intent, str] = {
 # not get to disagree with the person saying it.
 NAME_SOUNDS = ("tranq", "trank", "drink", "tranc", "trinq", "tranguil", "tranqu")
 
+# The words of the request, not of a name. "Can you invite the next speaker?"
+# is entirely made of these, and an agent that happened to be called "Next
+# Steps" must not win it. Four characters and up, because `_named_session`
+# has already dropped anything shorter; every word here was said by Robert in
+# an actual invite on 27 Sep, or is the manager's own name.
+ASKING_WORDS = {
+    "invite", "next", "agent", "agents", "speaker", "session", "sessions",
+    "please", "could", "would", "should", "bring", "speak", "talk", "tell",
+    "show", "that", "this", "them", "they", "then", "from", "with", "what",
+    "whos", "who's", "have", "here", "hear", "thanks", "thank", "okay",
+    "tranquility", "tranquility's", "base", "another", "other", "again",
+    "someone", "somebody", "anyone", "anybody", "person", "people", "up",
+}
+
 
 def only_the_name(text: str) -> bool:
     """The whole fragment is the manager's name and nothing else. 13:09, 22 Sep:
@@ -1432,8 +1446,13 @@ class Manager(FrameProcessor):
         two agents tied on the same word is not a name, it is an ambiguity, and
         the queue is a better answer than a coin flip."""
         said = {w.strip(",.!?;:'\"").lower() for w in text.split()}
-        said = {w for w in said if len(w) >= 4}
+        said = {w for w in said if len(w) >= 4} - ASKING_WORDS
         if not said:
+            # Nothing here but the request itself, so this is the queue and no
+            # fleet lookup is needed to know it. Worth the early return rather
+            # than a match that fails: `invite_survives_drill` stubs the queue
+            # and not the roster, and it hung for as long as this reached past
+            # it to shell out for a list it was never going to use.
             return None
         current = (self.stage or {}).get("sessionId")
         best, score = None, 0
