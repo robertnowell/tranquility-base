@@ -11,6 +11,7 @@ See docs/design.md sections 2, 6, 7 and the manager-mode architecture page.
 import asyncio
 import json
 import os
+import re
 import time
 import uuid
 
@@ -36,6 +37,7 @@ import session
 import span
 from vocab import Intent, Line, LineKind, Role, line_from_transcript, parse_intent
 from turns import TurnQueue, effect
+from loop import Loop, Tool
 from spoken import spoken
 from tools import _json_or_text, _run
 
@@ -270,6 +272,39 @@ def exchange_lines(n: int = 8) -> list[str]:
     return [f"{ln.jev_who} ({ln.jev_status}): {ln.jev_text}" for ln in session.current().exchange[-n:]]
 
 
+BRIEF_FIELDS = ("goal", "recap", "proposal", "findings", "solution", "why", "lastAssistantMessage")
+
+# What the loop is told (hf-6). It reads; it never acts.
+LOOP_SYSTEM = (
+    f"You are {NAME}, the hands-free manager of a developer's coding agents. The developer "
+    "asked you something aloud. Find the answer with the tools, then answer.\n"
+    "- Read before you answer. A question about an agent's work is answered from its brief "
+    "and, for anything the brief does not settle (risks, what would happen if, what it tried, "
+    "what it said last, any detail), from its transcript. A question across agents starts "
+    "from who is live and who is waiting. For the agent on stage you are already given its "
+    "brief, the end of its transcript, and the passages anywhere in it that best match the "
+    "question. A question about what happened earlier (what was first asked, an early "
+    "decision) is answered from the matching passages, not from the end. When none of these "
+    "settle it, search the transcript with other key words (names, numbers).\n"
+    "- Answer only from what you were given and what the tools returned, with the specifics "
+    "that answer it: the number, the name, the reason, what it hangs on. If the record does "
+    "not say, say so in one sentence. Never guess, never fill a gap with what is likely, and "
+    "never give generic advice. A "
+    "decision the record shows is still open (a question the agent asked the developer) is "
+    "open: say so, and say what it hangs on. If a transcript could not be read, say you could "
+    "not read it; never take that to mean nothing was said.\n"
+    "- At most 30 words, one or two sentences, spoken aloud; across agents, name at most three "
+    "and say how many more. Plain words only, no lists, no "
+    "markdown, no quotation marks around names, and never an id, hash, path, URL, branch or "
+    "file name.\n"
+    "- You only read. You cannot send, start, invite or change anything, and never say you did.")
+TAIL_CHARS = 7000  # of the staged agent's transcript, given to the loop up front
+MATCH_CHARS = 6000  # of its passages matching the question, also up front
+SPOKEN_WORDS = 30  # what an answer may run to aloud; longer is cut down by the model once (loop.py)
+LOOP_AS_AGENT = ("\n- You are answering AS the agent on stage, in its own voice: first person "
+                 "plural ('we found', 'we propose').")
+
+
 def _chosen(choice: dict) -> str:
     # A Jev choice answer: {"choice": name, "confidence": c, "probabilities": {name: p}}.
     probs = choice.get("probabilities") or {}
@@ -277,8 +312,8 @@ def _chosen(choice: dict) -> str:
 
 
 class Brain:
-    """One completion, no tools: the answer to a question about the session on
-    stage, from its brief and last message. MiniMax M2.7 on General Compute."""
+    """The span picker's one completion (it only points; span.py), and the
+    local transcript reader. Questions are the loop's (loop.py)."""
 
     def __init__(self):
         self._client = httpx.AsyncClient(
@@ -292,72 +327,79 @@ class Brain:
         self.model = os.getenv("GC_MODEL", "minimax-m2.7")
 
     @staticmethod
-    def transcript_tail(path: str | None, limit: int = 7000) -> str:
-        """The last stretch of the session's own transcript: what it and its
-        supervisor actually said, text parts only."""
+    def _turns(path: str | None, window: int | None = 400_000) -> list[tuple[str, str]]:
+        """Every text turn in a transcript file, oldest first; `window` reads
+        only its last that many bytes."""
         if not path or not os.path.exists(path):
-            return ""
-        parts = []
+            return []
+        turns = []
         try:
             with open(path, "rb") as f:
-                f.seek(max(0, os.path.getsize(path) - 400_000))
+                if window:
+                    f.seek(max(0, os.path.getsize(path) - window))
                 for raw in f.read().decode(errors="replace").splitlines():
                     try:
                         o = json.loads(raw)
                     except Exception:
                         continue
-                    if o.get("type") not in ("assistant", "user"):
-                        continue
-                    c = (o.get("message") or {}).get("content")
-                    if isinstance(c, str):
-                        parts.append(f"{o['type']}: {c}")
-                    elif isinstance(c, list):
-                        txt = " ".join(p.get("text", "") for p in c if isinstance(p, dict) and p.get("type") == "text")
-                        if txt.strip():
-                            parts.append(f"{o['type']}: {txt}")
+                    who, c = Brain._turn_of(o)
+                    if who and c:
+                        turns.append((who, c))
         except Exception as e:
             logger.warning(f"transcript read failed: {e}")
-        return "\n".join(parts)[-limit:]
+        return turns
 
-    async def tail(self, brief: dict, sid: str | None) -> str:
-        """The agent's own words. Hosted the file is on the Mac, not here: the
-        path in the brief never existed in the container and this returned
-        nothing, silently, for every hosted answer (hf-4). The Mac reads it."""
-        if os.getenv("TB_HOSTED") and sid:
-            import wire
-            r = await wire.call(wire.Tool.TRANSCRIPT, {"agent": sid, "chars": 7000})
-            if r is not None:
-                if not r.get("ok"):
-                    logger.warning(f"transcript for {sid[:8]}: {(r.get('error') or {}).get('code')}")
-                    return ""
-                turns = (r.get("data") or {}).get("turns") or []
-                return "\n".join(f"{t.get('who')}: {t.get('text')}" for t in turns)[-7000:]
-            logger.warning("transcript: this Mac offers no transcript tool; answering from the brief alone")
-        return self.transcript_tail(brief.get("transcriptPath"))
+    @staticmethod
+    def _turn_of(o: dict) -> tuple[str | None, str]:
+        """One transcript line as (who, text), or (None, "") when it is not a
+        spoken turn. Claude Code writes {type, message}; Codex writes
+        {type: response_item, payload: {type: message, role, content}}."""
+        if o.get("type") in ("assistant", "user"):
+            who, c = o["type"], (o.get("message") or {}).get("content")
+        elif o.get("type") == "response_item" and (o.get("payload") or {}).get("type") == "message" \
+                and o["payload"].get("role") in ("assistant", "user"):
+            who, c = o["payload"]["role"], o["payload"].get("content")
+        else:
+            return None, ""
+        if isinstance(c, list):
+            c = " ".join(p.get("text", "") for p in c if isinstance(p, dict)
+                         and p.get("type") in ("text", "input_text", "output_text"))
+        return (who, c.strip()) if isinstance(c, str) and c.strip() else (None, "")
 
-    async def answer(self, question: str, brief: dict, recent: list[str], sid: str | None = None) -> str:
-        facts = {k: brief.get(k) for k in ("goal", "recap", "proposal", "findings", "solution", "why", "lastAssistantMessage")}
-        tail = await self.tail(brief, sid)
-        msgs = [
-            {"role": "system", "content": (
-                "You are a coding-agent session answering its supervisor aloud, in first person "
-                "plural ('we'). Answer ONLY from the facts given. One or two sentences, 30 words "
-                "max, no lists, no markdown. If the facts do not say, say so in one sentence. "
-                "Spoken, so never say an id, hash, path, URL, branch or file name; say 'the file', "
-                "'the branch', 'the PR', 'PR five forty-seven'. You answer questions; you cannot perform "
-                "actions and must never claim to (no 'opening', 'sending', 'doing it now').")},
-            {"role": "user", "content": f"Facts about this session:\n{json.dumps(facts, ensure_ascii=False)}\n\n"
-                                        f"The end of the session's transcript:\n{tail}\n\n"
-                                        f"The exchange so far (you = the supervisor):\n" + "\n".join(exchange_lines()) + f"\n\nQuestion: {question}"},
-        ]
-        body = {"model": self.model, "messages": msgs, "max_tokens": 400, "temperature": 0.3}
-        t0 = time.monotonic()
-        r = await self._client.post("/chat/completions", json=body)
-        r.raise_for_status()
-        record("brain", body, r.json(), ms=int((time.monotonic() - t0) * 1000))
-        text = (r.json()["choices"][0]["message"].get("content") or "").strip()
-        return " ".join(text.split())[:600]
+    @staticmethod
+    def transcript_tail(path: str | None, limit: int = 7000) -> str:
+        """The last stretch of the session's own transcript: what it and its
+        supervisor actually said, text parts only."""
+        return "\n".join(f"{who}: {text}" for who, text in Brain._turns(path))[-limit:]
 
+    @staticmethod
+    def transcript_search(path: str | None, query: str, limit: int = 9000) -> str:
+        """The turns anywhere in the transcript that best match the query, in
+        the order said: the same as the Mac's TranscriptTail.search. A word
+        counts by how rare it is in this session (log N/df), so the one turn
+        with "salary" outranks forty with "the" and "raise"."""
+        import math
+        turns = Brain._turns(path, window=None)
+        words = {w for w in re.split(r"[^\w]+", query.lower()) if len(w) >= 3}
+        if not words or not turns:
+            return ""
+        lows = [t.lower() for _, t in turns]
+        weight = {w: math.log((len(lows) + 1) / (1 + sum(w in t for t in lows))) for w in words}
+        scored = [(sum(weight[w] for w in words if w in t), i) for i, t in enumerate(lows)]
+        scored = sorted((x for x in scored if x[0] > 0), key=lambda x: (-x[0], -x[1]))
+        picked, used = [], 0
+        for _, i in scored:
+            who, text = turns[i]
+            if len(text) > 1500:
+                low = lows[i]
+                first = min((low.find(w) for w in sorted(words, key=lambda w: -weight[w]) if w in low), default=0)
+                start = max(0, first - 500)
+                text = ("…" if start else "") + text[start:start + 1500] + ("…" if start + 1500 < len(text) else "")
+            if used + len(text) > limit and picked:
+                break
+            picked.append((i, f"[turn {i + 1}] {who}: {text}"))
+            used += len(text)
+        return "\n".join(t for _, t in sorted(picked))
 
     async def pick_span(self, request: str, cands: list, agent: str, goal: str | None) -> dict | None:
         """Which of the developer's own lines are the message, or which part of
@@ -419,19 +461,20 @@ class Manager(FrameProcessor):
         self._tts = tts
         self._manager_voice = None
         self._brain = Brain()
+        self._loop = Loop()
         seed_exchange()
         self._recent: list[str] = []
         self._last_intent: Intent | None = None
         # Each intent's handler, named once. Found by building "_do_<label>"
         # before hf-26: a renamed label was not an error, only a handler that
-        # silently never ran. SUMMARIZE_RECENT has none: it goes to the LLM.
+        # silently never ran. Every intent has one; questions go to the loop.
         self._handlers = {
             Intent.MUTE: self._do_mute, Intent.NONE: self._do_none,
             Intent.INVITE_NEXT: self._do_invite_next,
             Intent.RUNG_GOAL: self._do_rung_goal, Intent.RUNG_FINDINGS: self._do_rung_findings,
             Intent.RUNG_SOLUTION: self._do_rung_solution, Intent.RUNG_WHY: self._do_rung_why,
             Intent.CUSTOM: self._do_custom, Intent.TEACH: self._do_teach, Intent.SPEAK: self._do_speak,
-            Intent.FLEET_STATUS: self._do_fleet_status,
+            Intent.FLEET_STATUS: self._do_fleet_status, Intent.SUMMARIZE_RECENT: self._do_summarize_recent,
             Intent.SEND_MESSAGE: self._do_send_message, Intent.START_AGENT: self._do_start_agent,
             Intent.TAKE_NOTE: self._do_take_note,
         }
@@ -687,11 +730,7 @@ class Manager(FrameProcessor):
         # on top of the voice. Only the slow intents get one.
         if intent in SLOW_INTENTS:
             await self._earcon("listening")
-        handler = self._handlers.get(intent)
-        if handler:
-            await handler(text, frame, direction)
-        else:
-            await self._llm(frame, direction, text, intent)
+        await self._handlers[intent](text, frame, direction)
 
     # -- intents handled without the LLM ---------------------------------------------
 
@@ -775,7 +814,7 @@ class Manager(FrameProcessor):
 
     async def _do_custom(self, text, frame, direction):
         if not self.stage:
-            await self._llm(frame, direction, text, Intent.CUSTOM)
+            await self._ask_loop(text)
             return
         # An instruction to the session on stage is typed in; a question is answered.
         try:
@@ -790,27 +829,179 @@ class Manager(FrameProcessor):
         await self._answer_about_stage(text, await self._brief(self.stage["sessionId"]))
 
     async def _answer_about_stage(self, question: str, brief: dict | None):
-        """A question about the session on stage: one completion from its brief,
-        spoken by the session. No tools; nothing to wander off into."""
+        """A question about the session on stage, answered by the loop and
+        spoken by the session, in its own voice."""
+        await self._ask_loop(question, as_stage=True)
+
+    async def _do_summarize_recent(self, text, frame, direction):
+        await self._ask_loop(text)
+
+    async def _ask_loop(self, question: str, as_stage: bool = False):
+        """A question, answered by reading (loop.py, hf-6). The manager's voice
+        says it, or the staged agent's when the question is about its work."""
         from urllib.parse import quote
-        sid = self.stage["sessionId"]
-        if not brief:
-            await self._say("That session has no brief stored yet.")
+        stage = self.stage if as_stage else None
+        holding: list[asyncio.Task] = []
+
+        async def hold(line: str):
+            holding.append(asyncio.create_task(self._say(line)))
+
+        outcome = await self._answer(question, as_stage, on_hold=hold)
+        for t in holding:
+            await t
+        if not outcome.answer:
+            await self._say("I couldn't find that in time." if outcome.stopped in ("time", "steps")
+                            else "I couldn't get an answer right now.")
             return
-        try:
-            answer = await self._brain.answer(question, brief, self._recent, sid)
-        except Exception as e:
-            logger.error(f"brain failed: {e}")
-            await emit(self, "error", reason=f"brain: {str(e)[:120]}")
-            await self._say("I couldn't get an answer from the session's notes.")
+        answer = spoken(outcome.answer)
+        if not stage:
+            await self._say(answer)
             return
-        if not answer:
-            await self._say("The session's notes don't say.")
-            return
-        answer = spoken(answer)
+        sid = stage["sessionId"]
         await emit(self, "speaking", voice="agent", session=sid, text=answer[:160])
-        note(Line(Role.AGENT, LineKind.SPOKEN, answer, speaker=self.stage.get("name") or self.stage.get("goal") or sid[:8]))
+        note(Line(Role.AGENT, LineKind.SPOKEN, answer, speaker=stage.get("name") or stage.get("goal") or sid[:8]))
         await self._app_speaks(f"{SCHEME}://say?session={sid}&text={quote(answer)}", answer, sid)
+
+    async def _answer(self, question: str, as_stage: bool = False, on_hold=None):
+        """The loop's answer, unspoken (drills/loop_eval.py asks this too)."""
+        who = (self.stage or {})
+        context = []
+        if who:
+            context.append(f"Agent on stage: {who.get('name') or who.get('project') or 'unnamed'}"
+                           f"{' - ' + who['goal'] if who.get('goal') else ''} "
+                           f"(agent id {who['sessionId']}, for tools only; never say it)")
+            # Its brief, up front: the old one-shot answer always had it, and
+            # the loop, left to fetch it, sometimes fetched the wrong agent's
+            # (25 Sep graded eval).
+            b = await self._brief(who["sessionId"])
+            if b:
+                context.append("Its brief: " + json.dumps({k: b.get(k) for k in BRIEF_FIELDS if b.get(k)},
+                                                          ensure_ascii=False))
+            # And the end of its transcript: what the one-shot answer always
+            # had, and where most answers are. Left for the loop to fetch, it
+            # searched instead and answered in part: 0 of 12 recent held-out
+            # questions right against 7 (25 Sep). The tools reach beyond this.
+            tail = await self._transcript(who["sessionId"], TAIL_CHARS)
+            if tail:
+                context.append(f"The end of its transcript (last {TAIL_CHARS} characters, newest last):\n{tail}")
+            # And what matches the question anywhere in the session. Given only
+            # the end, the loop answered early-session questions from it,
+            # wrongly and with confidence (15 of 24 on the tuning half); left
+            # to search on its own, it did not always search. Both are in
+            # hand before it answers; the tools go further when these do not
+            # settle it.
+            hits = await self._transcript(who["sessionId"], MATCH_CHARS, question)
+            if hits:
+                context.append("Passages anywhere in its transcript that best match the question, "
+                               f"in the order said:\n{hits}")
+        before = exchange_lines()
+        if before:
+            context.append("What was said just before, oldest first (you = the developer):\n" + "\n".join(before))
+        context.append(f"Question: {question}")
+        outcome = await self._loop.run(LOOP_SYSTEM + (LOOP_AS_AGENT if as_stage and who else ""),
+                                       "\n\n".join(context), self._loop_tools(), on_hold=on_hold,
+                                       max_words=SPOKEN_WORDS)
+        await emit(self, "loop", steps=outcome.steps, ms=outcome.ms, stopped=outcome.stopped,
+                   calls=[{"tool": c["tool"], "ms": c["ms"]} for c in outcome.calls])
+        logger.info(f"loop: {outcome.steps} steps, {outcome.ms} ms, calls "
+                    f"{[c['tool'] for c in outcome.calls]}, stopped {outcome.stopped}")
+        return outcome
+
+    def _loop_tools(self) -> list[Tool]:
+        """What the loop may read: all of it on this Mac when hosted (wire v1)."""
+        agent = {"agent": {"type": "string", "description": "the agent's id (from agents or waiting); "
+                                                             "leave it out for the agent on stage"}}
+
+        async def resolve(a) -> str | None:
+            """The agent a tool call means: the one on stage when none is named;
+            otherwise an id, a unique id prefix, or a name, never a guess."""
+            want = (a.get("agent") or "").strip()
+            if not want:
+                return (self.stage or {}).get("sessionId")
+            if await self._brief(want):
+                return want
+            live = await self._targets()
+            hits = [t["sessionId"] for t in live if t.get("sessionId", "").startswith(want)]
+            if len(hits) != 1:
+                low = want.lower()
+                hits = [t["sessionId"] for t in live
+                        if low in (t.get("name") or "").lower() or low in (t.get("goal") or "").lower()]
+            if len(hits) == 1:
+                return hits[0]
+            stage = (self.stage or {}).get("sessionId")
+            return stage if stage and stage.startswith(want[:8]) else None
+
+        def unknown(a):
+            return {"error": f"no agent matches {a.get('agent')!r}; use an id from agents, or leave "
+                             "agent out for the agent on stage"}
+
+        # Active means a lamp on: a live session, heard or not (ruled 26 Sep).
+        # Everything the panel knows about each, so a question about the fleet
+        # ("which one runs on Codex?") is answered from the list, not guessed.
+        async def agents(a):
+            return [{k: t.get(k) for k in ("sessionId", "name", "goal", "project", "harness", "status",
+                                           "waiting", "topic") if t.get(k) is not None}
+                    for t in await self._targets()]
+
+        async def waiting(a):
+            return [{k: w.get(k) for k in ("sessionId", "name", "goal", "project", "harness", "topic", "heard")
+                     if w.get(k) is not None} for w in await self._live_waiting()]
+
+        async def brief(a):
+            sid = await resolve(a)
+            if not sid:
+                return unknown(a)
+            b = await self._brief(sid)
+            return {k: b.get(k) for k in BRIEF_FIELDS} if b else {"error": "no brief stored for that agent"}
+
+        async def transcript(a):
+            sid = await resolve(a)
+            if not sid:
+                return unknown(a)
+            text = await self._transcript(sid, min(int(a.get("chars") or 7000), 30_000),
+                                          (a.get("query") or "").strip())
+            return text or {"error": "could not read a transcript for that agent (none found, or a "
+                                     "format this reader does not know); this says nothing about "
+                                     "what was said"}
+
+        async def said(a):
+            return [f"[{c.n}] {c.text}" for c in await span.candidates()]
+
+        return [
+            Tool("agents", "Every active agent (lamp on, live, heard or not): id, name, goal, project, "
+                           "harness (claude-code, codex, ...), status (busy, idle, ...), whether it is "
+                           "waiting on the developer, and the topic of its latest turn.", agents),
+            Tool("waiting", "The active agents waiting on the developer right now, with their topic and "
+                            "whether the developer has heard them yet.", waiting),
+            Tool("brief", "An agent's latest brief: goal, recap, proposal, findings, solution, why, "
+                          "its last message.", brief, agent),
+            Tool("transcript", "An agent's own words and the developer's replies to it. With `query` (a few "
+                               "key words): the turns anywhere in the whole session that match them best, "
+                               "in the order said; use this for anything earlier than what you were given. "
+                               "Without `query`: the most recent, newest last; `chars` (default 7000, up to "
+                               "30000) reads further back.",
+                 transcript, {**agent, "chars": {"type": "integer"},
+                              "query": {"type": "string", "description": "key words to search the whole session for"}},
+                 [], "Reading its transcript."),
+            Tool("said", "What the developer has said aloud since the last message was sent, numbered.", said),
+        ]
+
+    async def _transcript(self, sid: str, chars: int, query: str = "") -> str:
+        """The agent's own words, its latest or those matching `query`: from
+        the Mac when hosted (the file is there, hf-4), from its file when local."""
+        if os.getenv("TB_HOSTED"):
+            import wire
+            args = {"agent": sid, "chars": max(chars, 9000) if query else chars} | ({"query": query} if query else {})
+            r = await wire.call(wire.Tool.TRANSCRIPT, args)
+            if r is not None:
+                if not r.get("ok"):
+                    logger.warning(f"transcript for {sid[:8]}: {(r.get('error') or {}).get('code')}")
+                    return ""
+                turns = (r.get("data") or {}).get("turns") or []
+                return "\n".join((f"[turn {t['turn']}] " if t.get("turn") else "") + f"{t.get('who')}: {t.get('text')}"
+                                 for t in turns)[-chars:]
+        path = ((await self._brief(sid)) or {}).get("transcriptPath")
+        return Brain.transcript_search(path, query, max(chars, 9000)) if query else Brain.transcript_tail(path, chars)
 
     CAPABILITIES = ("Say what's next to hear the next agent. Ask for the goal, findings, next step "
                     "or why. Say tell it to, then your message. Say stop to mute. Say start an agent.")
@@ -1036,24 +1227,6 @@ class Manager(FrameProcessor):
         await emit(self, "tool", argv=["send", session_id[:8]], outcome=meaning, wire=True)
         return meaning
 
-    async def _llm(self, frame, direction, text, intent, brief=None):
-        note = {"intent": intent.value, "stage": self.stage and {
-            "sessionId": self.stage["sessionId"], "goal": self.stage.get("goal"),
-            "project": self.stage.get("project")}}
-        if self.stage and intent is Intent.CUSTOM:
-            brief = brief or await self._brief(self.stage["sessionId"])
-            if brief:
-                note["brief"] = {k: brief.get(k) for k in ("goal", "recap", "proposal", "findings", "solution", "why", "lastAssistantMessage")}
-                note["instruction"] = "Answer the question from this brief in the session's own voice via say_as_session, 30 words max."
-        if intent is Intent.SEND_MESSAGE and self.stage:
-            note["instruction"] = ("Call send_message with the stage sessionId now; do not ask "
-                                   "which session. Then confirm in one clause.")
-        if intent is Intent.SUMMARIZE_RECENT:
-            note["recent"] = await self._recent_briefs()
-        frame.context.add_message({"role": "developer", "content": "manager note: " + json.dumps(note)})
-        await emit(self, "speaking", intent=intent.value, stage=(self.stage or {}).get("goal"))
-        await self.push_frame(frame, direction)
-
     # -- doors ----------------------------------------------------------------------
 
     async def _say(self, text: str, voice: str = "manager", session: str | None = None,
@@ -1169,14 +1342,6 @@ class Manager(FrameProcessor):
             if t["sessionId"] != current:
                 return t
         return None
-
-    async def _recent_briefs(self) -> list[dict]:
-        out = []
-        for w in (await self._waiting())[:5]:
-            b = await self._brief(w["sessionId"])
-            if b:
-                out.append({"goal": b.get("goal"), "recap": b.get("recap"), "project": b.get("project")})
-        return out
 
 
 def _last_user_text(frame: LLMContextFrame) -> str:
