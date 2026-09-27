@@ -1010,6 +1010,19 @@ public enum HomeBase {
             // left, the date on the right — the engineering-notes shape this
             // house already uses for its briefs. Then the accent kicker, the
             // serif headline, the dek, and the byline between hairlines.
+            // WHAT NEEDS YOU, in the dark block, straight under the lede: the
+            // newest turn's question if it asked one, else what it proposes
+            // next, else the plain fact that nothing is waiting. The same
+            // block every report opens with since 25 Sep; a hub is the report
+            // about an agent, and this is the one thing a reader opens it for.
+            let you: String
+            if let q = n.question, !q.isEmpty {
+                you = "<div class=\"you\"><div class=\"k\">Needs you · one question</div><p>\(e(q))</p></div>"
+            } else if let next = n.nextStep, !next.isEmpty {
+                you = "<div class=\"you\"><div class=\"k\">Proposes next · nothing to decide yet</div><p>\(e(next))</p></div>"
+            } else {
+                you = "<div class=\"you\"><div class=\"k\">Nothing to decide</div><p>The last turn asked nothing of you.</p></div>"
+            }
             let project = (model.cwd as NSString?)?.lastPathComponent
             let plate = nameplate(brand: theme.nameplate, project: project)
             let dateline = model.lastActive.map { dayStamp.string(from: $0) } ?? ""
@@ -1019,6 +1032,7 @@ public enum HomeBase {
                 <h1>\(e(name))</h1>
                 <p class="latest">\(e(n.headline ?? n.topic))</p>
                 <p class="deck">\(deck)</p>
+                \(you)
                 <p class="byline">\(byline)</p>
                 """
         }
@@ -1240,21 +1254,6 @@ public enum HomeBase {
             "<link rel=\"stylesheet\" href=\"file://\(fontSheetRoot.path)/\($0)\">"
         } ?? "")
         <style>
-          /* Two families, one job each — the newspaper's own division of labour.
-             The serif carries the story; the sans carries facts ABOUT the story
-             (byline, dates, tags). A reader tells them apart before reading a
-             word, which is one free distinction doing the work four decorative
-             ones were doing badly. Colour is the weakest tool in Butterick's
-             list — "position, size, font, and sometimes color" — so amber is
-             spent in exactly one place: the risk tag. */
-          /* PROVENANCE — theme \(theme.id). Editorial tokens are rung 5, the
-             house default; Kopi is rung 2 (share-as-page references/brands.md);
-             Mirai's two recorded tokens are rung 3 (the brand record), and its
-             neutrals stay editorial rather than being invented around them.
-             Type is the system serif/sans stack, NOT the brands' own faces:
-             naming a face without embedding it renders system sans and claims
-             an identity the page has not got, and a page rewritten every turn
-             cannot carry embedded fonts. */
           :root{--bg:\(theme.bg);--fg:\(theme.ink);--dim:\(theme.muted);--faint:\(theme.faint);
                 --rule:\(theme.line);--amber:\(theme.amber);--card:\(theme.paper);
                 --accent:\(theme.accent);--brand:\(theme.brand);
@@ -1289,184 +1288,153 @@ public enum HomeBase {
                 --faint:#6a6558;--rule:#2e2c26;--amber:#d9a441;--card:#1e1d19;
                 --accent:#e0645f;--brand:#eceae2}}
           """ : "/* light stock only: this brand's tokens are specified for paper. */")
-          *{box-sizing:border-box}html{background:var(--bg)}
-          body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--serif);
-               font-size:18px;line-height:1.62;-webkit-font-smoothing:antialiased}
-          /* 66 characters is Bringhurst's ideal; 45–75 the acceptable band. */
-          .wrap{max-width:660px;margin:0 auto;padding:0 26px 56px}
-          /* The masthead: a thick rule the width of the measure, the nameplate
-             tracked in sans on the left, the dateline on the right. It is the
-             one place caps belong on this page, because a nameplate is a
-             label and not prose. */
+          /* THE HOUSE SHAPE, 27 Sep 2026. Three levels, far apart: the agent's
+             name at headline size; the latest claim in bold at the head of the
+             lede, then the dark block that says what needs you; then one row per
+             turn, each with its pages, pull requests and words under it.
+             Sans throughout, body 17px, headline up to 80px: the eight-to-one
+             jump measured on typesafe.ai, not the three-to-one this page had.
+             Artifacts are not boxes: a rule for what was said, a hairline for
+             a page or a pull request, whitespace between turns. The tokens
+             still come from the theme table and the agent's own ink. */
+          body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--sans);
+               font-size:17px;line-height:1.45;-webkit-font-smoothing:antialiased}
+          .wrap{max-width:760px;margin:0 auto;padding:0 20px 96px}
           .plate{display:flex;justify-content:space-between;align-items:baseline;gap:16px;
-                 margin-top:44px;padding:14px 0 12px;border-top:3px solid var(--brand);
-                 border-bottom:1px solid var(--rule);
-                 font-family:var(--sans);font-size:12px;font-weight:600;
-                 letter-spacing:.12em;text-transform:uppercase;color:var(--brand)}
-          .plate span:last-child{color:var(--faint);font-weight:500;white-space:nowrap}
+                 margin-top:56px;padding:0;border:0;
+                 font-family:var(--sans);font-size:11px;font-weight:500;
+                 letter-spacing:.1em;text-transform:uppercase;color:var(--dim)}
+          .plate span:last-child{color:var(--faint);white-space:nowrap}
           .plate a.hq{margin-left:auto;margin-right:16px;text-decoration:none;color:var(--accent);
-                      letter-spacing:.12em;white-space:nowrap}
-          footer .hq{margin-left:auto;text-decoration:none;color:var(--accent);font-weight:600;
-                     border:1px solid var(--rule);padding:7px 13px;border-radius:7px}
-          footer .hq + .discuss{margin-left:0}
-          .kicker{font-family:var(--sans);font-size:12px;font-weight:700;letter-spacing:.12em;
-                  text-transform:uppercase;color:var(--accent);margin:34px 0 10px}
-          h1{font-size:44px;line-height:1.06;letter-spacing:-.022em;font-weight:600;
-             margin:0 0 18px;max-width:17ch;color:var(--brand)}
-          /* WHAT THIS PAGE IS ABOUT, BEFORE WHAT JUST HAPPENED. The h1 was
-             the newest turn's headline, so a hub was titled after its last
-             event while the agent's own name sat in 11px grey three lines
-             down — you learned what happened before you learned whose page you
-             were on (03 Sep). The headline keeps its place, one step below the
-             name. */
-          .latest{font-family:var(--serif);font-size:21px;line-height:1.32;
-            color:var(--fg);margin:2px 0 14px;font-weight:600;max-width:56ch;
-            letter-spacing:-.005em}
-          /* The live turn, given the weight of the only thing still moving. */
-          .now{font-size:15px;line-height:1.55;color:var(--fg);margin:22px 0 4px;
-            padding-left:13px;border-left:2px solid var(--accent);max-width:60ch}
+                      letter-spacing:.1em;white-space:nowrap}
+          .kicker{display:none}
+          h1{font-size:clamp(40px,7.5vw,80px);line-height:.98;letter-spacing:-.03em;
+             font-weight:600;margin:18px 0 26px;color:var(--brand)}
+          .latest{font-size:24px;line-height:1.3;color:var(--brand);margin:0;font-weight:600;
+                  max-width:30ch;letter-spacing:-.01em}
+          .deck{font-size:24px;line-height:1.3;color:var(--dim);margin:0 0 6px;max-width:30ch}
+          .you{margin:40px 0 0;padding:22px 24px;border-radius:12px;background:var(--brand);
+               color:var(--bg)}
+          .you .k{font-family:var(--sans);font-size:11px;letter-spacing:.1em;
+                  text-transform:uppercase;color:var(--card);opacity:.85}
+          .you p{font-size:26px;line-height:1.22;margin:6px 0 0;font-weight:600;
+                 letter-spacing:-.015em}
+          .you small{display:block;font-size:14px;margin-top:8px;opacity:.75;font-weight:400}
+          .now{font-size:15px;line-height:1.5;color:var(--fg);margin:22px 0 4px;
+               padding-left:13px;border-left:2px solid var(--accent);max-width:60ch}
           .now span{display:block;font-family:var(--sans);font-size:10.5px;
-            letter-spacing:.1em;text-transform:uppercase;color:var(--accent);
-            margin-bottom:4px}
-          .deck{font-size:20px;line-height:1.5;color:var(--dim);margin:0 0 22px;max-width:60ch}
+                    letter-spacing:.1em;text-transform:uppercase;color:var(--accent);
+                    margin-bottom:4px}
           .byline{font-family:var(--sans);font-size:12.5px;line-height:1.55;color:var(--faint);
-                  letter-spacing:.02em;
-                  margin:0 0 44px;padding:16px 0 0;border-top:1px solid var(--rule)}
-          /* A short accent rule over each section: the second ink's whole job,
-             rationed to a hairline so it punctuates rather than fills. */
-          h2{font-size:26px;line-height:1.2;letter-spacing:-.015em;font-weight:600;
-             margin:52px 0 6px;padding-top:14px;position:relative;color:var(--brand)}
-          h2::before{content:"";position:absolute;top:0;left:0;width:46px;height:3px;
-                     background:var(--accent)}
-          .sub{font-family:var(--sans);font-size:13px;color:var(--faint);margin:0 0 14px}
-          /* The list carries the gap its deleted subline used to hold, so the
-             first rule does not crowd the heading. */
-          ul.pages{list-style:none;padding:0;margin:14px 0 0}
-          /* A page made by a turn, printed under it: indented off the accent
-             so it reads as this turn's output rather than a sibling claim. */
-          ul.made{list-style:none;padding:0 0 0 13px;margin:10px 0 2px;
-                  border-left:2px solid var(--accent)}
-          ul.made li{padding:4px 0}
-          ul.made .page{color:var(--fg);text-decoration:none;font-size:16px;
-                        border-bottom:1px solid var(--rule)}
+                  margin:26px 0 0;padding:0}
+          h2{font-size:13px;line-height:1.3;letter-spacing:.1em;text-transform:uppercase;
+             font-weight:500;color:var(--dim);margin:72px 0 6px;padding:0 0 10px;
+             border-bottom:1px solid var(--rule);position:static}
+          h2::before{content:none}
+          .sub{font-family:var(--sans);font-size:13px;color:var(--faint);margin:0 0 4px}
+          ol{list-style:none;padding:0;margin:0}
+          ol li{display:grid;grid-template-columns:84px 1fr;gap:16px;padding:22px 0;
+                border-bottom:1px solid var(--rule)}
+          .when{font-family:var(--sans);font-size:12px;line-height:1.9;color:var(--faint);
+                font-variant-numeric:tabular-nums}
+          .what{min-width:0}
+          .what h3{margin:0 0 6px;font-size:24px;line-height:1.18;font-weight:600;
+                   letter-spacing:-.02em;color:var(--brand)}
+          .what p{margin:0 0 6px;font-size:16px;line-height:1.45;max-width:62ch;color:var(--dim)}
+          .what .h{color:var(--dim)}
+          .what .m{font-size:15px;color:var(--fg)}
+          .what span{font-family:var(--sans);font-size:10.5px;font-weight:500;
+                     letter-spacing:.08em;text-transform:uppercase;color:var(--faint);
+                     margin-right:8px}
+          .what .risky span{color:var(--amber)}
+          li.line .what h3{font-size:18px;font-weight:500}
+          li.line .what .h{font-size:15px}
+          ul.made{list-style:none;padding:0;margin:12px 0 4px;border:0}
+          ul.made li{padding:8px 0;border-top:1px solid var(--rule);font-size:15px}
+          ul.made .page{color:var(--fg);text-decoration:underline;text-decoration-color:var(--accent);
+                        text-underline-offset:3px;font-size:16px}
           ul.made .page:hover{color:var(--accent)}
           ul.made .on{display:none}
-          /* A pull request in the made-list. The number is set in the sans,
-             like every other label on this page that names an instrument
-             rather than saying a sentence; the repository trails it, quiet. */
-          ul.made .pr{font-family:var(--sans);font-size:13px;font-weight:700;
-                      letter-spacing:.02em;color:var(--accent);text-decoration:none}
+          ul.made .pr{font-family:var(--sans);font-size:13px;font-weight:600;
+                      color:var(--accent);text-decoration:none;min-width:5.4em;margin-right:10px;flex:none}
           ul.made .pr:hover{text-decoration:underline}
-          /* `.what span` sets every span on a turn in the field-tag caps, and
-             a repository is a proper noun rather than a label — the page's own
-             rule is that caps mark placards and nothing else. So this one opts
-             out, and aligns instead: the numbers form a column, the repos form
-             a column, and two PRs on one turn read as a pair. */
           ul.made li.prrow{display:flex;align-items:baseline}
-          ul.made .where{font-family:var(--sans);font-size:12.5px;color:var(--faint);
-                         text-transform:none;letter-spacing:0;font-weight:400;
-                         margin:0}
-          ul.made .pr{min-width:5.4em;margin-right:10px;flex:none}
-          ul.made .prtitle{font-family:var(--sans);font-size:12.5px;color:var(--dim);
-                           text-transform:none;letter-spacing:0;font-weight:400;
-                           margin:0;flex:1;overflow:hidden;text-overflow:ellipsis;
-                           white-space:nowrap}
-          /* State, read from GitHub at render. Open is the one that wants you;
-             merged and closed are settled and recede. */
-          ul.made .prstate{font-family:var(--sans);font-size:11px;font-weight:700;
+          ul.made .where{font-family:var(--sans);font-size:12.5px;color:var(--faint);margin:0}
+          ul.made .prtitle{font-family:var(--sans);font-size:13px;color:var(--dim);margin:0;flex:1;
+                           overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+          ul.made .prstate{font-family:var(--sans);font-size:11px;font-weight:600;
                            letter-spacing:.06em;text-transform:uppercase;
                            color:var(--faint);margin-left:12px;white-space:nowrap;flex:none}
           ul.made .prstate.s-open{color:var(--accent)}
+          ul.pages{list-style:none;padding:0;margin:14px 0 0}
           ul.pages li{display:flex;align-items:baseline;gap:14px;padding:12px 0;
                       border-top:1px solid var(--rule)}
-          ul.pages .page{color:var(--fg);text-decoration:none;font-size:18px;flex:1;
-                         line-height:1.4}
+          ul.pages .page{color:var(--fg);text-decoration:none;font-size:17px;flex:1;line-height:1.4}
           ul.pages .page:hover{color:var(--accent)}
-          ul.pages .on{font-family:var(--sans);font-size:12.5px;color:var(--faint);
-                       white-space:nowrap}
-          /* "published" — the copy other people can open. Quiet, in the
-             agent's own ink, because it is a fact about the page rather than
-             a second name for it. */
-          .live{font-family:var(--sans);font-size:11px;font-weight:700;
+          ul.pages .on{font-family:var(--sans);font-size:12.5px;color:var(--faint);white-space:nowrap}
+          .live{font-family:var(--sans);font-size:11px;font-weight:600;
                 letter-spacing:.08em;text-transform:uppercase;color:var(--accent);
-                text-decoration:none;white-space:nowrap;margin-left:2px}
-          .live:hover{text-decoration:underline}
-          /* THE INDEX. Sans throughout: this is a finding aid, a set of facts
-             about the documents, not the documents' own prose. The serif is
-             spent on the stack above, where the story is. */
-          .tagbar{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0 6px}
-          /* A chip is a control, so it is a <button>: focusable, operable from
-             the keyboard, and announced as pressed. The old tag chips on the
-             top hub were <a> elements doing nothing, which read to a screen
-             reader as links that go nowhere. */
-          .chip{font-family:var(--sans);font-size:11.5px;letter-spacing:.05em;
-            background:transparent;color:var(--dim);border:1px solid var(--rule);
-            border-radius:999px;padding:3px 9px 3px 10px;cursor:pointer;
-            display:inline-flex;align-items:baseline;gap:6px;line-height:1.7}
-          .chip i{font-style:normal;font-size:10px;color:var(--faint);
-            font-variant-numeric:tabular-nums}
-          .chip:hover{border-color:var(--accent);color:var(--fg)}
-          .chip:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-          /* The pressed chip is the only place the index spends the accent —
-             one signal, so the eye finds the live filter with no hunting. */
-          .chip.on{border-color:var(--accent);color:var(--accent);font-weight:700}
-          .chip.on i{color:var(--accent)}
+                text-decoration:none;margin-left:10px}
+          .tagbar{display:flex;flex-wrap:wrap;gap:6px;margin:14px 0 4px}
+          .chip{font-family:var(--sans);font-size:12px;color:var(--dim);background:transparent;
+                border:1px solid var(--rule);border-radius:999px;padding:4px 10px;cursor:pointer}
+          .chip i{font-style:normal;color:var(--faint);margin-left:6px;font-variant-numeric:tabular-nums}
+          .chip.on{border-color:var(--brand);color:var(--brand)}
           .chip.none{font-style:italic}
           ul.index{list-style:none;padding:0;margin:10px 0 0}
-          ul.index li{display:flex;flex-wrap:wrap;align-items:baseline;gap:10px;
-            padding:11px 0;border-top:1px solid var(--rule)}
-          ul.index .page{color:var(--fg);text-decoration:none;font-size:16.5px;
-            font-family:var(--serif);line-height:1.4;flex:1 1 62%}
+          ul.index li{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 14px;padding:12px 0;
+                      border-top:1px solid var(--rule)}
+          ul.index li[hidden]{display:none}
+          ul.index .page{color:var(--fg);text-decoration:none;font-size:17px;flex:1;line-height:1.4;
+                         min-width:60%}
           ul.index .page:hover{color:var(--accent)}
           ul.index .on{font-family:var(--sans);font-size:12px;color:var(--faint);
-            white-space:nowrap;font-variant-numeric:tabular-nums}
-          /* The tags sit on their own line under the title at narrow widths and
-             at the end of the row when there is space: they are the least
-             important thing in the row and must never push the title around. */
+                       white-space:nowrap;font-variant-numeric:tabular-nums}
           ul.index .tags{flex:1 0 100%;display:flex;flex-wrap:wrap;gap:5px;
-            font-family:var(--sans);font-size:10.5px;letter-spacing:.06em;
-            text-transform:uppercase}
+                         font-family:var(--sans);font-size:10.5px;letter-spacing:.06em;
+                         text-transform:uppercase}
           ul.index .tags span{color:var(--faint)}
           ul.index .tags span::after{content:"\\2009·";margin-left:5px;color:var(--rule)}
           ul.index .tags span:last-child::after{content:""}
           ul.index .tags.none{color:var(--faint);opacity:.7;font-style:italic;
-            text-transform:none;letter-spacing:0}
-          p.idxempty{font-family:var(--sans);font-size:13px;color:var(--faint);
-            margin:16px 0 0}
-          ol{list-style:none;padding:0;margin:0}
-          ol li{display:flex;gap:20px;padding:16px 0;border-top:1px solid var(--rule)}
-          .when{flex:0 0 84px;font-family:var(--sans);font-size:12.5px;line-height:1.9;
-                color:var(--faint)}
-          .what{flex:1;min-width:0}
-          .what h3{margin:0 0 4px;font-size:20px;font-weight:600;letter-spacing:-.01em}
-          .what p{margin:0 0 5px;font-size:16.5px;max-width:60ch}
-          .what .m{font-size:15.5px;color:var(--dim)}
-          /* The only caps left, and the only amber: a fragment marking a field. */
-          .what span{font-family:var(--sans);font-size:11px;font-weight:600;
-                     letter-spacing:.06em;text-transform:uppercase;color:var(--faint);
-                     margin-right:7px}
-          .what .risky span{color:var(--amber)}
-          li.line .what h3{font-size:17px}
-          li.line .what .h{color:var(--dim);font-size:15.5px}
-          .digest{margin-top:18px;padding:16px 18px;background:var(--card);border-radius:10px;
-                  font-size:16px;color:var(--dim);max-width:64ch}
+                              text-transform:none;letter-spacing:0}
+          p.idxempty{font-family:var(--sans);font-size:13px;color:var(--faint);margin:16px 0 0}
+          .digest{margin-top:18px;padding:0 0 0 18px;border-left:3px solid var(--rule);
+                  font-size:15px;color:var(--dim);max-width:64ch}
           .digest b{color:var(--fg);font-weight:600}
-          footer{margin-top:52px;padding-top:20px;border-top:1px solid var(--rule);
-                 font-family:var(--sans);font-size:13px;color:var(--faint);
+          details.transcript{margin:1.2rem 0 0;border-top:0;padding-top:0}
+          details.transcript>summary{font-family:var(--sans);font-size:11px;
+            letter-spacing:.08em;text-transform:uppercase;color:var(--faint);
+            cursor:pointer;list-style:none}
+          details.transcript>summary::-webkit-details-marker{display:none}
+          details.transcript>summary::before{content:"+ ";color:var(--faint)}
+          details.transcript[open]>summary::before{content:"\\2013 "}
+          details.transcript>summary:hover{color:var(--accent)}
+          details.transcript.inline{margin:.7rem 0 0}
+          ol.said{list-style:none;padding:0;margin:.7rem 0 0}
+          ol.said>li{display:block;padding:.7rem 0 .7rem 18px;border:0;border-left:3px solid var(--accent);
+                     margin:.5rem 0}
+          p.ask{font-family:var(--sans);font-size:15px;color:var(--fg);
+            font-weight:600;margin:0 0 .35rem;white-space:pre-wrap}
+          p.said{font-family:var(--sans);font-size:15px;color:var(--dim);
+            margin:0;white-space:pre-wrap}
+          footer{margin-top:72px;padding-top:20px;border-top:1px solid var(--rule);
+                 font-family:var(--sans);font-size:12.5px;color:var(--faint);
                  display:flex;flex-wrap:wrap;gap:14px;align-items:center}
           footer b{color:var(--dim);font-weight:600}
-          footer .discuss{margin-left:auto;text-decoration:none;background:var(--accent);
+          footer .hq{margin-left:auto;text-decoration:none;color:var(--accent);font-weight:600;
+                     border:1px solid var(--rule);padding:7px 13px;border-radius:7px}
+          footer .hq + .discuss{margin-left:0}
+          footer .discuss{margin-left:auto;text-decoration:none;background:var(--brand);
                           color:var(--bg);padding:8px 14px;border-radius:7px;font-weight:600}
-          /* Hover cards, only where hover means something. A tap fires hover and
-             activation together, so on touch this whole affordance is absent
-             rather than sticky. */
-          #card{position:fixed;z-index:9;max-width:340px;padding:13px 15px;background:var(--card);
-                border:1px solid var(--rule);border-radius:10px;font-family:var(--sans);
+          #card{position:fixed;z-index:9;max-width:340px;padding:13px 15px;background:var(--bg);
+                border:1px solid var(--rule);border-radius:8px;font-family:var(--sans);
                 font-size:13.5px;line-height:1.5;color:var(--dim);
-                box-shadow:0 8px 26px rgba(0,0,0,.14);opacity:0;pointer-events:none;
+                box-shadow:0 8px 26px rgba(0,0,0,.12);opacity:0;pointer-events:none;
                 transition:opacity .2s}
           #card.on{opacity:1;pointer-events:auto}
           @media(hover:none),(pointer:coarse){#card{display:none}}
+          @media(max-width:640px){ol li{grid-template-columns:1fr}.when{line-height:1.4}}
         </style></head><body><div class="wrap">
         \(head)
         \(said)
