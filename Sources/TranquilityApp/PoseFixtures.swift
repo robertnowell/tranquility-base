@@ -201,6 +201,31 @@ extension StatusHUD {
             announce(project: callsign,
                      spoken: spoken, highlightFraction: 0.6)
 
+        // Hands-free, 27 Sep. Two poses because the mode has two speakers and
+        // the whole complaint was that only one of them got a card.
+        //
+        // The orb is on the grid in `grid` already; what could not be looked at
+        // before is the orb ABOVE a card, which is the arrangement Robert asked
+        // for — "basically a modification of the card UI that has the Orb at the
+        // top" — and the arrangement PR 638 did not produce.
+        case "handsfree-agent":
+            setManager(on: true)
+            setManagerState(StatusHUD.orbState,
+                            line: "promotions copy · the agent is speaking",
+                            mood: "speaking")
+            announce(project: callsign, spoken: spoken, highlightFraction: 0.55)
+
+        // The manager's own voice. No session, so no doors: the card carries the
+        // words and nothing that would be a door to nowhere.
+        case "handsfree-manager":
+            setManager(on: true)
+            setManagerState(StatusHUD.orbState,
+                            line: "promotions copy · speaking", mood: "speaking")
+            let line = "Inviting promotions copy to speak. It has one question "
+                + "waiting about the hero backfill."
+            _ = showManagerLine(line)
+            highlight(upTo: Int(Double(line.count) * 0.45))
+
         // The card up, the audio not here yet — the state the shimmer exists
         // for, held still so it can actually be looked at. It is otherwise
         // almost unobservable by design: the clip is normally prefetched, so

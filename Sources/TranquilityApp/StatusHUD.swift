@@ -780,7 +780,12 @@ final class StatusHUD: NSObject {
         currentEventId = nil
         currentSpoken = nil
         currentTarget = nil
-        face = Face(title: StateLegend.managerOnTitle, body: text,
+        // No title, and that is the whole of the difference from an agent's
+        // card. The title slot names the SESSION that is talking, and the
+        // manager is not one; the placard already says which voice this is, and
+        // the orb above it says the mode. Titling it HANDS-FREE printed the
+        // same two words twice, one line apart.
+        face = Face(title: "", body: text,
                     placardOverride: "\(StateLegend.Glyph.speaking) \(StateLegend.managerOnTitle)")
         render()
         return true

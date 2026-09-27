@@ -3052,7 +3052,10 @@ extension StatusHUD {
         _ = showManagerLine("Inviting promotions copy to speak.")
         let orbOnACard = managerOrb.isHidden == false
         let bodyIsTheSentence = bodyLabel.stringValue == "Inviting promotions copy to speak."
-        let titled = titleLabel.stringValue.contains(StateLegend.managerOnTitle)
+        // The placard names the voice; the title slot is for a session and the
+        // manager is not one, so it must be EMPTY here (and hidden with it).
+        let titled = stateLabel.stringValue.contains(StateLegend.managerOnTitle)
+            && titleLabel.isHidden
 
         // Eight characters is "Inviting"; the card counts in the same
         // characters the bot counts in, which is why `spoke` needs no mapping
@@ -3074,7 +3077,7 @@ extension StatusHUD {
             ("orbOnTheGrid", orbOnTheGrid),
             ("orbOnACard", orbOnACard),
             ("managerLinePaintsTheCard", bodyIsTheSentence),
-            ("managerCardIsTitled", titled),
+            ("managerCardIsPlacarded", titled),
             ("highlightFollowsTheVoice", cursorFollowed),
             ("orbSurvivesTheCard", orbSurvivesTheCard),
             ("agentCardStillPaints", agentCardKeptItsDoors),
