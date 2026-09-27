@@ -189,6 +189,57 @@ final class DropSurfaceView: NSView {
     }
 }
 
+/// The typed line's field. Its one difference from a stock text field is
+/// the editor it asks for: `TrayLineEditor`, which takes no drop and no
+/// paste of its own.
+final class TrayLineField: NSTextField {
+    override class var cellClass: AnyClass? {
+        get { TrayLineCell.self }
+        set {}
+    }
+}
+
+final class TrayLineCell: NSTextFieldCell {
+    private var editor: TrayLineEditor?
+    /// AppKit asks the cell for a field editor each time editing begins;
+    /// one editor, made once, so its registrations are set once.
+    override func fieldEditor(for controlView: NSView) -> NSTextView? {
+        if editor == nil {
+            let made = TrayLineEditor()
+            made.isFieldEditor = true
+            editor = made
+        }
+        return editor
+    }
+}
+
+/// A field editor that is only a line words appear on.
+///
+/// Ruled 27 Sep, from a screenshot dropped just above the chips: the path
+/// went INTO the line, mid-word, and rode as text ("adkamwd./Users/…png da
+/// dwa"). One rule for everything that arrives on the card: a drop is a
+/// chip and Command-V is a chip, wherever the pointer or the caret was. A
+/// stock field editor registers for file URLs and strings and inserts them
+/// at the drop point, which is the one behaviour the line must not have.
+///
+/// So this editor registers for no drag type at all: AppKit looks for the
+/// deepest registered view under the pointer, finds none here, and hands
+/// the drag to the surface behind the line, the same destination as the
+/// rest of the card. Its Paste goes to the panel, which already owns what
+/// Command-V means on an armed card.
+final class TrayLineEditor: NSTextView {
+    override func updateDragTypeRegistration() { unregisterDraggedTypes() }
+    override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation { [] }
+    override func prepareForDragOperation(_ sender: any NSDraggingInfo) -> Bool { false }
+    override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool { false }
+    private func pasteToTheCard(_ sender: Any?) {
+        _ = window?.tryToPerform(#selector(NSText.paste(_:)), with: sender)
+    }
+    override func paste(_ sender: Any?) { pasteToTheCard(sender) }
+    override func pasteAsPlainText(_ sender: Any?) { pasteToTheCard(sender) }
+    override func pasteAsRichText(_ sender: Any?) { pasteToTheCard(sender) }
+}
+
 /// The message tray's chips: one row per staged fragment, above the action row.
 ///
 /// A vertical list rather than wrapped pills, for the reason the grid is a
@@ -228,7 +279,7 @@ final class TrayRowView: NSStackView, NSTextFieldDelegate {
     /// the chips, when there are any, stack above it. No "no attachments":
     /// an empty row says nothing.
     let composeRow = NSView()
-    let compose = NSTextField()
+    let compose = TrayLineField()
     let attach: ConsoleButton
     var onComposeChanged: ((String) -> Void)?
     var onComposeReturn: ((String) -> Void)?

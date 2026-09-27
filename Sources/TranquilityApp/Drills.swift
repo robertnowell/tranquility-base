@@ -826,6 +826,18 @@ extension StatusHUD {
         let refusalOnTheCard = received.count == 2
             && pasteHintForTesting.contains("too large")
 
+        // The typed line's own editor (ruled 27 Sep): a drop over the line is
+        // a chip, never words in the line, so its field editor registers for
+        // no drag type and AppKit hands the drag to the surface behind it.
+        // Its Paste is the card's paste: a chip, not text at the caret.
+        let editor = trayRow.compose.currentEditor() as? TrayLineEditor
+        let lineRefusesDrops = editor?.registeredDraggedTypes.isEmpty == true
+        board.clearContents()
+        board.writeObjects([URL(fileURLWithPath: "/tmp/dropped-on-the-line.png") as NSURL])
+        editor?.paste(nil)
+        let pasteOnTheLineIsAChip = received.count == 3 && received.last?.via == .paste
+            && trayRow.compose.stringValue.isEmpty
+
         // A typed key is WORDS now (ruled 15 Sep): it lands on the typed line
         // and the card stays armed, where it used to release and drop the
         // key. Escape releases; another window taking key releases (AppKit's
@@ -855,7 +867,7 @@ extension StatusHUD {
         if let escape { panel.sendEvent(escape) }
         let escapeReleases = !pasteArmed
         pasteIntoTray()
-        let releasedPastesNothing = received.count == 2
+        let releasedPastesNothing = received.count == 3
         armPaste(via: "drill")
         if let escape { panel.sendEvent(escape) }
         let escapeReleasesAgain = !pasteArmed
@@ -893,6 +905,8 @@ extension StatusHUD {
             ("staysArmedAfterPaste", staysArmedAfterPaste),
             ("fileIsAChip", chipIsCutAndCounted),
             ("refusalOnTheCard", refusalOnTheCard),
+            ("lineRefusesDrops", lineRefusesDrops),
+            ("pasteOnTheLineIsAChip", pasteOnTheLineIsAChip),
             ("typedKeyLandsOnTheLine", strayKeyReleases),
             ("draftIsKept", draftIsKept),
             ("draftComesBack", draftComesBack),
