@@ -2238,6 +2238,7 @@ extension StatusHUD {
         goToSessionDrill()
         speechCallbackDrill()
         dismissKeepsTheTurnDrill()
+        handsFreePanelDrill()
 
         endCapture(because: "selftest cleanup")
         showIdle(rows: [])
@@ -2281,6 +2282,10 @@ extension StatusHUD {
             ("restartAudio", restartAudioButton),
             ("voices", voiceList),
             ("gear", gearButton), ("back", backButton), ("rows", waitingRows),
+            // In the matrix because it is the one widget that belongs to the
+            // MODE rather than to a face: a diff that shows it going out when
+            // the face changes is exactly the 26 Sep failure.
+            ("orb", managerOrb),
             // `sticky` is in the matrix precisely BECAUSE it is hover-driven:
             // the drill's job is to prove that leaving the grid closes it, and
             // a widget the matrix never names is a residue class nobody can

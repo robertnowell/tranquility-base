@@ -546,6 +546,23 @@ extension AppDelegate {
             // would be the same text twice on one small panel.
             managerLastLine = e.voice == "agent" ? "the agent is speaking" : "speaking"
             hud.setManagerState(StatusHUD.orbState, line: orbLine(managerLastLine), mood: "speaking")
+            // ...and the manager's own words go on the card, the same card an
+            // agent's line gets. PR 638 gave the card back but only for an
+            // agent, whose line arrives by URL (`speakForManager`); the
+            // manager's own sentences arrive only as this event, so the panel
+            // said "speaking" and never showed the sentence. Robert, 26 Sep:
+            // "the text highlighter should just be there anytime it's going to
+            // speak" — so it is driven by the speaking event, not by who is
+            // speaking.
+            //
+            // An agent's line is skipped here on purpose, and not because it
+            // needs no card: it needs a RICHER one. `speakForManager` has the
+            // session, its project, and its doors, and it is already opening
+            // that card from the `hear` URL a breath earlier. Painting a
+            // doorless one here would take the stage first and lose them.
+            if e.voice != "agent", let text = e.text, !text.isEmpty {
+                hud.showManagerLine(text)
+            }
         case .reloading:
             hud.setManagerState(StatusHUD.orbState, line: "reloading")
         case .quiet:
