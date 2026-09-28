@@ -8,7 +8,7 @@ Ruled 25 Sep 2026 after a deep research pass (agent a8e3f054, `2026-09-25-inform
 
 1. **The message.** Three to six words at seven times body size: "Two chips moved." Then the lede, whose first sentence, in bold, is the one-sentence claim with a verb; two more sentences at most. Then the dark block: what needs them, or "nothing to decide". The scale is measured, not felt: typesafe.ai sets a four-word headline at 140px over 17px body, an eight-to-one jump; a sentence at 54px over 16px was called "relatively indistinguished" (27 Sep).
 2. **The claims.** One row per claim, a full sentence each, with a status dot and one figure. Read only the rows and the argument survives. Five to seven rows; a second, smaller list for what deliberately did not change.
-3. **The artifacts.** Collapsed under their claim, never in a separate section. The thing itself: the screenshot, the diff hunk, the raw rows, the literal prompt. A one-line caption saying what to look at.
+3. **The artifacts.** Open under their claim, never in a separate section; a row closes only on a page past about eight claims (ruled 28 Sep 2026: hidden content goes unread). The thing itself: the screenshot, the diff hunk, the raw rows, the literal prompt. A one-line caption saying what to look at.
 
 Start with `hq-page new <slug> --session=<your full session id>` (add `--brand=NAME` for a brand page). It writes `templates/brief.html` into your hub directory with the session line, the kicker and the `:root` tokens filled in, binds the brand to your session, and refuses to overwrite. Ruled 27 Sep 2026 after two hours of watching: sessions copy their own last page because it is the cheapest start; this makes the template cheaper. The worked example is `agents/a8e3f054-8583-45f2-8bc0-3dfe55d47a06/uvape-what-is-different-redone.html`: a real report, five claims, the signed-in app under each.
 
@@ -21,7 +21,7 @@ Start with `hq-page new <slug> --session=<your full session id>` (add `--brand=N
 | 3 | **Headings are claims.** Every heading is a sentence with a verb. | Assertion-evidence: sentence headline over visual evidence beat topic headings on comprehension and delayed recall, N=110, p<.01. | Read only the headings. Does the argument survive? |
 | 4 | **Evidence is the artifact, beside the claim.** The screenshot, the diff, the rows, the prompt. Prose about the evidence is not evidence. | Contiguity is a measured multimedia lever; the trust half is a ruling: "editorial over the data is way less useful than the data itself." | For each claim: a checkable artifact within one screen? Artifact 2, derived table 1, prose 0. |
 | 5 | **Encoding fits the task.** Trends as graphs on a common scale, lookups as tables, status as colour plus shape plus label, counts with denominators. | Cognitive fit: graphs win simple trend tasks and lose to tables as tasks get complex. Natural frequencies moved physicians from 10% correct to most correct. | Any trend told in prose? Any bare percentage without its denominator? |
-| 6 | **Big jumps in hierarchy.** Three levels; detail attached to its claim, collapsed. No paragraph over 80 words. | Readers scan: 79% scan, 20 to 28% of words get read, half a page only under about 111 words. | Words above the fold; longest paragraph; can every detail be reached from its claim without scrolling? |
+| 6 | **Big jumps in hierarchy.** Three levels; detail attached to its claim, open. No paragraph over 80 words. | Readers scan: 79% scan, 20 to 28% of words get read, half a page only under about 111 words. | Words above the fold; longest paragraph; can every detail be reached from its claim without scrolling? |
 
 Red flags that zero a page whatever else it does: a paragraph over 150 words; a decision that exists only in prose; a chart headed by a topic instead of a finding.
 
@@ -71,3 +71,17 @@ Methodology, agent counts, source tiers, the order you did the work in, and find
 ## Vocabulary, so the shape is chosen before the writing
 
 Brief (one reader, one decision) · status board (many items, one state each) · annotated chart (one finding, the chart carries it) · small multiples · before/after pair · comparison matrix · postmortem (impact, cause, actions, timeline) · lead plus infobox · table (exact lookups, wins as complexity rises) · checklist · timeline. A report is usually two or three of these stacked, not one long one.
+
+## Editorial patterns, ruled 28 Sep 2026
+
+From the editorial pass (`2026-09-27-editorial-design-patterns`, agent a8e3f054): what newspapers, long-form journalism, postmortems and design-led documentation do that the template did not.
+
+- **Artifacts open by default.** GOV.UK: do not use disclosure for what most readers need; users avoid the control. Nielsen Norman: scrolling beats deciding which heading to click; at most two levels. Close rows only past about eight claims.
+- **Text at 720px, evidence at 1000px.** Distill and Tufte hold text near 60 characters and give figures the page. A screenshot inside the text column is a click away from legible.
+- **Air between claims; a rule only under the section label.** tufte-css and Distill rule only the coarsest boundary. The number and the space carry the rows.
+- **The headline is under ten words and the lede answers it.** Axios: more than ten words means the lead is not found yet. The lede's first sentence answers the headline and carries the number, as Buffett's letters open with the year's gain.
+- **Figures line up.** Tabular figures in the status column and in any count (Butterick, grids of numbers).
+- **The summary is one declared sentence under 160 characters** (GOV.UK's rule, for the same reason: it is what every index shows).
+- **Two weights; tracked capitals only for labels.** Every text token passes 4.5:1 on the house paper and the status dots pass 3:1; a brand paper darker than the house needs the faint token re-measured.
+- **A hub is a list, so it takes the postmortem's facts block and the changelog's day headers:** turns, pull requests, pages and last active under the needs-you block; a day header before the first turn of each day; no hairlines between turns.
+

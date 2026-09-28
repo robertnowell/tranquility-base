@@ -25,8 +25,13 @@ final class HomeBaseTests: XCTestCase {
     /// which is what the deep link is for.
     func testTheTurnCapHolds() {
         let html = HomeBase.render(model(turns: (1...60).map { turn($0) }))
-        XCTAssertEqual(html.components(separatedBy: "<li class=").count - 1,
-                       HomeBase.fullTurns + HomeBase.lineTurns)
+        // Turn rows only: since 28 Sep a day header is also an <li>, one per
+        // day, and these sixty turns sit ten minutes apart on one day.
+        let turnRows = html.components(separatedBy: "<li class=\"full\">").count
+            + html.components(separatedBy: "<li class=\"line\">").count - 2
+        XCTAssertEqual(turnRows, HomeBase.fullTurns + HomeBase.lineTurns)
+        XCTAssertEqual(html.components(separatedBy: "<li class=\"day\">").count - 1, 1)
+        XCTAssertTrue(html.contains("<dl class=\"facts\"><dt>Turns</dt><dd>60</dd>"))
         XCTAssertTrue(html.contains("Before that — 51 turns."))
     }
 

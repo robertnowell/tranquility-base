@@ -1033,6 +1033,7 @@ public enum HomeBase {
                 <p class="latest">\(e(n.headline ?? n.topic))</p>
                 <p class="deck">\(deck)</p>
                 \(you)
+                <!--FACTS-->
                 <p class="byline">\(byline)</p>
                 """
         }
@@ -1115,7 +1116,16 @@ public enum HomeBase {
         var printedBranches: Set<String> = []
         var printedURLs: Set<String> = []
         var rows = ""
+        // A day header before the first turn of each day: Linear's changelog
+        // groups under a date, and a hub with sixty turns reads as one long
+        // list without it. Ruled 28 Sep 2026 from the editorial pass.
+        var lastDay: String? = nil
         for (i, turn) in ordered.enumerated() {
+            let day = dayStamp.string(from: turn.at)
+            if day != lastDay {
+                rows += "<li class=\"day\">\(e(day))</li>"
+                lastDay = day
+            }
             var body = "<p class=\"h\">\(e(turn.happened))</p>"
             var cls = "line"
             if i < fullTurns {
@@ -1190,6 +1200,24 @@ public enum HomeBase {
                 <div class="what"><h3>\(e(turn.headline ?? turn.topic))</h3>\(body)</div></li>
                 """
         }
+
+        // ---- the facts strip: the postmortem's metadata block, in numbers ----
+        //
+        // Turns, pull requests, pages and last active, under the needs-you
+        // block. Ruled 28 Sep 2026 from the editorial pass: the Google SRE
+        // postmortem opens with date, status and one-line facts before any
+        // prose, and a hub is the report about an agent. Counted after the
+        // rows so the pull-request figure is the number the rows printed.
+        var facts = "<dl class=\"facts\">"
+        let factRows: [(String, String)] = [
+            ("Turns", String(model.turns.count)),
+            ("Pull requests", String(printedURLs.count)),
+            ("Pages", String(model.pages.count)),
+            ("Last active", model.lastActive.map { stamp.string(from: $0) } ?? "—"),
+        ]
+        for (k, v) in factRows { facts += "<dt>\(e(k))</dt><dd>\(e(v))</dd>" }
+        facts += "</dl>"
+        head = head.replacingOccurrences(of: "<!--FACTS-->", with: facts)
 
         // ---- the tail: one digest, every proper noun kept --------------------
         var digest = ""
@@ -1333,8 +1361,20 @@ public enum HomeBase {
           h2::before{content:none}
           .sub{font-family:var(--sans);font-size:13px;color:var(--faint);margin:0 0 4px}
           ol{list-style:none;padding:0;margin:0}
-          ol li{display:grid;grid-template-columns:84px 1fr;gap:16px;padding:22px 0;
-                border-bottom:1px solid var(--rule)}
+          /* Air between turns, a rule only under a day. Ruled 28 Sep 2026 from
+             the editorial pass: tufte-css and Distill rule only the coarsest
+             boundary, and Linear's changelog groups under a date header. */
+          ol li{display:grid;grid-template-columns:84px 1fr;gap:16px;padding:20px 0;
+                border-bottom:0}
+          ol li.day{display:block;padding:34px 0 6px;border-bottom:1px solid var(--rule);
+                    font-family:var(--sans);font-size:12px;letter-spacing:.1em;
+                    text-transform:uppercase;color:var(--dim)}
+          /* The facts strip: the postmortem's metadata block, in numbers. */
+          dl.facts{display:grid;grid-template-rows:auto auto;grid-auto-flow:column;
+                   gap:0 34px;margin:26px 0 0;width:max-content;font-family:var(--sans)}
+          dl.facts dt{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint)}
+          dl.facts dd{margin:2px 0 0;font-size:22px;font-weight:600;color:var(--brand);
+                      font-variant-numeric:tabular-nums}
           .when{font-family:var(--sans);font-size:12px;line-height:1.9;color:var(--faint);
                 font-variant-numeric:tabular-nums}
           .what{min-width:0}
@@ -1434,7 +1474,8 @@ public enum HomeBase {
                 transition:opacity .2s}
           #card.on{opacity:1;pointer-events:auto}
           @media(hover:none),(pointer:coarse){#card{display:none}}
-          @media(max-width:640px){ol li{grid-template-columns:1fr}.when{line-height:1.4}}
+          @media(max-width:640px){ol li{grid-template-columns:1fr}.when{line-height:1.4}
+                                  dl.facts{gap:0 18px}dl.facts dd{font-size:18px}}
         </style></head><body><div class="wrap">
         \(head)
         \(said)
