@@ -98,7 +98,7 @@ async def old_pick(client, case, cands):
 
 
 async def loop_act(case, cands):
-    m = Manager(JevClient("eval-key-unused"))
+    m = Manager(JevClient(os.environ.get("JEV_API_KEY", "eval-key-unused")))
     stage = case.get("stage") if "stage" in case else {"sessionId": "cccc3333-0000-4000-8000-000000000003",
                                                        "name": case.get("agent"), "goal": case.get("goal")}
     agents = case.get("agents") or [stage]

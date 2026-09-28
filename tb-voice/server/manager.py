@@ -73,9 +73,9 @@ INTENTS: dict[Intent, str] = {
     Intent.RUNG_SOLUTION: "Asks for the recommended next step, the solution, or what it proposes",
     Intent.RUNG_WHY: "Asks why, for the rationale or reasoning",
     Intent.CUSTOM: "Any other question about the agent on stage or its work: files, code, status, details, opinions",
-    Intent.SEND_MESSAGE: "Tells an agent to do something; a message or instruction to relay",
+    Intent.SEND_MESSAGE: ("Asks the assistant to send, tell, pass on or relay a message to an agent, "
+                          "the notes agent included"),
     Intent.START_AGENT: "Asks to start, spin up, or open a new agent or session",
-    Intent.TAKE_NOTE: "Asks to take a note, dictate a note, or put something on the clipboard",
     Intent.SUMMARIZE_RECENT: "Asks what has been going on recently across ALL agents, or what we did today or yesterday; not about one session",
     Intent.TEACH: "Asks what the manager can do, what this is, who it is, or how it works",
     Intent.FLEET_STATUS: "Asks which agents or sessions are live or waiting on the developer, or to see or list them",
@@ -171,19 +171,30 @@ class JevClient:
                 "Tranquil, Trank; a turn opening with such a word is addressed. "
                 "A line that repeats what an agent or the assistant just said is the room hearing that "
                 "voice again, not the developer: it is not addressed. Only the assistant can invite the "
-                "next agent, send a message to an agent, start an agent, take a note, or stop the voice: "
+                "next agent, send, tell or pass on a message to an agent, start an agent, say which "
+                "agents are live or waiting, or stop the voice: "
                 "a request for one of those is addressed even when it is phrased loosely, misheard, or "
                 "has no name in it."
                 + (" With an agent on stage, a question about its work (status, risks, what would happen "
                    "if..., is it going well) is addressed even without the name: the assistant answers it "
-                   "from that agent's record." if stage else "")),
+                   "from that agent's record." if stage else "")
+                # Explicit send only (ruled 22 Sep; measured 27 Sep): "unpublish
+                # this", said at the end of a run of notes for the agent on
+                # stage, was read as a send and the manager sent just those two
+                # words. An instruction meant for the agent is dictation until
+                # the developer asks for it to be sent.
+                + " The assistant relays to an agent only when asked to (send that, tell it ..., pass it "
+                  "on, have the notes agent ...). An instruction meant for the agent itself, said without "
+                  "asking the assistant to send it ('unpublish this', 'keep going', 'drop that field'), is "
+                  "the developer dictating notes for later: not addressed."),
         }
         return state, {
             "addressed": {"type": "noul",
                 "instructions": (f"In text_to_judge, is the developer asking the assistant {NAME} to speak "
                                  "or act RIGHT NOW? Earlier turns do not count; only this text."),
                 "criteria": {"true": (f"Names {NAME}, or asks or instructs the assistant directly"
-                                      + (", or asks about the agent on stage: its goal, findings, next step, reasons, or tells it to do something"
+                                      + (", or asks about the agent on stage: its goal, findings, next step, reasons, "
+                                         "or asks the assistant to send or tell it something"
                                          if stage else "")),
                              "false": ("Thinking aloud, a rhetorical question, talking to another "
                                        f"person, reading text aloud, or the word {NAME.lower()} used for something else")}},
@@ -191,6 +202,21 @@ class JevClient:
                 "instructions": "If text_to_judge is a request to the assistant, which kind is it?",
                 "criteria": {i.value: d for i, d in INTENTS.items()}},
         }
+
+    async def names_agent(self, utterance: str, agent: str) -> float:
+        """Does this request name, or unmistakably point at, this agent? Asked
+        only when nobody is on stage and the loop chose a destination: without
+        it the loop sent "send that over" to whichever agent the words sounded
+        like, 5 times in 5 (27 Sep, drills/send_eval.py w3)."""
+        answers = await self.ask(
+            {"request": utterance, "agent": agent},
+            {"names": {"type": "noul",
+                       "instructions": "Does the request name this agent, or point at it so plainly that no other "
+                                       "agent could be meant (by its name, its project, or what it is working on)?",
+                       "criteria": {"true": "The request names or plainly points at this agent",
+                                    "false": "The request names no agent, or names a different one; guessing from "
+                                             "what the message is about does not count"}}})
+        return float(answers["names"]["noul"])
 
     async def harness(self, utterance: str) -> str:
         """Which coding agent a start asks for: "codex" or "claude". Asked of the
@@ -314,7 +340,9 @@ LOOP_ACT = (
     "`range` is only for a request that names a topic or a time to take from their whole "
     "record ('what I said about pricing', 'this morning', 'the last ten minutes', 'everything "
     "today'): that is a range, never a wait, even when no lines are listed above. 'That', "
-    "'it', 'that message', 'what I just said' mean the lines listed above: no range.\n"
+    "'it', 'that message', 'what I just said' mean the lines listed above: no range.\n"    "In a range, a day ('today', 'yesterday', 'on Tuesday', 'everything today') is `day` as "
+    "YYYY-MM-DD; 'the last N minutes' is `since_minutes`; a topic is `query`. Never narrow what "
+    "they asked for: 'everything today' is the whole day.\n"
     "The agent the request names wins over the one on stage: 'send what I said about pricing to "
     "the site agent', with Mailchimp on stage, is send(agent=<the site agent's id>, "
     "range={query: 'pricing'}).\n"
@@ -523,7 +551,6 @@ class Manager(FrameProcessor):
             Intent.CUSTOM: self._do_custom, Intent.TEACH: self._do_teach, Intent.SPEAK: self._do_speak,
             Intent.FLEET_STATUS: self._do_fleet_status, Intent.SUMMARIZE_RECENT: self._do_summarize_recent,
             Intent.SEND_MESSAGE: self._do_send_message, Intent.START_AGENT: self._do_start_agent,
-            Intent.TAKE_NOTE: self._do_take_note,
         }
         self._last_intent_at = 0.0
         self.stage: dict | None = None
@@ -1131,30 +1158,28 @@ class Manager(FrameProcessor):
         where and which words, pointing at what was said; the app copies them."""
         await self._act(text)
 
-    async def _act(self, request: str, notes: dict | None = None):
+    async def _act(self, request: str):
         """Send (or note) by pointing (hf-6 step 2): the loop ends in one act,
         send, ask or wait, and nothing it writes is ever the message. The send
         itself happens here, after the loop, through the app's own Send."""
         cands = await span.candidates()
         who = self.stage or {}
         context = []
-        if notes:
-            context.append("Destination: the Notes agent, which keeps the developer's notes. "
-                           "Leave `agent` out.")
-        elif who:
+        if who:
             context.append(f"Agent on stage: {who.get('name') or who.get('project') or 'unnamed'}"
                            f"{' - ' + who['goal'] if who.get('goal') else ''} "
                            f"(agent id {who['sessionId']})")
         else:
             context.append("Nobody is on stage: the request says who it is for.")
-        if not notes:
-            # Who could receive it, up front: left to look, it asked instead
-            # (2 of 3 runs of "send that to the Mailchimp agent", 26 Sep).
-            live = await self._targets()
-            if live:
-                context.append("Active agents (lamp on): " + "; ".join(
-                    f"{t.get('name') or t.get('project') or 'unnamed'} - {t.get('goal') or ''} (id {t['sessionId']})"
-                    for t in live[:20]))
+        # Who could receive it, up front: left to look, it asked instead
+        # (2 of 3 runs of "send that to the Mailchimp agent", 26 Sep).
+        live = await self._targets()
+        if live:
+            context.append("Active agents (lamp on): " + "; ".join(
+                f"{t.get('name') or t.get('project') or 'unnamed'} - {t.get('goal') or ''} (id {t['sessionId']})"
+                for t in live[:20]))
+        context.append("The Notes agent, which keeps the developer's notes, is a destination too: "
+                       "send(to_notes=true).")
         before = exchange_lines()
         if before:
             context.append("What was said just before, oldest first (you = the developer):\n" + "\n".join(before))
@@ -1165,6 +1190,7 @@ class Manager(FrameProcessor):
         context.append(f"Request: {request}")
 
         async def send(a):
+            to_notes = a.get("to_notes") is True
             words, request_on_top = cands, False
             rng = a.get("range") or {}
             if rng:
@@ -1192,35 +1218,53 @@ class Manager(FrameProcessor):
                         seen.add(t)
                         merged.append(t)
                 words = [span.Candidate(n=i + 1, text=t) for i, t in enumerate(merged)]
-                request_on_top = bool(notes)
-            if notes:
-                target = notes
+                request_on_top = to_notes
+            if to_notes:
+                # Notes are a destination like any agent: a session named Notes,
+                # found while live, started (and seeded once) when not. There is
+                # no "take a note" intent any more: everything said is already
+                # in the record (the hub's Notes page); asking the Notes agent
+                # to do something with it is a send like any other (27 Sep).
+                target = await self._notes_session()
+                if not target:
+                    return {"error": "the notes agent could not be started; say so"}
             else:
                 sid = await self._resolve_agent(a.get("agent"))
                 live = {t["sessionId"]: t for t in await self._targets()}
                 target = live.get(sid) or (self.stage if sid and sid == who.get("sessionId") else None)
                 if not target:
                     return {"error": f"no active agent matches {a.get('agent')!r}; use agents, or ask"}
+                if not who:
+                    # Nobody on stage: the destination must be named, not
+                    # guessed. A second opinion, not the loop's own word.
+                    label = " - ".join(x for x in (target.get("name"), target.get("goal")) if x)
+                    try:
+                        named = await self._jev.names_agent(request, label)
+                    except Exception as e:
+                        logger.warning(f"names_agent failed: {e}; asking instead")
+                        named = 0.0
+                    if named < 0.5:
+                        return {"done": True, "question": "Which agent should get it?"}
             # The words: the span picker, unchanged from main, measured on 12
             # real sends (0 wrong in 60, 23 Sep). Asked to point at the words
             # itself, the loop sent something that was not the message 8 times
             # in 85 (26 Sep, drills/send_eval.py): whether and to whom are the
             # loop's; which words stay the picker's.
-            name = "Notes" if notes else (target.get("name") or target.get("project") or "the agent")
+            name = "Notes" if to_notes else (target.get("name") or target.get("project") or "the agent")
             try:
                 answer = await self._brain.pick_span(request, words, name,
-                                                     "keeping the developer's notes" if notes else target.get("goal"))
+                                                     "keeping the developer's notes" if to_notes else target.get("goal"))
             except Exception as e:
                 logger.error(f"span pick failed: {e}")
                 answer = None
             pick = span.check(answer, words, request)
             logger.info(f"span: {len(words)} candidate lines; answer {answer}; pick {pick}")
             if not pick:
-                return {"done": True, "waited": True, "target": target}
+                return {"done": True, "waited": True, "target": target, "notes": to_notes}
             text = span.text_of(pick, words)
             if request_on_top and pick.lines is not None:
                 text = f"{request.strip()}\n\n{text}"
-            return {"done": True, "target": target, "text": text}
+            return {"done": True, "target": target, "text": text, "notes": to_notes}
 
         async def ask(a):
             q = " ".join((a.get("question") or "").split())
@@ -1235,8 +1279,8 @@ class Manager(FrameProcessor):
                          "the agent with this id. Their own words are picked after you. `range` when "
                          "the request names a stretch of what they said beyond the lines you were given "
                          "('what I said about pricing', 'the last ten minutes'): `query` key words, or "
-                         "`since_minutes`.", send,
-                 {"agent": {"type": "string"},
+                         "`since_minutes`. `to_notes` for the Notes agent.", send,
+                 {"agent": {"type": "string"}, "to_notes": {"type": "boolean"},
                   "range": {"type": "object", "properties": {"query": {"type": "string"},
                                                              "day": {"type": "string"},
                                                              "since_minutes": {"type": "integer"},
@@ -1252,18 +1296,18 @@ class Manager(FrameProcessor):
                    stopped=outcome.stopped, calls=[{"tool": c["tool"], "ms": c["ms"]} for c in outcome.calls])
         logger.info(f"loop act: {act['tool']} after {outcome.steps} steps, {outcome.ms} ms, "
                     f"calls {[c['tool'] for c in outcome.calls]}")
-        if act["tool"] == "ask":
+        if act["tool"] == "ask" or act.get("question"):
             await self._say(spoken(act["question"]))
             return
         if act["tool"] != "send" or act.get("waited"):
             # Nothing said yet to send: keep listening. A named agent still
             # takes the stage, so a later "send that" goes there.
-            if act.get("waited") and not notes and act["target"]["sessionId"] != who.get("sessionId"):
+            if act.get("waited") and not act.get("notes") and act["target"]["sessionId"] != who.get("sessionId"):
                 await self._take_stage(act["target"])
             await self._earcon("listening")
             return
         target, message = act["target"], act["text"]
-        if notes:
+        if act.get("notes"):
             note(Line(Role.MANAGER, LineKind.ACTION, message, target=target["sessionId"], target_name="Notes"))
             await self._send(target["sessionId"], message, quiet=True)
             await self._say("Noted.")
@@ -1323,18 +1367,6 @@ class Manager(FrameProcessor):
             return None
         await self._take_stage({"sessionId": reg, "name": name, "project": "", "goal": ""})
         return reg
-
-    async def _do_take_note(self, text, frame, direction):
-        """Notes are a destination like any agent: a session named Notes that
-        keeps notes.md and notes.html in its own hub directory. Found by the id
-        in notes-session.txt while it is live; started (and seeded once) when
-        it is not. The note is picked from what was said (span.py), like a send.
-        No writer, no file format, no new door."""
-        dest = await self._notes_session()
-        if not dest:
-            await self._say("I couldn't start the notes agent.")
-            return
-        await self._act(text, notes=dest)
 
     async def _notes_session(self) -> dict | None:
         live = {t["sessionId"] for t in await self._targets()}
