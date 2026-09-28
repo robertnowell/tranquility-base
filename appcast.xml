@@ -6,6 +6,14 @@
     <description>Updates for Tranquility Base.</description>
     <language>en</language>
     <item>
+      <title>Version 0.3.1391</title>
+      <sparkle:version>1391</sparkle:version>
+      <sparkle:shortVersionString>0.3.1391</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <pubDate>Mon, 28 Sep 2026 22:06:02 +0000</pubDate>
+      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1391-1661f2250/TranquilityBase-0.3.1391.dmg" type="application/octet-stream" length="34558427" sparkle:edSignature="2Xs6AIR5ceD/yfZvhVb1RYqTFZOznmx6Uzsdp4stO4Vx/nUBIr5Ig6ywMDV28LedNhON05piGIPDJX8M3glsAg==" />
+    </item>
+    <item>
       <title>Version 0.3.1390</title>
       <sparkle:version>1390</sparkle:version>
       <sparkle:shortVersionString>0.3.1390</sparkle:shortVersionString>
@@ -77,16 +85,8 @@
       <pubDate>Sun, 27 Sep 2026 23:39:14 +0000</pubDate>
       <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1380-604f73bcc/TranquilityBase-0.3.1380.dmg" type="application/octet-stream" length="34270520" sparkle:edSignature="ZA+EMz1AM7so2OC5V05J6Hn1wxLL7S6e6XFbsMUeGrrmK/WXfImZrb0uVcqUugLx42vV/ECSpTTA3hi8enYGAw==" />
     </item>
-    <item>
-      <title>Version 0.3.1379</title>
-      <sparkle:version>1379</sparkle:version>
-      <sparkle:shortVersionString>0.3.1379</sparkle:shortVersionString>
-      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <pubDate>Sun, 27 Sep 2026 23:16:14 +0000</pubDate>
-      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1379-6f62d11c9/TranquilityBase-0.3.1379.dmg" type="application/octet-stream" length="34257738" sparkle:edSignature="4r7RvB69VF2IItsv+lG79pP3yPDwr3WXzi2TM6+IKYeMyk6UGMkOY0FoVn/zo3sLTZPD8vvsIt5ep6xAmyHoAA==" />
-    </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: ktknT7CbMrimAeo8OTfphydisWCvwk2WI/NMqxOWJbiBt0xoeg9IcIZOkUKVvFbQ42V51trWyPy/IPGPuykbCg==
+edSignature: ufWW05tD5puRlaqn/E6ikCT2kuahvyJs2rhMDxDcnC2l2z6TwoIKJLObS0/7lGOOpGYp2ZAKbtBUSOGmO3xkCQ==
 length: 6457
 -->
