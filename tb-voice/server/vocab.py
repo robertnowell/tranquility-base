@@ -109,7 +109,6 @@ class Intent(Enum):
     CUSTOM = "custom"
     SEND_MESSAGE = "send_message"
     START_AGENT = "start_agent"
-    TAKE_NOTE = "take_note"
     SUMMARIZE_RECENT = "summarize_recent"
     TEACH = "teach"
     FLEET_STATUS = "fleet_status"
