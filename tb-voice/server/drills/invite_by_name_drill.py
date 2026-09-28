@@ -26,8 +26,16 @@ import manager as M
 TARGETS = [
     {"sessionId": "aaaa1111", "name": "Document sharing and hub design", "project": "sharing"},
     {"sessionId": "bbbb2222", "name": "AI Voice Hackathon SambaNova planning", "project": "Projects"},
-    {"sessionId": "cccc3333", "name": "Uvape report", "project": "kopi"},
+    {"sessionId": "cccc3333", "name": "Uvape report", "project": "kopi", "status": "busy"},
     {"sessionId": "dddd4444", "name": "Landing page inspiration", "project": "kopi"},
+]
+
+# Only these are waiting on the developer. `cccc3333` is a BLUE lamp -- busy,
+# working away on its own -- and the whole of the 28 Sep fix is that it is not
+# invitable, however it sorts.
+WAITING = [
+    {"sessionId": "dddd4444", "heard": True, "eventId": 100, "topic": "Payment section live"},
+    {"sessionId": "aaaa1111", "heard": False, "eventId": 50, "topic": "Six seams"},
 ]
 
 
@@ -46,7 +54,7 @@ async def main() -> int:
         return list(TARGETS)
 
     async def waiting(self=None):
-        return [{"sessionId": "aaaa1111", "heard": False, "topic": "Six seams"}]
+        return [dict(w) for w in WAITING]
 
     mgr._targets = targets
     mgr._waiting = waiting
@@ -59,16 +67,35 @@ async def main() -> int:
     plain = await M.Manager._named_session(mgr, "Can you invite the next speaker?")
     check("'the next speaker' names nobody", plain is None)
     nxt = await M.Manager._next_session(mgr)
-    check("the queue is the grid's first row",
+    check("the queue takes the unheard row first, whatever its age",
           nxt is not None and nxt["sessionId"] == "aaaa1111")
     check("and it carries the waiting row's topic for the announcement",
           nxt.get("topic") == "Six seams")
 
-    # On stage is never invited again.
+    # On stage is never invited again: the next waiting row answers instead.
     mgr.stage = {"sessionId": "aaaa1111"}
     nxt = await M.Manager._next_session(mgr)
-    check("the agent on stage is skipped", nxt["sessionId"] == "bbbb2222")
+    check("the agent on stage is skipped", nxt["sessionId"] == "dddd4444")
     mgr.stage = None
+
+    # 28 Sep, the whole point. A blue lamp is drawn on the grid and is never
+    # announced from it, so it is never invited either -- not first, not last,
+    # not as a fallback when the queue runs dry.
+    only_busy = [dict(w) for w in WAITING]
+    async def nothing_waiting(self=None):
+        return []
+    mgr._waiting = nothing_waiting
+    check("nobody waiting means nobody is invited, not 'invite anybody'",
+          await M.Manager._next_session(mgr) is None)
+    mgr._waiting = waiting
+
+    # And a waiting row whose session has died is not invitable either.
+    async def ghost(self=None):
+        return [{"sessionId": "eeee5555", "heard": False, "eventId": 900}]
+    mgr._waiting = ghost
+    check("a waiting row with no live session is skipped",
+          await M.Manager._next_session(mgr) is None)
+    mgr._waiting = waiting
 
     # The words of the request are not the words of a name, however long they
     # are. "next", "speaker" and "agent" are six and seven characters, so the

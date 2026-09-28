@@ -800,7 +800,11 @@ class Manager(FrameProcessor):
         # words, which this is handed and used to throw away.
         nxt = await self._named_session(text) or await self._next_session()
         if not nxt:
-            await self._say("Nobody is waiting, and I see no live sessions.")
+            # Not "no live sessions": there are usually a dozen, and saying
+            # otherwise while the grid shows them reads as the manager being
+            # blind. What is true is that none of them is waiting on you, and
+            # a session that is not waiting is not the manager's to interrupt.
+            await self._say("Nobody is waiting on you. Name an agent if you want one.")
             return
         self.stage = nxt
         await emit(self, "stage", session=nxt["sessionId"], goal=nxt.get("goal"),
@@ -1508,31 +1512,41 @@ class Manager(FrameProcessor):
         return out
 
     async def _next_session(self) -> dict | None:
-        """The first agent on the grid that is not already on stage.
+        """The next agent WAITING ON YOU, and nothing else.
 
-        Ruled 27 Sep: "it should be the same rules as for the grid today, bring
-        next agent." So there is no ordering here any more. `tbase targets`
-        returns the grid's own order -- the lamps that ask for you, newest
-        first, then the ones working, then the merely alive (ManagerJSON.
-        gridBand) -- and this takes the first row of it.
+        Rewritten 28 Sep, after it invited a blue lamp with green ones sitting
+        in the grid. Robert: "Control-Option from the grid doesn't open Blue
+        Lamp sessions. How are we getting this wrong?"
 
-        What it replaces re-sorted the waiting list by `(heard, -eventId)` and
-        then fell through to the live list in whatever order the door happened
-        to return, which was alphabetical by working directory. Both halves
-        were wrong. Sorting unheard first meant hearing an agent changed who
-        was next, which the panel itself reverted on the day it was tried
-        (#439: "hearing a row must not move it"). And the fallback picked a
-        project name, not an agent: on 27 Sep at 22:39 it staged an idle
-        session nobody was waiting on, because its directory sorted first.
+        By reading the wrong rule. He asked for "the same rules as for the grid
+        today, bring next agent", and I took that to `SessionRow.quietRowsLast`
+        -- which is how the grid DRAWS rows, five bands deep, blue included.
+        But drawing and announcing are different acts. What ⌃⌥ does is
+        `announceNext`, and that walks the WAITING rows only: "anything green
+        always plays... when every waiting row has been opened, ⌃⌥ WALKS them".
+        A working session is drawn on the grid and is never announced from it.
 
-        The waiting rows are still joined on, for `topic` and `heard`, which
-        the announcement reads. They no longer decide the order."""
+        So there is no fallback any more, and its absence is the fix. The
+        version before this one ended `for t in live.values(): return t` --
+        invite somebody, anybody, whoever the door listed first. That is how an
+        idle session nobody was waiting on took the stage on 27 Sep, and my
+        replacement only changed WHICH stranger it picked. Nobody waiting is an
+        answer, and the caller already says it out loud.
+
+        Order is `announceNext`'s: unheard first, then the newest of the rest.
+        I removed the `heard` term this morning on the grid's authority --
+        "hearing a row must not move it" (#439) -- which is a rule about where
+        a row is DRAWN, not about what is read aloud next. Restored."""
         current = (self.stage or {}).get("sessionId")
-        waiting = {w["sessionId"]: w for w in await self._waiting()}
-        for t in await self._targets():
-            if t["sessionId"] != current:
-                return {**t, **waiting.get(t["sessionId"], {})}
-        return None
+        live = {t["sessionId"] for t in await self._targets()}
+        waiting = [w for w in await self._waiting()
+                   if w["sessionId"] != current and w["sessionId"] in live]
+        if not waiting:
+            return None
+        waiting.sort(key=lambda w: (w.get("heard", True), -(w.get("eventId") or 0)))
+        first = waiting[0]
+        rows = {t["sessionId"]: t for t in await self._targets()}
+        return {**rows.get(first["sessionId"], {}), **first}
 
     async def _named_session(self, text: str) -> dict | None:
         """The agent the sentence names, if it names one.
