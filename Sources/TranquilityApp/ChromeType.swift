@@ -48,18 +48,15 @@ enum ChromeType {
         guard let family = preferredFamily else {
             return .monospacedSystemFont(ofSize: size, weight: weight)
         }
-        // Two weights, whichever face: Regular and a heavier one and nothing
-        // between. For Geist the heavier one is SemiBold, not Bold: at panel
-        // sizes Bold closed the gaps between letters ("slightly less chubby
-        // ... the letters are almost running into each other", 27 Sep).
-        // The panel's five weights land on two. Medium stays REGULAR rather
+        // Two weights, whichever face: Regular and Bold and nothing between,
+        // so the panel's five weights land on two. Medium stays REGULAR rather
         // than rounding up: the panel spends weight on one distinction only —
         // a door versus a word — and it already spends ink on the same one.
         // Rounding medium to bold would put half the chrome in bold and leave
         // the hierarchy carried by nothing.
         let bold = weight.rawValue >= NSFont.Weight.semibold.rawValue
         let name = family == geistFamily
-            ? (bold ? "GeistMono-SemiBold" : "GeistMono-Regular")
+            ? (bold ? "GeistMono-SemiBold" : "GeistMono-Light")
             : (bold ? "BerkeleyMono-Bold" : "BerkeleyMono-Regular")
         return NSFont(name: name, size: size)
             ?? NSFontManager.shared.font(withFamily: family,
@@ -89,7 +86,7 @@ enum ChromeType {
         let forced = ProcessInfo.processInfo.environment["TB_MONO"]
         guard forced != "system" else { return nil }
         if forced != "berkeley", registerBundledFonts(),
-           NSFont(name: "GeistMono-Regular", size: 10) != nil {
+           NSFont(name: "GeistMono-Light", size: 10) != nil {
             return geistFamily
         }
         guard NSFont(name: "BerkeleyMono-Regular", size: 10) != nil else { return nil }
