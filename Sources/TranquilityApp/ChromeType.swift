@@ -29,13 +29,13 @@ enum ChromeType {
 
     /// The monospaced face the whole panel is set in.
     ///
-    /// Berkeley Mono when the machine has it, the system's monospaced face
-    /// otherwise — and **the font is never shipped with the app**. Its licence
-    /// does not permit redistribution and the vendor's commercial tiers are
-    /// explicitly not compatible with open-source applications, so the repo
-    /// carries no font file and installs nothing. This is the same courtesy a
-    /// terminal extends: if you have licensed it and installed it, your tools
-    /// use it; if you have not, nothing is missing.
+    /// Geist Mono, shipped in the bundle under the OFL (27 Sep 2026). Before
+    /// that: Berkeley Mono when the machine had it, the system's monospaced
+    /// face otherwise — and Berkeley is still **never shipped with the app**.
+    /// Its licence does not permit redistribution and the vendor's commercial
+    /// tiers are explicitly not compatible with open-source applications, so
+    /// the repo carries no Berkeley file and installs nothing; it remains the
+    /// fallback on a machine that licensed it, behind `TB_MONO=berkeley`.
     ///
     /// Nothing else in the panel needs to know. Every measurement that matters
     /// — the cap band, each mark's ink, the size a mark has to be to match it —
@@ -48,14 +48,16 @@ enum ChromeType {
         guard let family = preferredFamily else {
             return .monospacedSystemFont(ofSize: size, weight: weight)
         }
-        // Berkeley Mono ships Regular and Bold and nothing between, so the
-        // panel's five weights land on two. Medium stays REGULAR rather than
-        // rounding up: the panel spends weight on one distinction only — a door
-        // versus a word — and it already spends ink on the same one. Rounding
-        // medium to bold would put half the chrome in bold and leave the
-        // hierarchy carried by nothing.
+        // Two weights, whichever face: Regular and Bold and nothing between,
+        // so the panel's five weights land on two. Medium stays REGULAR rather
+        // than rounding up: the panel spends weight on one distinction only —
+        // a door versus a word — and it already spends ink on the same one.
+        // Rounding medium to bold would put half the chrome in bold and leave
+        // the hierarchy carried by nothing.
         let bold = weight.rawValue >= NSFont.Weight.semibold.rawValue
-        let name = bold ? "BerkeleyMono-Bold" : "BerkeleyMono-Regular"
+        let name = family == geistFamily
+            ? (bold ? "GeistMono-Bold" : "GeistMono-Regular")
+            : (bold ? "BerkeleyMono-Bold" : "BerkeleyMono-Regular")
         return NSFont(name: name, size: size)
             ?? NSFontManager.shared.font(withFamily: family,
                                          traits: bold ? .boldFontMask : [],
@@ -63,14 +65,52 @@ enum ChromeType {
             ?? .monospacedSystemFont(ofSize: size, weight: weight)
     }
 
+    /// The face the panel ships with, since 27 Sep 2026.
+    ///
+    /// Robert, choosing from four set on the card and the hub: "Let's try
+    /// Geist. This card. And the grid. For sure." Geist Mono is Vercel's, under
+    /// the SIL Open Font License, so unlike Berkeley it CAN travel inside the
+    /// bundle (Resources/Fonts, copied by bundle.sh, licence beside it) and
+    /// every machine draws the same chrome. Registered for this process only:
+    /// nothing is installed on the user's Mac.
+    static let geistFamily = "Geist Mono"
+
     /// Resolved once. A font lookup per label per render is a subprocess-free
     /// but not free thing, and the answer cannot change while the app runs.
+    ///
+    /// Geist Mono from the bundle first; Berkeley Mono if this machine has it
+    /// and the bundle somehow does not (a `swift run` from the checkout has no
+    /// Resources); the system face last. `TB_MONO=system` forces the last, and
+    /// `TB_MONO=berkeley` the middle, for comparing.
     static let preferredFamily: String? = {
-        guard ProcessInfo.processInfo.environment["TB_MONO"] != "system" else { return nil }
-        let wanted = "Berkeley Mono"
+        let forced = ProcessInfo.processInfo.environment["TB_MONO"]
+        guard forced != "system" else { return nil }
+        if forced != "berkeley", registerBundledFonts(),
+           NSFont(name: "GeistMono-Regular", size: 10) != nil {
+            return geistFamily
+        }
         guard NSFont(name: "BerkeleyMono-Regular", size: 10) != nil else { return nil }
-        return wanted
+        return "Berkeley Mono"
     }()
+
+    /// Register the faces that ship in Contents/Resources/Fonts with CoreText,
+    /// process-scoped. True when at least one registered. Idempotent in effect:
+    /// a second registration of the same file fails harmlessly and the face is
+    /// already usable.
+    @discardableResult
+    static func registerBundledFonts() -> Bool {
+        guard let urls = Bundle.main.urls(forResourcesWithExtension: "ttf",
+                                          subdirectory: "Fonts"), !urls.isEmpty
+        else { return false }
+        var any = false
+        for url in urls {
+            if CTFontManagerRegisterFontsForURL(url as CFURL, .process, nil) { any = true }
+            else if NSFont(name: url.deletingPathExtension().lastPathComponent, size: 10) != nil {
+                any = true
+            }
+        }
+        return any
+    }
 
     /// The font CoreText will actually use to draw this character.
     static func resolvedFont(for ch: Character, in font: NSFont) -> NSFont {
