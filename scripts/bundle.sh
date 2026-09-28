@@ -155,6 +155,10 @@ fi
 # thing to forget. If these are missing the app still runs; it just goes
 # silent, and Earcons logs "no audio for <cue>".
 cp Resources/Sounds/*.wav "$APP_DIR/Contents/Resources/"
+# The chrome face. Geist Mono, SIL Open Font License, licence beside it.
+# ChromeType registers these for the process at launch; nothing is installed on
+# the user's Mac. Berkeley Mono is deliberately NOT here (see ChromeType).
+mkdir -p "$APP_DIR/Contents/Resources/Fonts" && cp Resources/Fonts/* "$APP_DIR/Contents/Resources/Fonts/"
 # The manager orb: a vendored 2D-canvas engine (thinking-orbs, MIT) and its page.
 mkdir -p "$APP_DIR/Contents/Resources/Orb" && cp Resources/Orb/* "$APP_DIR/Contents/Resources/Orb/"
 
