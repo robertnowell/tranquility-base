@@ -114,6 +114,20 @@ def only_the_name(text: str) -> bool:
     return len(words) == 1 and words[0].startswith(NAME_SOUNDS)
 
 
+def _why(e: BaseException) -> str:
+    """A reason a person can read, which `str(e)` is often not.
+
+    28 Sep: every `error` event in the viewer read `reason: ""`. The exception
+    was `httpx.ReadTimeout`, and httpx raises it wrapping a bare `TimeoutError`
+    whose message is the empty string -- so the panel showed the word "error"
+    and nothing else, four times in a row, while the manager appeared simply
+    broken. An exception class always has a name even when it has nothing to
+    say, and the name is what tells you it was the gate and not the fleet."""
+    text = str(e).strip()
+    name = type(e).__name__
+    return (f"{name}: {text}" if text else name)[:160]
+
+
 def names_the_manager(text: str) -> bool:
     """The vocative: the FIRST word sounds like the name and is not 'tranquility
     base' the product. 'Drinkody, can you…' yes; 'let me drink…' no."""
@@ -128,21 +142,63 @@ SLOW_INTENTS = {Intent.SEND_MESSAGE, Intent.SUMMARIZE_RECENT, Intent.CUSTOM, Int
 
 class JevClient:
     def __init__(self, api_key: str):
+        # Measured inside the bot, 28 Sep, 70 successful gate calls:
+        # p50 102ms, p90 132ms, p99 153ms, max 153ms, none over a second.
+        # And 4 calls that never answered at all, at the 8s ceiling.
+        #
+        # Nothing in between. A distribution with nothing between 153ms and
+        # 8000ms is not a slow server -- a slow server has a tail. It is a
+        # request that was never answered, and the traceback says why:
+        # `AsyncHTTP11Connection [... CLOSED, Request Count: 1]`. httpx took a
+        # pooled connection the server had already hung up on and wrote to it.
+        # HTTP/1.1 cannot detect that before writing; the race is in the
+        # protocol, not in anybody's code.
+        #
+        # So: a voice-sized budget, because a spoken turn cannot wait eight
+        # seconds for permission to exist. 1.5s is ten times the measured p99.
+        # `keepalive_expiry` is the structural half -- retiring idle sockets on
+        # our own schedule means the pool has far fewer chances to hand out a
+        # dead one. Neither is a guess; both come off the numbers above.
+        self._headers = {"Authorization": f"Bearer {api_key}"}
         self._client = httpx.AsyncClient(
-            headers={"Authorization": f"Bearer {api_key}"}, timeout=8.0)
+            headers=self._headers,
+            timeout=httpx.Timeout(1.5, connect=2.0),
+            limits=httpx.Limits(keepalive_expiry=5.0))
 
     last: dict = {}
 
     async def ask(self, state: dict, questions: dict) -> dict:
         t0 = time.monotonic()
-        r = await self._client.post(
-            JEV_URL, json={"state": state, "model": "jev-latest", "questions": questions})
+        r = await self._post({"state": state, "model": "jev-latest", "questions": questions})
         r.raise_for_status()
         answers = r.json()["answers"]
         ms = int((time.monotonic() - t0) * 1000)
         self.last = {"state": state, "questions": list(questions), "answers": answers, "ms": ms}
         record("jev", {"state": state, "model": "jev-latest", "questions": questions}, r.json(), ms=ms)
         return answers
+
+    async def _post(self, body: dict) -> httpx.Response:
+        """One retry, and only for the failure that earns it.
+
+        A timeout here means a dead pooled socket, not a slow gate (the
+        measurements above have nothing between 153ms and the ceiling). A dead
+        socket is discovered by writing to it, so the first attempt IS the
+        detection and there is nothing to do but write again -- on a connection
+        that cannot be the same one, because this closes the pool first.
+
+        Only on timeout, and only once. A 500 is the gate disagreeing with us
+        and saying it twice will not help; two attempts at 1.5s still fit
+        inside a turn a person will wait through, and a third would not."""
+        try:
+            return await self._client.post(JEV_URL, json=body)
+        except httpx.TimeoutException:
+            logger.warning("gate: no answer in 1.5s; retrying on a fresh connection")
+            await self._client.aclose()
+            self._client = httpx.AsyncClient(
+                headers=self._headers,
+                timeout=httpx.Timeout(1.5, connect=2.0),
+                limits=httpx.Limits(keepalive_expiry=5.0))
+            return await self._client.post(JEV_URL, json=body)
 
     async def turn(self, utterance: str, recent: list[str], stage: dict | None):
         before = [{"who": ln.jev_who, "status": ln.jev_status, "text": ln.jev_text}
@@ -743,11 +799,19 @@ class Manager(FrameProcessor):
             await self._turn(text, frame, direction)
         except FileNotFoundError as e:  # a read door is missing: say so, never infer
             logger.error(f"manager read failed: {e}")
-            await emit(self, "error", reason=str(e)[:160])
+            await emit(self, "error", reason=_why(e))
             await self._say("I can't read the fleet right now.")
         except Exception as e:  # the manager fails closed: silence, never a crash
             logger.exception(f"manager turn failed: {e}")
-            await emit(self, "error", reason=str(e)[:160])
+            await emit(self, "error", reason=_why(e))
+            # Failing closed is right when the manager cannot tell whether it
+            # was addressed -- it listens to a room all day and must not answer
+            # it. But when the first word is its own name, being addressed is
+            # not in doubt, and silence is the manager appearing broken while
+            # it is merely unable to think. 28 Sep: four turns in a row died
+            # here and the panel showed a bare "error" with nothing after it.
+            if names_the_manager(text):
+                await self._say("Something went wrong judging that. Say it again.")
 
     async def _judge(self, text: str):
         """Is this turn for the manager, and what does it want? One judgement,
