@@ -1364,9 +1364,12 @@ public enum HomeBase {
           /* Air between turns, a rule only under a day. Ruled 28 Sep 2026 from
              the editorial pass: tufte-css and Distill rule only the coarsest
              boundary, and Linear's changelog groups under a date header. */
-          ol li{display:grid;grid-template-columns:84px 1fr;gap:16px;padding:20px 0;
+          /* Direct children only: a page or pull-request <li> nested inside a
+             turn was inheriting this grid and wrapping its title in the 84px
+             stamp column. */
+          ol>li{display:grid;grid-template-columns:84px 1fr;gap:16px;padding:20px 0;
                 border-bottom:0}
-          ol li.day{display:block;padding:34px 0 6px;border-bottom:1px solid var(--rule);
+          ol>li.day{display:block;padding:34px 0 6px;border-bottom:1px solid var(--rule);
                     font-family:var(--sans);font-size:12px;letter-spacing:.1em;
                     text-transform:uppercase;color:var(--dim)}
           /* The facts strip: the postmortem's metadata block, in numbers. */
@@ -1474,7 +1477,7 @@ public enum HomeBase {
                 transition:opacity .2s}
           #card.on{opacity:1;pointer-events:auto}
           @media(hover:none),(pointer:coarse){#card{display:none}}
-          @media(max-width:640px){ol li{grid-template-columns:1fr}.when{line-height:1.4}
+          @media(max-width:640px){ol>li{grid-template-columns:1fr}.when{line-height:1.4}
                                   dl.facts{gap:0 18px}dl.facts dd{font-size:18px}}
         </style></head><body><div class="wrap">
         \(head)
