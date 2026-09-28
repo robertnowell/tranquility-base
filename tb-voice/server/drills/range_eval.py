@@ -28,10 +28,14 @@ import session  # noqa: E402
 import span  # noqa: E402
 import wire  # noqa: E402
 from manager import JevClient, Manager  # noqa: E402
+import manager as _manager  # noqa: E402
 
-# The record is placed against the real clock: the loop is told the real time,
-# so a fixed one would put "yesterday" in the wrong window.
-NOW = datetime.now(timezone.utc)
+_manager._now_line = lambda: NOW.strftime("%A %d %B %Y, %H:%M (UTC)")
+
+# One fixed moment for the record AND for the time the manager is told
+# (manager._now_line, patched below): against the real clock, "yesterday" and
+# "today" meant different lines depending on the hour the eval ran.
+NOW = datetime(2026, 9, 27, 15, 0, tzinfo=timezone.utc)
 SITE = {"sessionId": "aaaa1111-0000-4000-8000-000000000001", "name": "Landing page",
         "goal": "We are building the landing page", "project": "site"}
 MAIL = {"sessionId": "bbbb2222-0000-4000-8000-000000000002", "name": "Mailchimp sends",
@@ -75,7 +79,7 @@ def fake_notes(query="", since_minutes=None, until_minutes=None, limit=80, day=N
 
 
 def manager(stage=None):
-    m = Manager(JevClient("eval-key-unused"))
+    m = Manager(JevClient(os.environ.get("JEV_API_KEY", "eval-key-unused")))
     m.stage = stage
     got = {}
 
@@ -120,9 +124,14 @@ async def answer_case(q, check):
     return ("OK" if check(o.answer) else "WRONG"), o.answer
 
 
-async def act_case(q, stage, check, notes=False):
+async def act_case(q, stage, check):
     m, got = manager(stage)
-    await m._act(q, notes=NOTES_AGENT if notes else None)
+
+    async def notes_session():
+        return NOTES_AGENT
+
+    m._notes_session = notes_session
+    await m._act(q)
     return ("OK" if check(got) else "WRONG"), got
 
 
@@ -160,7 +169,7 @@ async def main(runs=5):
                 if kind == "answer":
                     v, out = await answer_case(q, check)
                 else:
-                    v, out = await act_case(q, stage, check, notes=(kind == "notes"))
+                    v, out = await act_case(q, stage, check)
             except Exception as e:
                 v, out = "WRONG", f"error {e}"
             ms.append(int((time.monotonic() - t0) * 1000))

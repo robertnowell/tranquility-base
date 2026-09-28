@@ -123,7 +123,7 @@ async def main(turns_path, gold_path, runs=1):
                 try:
                     a = await jev.ask(*build(row["text"], row["before"][-8:], stage_of(row)))
                     return float(a["addressed"]["noul"]), a["intent"]
-                except Exception as e:  # a flaky call is retried, never scored
+                except Exception:  # a flaky call is retried, never scored
                     if attempt == 2:
                         raise
                     await asyncio.sleep(1 + attempt)
