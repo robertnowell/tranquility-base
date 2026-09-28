@@ -142,29 +142,63 @@ SLOW_INTENTS = {Intent.SEND_MESSAGE, Intent.SUMMARIZE_RECENT, Intent.CUSTOM, Int
 
 class JevClient:
     def __init__(self, api_key: str):
-        # 20s, not 8. Measured 28 Sep against the live endpoint: the first
-        # call after it goes cold took 10.08s, the next two 0.066s. Eight
-        # seconds therefore guaranteed that the FIRST thing said after a quiet
-        # spell was thrown away -- which is most of what a manager hears, since
-        # it sits silent in a room until somebody wants it. The gate is on the
-        # turn's critical path, so this is not free; a turn that takes twenty
-        # seconds to judge is a bad turn. It is still a better one than a turn
-        # that is silently discarded.
+        # Measured inside the bot, 28 Sep, 70 successful gate calls:
+        # p50 102ms, p90 132ms, p99 153ms, max 153ms, none over a second.
+        # And 4 calls that never answered at all, at the 8s ceiling.
+        #
+        # Nothing in between. A distribution with nothing between 153ms and
+        # 8000ms is not a slow server -- a slow server has a tail. It is a
+        # request that was never answered, and the traceback says why:
+        # `AsyncHTTP11Connection [... CLOSED, Request Count: 1]`. httpx took a
+        # pooled connection the server had already hung up on and wrote to it.
+        # HTTP/1.1 cannot detect that before writing; the race is in the
+        # protocol, not in anybody's code.
+        #
+        # So: a voice-sized budget, because a spoken turn cannot wait eight
+        # seconds for permission to exist. 1.5s is ten times the measured p99.
+        # `keepalive_expiry` is the structural half -- retiring idle sockets on
+        # our own schedule means the pool has far fewer chances to hand out a
+        # dead one. Neither is a guess; both come off the numbers above.
+        self._headers = {"Authorization": f"Bearer {api_key}"}
         self._client = httpx.AsyncClient(
-            headers={"Authorization": f"Bearer {api_key}"}, timeout=20.0)
+            headers=self._headers,
+            timeout=httpx.Timeout(1.5, connect=2.0),
+            limits=httpx.Limits(keepalive_expiry=5.0))
 
     last: dict = {}
 
     async def ask(self, state: dict, questions: dict) -> dict:
         t0 = time.monotonic()
-        r = await self._client.post(
-            JEV_URL, json={"state": state, "model": "jev-latest", "questions": questions})
+        r = await self._post({"state": state, "model": "jev-latest", "questions": questions})
         r.raise_for_status()
         answers = r.json()["answers"]
         ms = int((time.monotonic() - t0) * 1000)
         self.last = {"state": state, "questions": list(questions), "answers": answers, "ms": ms}
         record("jev", {"state": state, "model": "jev-latest", "questions": questions}, r.json(), ms=ms)
         return answers
+
+    async def _post(self, body: dict) -> httpx.Response:
+        """One retry, and only for the failure that earns it.
+
+        A timeout here means a dead pooled socket, not a slow gate (the
+        measurements above have nothing between 153ms and the ceiling). A dead
+        socket is discovered by writing to it, so the first attempt IS the
+        detection and there is nothing to do but write again -- on a connection
+        that cannot be the same one, because this closes the pool first.
+
+        Only on timeout, and only once. A 500 is the gate disagreeing with us
+        and saying it twice will not help; two attempts at 1.5s still fit
+        inside a turn a person will wait through, and a third would not."""
+        try:
+            return await self._client.post(JEV_URL, json=body)
+        except httpx.TimeoutException:
+            logger.warning("gate: no answer in 1.5s; retrying on a fresh connection")
+            await self._client.aclose()
+            self._client = httpx.AsyncClient(
+                headers=self._headers,
+                timeout=httpx.Timeout(1.5, connect=2.0),
+                limits=httpx.Limits(keepalive_expiry=5.0))
+            return await self._client.post(JEV_URL, json=body)
 
     async def turn(self, utterance: str, recent: list[str], stage: dict | None):
         before = [{"who": ln.jev_who, "status": ln.jev_status, "text": ln.jev_text}
