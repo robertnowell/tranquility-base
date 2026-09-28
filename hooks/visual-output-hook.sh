@@ -166,7 +166,7 @@ except Exception:
     "with a verb, the thing they cannot miss; a lede; then a dark block saying what needs "
     "them, or that nothing does. (2) One row per claim, a full sentence each, with a "
     "status dot and one figure: reading only the rows gives the argument. (3) Under each "
-    "claim, collapsed, the artifact: the screenshot of the real UI, the diff hunk, the raw "
+    "claim, open, the artifact: the screenshot of the real UI, the diff hunk, the raw "
     "rows, the literal prompt. Prose ABOUT the evidence is not evidence. Start from the "
     "template at " + brief_template + " and read " + brief_doc + " first; replace its :root "
     "with `hq-theme " + agent + "`. No paragraph over 80 words; a decision that exists only "

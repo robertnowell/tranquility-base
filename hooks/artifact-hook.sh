@@ -984,7 +984,7 @@ def _shape_ask(path):
         tpl = (" NOT ON THE BRIEF TEMPLATE: since 25 Sep 2026 a report starts from "
                + _os.path.join(skill, "templates", "brief.html")
                + " (one sentence at headline size, a dark needs-you block, one row per claim "
-               "with its artifact collapsed under it) and reads "
+               "with its artifact open under it) and reads "
                + _os.path.join(skill, "references", "brief.md")
                + " first. The worked example is "
                "agents/a8e3f054-8583-45f2-8bc0-3dfe55d47a06/uvape-what-is-different-redone.html.")
