@@ -308,7 +308,7 @@ h1:after { content:""; display:block; width:3.5rem; border-bottom:3px solid var(
 h2 { font-size: 1.4rem; margin-top: 2.2em; border-bottom: 1px solid var(--rule); padding-bottom:.25em; }
 h3 { font-size: 1.1rem; margin-top: 1.8em; }
 a { color: var(--ikb); }
-code, pre { font-family: "Berkeley Mono", ui-monospace, SFMono-Regular, Menlo, monospace; font-size:.85em; }
+code, pre { font-family: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace; font-size:.85em; }
 pre { background:#EDE6D3; padding: .9em 1em; overflow-x:auto; border-left:3px solid var(--rule); }
 blockquote { margin:1.5em 0; padding:.1em 1.2em; border-left:3px solid var(--ikb); color:var(--stone); }
 table { border-collapse: collapse; width:100%; font-size:.9em; }
