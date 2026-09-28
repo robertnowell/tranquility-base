@@ -48,7 +48,9 @@ extension StatusHUD {
     /// not moving once through four settle windows and then jumping. A drill
     /// that measures geometry in the dark measures the frame from before, so
     /// it says so and skips rather than failing a build that is fine.
-    private func displayIsAsleep() -> Bool {
+    /// Not private any more: `placardClearsControlsDrill` lives in Drills.swift
+    /// and needs the same guard, which it learned the expensive way (28 Sep).
+    func displayIsAsleep() -> Bool {
         CGDisplayIsAsleep(CGMainDisplayID()) != 0
     }
 

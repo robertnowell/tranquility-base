@@ -114,6 +114,20 @@ def only_the_name(text: str) -> bool:
     return len(words) == 1 and words[0].startswith(NAME_SOUNDS)
 
 
+def _why(e: BaseException) -> str:
+    """A reason a person can read, which `str(e)` is often not.
+
+    28 Sep: every `error` event in the viewer read `reason: ""`. The exception
+    was `httpx.ReadTimeout`, and httpx raises it wrapping a bare `TimeoutError`
+    whose message is the empty string -- so the panel showed the word "error"
+    and nothing else, four times in a row, while the manager appeared simply
+    broken. An exception class always has a name even when it has nothing to
+    say, and the name is what tells you it was the gate and not the fleet."""
+    text = str(e).strip()
+    name = type(e).__name__
+    return (f"{name}: {text}" if text else name)[:160]
+
+
 def names_the_manager(text: str) -> bool:
     """The vocative: the FIRST word sounds like the name and is not 'tranquility
     base' the product. 'Drinkody, can you…' yes; 'let me drink…' no."""
@@ -128,8 +142,16 @@ SLOW_INTENTS = {Intent.SEND_MESSAGE, Intent.SUMMARIZE_RECENT, Intent.CUSTOM, Int
 
 class JevClient:
     def __init__(self, api_key: str):
+        # 20s, not 8. Measured 28 Sep against the live endpoint: the first
+        # call after it goes cold took 10.08s, the next two 0.066s. Eight
+        # seconds therefore guaranteed that the FIRST thing said after a quiet
+        # spell was thrown away -- which is most of what a manager hears, since
+        # it sits silent in a room until somebody wants it. The gate is on the
+        # turn's critical path, so this is not free; a turn that takes twenty
+        # seconds to judge is a bad turn. It is still a better one than a turn
+        # that is silently discarded.
         self._client = httpx.AsyncClient(
-            headers={"Authorization": f"Bearer {api_key}"}, timeout=8.0)
+            headers={"Authorization": f"Bearer {api_key}"}, timeout=20.0)
 
     last: dict = {}
 
@@ -743,11 +765,19 @@ class Manager(FrameProcessor):
             await self._turn(text, frame, direction)
         except FileNotFoundError as e:  # a read door is missing: say so, never infer
             logger.error(f"manager read failed: {e}")
-            await emit(self, "error", reason=str(e)[:160])
+            await emit(self, "error", reason=_why(e))
             await self._say("I can't read the fleet right now.")
         except Exception as e:  # the manager fails closed: silence, never a crash
             logger.exception(f"manager turn failed: {e}")
-            await emit(self, "error", reason=str(e)[:160])
+            await emit(self, "error", reason=_why(e))
+            # Failing closed is right when the manager cannot tell whether it
+            # was addressed -- it listens to a room all day and must not answer
+            # it. But when the first word is its own name, being addressed is
+            # not in doubt, and silence is the manager appearing broken while
+            # it is merely unable to think. 28 Sep: four turns in a row died
+            # here and the panel showed a bare "error" with nothing after it.
+            if names_the_manager(text):
+                await self._say("Something went wrong judging that. Say it again.")
 
     async def _judge(self, text: str):
         """Is this turn for the manager, and what does it want? One judgement,

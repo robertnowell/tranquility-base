@@ -255,6 +255,25 @@ extension StatusHUD {
     /// the end of render; this holds it for the writers that exist and for
     /// the next one. Measured in window space, like placardClearsChevron.
     func placardClearsControlsDrill() {
+        // Every assertion below is GEOMETRY — where the ink sits relative to
+        // the chevron and the gear, read through `convert(_:to: nil)` — and a
+        // sleeping display has no frames to measure. `topBand` and `collapsed`
+        // have skipped for this since they were written; this one asserted
+        // instead, and on 28 Sep at 02:09 it failed a delivery of code that
+        // could not touch it: four of six assertions false, and precisely the
+        // four that read geometry. The two that do not (`offlineIsQuiet`,
+        // `creditsOutrankOffline`) passed in the same breath.
+        //
+        // The panel's evidence is thin enough already (CLAUDE.md rule 7), so
+        // this skips rather than being deleted or loosened: the assertions are
+        // right, they simply need pixels to be true of. It matters because
+        // hands-free is driven by voice with the screen off, which is when
+        // most deploys now happen.
+        if displayIsAsleep() {
+            SelfTest.skipped("placardClearsControls",
+                             because: "display asleep, frames do not animate")
+            return
+        }
         showIdle(rows: [SessionRow(id: "p1", name: "p1", aux: "p1", lamp: .ready)])
         let priorStanding = creditStanding
         func clears() -> Bool {
