@@ -45,7 +45,10 @@
 /* LEVEL 1: the message. One sentence at 54px, one lede, one dark block for what needs them. */
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:17px;line-height:1.45;-webkit-font-smoothing:antialiased}
-main{max-width:760px;margin:0 auto;padding:56px 20px 96px}
+/* THE TEXT IS 720px WIDE AND THE EVIDENCE IS 1000px. Ruled 28 Sep 2026 after the editorial pass: Distill and Tufte hold
+   text at about 60 characters and give figures the page; a screenshot trapped in the text column is unreadable without a click. */
+main{max-width:1000px;margin:0 auto;padding:56px 20px 96px}
+h1,.lede,.you,h2,summary,.d>p,.tail,.k,.quote{max-width:720px}
 .k{font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
 /* THE HEADLINE IS THREE TO SIX WORDS AT SEVEN TIMES BODY SIZE. Measured 27 Sep on
    typesafe.ai: h1 140px Medium in four words, h2 64px, body 17px. A sentence at 54px
@@ -70,14 +73,18 @@ h1{font-size:clamp(56px,11.5vw,112px);line-height:.95;letter-spacing:-.035em;fon
 
 /* LEVEL 2: the claims. A section label, then rows. Each row is a claim in one sentence, a status dot and its figure. */
 h2{font-size:13px;font-family:var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--muted);font-weight:500;margin:72px 0 6px;padding-bottom:10px;border-bottom:1px solid var(--line)}
-details{border-bottom:1px solid var(--line)}
+/* AIR BETWEEN CLAIMS, A RULE ONLY UNDER THE SECTION LABEL. Ruled 28 Sep 2026: a drawn boundary is the strongest grouping cue,
+   so it is spent once, on the section; the number and the space carry the rows. */
+details{border-bottom:0;padding:6px 0 18px}
+details.small{padding:0}
 summary{list-style:none;cursor:pointer;display:grid;grid-template-columns:34px 1fr auto;gap:14px;align-items:baseline;padding:20px 0}
 summary::-webkit-details-marker{display:none}
 summary .n{font-family:var(--mono);font-size:13px;color:var(--faint);padding-top:4px}
 summary .c{font-size:24px;line-height:1.18;font-weight:600;color:var(--heading);letter-spacing:-.02em}
 summary .c em{font-style:normal;color:var(--muted);font-weight:400;display:block;font-size:16px;margin-top:6px;letter-spacing:0}
-summary .s{font-family:var(--mono);font-size:12px;color:var(--muted);text-align:right;white-space:nowrap;padding-top:4px}
+summary .s{font-family:var(--mono);font-size:12px;color:var(--muted);text-align:right;white-space:nowrap;padding-top:4px;font-variant-numeric:tabular-nums}
 summary .s::after{content:'+';display:inline-block;margin-left:12px;color:var(--faint);font-size:14px;width:10px}
+details[open]>summary .s::after{content:'\2013'}
 details[open] summary .s::after{content:'–'}
 summary .s i{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:7px;vertical-align:0;background:var(--accent)}
 summary .s i.w{background:var(--amber)}summary .s i.o{background:transparent;border:1.5px solid var(--faint);width:7px;height:7px}
@@ -87,7 +94,9 @@ details[open] summary .n{color:var(--accent);font-weight:700}
 .small summary{padding:14px 0}
 .small summary .c{font-size:16px;font-weight:500}
 
-/* LEVEL 3: the artifacts, collapsed under their claim. Whitespace first, a rule second, a box only for code. */
+/* LEVEL 3: the artifacts, OPEN under their claim. Ruled 28 Sep 2026: hidden content goes unread (GOV.UK, Nielsen Norman),
+   and the artifact is the evidence the reader is meant to check. Close rows only on a page past about eight claims.
+   Whitespace first, a rule second, a box only for code. */
 .d{padding:4px 0 30px 48px;display:grid;gap:26px}
 .d p{margin:0;font-size:15px;color:var(--ink)}
 .d p b{color:var(--heading)}
@@ -143,7 +152,7 @@ figcaption .src{color:var(--muted)}
 <!-- ONE ROW PER CLAIM. The claim is a full sentence with a verb. The em is one line of how.
      The status: a filled dot for done or verified, a .w amber dot for partial, an .o hollow dot for not done.
      The figure: one number with its unit, or a count with its denominator. -->
-<details><summary><span class="n">1</span><span class="c"><!-- CLAIM --><em><!-- how, in one line --></em></span><span class="s"><i></i><!-- figure --></span></summary><div class="d">
+<details open><summary><span class="n">1</span><span class="c"><!-- CLAIM --><em><!-- how, in one line --></em></span><span class="s"><i></i><!-- figure --></span></summary><div class="d">
 
   <!-- SCREENSHOT with the passage marked. Percentages are of the image box. -->
   <figure class="shot"><div class="frame"><img src="data:image/jpeg;base64,<!-- -->" alt=""><div class="mark" style="left:15%;top:72%;width:14%;height:4%"></div></div>
