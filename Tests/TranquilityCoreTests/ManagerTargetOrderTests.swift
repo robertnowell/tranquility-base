@@ -1,12 +1,13 @@
 import XCTest
 @testable import TranquilityCore
 
-/// The manager's `targets` door returns the grid's order (27 Sep 2026).
+/// The manager's `targets` door LISTS in the grid's order (27 Sep 2026).
 ///
-/// Ruled by Robert after "invite the next agent" staged an idle session nobody
-/// was waiting on: "it should be the same rules as for the grid today, bring
-/// next agent." The door used to sort alphabetically by working directory, so
-/// "next" meant "whichever project sorts first".
+/// It does not decide who speaks. That was a bug for a few hours on the night
+/// this landed -- the manager's invite was pointed at this order and duly
+/// invited a blue lamp, which ⌃⌥ would never do -- and `_next_session` reads
+/// the waiting list directly now. These tests pin the LISTING, which exists
+/// only because the alternative was alphabetical by working directory.
 final class ManagerTargetOrderTests: XCTestCase {
 
     private func band(_ id: String, status: String?, waiting: Set<String>) -> Int {

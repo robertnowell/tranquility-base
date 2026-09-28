@@ -103,25 +103,25 @@ public enum ManagerJSON {
         }
     }
 
-    /// The grid's bands, on the data this door has.
+    /// The order the grid DRAWS these rows in. **Not the invite queue.**
     ///
-    /// Ruled 27 Sep: "it should be the same rules as for the grid today, bring
-    /// next agent." The grid orders by LAMP and then by recency
-    /// (`SessionRow.quietRowsLast`): the lamps that ask for you, then the ones
-    /// working on their own, then the merely alive. This door used to sort by
-    /// working directory, alphabetically, which is how "invite the next agent"
-    /// came to mean "whichever project sorts first" — measured 27 Sep 22:39,
-    /// when it staged an idle agent nobody was waiting on.
+    /// That distinction is the whole of a bug shipped and withdrawn on the
+    /// same night. Ruled 27 Sep: "it should be the same rules as for the grid
+    /// today, bring next agent." I read that as `SessionRow.quietRowsLast`,
+    /// which is how the grid paints five bands including the blue one, and
+    /// pointed the manager's invite at it. Hours later it invited a blue lamp
+    /// with green rows sitting in the grid, and Robert was exact about why:
+    /// "Control-Option from the grid doesn't open Blue Lamp sessions."
     ///
-    /// Read-state is deliberately NOT consulted, for the grid's own reason:
-    /// hearing a row must not move it (#439). The manager used to sort unheard
-    /// rows first, so hearing an agent changed who was "next" — the exact
-    /// behaviour the panel reverted on the day it was tried.
+    /// He is right, and the authority was never this function. ⌃⌥ is
+    /// `announceNext`, which walks the WAITING rows and nothing else. Drawing
+    /// a session and announcing it are different acts, and only one of them is
+    /// what "bring the next agent" means. `manager.py:_next_session` reads the
+    /// waiting list directly now and never consults this order.
     ///
-    /// A mapping rather than a call to `quietRowsLast`, because that takes
-    /// `[SessionRow]` and this door holds `LiveSession` plus the store; the
-    /// honest fix is to assemble rows here, and this is the same order until
-    /// somebody does.
+    /// It stays because the alternative here was alphabetical by working
+    /// directory, which is not an order anybody wants a fleet listed in. It
+    /// sorts what `tbase targets` lists. It decides nothing about who speaks.
     static func gridBand(_ s: LiveSession, waiting: Set<String>) -> Int {
         if waiting.contains(s.sessionId) { return 0 }   // asks for you
         if s.status == "busy" { return 1 }              // working on its own
