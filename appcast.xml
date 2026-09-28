@@ -6,6 +6,14 @@
     <description>Updates for Tranquility Base.</description>
     <language>en</language>
     <item>
+      <title>Version 0.3.1385</title>
+      <sparkle:version>1385</sparkle:version>
+      <sparkle:shortVersionString>0.3.1385</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <pubDate>Mon, 28 Sep 2026 02:28:59 +0000</pubDate>
+      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1385-c32ed5c16/TranquilityBase-0.3.1385.dmg" type="application/octet-stream" length="34425207" sparkle:edSignature="BUz6TRl5WTpE0cXOJkdAwC5Flzh5Y2N691BvWqtxsoszFu0Phxrsx3YffqwSf8SByMW8eTBsbdse6q2SopEzDg==" />
+    </item>
+    <item>
       <title>Version 0.3.1384</title>
       <sparkle:version>1384</sparkle:version>
       <sparkle:shortVersionString>0.3.1384</sparkle:shortVersionString>
@@ -77,16 +85,8 @@
       <pubDate>Sun, 27 Sep 2026 20:32:07 +0000</pubDate>
       <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1375-70c855b61/TranquilityBase-0.3.1375.dmg" type="application/octet-stream" length="34244555" sparkle:edSignature="8m9gHdb4ios73GMy9VYz/wXy5hk7V8tz4toCpWkJ8qAMIttKdSAGCY4E7S4+U4DJAsQCwvsKZVJdmIOqI/8oAg==" />
     </item>
-    <item>
-      <title>Version 0.3.1374</title>
-      <sparkle:version>1374</sparkle:version>
-      <sparkle:shortVersionString>0.3.1374</sparkle:shortVersionString>
-      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <pubDate>Sun, 27 Sep 2026 19:15:00 +0000</pubDate>
-      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1374-f294e2253/TranquilityBase-0.3.1374.dmg" type="application/octet-stream" length="34243921" sparkle:edSignature="1WnpFWHcURC395KA6kci8qig4pYwqQYxbV/cj7ZbyJwUe8kKU0dQJ5IWXIuzmgRirqX/gO1tYt8ZMRsJXh5xCA==" />
-    </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: PTQM0NbYc78CoIpdm7x6B4OIOUq1KoX/efPuBwc5Q5fdmZvs/oHcgKaErKo9oXLi8MYx0MW34SldGnpCj9w0Dg==
+edSignature: Z1TCZquQqnuER06SLde4LivUgjviMW0cmyQx+k0kI/eXBpm7lQIPuIDcdqfwjMiddqT0/DdsC7D1Zt3W+8u3Bg==
 length: 6457
 -->
