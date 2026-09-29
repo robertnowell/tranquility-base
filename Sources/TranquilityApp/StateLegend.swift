@@ -730,15 +730,15 @@ enum StateLegend {
     static let repositoryURL = URL(string: "https://github.com/robertnowell/tranquility-base")!
     /// The quiet placard row above the hint. "AGENT", not "SESSION" (ui-pass-7,
     /// ruling 1): every user-facing noun on the panel says agent.
-    static let newAgentTitle = "NEW AGENT"
+    static let newAgentTitle = "New agent"
     /// The other half of the same row: not starting an agent, but bringing one
     /// back. Ruled 12 Aug.
-    static let pastAgentsTitle = "PAST AGENTS"
+    static let pastAgentsTitle = "Past agents"
     /// Manager mode's placard (19 Sep): the hands-free manager on the grid.
-    static let managerOnTitle = "HANDS-FREE"
-    static let managerOffTitle = "STOP HANDS-FREE"
+    static let managerOnTitle = "Hands-free"
+    static let managerOffTitle = "Stop hands-free"
     /// No manager on this Mac: neither hosted nor local is configured.
-    static let managerUnsetTitle = "SET UP HANDS-FREE"
+    static let managerUnsetTitle = "Set up hands-free"
 
     /// The empty room has no sentence of its own any more (ruled 14 Sep
     /// 2026). It used to replace the grid, ten seconds in, with "Control +
