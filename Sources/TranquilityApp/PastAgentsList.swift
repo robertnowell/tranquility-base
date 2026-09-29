@@ -955,8 +955,11 @@ private final class PlacardHalf: NSControl {
             color: StateLegend.Palette.hint)
         mark.translatesAutoresizingMaskIntoConstraints = false
 
-        label.attributedStringValue = Widgets.letterspaced(
-            title, size: 9.5, tracking: 1.33, color: StateLegend.Palette.hint)
+        // A door, so the door treatment: mono, sentence case, the bottom row's
+        // size and tracking (ruled 29 Sep 2026). Tracked capitals are for
+        // labels, which name a region; these are things you press.
+        label.attributedStringValue = StateLegend.BottomLine.label(
+            title, weight: .regular, color: StateLegend.Palette.hint)
         label.translatesAutoresizingMaskIntoConstraints = false
         resting = [mark.attributedStringValue, label.attributedStringValue]
 
