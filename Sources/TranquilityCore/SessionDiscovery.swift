@@ -427,36 +427,37 @@ public enum SessionDiscovery {
         guard let projectDirs = try? fm.contentsOfDirectory(
             at: projects, includingPropertiesForKeys: nil) else { return result }
 
-        var candidates: [(URL, Date)] = []
+        var candidates: [(URL, Date, Int)] = []
         for project in projectDirs {
             // Immediate children only. A session's subagent traffic lives in
             // `<sessionId>/subagents/*.jsonl` — 7,265 files on this machine
             // against 2,634 sessions — and a subagent is not an agent you can
             // talk to.
             guard let files = try? fm.contentsOfDirectory(
-                at: project, includingPropertiesForKeys: [.contentModificationDateKey])
+                at: project, includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey])
             else { continue }
             for file in files where file.pathExtension == "jsonl" {
-                let modified = (try? file.resourceValues(forKeys: [.contentModificationDateKey]))?
-                    .contentModificationDate ?? .distantPast
+                let values = try? file.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
+                let modified = values?.contentModificationDate ?? .distantPast
                 // mtime stays as the PRE-filter only. An append-only file's
                 // clock can only run ahead of its last written timestamp, so
                 // nothing inside the real window is lost to this test — but
                 // membership and rank are decided by `lastMoved`, below.
                 guard now.timeIntervalSince(modified) <= window else { continue }
-                candidates.append((file, modified))
+                candidates.append((file, modified, values?.fileSize ?? -1))
             }
         }
 
         var kept: [Session] = []
-        for (url, modified) in candidates.sorted(by: { $0.1 > $1.1 }) {
+        for (url, modified, size) in candidates.sorted(by: { $0.1 > $1.1 }) {
             result.scanned += 1
             let path = url.path
-            guard let head = classifiableHead(of: path) else { continue }
+            guard let head = transcriptFacts.head(
+                path: path, size: size, modified: modified) else { continue }
 
             // The one field that separates a person's session from a robot's,
             // and unlike the tty it is on disk, so it survives the process.
-            let entry = entrypoint(head: head)
+            let entry = head.entrypoint
             if entry == nil { result.unclassifiable += 1 }
             guard !isHeadless(entry) else { result.headless += 1; continue }
             // A session that ran in a directory the OS reaps is a fixture,
@@ -474,14 +475,16 @@ public enum SessionDiscovery {
             // ten visible rows were test fixtures.
             //
             let sessionId = url.deletingPathExtension().lastPathComponent
-            let tail = SessionActivity.tail(of: path) ?? []
-            let cwd = firstCwd(head: head, tail: tail)
+            let moving = transcriptFacts.tail(
+                path: path, size: size, modified: modified, head: head)
+            let tail = moving.tail
+            let cwd = moving.cwd
             // Same predicate as the revive guard, one gate earlier.
             guard !isTemporary(cwd ?? "", temporaryRoots) else {
                 result.temporary += 1
                 continue
             }
-            let moved = lastMoved(tail: tail) ?? modified
+            let moved = moving.lastMoved ?? modified
 
             // The window re-applied to the conversation's own clock: a touched
             // ancient transcript wears a fresh mtime — that is exactly the
@@ -499,7 +502,7 @@ public enum SessionDiscovery {
                 transcriptPath: path,
                 title: titles.latestTitle(transcriptPath: path),
                 lastActivityAt: moved,
-                answered: isAnswered(tail: tail),
+                answered: moving.answered,
                 activity: SessionActivity.classify(tail: tail, modified: modified, now: now),
                 liveness: .unknown,
                 revivable: false))
@@ -515,6 +518,7 @@ public enum SessionDiscovery {
         // is made over the whole population. Capping each harness separately
         // would quietly reserve half the list for whichever one this machine
         // happens to use less.
+        transcriptFacts.evictIdle(now: Date())
         let codex = codexWalk(window: window, limit: limit, now: now, sessions: sessions)
         kept.append(contentsOf: codex.sessions)
         result.scanned += codex.scanned
@@ -884,7 +888,7 @@ public enum SessionDiscovery {
         var result = Result()
         let fm = FileManager.default
         guard let walker = fm.enumerator(
-            at: sessions, includingPropertiesForKeys: [.contentModificationDateKey],
+            at: sessions, includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey],
             options: [.skipsHiddenFiles])
         else { return result }
 
@@ -895,15 +899,17 @@ public enum SessionDiscovery {
 
         var kept: [Session] = []
         for case let url as URL in walker where url.pathExtension == "jsonl" {
-            let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?
-                .contentModificationDate ?? .distantPast
+            let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
+            let modified = values?.contentModificationDate ?? .distantPast
             guard now.timeIntervalSince(modified) <= window else { continue }
             result.scanned += 1
 
-            guard let text = try? String(contentsOfFile: url.path, encoding: .utf8)
+            // The whole rollout is parsed, so this is the costlier half per
+            // file; `rolloutFacts` keeps the answer until the file moves.
+            guard let parsed = rolloutFacts.facts(
+                path: url.path, size: values?.fileSize ?? -1, modified: modified)
             else { continue }
-            let parsed = autoreleasepool { CodexRollout.parse(text) }
-            guard let sessionId = parsed.meta?.sessionId else {
+            guard let sessionId = parsed.sessionId else {
                 result.unclassifiable += 1
                 continue
             }
@@ -913,7 +919,7 @@ public enum SessionDiscovery {
             // file's own word for itself rather than on a guess, and only on
             // a POSITIVE `subagent`: a rollout written before the field
             // existed predates multi-agent v2 and is a session.
-            if parsed.meta?.isSubagent == true {
+            if parsed.isSubagent {
                 result.subagents += 1
                 continue
             }
@@ -922,15 +928,15 @@ public enum SessionDiscovery {
             // yet — a real, known gap, not a design choice — so file mtime
             // is the only clock there is: the same fallback Claude Code's
             // own `lastMoved` uses when a tail holds nothing dated.
-            let landable = landingDirectory(for: parsed.meta?.cwd, fm) != nil
+            let landable = landingDirectory(for: parsed.cwd, fm) != nil
 
             kept.append(Session(
                 sessionId: sessionId,
-                cwd: parsed.meta?.cwd,
+                cwd: parsed.cwd,
                 transcriptPath: url.path,
                 title: names[sessionId.lowercased()],
                 lastActivityAt: modified,
-                answered: parsed.messages.last?.role == "user",
+                answered: parsed.answered,
                 activity: nil,       // no SessionActivity-equivalent classifier for Codex yet
                 liveness: .unknown,
                 revivable: landable,
