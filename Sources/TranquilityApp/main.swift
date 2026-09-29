@@ -1027,6 +1027,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
+        // One-shot: the project-folders drill on a real panel, printed, exit.
+        // Safe beside the running app (`--allow-second-instance`): no hotkey
+        // tap is installed yet, the store is a scratch one, no model is asked.
+        if CommandLine.arguments.contains("--selftest-folders") {
+            intakeTimer?.invalidate(); intakeTimer = nil
+            hud.projectFoldersDrill()
+            NSApp.terminate(nil)
+            return
+        }
+
         // One-shot: pose a face, photograph it FROM the view hierarchy, exit.
         // No Screen Recording grant, no awake display — the pose renders its
         // own pixels, so this works from a lidded laptop or a headless agent.

@@ -2430,6 +2430,27 @@ final class StatusHUD: NSObject {
     }
     var face = Face()
 
+    // MARK: Project folders (ruled 29 Sep 2026, ruling-project-folders.md)
+
+    /// The folder book the grid draws from. The shared store in the app; a
+    /// drill swaps in a scratch one so it never writes the user's folders.
+    var projects: ProjectStore = .shared
+    /// True while a drag or a rename is live: the five-second beat must not
+    /// tear the rows out from under the pointer or the caret.
+    var rowsHeld = false
+    /// A repaint that arrived while the rows were held, owed on release.
+    var rowsDirty = false
+    /// The drag in flight, if any.
+    var gridDrag: GridDrag?
+    /// Folders whose name the model is still choosing.
+    var namingFolders: Set<String> = []
+    /// Whether a new folder asks the model for its name. Off in a drill.
+    var nameFoldersWithModel = true
+    /// The last drop, for five seconds: what it said and the book before it.
+    var undoDrop: (text: String, before: ProjectBook, until: Date)?
+    /// Every line the grid drew this paint, for hit-testing a drag.
+    var gridLines: [(view: NSView, line: ProjectLayout.Line)] = []
+
     /// The pill/controls row for the current state, where one exists. `hidden`
     /// has no face; the associated labels (listening target, send destination)
     /// come from the stashed face, which is why this lives here and not on
@@ -3259,8 +3280,21 @@ final class StatusHUD: NSObject {
     /// from. It has no opinion about which rows win, only about how many
     /// slots there are to win.
     static func gridRows(_ rows: [SessionRow],
-                         screen: NSScreen? = NSScreen.main) -> [SessionRow] {
-        SessionRow.gridRows(rows, capacity: gridRowCapacity(screen: screen), floor: gridRowFloor)
+                         screen: NSScreen? = NSScreen.main,
+                         book: ProjectBook = ProjectStore.shared.current) -> [SessionRow] {
+        let capacity = gridRowCapacity(screen: screen)
+        let first = SessionRow.gridRows(rows, capacity: capacity, floor: gridRowFloor)
+        // A folder header is shorter than a row but not free: each one takes
+        // its height out of the row budget, so twenty rows and three folders
+        // still fit the screen twenty rows fitted. The rows that lose their
+        // slot go to Past Agents, by the same set difference as ever.
+        let headers = ProjectLayout.headerCount(first, book: book,
+                                                origin: SessionLineage.lastKnownOrigin)
+        guard headers > 0 else { return first }
+        let cost = Int((CGFloat(headers) * (FolderHeaderView.height + 1)
+                        / (GridRowView.height + 1)).rounded(.up))
+        let room = max(1, capacity - cost)
+        return SessionRow.gridRows(rows, capacity: room, floor: min(gridRowFloor, room))
     }
 
     /// How many row-slots the panel is worth: every LIT session, or your top
@@ -3292,7 +3326,13 @@ final class StatusHUD: NSObject {
         SessionRow.shownCount(rows, capacity: gridRowCapacity(screen: screen), floor: gridRowFloor)
     }
 
-    private func rebuildSessionRows() {
+    func rebuildSessionRows() {
+        if rowsHeld {
+            rowsDirty = true
+            return
+        }
+        rowsDirty = false
+        gridLines = []
         waitingRows.removeAllArrangedSubviews()
         waitingRows.spacing = 0
 
@@ -3324,7 +3364,8 @@ final class StatusHUD: NSObject {
             Permissions.log("grid: manager mode, orb in place of \(face.sessionRows.count) rows")
             return
         }
-        let shown = Self.gridRows(face.sessionRows)
+        let book = projects.current
+        let shown = Self.gridRows(face.sessionRows, book: book)
         // ONE callsign column (ruled 05 Aug): sized to the widest callsign on
         // show, capped at 38% of the grid. Per-row widths made every name
         // truncate at its own x and the right side read as a rag, not a
@@ -3336,9 +3377,28 @@ final class StatusHUD: NSObject {
                 ceil(($0.aux as NSString)
                     .size(withAttributes: [.font: GridRowView.auxFont]).width)
             }.max() ?? 0)
-        for (index, item) in shown.enumerated() {
+        if let undo = undoDrop, undo.until > Date() {
+            waitingRows.addArrangedSubview(undoLine(undo.text))
+        }
+        let lines = ProjectLayout.lines(shown, book: book, origin: SessionLineage.lastKnownOrigin)
+        for (index, line) in lines.enumerated() {
+            let item: SessionRow
+            switch line {
+            case let .header(folder, lamp, lit, members):
+                let header = folderHeader(folder, lamp: lamp, lit: lit, members: members)
+                waitingRows.addArrangedSubview(header)
+                gridLines.append((header, line))
+                waitingRows.addArrangedSubview(hairline(StateLegend.Palette.hairlineSoft))
+                continue
+            case let .row(row, _):
+                item = row
+            }
             let row = GridRowView(item: item, auxWidth: auxWidth, target: self,
                                   action: #selector(sessionRowTapped(_:)))
+            row.onDrag = { [weak self, weak row] phase, event in
+                guard let self, let row else { return }
+                self.rowDragged(item.id, from: row, phase: phase, event: event)
+            }
             // The lamp column is the session's power switch, on every row.
             // Until 18 Aug only `.ready` got a target, so the column was a
             // control on one row in ten and part of the row everywhere else —
@@ -3369,9 +3429,16 @@ final class StatusHUD: NSObject {
             // the right name. No dialog after that, and none here either — the
             // grid would otherwise be the only surface in the app that asks twice.
             row.menu = rowMenu(for: item)
-            waitingRows.addArrangedSubview(row)
-            row.widthAnchor.constraint(equalToConstant: Self.gridWidth).isActive = true
-            if index < shown.count - 1 {
+            if case let .row(_, folder?) = line {
+                let member = FolderMemberView(row: row, folderId: folder, width: Self.gridWidth)
+                waitingRows.addArrangedSubview(member)
+                gridLines.append((member, line))
+            } else {
+                waitingRows.addArrangedSubview(row)
+                row.widthAnchor.constraint(equalToConstant: Self.gridWidth).isActive = true
+                gridLines.append((row, line))
+            }
+            if index < lines.count - 1 {
                 waitingRows.addArrangedSubview(hairline(StateLegend.Palette.hairlineSoft))
             }
         }
@@ -3816,7 +3883,7 @@ final class StatusHUD: NSObject {
     /// Give the keyboard back. Called on every door out of the list face, and
     /// safe to call when it was never taken: a panel that cannot become key
     /// cannot be holding it.
-    private func releaseKeyboard() {
+    func releaseKeyboard() {
         guard let panel else { return }
         panel.pasteArmed = false
         guard panel.acceptsKey else { return }
@@ -4457,6 +4524,13 @@ final class StatusHUD: NSObject {
             handoff.representedObject = item.id
             menu.addItem(handoff)
         }
+        if let folder = projects.current.folder(of: item.id, origin: SessionLineage.lastKnownOrigin) {
+            let out = NSMenuItem(title: "Remove from \u{201C}\(folder.name)\u{201D}",
+                                 action: #selector(removeFromFolderPicked(_:)), keyEquivalent: "")
+            out.target = self
+            out.representedObject = item.id
+            menu.addItem(out)
+        }
         menu.addItem(.separator())
         // The item NAMES its target, and that IS the confirmation.
         let end = NSMenuItem(title: "End session \u{201C}\(item.name)\u{201D}",
@@ -4509,7 +4583,9 @@ final class StatusHUD: NSObject {
     /// row menu — asserted against liveness, never assumed from it.
     var gridRowsForTesting: [(id: String, hasMenu: Bool)] {
         waitingRows.arrangedSubviews.compactMap {
-            guard let row = $0 as? GridRowView, let id = row.identifier?.rawValue
+            // A row inside a project folder is wrapped in its indent.
+            guard let row = ($0 as? GridRowView) ?? ($0 as? FolderMemberView)?.row,
+                  let id = row.identifier?.rawValue
             else { return nil }
             return (id, row.menu != nil)
         }

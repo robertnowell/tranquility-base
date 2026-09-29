@@ -2212,6 +2212,7 @@ extension StatusHUD {
         selectionDrill()
         hoverDrill()
         quietRowsDrill()
+        projectFoldersDrill()
         litLampsOnlyDrill()
         restartedAgentDrill()
         closedRowsDrill()
