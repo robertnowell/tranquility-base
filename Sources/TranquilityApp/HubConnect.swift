@@ -29,7 +29,7 @@ final class HubConnect {
     /// The hub this Mac talks to. hq.json when it says, else the one built in.
     /// NEVER a link's idea of where the archive lives.
     static var base: URL {
-        HubApp.baseURL ?? URL(string: "https://hq.tranquilitybase.dev")!
+        HubApp.hub
     }
 
     /// What the row says while the browser has the question.
@@ -50,10 +50,15 @@ final class HubConnect {
         phrase = session.phrase
         // Says what to DO, with the phrase first: "showing B12-C21. Approve it
         // in the browser" sent Gary looking for somewhere to type it (14 Sep).
-        note = "\(session.phrase) in the browser? Then press Connect there"
+        note = "\(session.phrase) in the Hub window? Then press Connect there"
         onChange?()
         Permissions.log("hub: pairing started, phrase \(session.phrase)")
-        NSWorkspace.shared.open(session.url)
+        // In the app's own Hub window, not the default browser: the sign-in
+        // that approves this Mac is then the window's sign-in too, so the app
+        // and the hub are one login from the first install (29 Sep, Robert:
+        // "auth via tb works for both"). A browser is the fallback only for a
+        // hub address the window does not show.
+        if !HubWindow.shared.show(session.url) { NSWorkspace.shared.open(session.url) }
 
         Task { [weak self] in
             let outcome = await pairing.collect(session)
