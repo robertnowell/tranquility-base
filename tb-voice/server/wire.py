@@ -129,12 +129,21 @@ class Tool(Enum):
     LEDGER = "ledger"
     SEND = "send"
     NOTES = "notes"
+    VOICE = "voice"
+    # The rest of the manager's effects, each by name (hf-6, one door).
+    START_AGENT = "start_agent"
+    ENROLL = "enroll"
+    QUIET_SEND = "quiet_send"
+    OPEN = "open"
 
 
 HELLO_GRACE_S = 1.5
 DEADLINES_MS = {Tool.AGENTS: 3000, Tool.WAITING: 3000, Tool.BRIEF: 3000, Tool.TRANSCRIPT: 5000, Tool.LEDGER: 2000, Tool.NOTES: 4000,
                 # The app's Send types, then watches the agent take it.
-                Tool.SEND: 20000}
+                Tool.SEND: 20000, Tool.VOICE: 2000, Tool.START_AGENT: 75000, Tool.ENROLL: 10000,
+                Tool.QUIET_SEND: 45000, Tool.OPEN: 3000}
+# Changes something on the Mac: sent with an idem key, never retried by it.
+EFFECTS = {Tool.SEND, Tool.START_AGENT, Tool.ENROLL, Tool.QUIET_SEND, Tool.OPEN}
 
 
 async def call(tool: Tool, args: dict | None = None, deadline_ms: int | None = None,
