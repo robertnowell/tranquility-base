@@ -77,10 +77,12 @@ extension AppDelegate {
 
             switch action {
             case "hub":
-                // A page for the Hub window. No address, or not the hub's:
-                // the window's home, which is never wrong to show.
-                if case let .hub(url) = parsed, let url, HubWindow.shared.show(url) { break }
-                HubWindow.shared.showHub()
+                // A page an agent opened with hq-open: offered, never forced.
+                // With the window open it is left alone (ruled 29 Sep); with
+                // none, it opens on the page. No address, or not the hub's:
+                // the window's home, unless it is already showing something.
+                if case let .hub(url) = parsed, let url, HubWindow.shared.offer(url) { break }
+                if HubWindow.shared.window?.isVisible != true { HubWindow.shared.showHub() }
             case "discuss":
                 discuss(session: session, ref: ref)
             case "hear":

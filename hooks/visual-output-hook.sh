@@ -185,9 +185,13 @@ except Exception:
 # mirrors the page and announces it, so the session leaves a pointer at the
 # app's address. Without one -- every machine that is not Robert's, today --
 # the panel itself is the announcement: it hears the turn end and offers
-# Open Report on the card. Either way the session never runs `open`: a tab
-# opened from a session steals the reader's place (ruled 10 Sep 2026), and a
-# machine with no hub must not be told that a hub will announce anything.
+# Open Report on the card. With a hub, the session opens its own page with
+# hq-open, which shows it in the app's Hub window and falls back to the
+# browser only where there is no such app (ruled 29 Sep 2026: "agents by
+# default should open in the Mac app, falling back to browser"). That
+# replaces the 10 Sep "never open" rule, which existed because a session's
+# browser tab stole the reader's place; the Hub window is one window that
+# does not. A machine with no hub must not be told a hub will show anything.
 _base = ""
 try:
     import os as _os
@@ -197,9 +201,10 @@ except Exception:
     _base = ""
 if _base.startswith("http"):
     after_writing = (
-        "(2) do NOT run `open` on it: the hub app mirrors the file within a minute and "
-        "announces it in its own window, and a browser tab opened from a session steals "
-        "the reader's place (ruled 10 Sep 2026); (3) leave the terminal a one-line pointer "
+        "(2) open it with `hq-open <path>`, never plain `open`: it waits until the hub has "
+        "the page, then shows it in Tranquility Base's Hub window, and in the browser only "
+        "when this Mac has no app with that window (ruled 29 Sep 2026); (3) leave the "
+        "terminal a one-line pointer "
         "at the page's hub address, " + _base + "/open?session=" + agent + "&slug=<slug>, "
         "nothing more.")
 else:
