@@ -105,6 +105,10 @@ async def main():
     check(gate and gate[-1]["line"].endswith(long) and "SPEAK" in gate[-1]["line"],
           "viewer: a verdict becomes the gate column's line, with its whole text")
     check([k for k, _ in out][-1] == "event", "viewer: the verdict still shows in the events column")
+    n = len(out)
+    for i in range(40):
+        h._event(json.dumps({"event": "spoke", "t": 1790000001.0 + i / 100, "upTo": i}), acc)
+    check(len(out) == n, "viewer: the per-word highlight lines do not fill the events column")
 
     print(f"\n{'FAIL' if failures else 'PASS'}: {len(failures)} failure(s)")
     sys.exit(1 if failures else 0)

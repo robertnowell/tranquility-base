@@ -1212,8 +1212,15 @@ class Manager(FrameProcessor):
         return "\n".join((f"[turn {t['turn']}] " if t.get("turn") else "") + f"{t.get('who')}: {t.get('text')}"
                          for t in turns)[-chars:]
 
-    CAPABILITIES = ("Say what's next to hear the next agent. Ask for the goal, findings, next step "
-                    "or why. Say tell it to, then your message. Say stop to mute. Say start an agent.")
+    # Fixed, and so instant and true by construction. Measured 29 Sep against
+    # the loop answering instead: one answer in ten was false ("I tell you
+    # first what I would send"), one read the question as about the agent on
+    # stage, and two took 8 s. The line it replaces offered "Say tell it to,
+    # then your message", wrong since sends became explicit-only (22 Sep).
+    CAPABILITIES = ("Ask what's next to hear the next agent, or ask about any agent's goal, findings, "
+                    "next step or reasons. Ask me to send what you said to an agent, or what I would "
+                    "send. Say stop to quiet a voice, or ask me to start an agent. Everything else you "
+                    "say, I keep as notes.")
 
     async def _do_teach(self, text, frame, direction):
         """Who it is and what it can do: a fixed line, no model. Which question

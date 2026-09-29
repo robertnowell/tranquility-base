@@ -128,6 +128,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 parts.pop(e.get("id"), None)
                 self._send("call", "".join(got))
             return
+        if e.get("event") == "spoke":
+            # One per word, for the panel's highlight: the `speaking` line
+            # above it already shows the whole sentence (29 Sep: forty rows
+            # of "spoke" for one line).
+            return
         if e.get("event") == "said":
             who = "you" if e.get("role") == "user" else (e.get("speaker") or "Tranquility")
             self._send("transcript", json.dumps({"line": f"{time.strftime('%H:%M:%S', time.localtime(e.get('t') or 0))}  "
