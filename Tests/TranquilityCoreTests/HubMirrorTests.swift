@@ -95,6 +95,59 @@ final class HubMirrorTests: XCTestCase {
         XCTAssertTrue(second.note.hasPrefix("ok"))
     }
 
+    /// 28 Sep: `hq-page new` writes the template first and the session fills
+    /// it a minute later; the sweep is twenty seconds, so the hub got the
+    /// blank page, announced it, and a reader opened it. The placeholders
+    /// are the tell, and the fill is sent as soon as the last one is gone.
+    func testATemplateStillOnItsPlaceholdersWaitsUntilItIsFilled() async {
+        let hub = FakeHub()
+        let template = """
+        <!doctype html><html><head><meta charset="utf-8">
+        <meta name="intranet:session" content="\(session)">
+        <title><!-- TITLE: two to five words --></title>
+        <meta name="intranet:summary" content="<!-- the answer in one sentence -->">
+        </head><body><main><div class="k">Kopi · 28 Sep 2026</div>
+        <h1><!-- TITLE: the one sentence --></h1></main></body></html>
+        """
+        let path = write("kopi-items-repeater-spec.html", template)
+        let m = mirror(hub)
+        let draft = await m.run(docs: true, turns: false)
+        XCTAssertEqual(draft.documents, 0)
+        XCTAssertEqual(hub.count("api/ingest"), 0)
+        XCTAssertTrue(draft.note.hasPrefix("ok"), "a draft is not a failure")
+
+        let filled = template
+            .replacingOccurrences(of: "<!-- TITLE: two to five words -->", with: "Spec written")
+            .replacingOccurrences(of: "<!-- the answer in one sentence -->", with: "The spec is in the repo.")
+            .replacingOccurrences(of: "<!-- TITLE: the one sentence -->", with: "Spec written and committed.")
+        try! filled.write(toFile: path, atomically: true, encoding: .utf8)
+        let sent = await m.run(docs: true, turns: false)
+        XCTAssertEqual(sent.documents, 1)
+        XCTAssertEqual(hub.last("api/ingest")?["slug"] as? String, "kopi-items-repeater-spec")
+        XCTAssertEqual(hub.last("api/ingest")?["title"] as? String, "Spec written")
+    }
+
+    /// A page that only mentions a placeholder, in a code sample about the
+    /// template, is a finished page.
+    func testAPageThatQuotesAPlaceholderInItsBodyIsSent() async {
+        let hub = FakeHub()
+        _ = write("about-the-template.html", "<html><head><title>About</title></head><body><pre>&lt;h1&gt;&lt;!-- TITLE --&gt;&lt;/h1&gt; and content=\"x\" <!-- a real comment --></pre></body></html>")
+        let r = await mirror(hub).run(docs: true, turns: false)
+        XCTAssertEqual(r.documents, 1)
+    }
+
+    /// The catalog's marker is read on its first line, where publish.py
+    /// writes it. This report quoted the marker while explaining the sweep
+    /// and was taken for an index for eleven minutes on 28 Sep.
+    func testOnlyAPageThatStartsWithTheIndexMarkerIsAnIndex() async {
+        let hub = FakeHub()
+        _ = write("index-ish.html", "<!-- research-hq-generated: index -->\n<html><title>catalog</title></html>")
+        _ = write("about-the-sweep.html", "<html><head><title>The sweep</title></head><body><pre>if html.contains(\"research-hq-generated: index\") { continue }</pre></body></html>")
+        let r = await mirror(hub).run(docs: true, turns: false)
+        XCTAssertEqual(r.documents, 1)
+        XCTAssertEqual(hub.last("api/ingest")?["slug"] as? String, "about-the-sweep")
+    }
+
     func testAHashTheHubAlreadyHoldsIsNotSentAgain() async {
         let hub = FakeHub()
         let html = "<html><title>Known</title></html>"

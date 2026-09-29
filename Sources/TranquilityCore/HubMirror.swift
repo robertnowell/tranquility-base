@@ -336,7 +336,8 @@ public final class HubMirror: @unchecked Sendable {
                     hash = old.hash
                 } else {
                     guard var html = try? String(contentsOfFile: path, encoding: .utf8) else { continue }
-                    if html.contains("research-hq-generated: index") { continue }
+                    if Self.isGeneratedIndex(html) { skip(path, "a generated index"); continue }
+                    if Self.isDraft(html) { skip(path, "still on the template"); continue }
                     if Self.hasImagesToMove(html) {
                         let moved = await moveImages(of: path, html: html, report: &report)
                         if moved { html = (try? String(contentsOfFile: path, encoding: .utf8)) ?? html }
@@ -496,6 +497,47 @@ public final class HubMirror: @unchecked Sendable {
         <p><small>On the Mac that wrote it: <code>\(e(page.path))</code></small></p>
         </body></html>
         """
+    }
+
+    /// The catalog that publish.py writes starts with its own marker, on the
+    /// first line. Until 28 Sep this was a search of the whole page, and a
+    /// report that quoted the marker while explaining this very sweep was
+    /// taken for an index and never sent. A marker is read where it is
+    /// written, not wherever it is mentioned.
+    static func isGeneratedIndex(_ html: String) -> Bool {
+        html.drop(while: { $0.isWhitespace }).hasPrefix("<!-- research-hq-generated: index -->")
+    }
+
+    /// A page still on the template is a draft, not a page.
+    ///
+    /// `hq-page new` writes templates/brief.html into the hub directory with
+    /// the session, kicker and tokens filled and everything else left as a
+    /// placeholder comment, and the session fills it over the next minute
+    /// or so. This sweep runs every twenty seconds, so on 28 Sep it sent the
+    /// empty template first, the hub announced it, and the reader who
+    /// opened it saw a kicker, a dark block and nothing else. When the
+    /// session then moved its work under another name and deleted the
+    /// template, the blank page stayed on the hub for good. Four did.
+    ///
+    /// The placeholders are the tell: a head meta or the title or the
+    /// headline whose content is still a comment. No finished page carries
+    /// one; the skill's own checker refuses a page that does.
+    static let placeholder = try! NSRegularExpression(
+        pattern: "<(?:meta\\s[^>]*content=\"|title>|h1[^>]*>)\\s*<!--", options: [])
+
+    static func isDraft(_ html: String) -> Bool {
+        let head = String(html.prefix(64_000))
+        return placeholder.firstMatch(in: head, range: NSRange(head.startIndex..., in: head)) != nil
+    }
+
+    /// A skipped page says so, once per path per run of the panel, so a page
+    /// that never reaches the hub can be found in the log rather than by
+    /// comparing hashes by hand. Twenty-second sweeps would otherwise print
+    /// the same line thousands of times a day.
+    private var announcedSkips = Set<String>()
+    private func skip(_ path: String, _ why: String) {
+        let first: Bool = sync { announcedSkips.insert(path).inserted }
+        if first { Self.trace?("not sent: \((path as NSString).lastPathComponent), \(why)") }
     }
 
     static func walk(_ base: String, depth: Int = 0) -> [String] {
