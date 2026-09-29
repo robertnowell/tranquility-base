@@ -995,6 +995,40 @@ def _shape_ask(path):
 
 SHAPE_ASK = _shape_ask(path)
 
+
+def _stray_ask(path):
+    """Text in the <head> renders at the top of the page, above everything.
+
+    Found 29 Sep 2026: 17 pages from one agent opened with a stray `">`,
+    because the tags placeholder in templates/brief.html sits inside an
+    attribute (content="<!-- ... -->") and a fill that replaced it along
+    with the closing quote left `content="a, b">">`. The browser moves the
+    leftover `">` into the body. Nothing else here read the head as text.
+    """
+    try:
+        with open(path, "r", encoding="utf-8", errors="ignore") as fh:
+            src = fh.read()
+    except Exception:
+        return ""
+    m = re.search(r"<head\b[^>]*>(.*?)</head>", src, flags=re.S | re.I)
+    if not m:
+        return ""
+    head = re.sub(r"<!--.*?-->", " ", m.group(1), flags=re.S)
+    head = re.sub(r"<(script|style|title)\b[^>]*>.*?</\1>", " ", head, flags=re.S | re.I)
+    # Quote-aware: an emoji favicon is an svg data URI with `>` inside the
+    # attribute, and a naive <[^>]*> split it and flagged 384 good pages.
+    stray = re.sub(r"""<[A-Za-z!/?](?:"[^"]*"|'[^']*'|[^'">])*>""", " ", head).split()
+    if not stray:
+        return ""
+    lines = [l.strip() for l in m.group(1).splitlines() if re.search(r'">\s*"?>', l)]
+    where = (" The line: " + lines[0][:160]) if lines else ""
+    return ("\n\nSTRAY TEXT IN THE HEAD: %r renders at the very top of this page, above the "
+            "kicker.%s Fix the markup (usually a doubled `\">` after filling a placeholder "
+            "that sits inside an attribute) and rewrite the file." % (" ".join(stray)[:40], where))
+
+
+STRAY_ASK = _stray_ask(path)
+
 # A misfile is louder than anything else this hook says, because it is the one
 # failure that makes the archive assert something untrue about who did the work.
 MISFILE_ASK = ("\n\nWRONG DIRECTORY. You wrote this page into agent {other}'s hub "
@@ -1086,12 +1120,12 @@ if stamp == "1":
             "The agent footer was stamped into {path} automatically: session "
             "id, Open hub, and Discuss with agent. Do not add another one, and "
             "do not hand-roll a footer of your own on HQ pages."
-        ).format(path=path) + MISFILE_ASK + TAG_ASK + SHAPE_ASK,
+        ).format(path=path) + MISFILE_ASK + STRAY_ASK + TAG_ASK + SHAPE_ASK,
     }}))
 else:
     print(json.dumps({"hookSpecificOutput": {
         "hookEventName": "PostToolUse",
-        "additionalContext": context + MISFILE_ASK + TAG_ASK + SHAPE_ASK,
+        "additionalContext": context + MISFILE_ASK + STRAY_ASK + TAG_ASK + SHAPE_ASK,
     }}))
 PY
 
