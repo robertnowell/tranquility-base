@@ -7,7 +7,7 @@ way bot.run_bot does (bind, then tasks) in one process, one after the other and
 then at once, and fails if either can see the other's exchange, echo state or
 Notes agent. It also checks the `said` line carries the whole utterance (hf-20).
 
-    TB_HOSTED=1 uv run python drills/isolation_drill.py
+    uv run python drills/isolation_drill.py
 
 Run the live bot with TB_STRICT_SESSION=1 for warm_process_drill.py too, so
 any read outside a session fails the drill instead of logging once.
@@ -33,7 +33,7 @@ failures: list[str] = []
 
 
 def check(ok: bool, what: str):
-    print(("PASS " if ok else "FAIL ") + what)
+    print(("PASS " if ok else "FAIL ") + what, file=sys.__stdout__)
     if not ok:
         failures.append(what)
 
@@ -62,9 +62,8 @@ async def a_session(name: str, lines: int, hold: asyncio.Event | None = None) ->
 
 
 async def main():
-    os.environ.setdefault("TB_HOSTED", "1")
     buf = io.StringIO()
-    events._sink = buf  # capture the event lines instead of stdout
+    real_stdout, sys.stdout = sys.stdout, buf  # capture the event lines
 
     # Back to back, as a warm instance hands over.
     a = await asyncio.create_task(a_session("A", 5))
@@ -129,7 +128,7 @@ async def main():
     got = await asyncio.wait_for(pending, 1)
     check(got.get("ok") and got.get("data") == ["x"], "the result reaches the caller by id")
 
-    print(f"\n{'FAIL' if failures else 'PASS'}: {len(failures)} failure(s)")
+    print(f"\n{'FAIL' if failures else 'PASS'}: {len(failures)} failure(s)", file=sys.__stdout__)
     sys.exit(1 if failures else 0)
 
 

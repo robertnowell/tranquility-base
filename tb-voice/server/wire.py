@@ -1,24 +1,16 @@
-"""The hosted wire: one WebSocket between the app and the bot.
+"""The wire between the app and the hosted bot (docs/wire-v1.md).
 
-Binary frames are audio, PCM16 mono: 16 kHz up from the app's microphone,
-24 kHz down from the synthesizer. Text frames are JSON lines: the same event
-lines the app already parses (`events.py`), plus two more shapes that let a
-hosted bot use the app's doors, since the bot has no `tbase` and no deep links
-where it runs:
-
-    down  {"request":"run","id":"r1","argv":["tbase","targets","--json"]}
-    up    {"reply":"r1","code":0,"out":"[...]"}
-
-The app answers a `run` request by doing what `run.sh`'s child would have done
-locally (`tbase` subcommands, `open <scheme>://...`), and the bot awaits the
-reply. Nothing else changes: the manager's doors are the same calls, routed
-through here when TB_HOSTED is set (see tools._run).
+Audio rides the WebRTC peer. Text messages are JSON: the event lines the app
+parses (`events.py`), and wire v1 frames, by which the bot asks the Mac for
+one of the tools it offers (`call`, `result`, `cancel`) and the Mac says what
+it offers (`hello`) and what the panel did (`event`). An app from before one
+door (hf-6) still answers the older `{"request":"run","argv":[...]}` for the
+tools it does not offer (tools._run); that goes once Prod offers them all.
 """
 
 import asyncio
 import contextvars
 import json
-import os
 import time
 import uuid
 from enum import Enum
@@ -33,7 +25,6 @@ from pipecat.frames.frames import (
 )
 from pipecat.serializers.base_serializer import FrameSerializer
 
-HOSTED = bool(os.getenv("TB_HOSTED"))
 IN_RATE = 16000
 
 class Wire:
@@ -47,6 +38,10 @@ class Wire:
 
     def __init__(self):
         self.outbox: asyncio.Queue = asyncio.Queue()
+        # The session's own record for the Mac (hf-14): every model call in
+        # full. Drained behind the outbox, a part at a time, so a record never
+        # stands in front of a line the panel is waiting for.
+        self.logbox: asyncio.Queue = asyncio.Queue()
         self.replies: dict[str, asyncio.Future] = {}
         # Wire v1 (hf-3, docs/wire-v1.md): the tools the Mac said it offers in
         # its hello, and the calls waiting on a result. None until a hello
@@ -77,6 +72,13 @@ def current() -> Wire:
         unbound("wire")  # a fresh queue here is a dead socket; see session.unbound
         w = bind()
     return w
+
+
+def logbox() -> asyncio.Queue | None:
+    """This session's model-call record queue, or None outside a session: a
+    record with no session has no Mac to go to, and must never find another's."""
+    w = _current.get()
+    return w.logbox if w is not None else None
 
 
 def outbox() -> asyncio.Queue:
@@ -129,12 +131,21 @@ class Tool(Enum):
     LEDGER = "ledger"
     SEND = "send"
     NOTES = "notes"
+    VOICE = "voice"
+    # The rest of the manager's effects, each by name (hf-6, one door).
+    START_AGENT = "start_agent"
+    ENROLL = "enroll"
+    QUIET_SEND = "quiet_send"
+    OPEN = "open"
 
 
 HELLO_GRACE_S = 1.5
 DEADLINES_MS = {Tool.AGENTS: 3000, Tool.WAITING: 3000, Tool.BRIEF: 3000, Tool.TRANSCRIPT: 5000, Tool.LEDGER: 2000, Tool.NOTES: 4000,
                 # The app's Send types, then watches the agent take it.
-                Tool.SEND: 20000}
+                Tool.SEND: 20000, Tool.VOICE: 2000, Tool.START_AGENT: 75000, Tool.ENROLL: 10000,
+                Tool.QUIET_SEND: 45000, Tool.OPEN: 3000}
+# Changes something on the Mac: sent with an idem key, never retried by it.
+EFFECTS = {Tool.SEND, Tool.START_AGENT, Tool.ENROLL, Tool.QUIET_SEND, Tool.OPEN}
 
 
 async def call(tool: Tool, args: dict | None = None, deadline_ms: int | None = None,

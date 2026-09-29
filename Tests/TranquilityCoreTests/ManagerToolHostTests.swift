@@ -137,6 +137,55 @@ final class ManagerToolHostTests: XCTestCase {
         XCTAssertEqual(seen.value, "abc|The sends are stuck in draft.")
     }
 
+    /// One door (hf-6): what the bot may do on this Mac is the tools, by
+    /// name. `/bin/echo` stands in for `tbase`, so the reply shows the argv.
+    private func effect(_ tools: [ManagerTool], _ tool: String, _ args: [String: Any],
+                        idem: String? = "k") async throws -> [String: Any] {
+        var frame: [String: Any] = ["wire": "call", "id": "e1", "tool": tool, "args": args]
+        if let idem { frame["idem"] = idem }
+        let reply = await ManagerToolHost(tools: tools).handle(try JSONSerialization.data(withJSONObject: frame))
+        return try Self.parse(try XCTUnwrap(reply))
+    }
+
+    func testTheCLIEffectsRunOnlyTheirOwnCommandAndAnswerWithTheExitStatus() async throws {
+        let tools = ManagerTools.standard(tbase: "/bin/echo")
+        let start = try await effect(tools, "start_agent", ["harness": "codex"])
+        XCTAssertEqual((start["data"] as? [String: Any])?["out"] as? String, "new --codex\n")
+        XCTAssertEqual((start["data"] as? [String: Any])?["exit"] as? Int, 0)
+        let enroll = try await effect(tools, "enroll", ["agent": "abc"])
+        XCTAssertEqual((enroll["data"] as? [String: Any])?["out"] as? String, "enroll abc\n")
+        let quiet = try await effect(tools, "quiet_send", ["agent": "abc", "text": "seed; rm -rf /"])
+        XCTAssertEqual((quiet["data"] as? [String: Any])?["out"] as? String, "send abc seed; rm -rf /\n",
+                       "the words are one argument, never a shell line")
+    }
+
+    func testAnUnknownHarnessIsRefusedAndNothingStarts() async throws {
+        let r = try await effect(ManagerTools.standard(tbase: "/bin/echo"), "start_agent", ["harness": "bash"])
+        XCTAssertEqual(code(r), "bad_args")
+    }
+
+    func testTheNewEffectsNeedAnIdemKeyLikeEveryOther() async throws {
+        let tools = ManagerTools.standard(tbase: "/bin/echo", opener: { _ in })
+        for (tool, args) in [("start_agent", [String: Any]()), ("enroll", ["agent": "a"]),
+                             ("quiet_send", ["agent": "a", "text": "x"]), ("open", ["url": "tranquilitybase://mute"])] {
+            let r = try await effect(tools, tool, args, idem: nil)
+            XCTAssertEqual(r["ok"] as? Bool, false, "\(tool) ran without idem")
+        }
+    }
+
+    func testOpenGoesToTheAppsHandlerAndVoiceComesFromTheApp() async throws {
+        let opened = Box()
+        let tools = ManagerTools.standard(tbase: "/nonexistent",
+                                          voice: { agent in agent == "abc" ? ("el-123", nil) : nil },
+                                          opener: { url in opened.set(url.absoluteString) })
+        _ = try await effect(tools, "open", ["url": "tranquilitybase://hear?session=abc"])
+        XCTAssertEqual(opened.value, "tranquilitybase://hear?session=abc")
+        let v = try await effect(tools, "voice", ["agent": "abc"], idem: nil)
+        XCTAssertEqual((v["data"] as? [String: Any])?["cloud"] as? String, "el-123")
+        let none = try await effect(tools, "voice", ["agent": "zzz"], idem: nil)
+        XCTAssertEqual(code(none), "not_found")
+    }
+
     func testASendWithNoWordsIsRefusedBeforeTheAppIsAsked() async throws {
         let seen = Box()
         let host = ManagerToolHost(tools: ManagerTools.standard(tbase: "/nonexistent") { _, _ in
@@ -318,6 +367,23 @@ final class ManagerToolHostTests: XCTestCase {
         XCTAssertNil(obj["goal"], "an absent goal is left out, not sent empty")
         let stamped = try Self.parse(ManagerDataChannel.stamped(frame))
         XCTAssertEqual(stamped["type"] as? String, ManagerDataChannel.carriageType)
+    }
+
+    /// The event stream carries every model call since hf-14, so it has a ceiling.
+    func testTheEventsLogRotatesPastItsLimitAndKeepsOneBefore() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("manager-events.jsonl")
+        try Data(repeating: 0x41, count: 200).write(to: url)
+        let small = try XCTUnwrap(EventsLog.open(url, limit: 1000))
+        small.write(Data("b\n".utf8)); try small.close()
+        XCTAssertEqual(try Data(contentsOf: url).count, 202, "under the limit it appends")
+        let big = try XCTUnwrap(EventsLog.open(url, limit: 100))
+        big.write(Data("c\n".utf8)); try big.close()
+        XCTAssertEqual(try Data(contentsOf: url), Data("c\n".utf8), "over the limit it starts again")
+        XCTAssertEqual(try Data(contentsOf: dir.appendingPathComponent("manager-events.1.jsonl")).count, 202,
+                       "and keeps the one before")
     }
 
     func testAMissingTranscriptSaysSoRatherThanLookingEmpty() {

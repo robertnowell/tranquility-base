@@ -56,11 +56,43 @@ async def old_answer(client: httpx.AsyncClient, question: str, brief: dict) -> t
     return " ".join(text.split()), int((time.monotonic() - t0) * 1000)
 
 
+def on_this_mac(m: Manager) -> Manager:
+    """The Mac's side of the reads, played here with this Mac's own tbase:
+    the bot has no local path of its own since hf-24."""
+    tbase = os.environ.get("TBASE_BIN", "tbase")
+
+    async def cli(*args):
+        p = await asyncio.create_subprocess_exec(tbase, *args, stdout=asyncio.subprocess.PIPE,
+                                                 stderr=asyncio.subprocess.DEVNULL)
+        out, _ = await p.communicate()
+        try:
+            return json.loads(out)
+        except ValueError:
+            return None
+
+    async def targets():
+        return await cli("targets", "--json") or []
+
+    async def waiting():
+        return (await cli("status", "--json") or {}).get("waiting") or []
+
+    async def brief(sid):
+        b = await cli("brief", sid, "--json")
+        return b.get("data", b) if isinstance(b, dict) else None
+
+    async def transcript(sid, chars, query=""):
+        path = ((await brief(sid)) or {}).get("transcriptPath")
+        return Brain.transcript_search(path, query, max(chars, 9000)) if query else Brain.transcript_tail(path, chars)
+
+    m._targets, m._waiting, m._brief, m._transcript = targets, waiting, brief, transcript
+    return m
+
+
 async def main(cases_path, runs=1, out_path=None):
     session.bind()
     wire.bind()
     cases = json.load(open(cases_path))
-    m = Manager(JevClient("eval-key-unused"))
+    m = on_this_mac(Manager(JevClient("eval-key-unused")))
     client = httpx.AsyncClient(base_url=os.getenv("GC_BASE_URL", "https://api.generalcompute.com/v1"),
                                headers={"Authorization": f"Bearer {os.environ['GC_API_KEY']}"})
     targets = {t["sessionId"]: t for t in await m._targets()}

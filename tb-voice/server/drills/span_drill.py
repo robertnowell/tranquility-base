@@ -27,7 +27,7 @@ it, since the last action. Three utterances per scenario:
     key, and nothing goes to `tbase send`: the app's own Send typed it, tray
     and all. Every other scenario plays an older app, without `send`.
 
-    TB_HOSTED=1 <keys> uv run bot.py -t websocket --port 7879
+    <keys> uv run bot.py -t websocket --port 7879
     uv run python drills/span_drill.py ws://localhost:7879/ws next.wav mail.wav sendthat.wav sendmsg.wav
 """
 

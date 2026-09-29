@@ -101,7 +101,7 @@ extension AppDelegate {
         newSession.image = icon
         menu.addItem(newSession)
 
-        // Manager mode (19 Sep): the hands-free manager, a stdio child that
+        // Manager mode (19 Sep): the hands-free manager, which
         // listens all day and speaks only when addressed. A checkmark, not a
         // gesture: starting a microphone that never closes is a click you make.
         let manager = NSMenuItem(title: "Manager mode",

@@ -4,7 +4,6 @@ FROM dailyco/pipecat-base:latest
 COPY requirements-hosted.txt /app/requirements-hosted.txt
 RUN pip install --no-cache-dir -r /app/requirements-hosted.txt
 COPY *.py /app/
-ENV TB_HOSTED=1
 # Without this the bot gathers only the container's own address, answers with
 # it, and nothing outside the cloud can reach it: two sessions in three hung
 # for fifteen seconds and the third connected by luck (23 Sep). A failing

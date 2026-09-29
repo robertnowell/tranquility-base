@@ -114,7 +114,13 @@ def manager_on(snap: Snapshot) -> Manager:
     async def brief(sid):
         return snap.brief(sid)
 
-    m._targets, m._waiting, m._brief = targets, waiting, brief
+    async def transcript(sid, chars, query=""):
+        # The Mac's side of the `transcript` tool, played from the snapshot:
+        # the same reading TranscriptTail does where the file is.
+        path = (snap.brief(sid) or {}).get("transcriptPath")
+        return Brain.transcript_search(path, query, max(chars, 9000)) if query else Brain.transcript_tail(path, chars)
+
+    m._targets, m._waiting, m._brief, m._transcript = targets, waiting, brief, transcript
     return m
 
 

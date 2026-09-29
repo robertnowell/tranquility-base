@@ -176,11 +176,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var repliedToEventId: String?
     /// The one announcement allowed to exist. See `announceNext`.
     var announceTask: Task<Void, Never>?
-    /// Manager mode (19 Sep): the stdio child, its reader, and its lamp.
-    var managerTransport: ACPProcessTransport?
-    /// Hosted manager (21 Sep): the socket to the bot we host, when
-    /// `manager.hosted` is configured and no local command is.
-    /// Hands-free over WebRTC, when `manager.webrtc` is configured.
+    /// Hands-free: the WebRTC peer to the hosted manager (Gateway or dev shim).
     var managerPeer: ManagerPeer?
     /// True from the moment a start begins until a peer exists or it fails.
     ///
@@ -1116,7 +1112,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hud.onPickWaiting = { [weak self] id in self?.announceNext(only: id) }
         hud.onNewSession = { [weak self] in self?.newSession() }
         hud.onManagerToggle = { [weak self] in self?.toggleManagerMode() }
-        hud.managerAvailable = ManagerConfig.availability() != .unset
+        hud.managerAvailable = ManagerConfig.webrtc() != nil || ManagerConfig.availability() != .unset
         hud.onContinueWork = { [weak self] id, name in
             self?.continueWork(from: id, name: name)
         }
@@ -2132,24 +2128,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // the reply was read off the wrapper instead of the payload.
                 // Both were silent: no voice means "speak as the manager", and
                 // that is nobody's error.
-                let (code, out) = await AppDelegate.answerManagerRequest(
-                    ["tbase", "targets", "--json"])
-                let live = (code == 0 ? out.data(using: .utf8) : nil)
+                let fleet = try? await ManagerCommand.run(ManagerConfig.tbasePath(), ["targets", "--json"])
+                let live = (fleet?.code == 0 ? fleet?.out.data(using: .utf8) : nil)
                     .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [[String: Any]] }
                 guard let session = live?.compactMap({ $0["sessionId"] as? String }).first else {
                     Permissions.log("selftest handsFreeAudio: SKIP — no live session to ask about"
                                     + " (output device \(device) at \(Int(rate)) Hz)")
                     return
                 }
-                let (voiceCode, voiceOut) = await AppDelegate.answerManagerRequest(
-                    ["tbase", "voice", session, "--json"])
-                let answer = voiceOut.data(using: .utf8)
-                    .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
-                let cloud = answer?["cloud"] as? String
+                // Through the wire's own host, as the bot asks it: a `voice`
+                // call frame in, a result frame out.
+                let call = try? JSONSerialization.data(withJSONObject: [
+                    "wire": "call", "id": "selftest-voice", "tool": "voice",
+                    "args": ["agent": session], "deadline_ms": 2000,
+                ] as [String: Any])
+                var reply: Data?
+                if let call { reply = await AppDelegate.managerToolHost.handle(call) }
+                let result = reply.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+                let answered = result?["ok"] as? Bool == true
+                let cloud = (result?["data"] as? [String: Any])?["cloud"] as? String
                 SelfTest.report("handsFreeAudio", [
                     ("anOutputDeviceExists", device != 0),
                     ("itsRateIsReadable", rate > 0),
-                    ("theVoiceDoorAnswers", voiceCode == 0),
+                    ("theVoiceDoorAnswers", answered),
                     ("andNamesAVoice", !(cloud ?? "").isEmpty),
                 ])
                 Permissions.log("selftest handsFreeAudio: output device \(device)"

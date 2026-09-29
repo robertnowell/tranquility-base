@@ -1,14 +1,10 @@
 import Foundation
 
-/// Manager mode (19 Sep 2026): the hands-free manager as a stdio child of the app.
-///
-/// The manager (tb-voice) listens all day, decides with Jev whether it was
-/// addressed, and drives the fleet through the doors the app already has:
-/// `tbase send`, `tbase new`, and the speak-only deep links. What the app owes
-/// it is a place to stand: the app spawns it exactly the way it spawns an ACP
-/// agent, reads one JSON line per event from its stdout, and paints the orb
-/// and the state label from those lines. The child never learns anything
-/// about the app's audio path, and the app never parses the child's speech.
+/// Manager mode: the hands-free manager (tb-voice), hosted, reached over a
+/// WebRTC peer (ManagerPeer). It listens all day, decides with Jev whether it
+/// was addressed, and acts on this Mac only through the wire v1 tools the app
+/// offers (docs/wire-v1.md). It sends one JSON line per event, and the app
+/// paints the orb and the state label from those lines.
 ///
 /// `ManagerEvent` is the contract. A native manager written in Core later
 /// emits the same lines, and the orb does not know the difference.
@@ -26,8 +22,6 @@ public struct ManagerEvent: Codable, Equatable, Sendable {
         case speaking
         /// The manager's own voice stopped.
         case quiet
-        /// The child's source changed; it is about to exit 75 for a restart.
-        case reloading
         /// A session took the stage.
         case stage
         /// The manager asks the app to play a cue by name.
@@ -82,23 +76,6 @@ public struct ManagerEvent: Codable, Equatable, Sendable {
 }
 
 public enum ManagerConfig {
-    /// The command that starts the manager, from `~/.claude/hq.json`
-    /// (`manager.command`, an argv array) or the default checkout beside the
-    /// app's own. A path in config is a path the user typed; nothing here
-    /// invents one.
-    /// A command the user typed into `hq.json`, or nil. Distinct from
-    /// `command()`, which falls back to the default checkout: a hosted
-    /// manager is chosen only when nothing local was asked for.
-    public static func explicitCommand(config: URL = HubApp.configPath) -> [String]? {
-        if let data = try? Data(contentsOf: config),
-           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           let manager = obj["manager"] as? [String: Any],
-           let argv = manager["command"] as? [String], !argv.isEmpty {
-            return argv
-        }
-        return nil
-    }
-
     /// The `tbase` a hosted bot's door requests run: `manager.tbase` in
     /// `hq.json`, else the default checkout's debug build beside the app's own.
     /// Where the app finds `tbase`, the helper it executes for every question
@@ -145,24 +122,22 @@ public enum ManagerConfig {
 
     /// What HANDS-FREE would do if pressed.
     ///
-    /// In order: a `manager.command` in hq.json is the developer's own bot and
-    /// always wins; a signed-in Mac buys a session from the Gateway, which is
-    /// the path every other user has; `manager.webrtc` is the dev shim that
-    /// starts a Cloud session with a public key on this Mac; the default
-    /// checkout's `run.sh` on disk is a local manager; and with none of them
-    /// the placard reads SET UP HANDS-FREE and a press says why.
+    /// A signed-in Mac buys a session from the Gateway, which is the path
+    /// every user has; `manager.webrtc` in hq.json (checked before this) is
+    /// the dev shim that starts a session on a bot of the developer's own,
+    /// hosted or on `localhost`. With neither, the placard reads SET UP
+    /// HANDS-FREE and a press says why.
     ///
-    /// `manager.hosted` was a fourth, and went with the WebSocket on 25 Sep.
-    public enum Availability: Equatable, Sendable { case local, managed, unset }
+    /// There was a third until 29 Sep: `.local`, the bot as a stdio child of
+    /// the app (`run.sh`, or `manager.command`). It duplicated the hosted
+    /// manager with a second copy of every door, and 16 of 16 starts in the
+    /// two days before it went bought a Gateway session (hf-24).
+    public enum Availability: Equatable, Sendable { case managed, unset }
 
     public static func availability(
-        config: URL = HubApp.configPath,
-        fileExists: (String) -> Bool = { FileManager.default.isExecutableFile(atPath: $0) },
         signedIn: () -> Bool = { HubApp.baseURL != nil && !(Secrets.read(.hubToken) ?? "").isEmpty }
     ) -> Availability {
-        if explicitCommand(config: config) != nil { return .local }
-        if signedIn() { return .managed }
-        return fileExists(command(config: config)[0]) ? .local : .unset
+        signedIn() ? .managed : .unset
     }
 
     /// The WebRTC media path, the one that lets the manager be interrupted
@@ -195,28 +170,5 @@ public enum ManagerConfig {
               let key = rtc["key"] as? String, !key.isEmpty else { return nil }
         return WebRTCManager(start: start, key: key,
                              iceServers: IceServers.parse(rtc["iceServers"]))
-    }
-
-    public static func command(config: URL = HubApp.configPath) -> [String] {
-        if let data = try? Data(contentsOf: config),
-           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           let manager = obj["manager"] as? [String: Any],
-           let argv = manager["command"] as? [String], !argv.isEmpty {
-            return argv
-        }
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        return ["\(home)/Projects/voice-controlled-coding-agents/tb-voice/server/run.sh"]
-    }
-
-    /// The child's environment: the user's, plus the marker that tells the
-    /// bot the app is hosting it (so the app plays the cues, not the bot) and
-    /// a PATH that can find `uv`, `open`, and `tbase`.
-    public static func environment(base: [String: String] = ProcessInfo.processInfo.environment) -> [String: String] {
-        var env = base
-        env["TB_HOST"] = "app"
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        let extra = ["\(home)/.local/bin", "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"]
-        env["PATH"] = (extra + (env["PATH"] ?? "").split(separator: ":").map(String.init)).joined(separator: ":")
-        return env
     }
 }
