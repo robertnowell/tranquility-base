@@ -369,6 +369,23 @@ final class ManagerToolHostTests: XCTestCase {
         XCTAssertEqual(stamped["type"] as? String, ManagerDataChannel.carriageType)
     }
 
+    /// The event stream carries every model call since hf-14, so it has a ceiling.
+    func testTheEventsLogRotatesPastItsLimitAndKeepsOneBefore() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("manager-events.jsonl")
+        try Data(repeating: 0x41, count: 200).write(to: url)
+        let small = try XCTUnwrap(EventsLog.open(url, limit: 1000))
+        small.write(Data("b\n".utf8)); try small.close()
+        XCTAssertEqual(try Data(contentsOf: url).count, 202, "under the limit it appends")
+        let big = try XCTUnwrap(EventsLog.open(url, limit: 100))
+        big.write(Data("c\n".utf8)); try big.close()
+        XCTAssertEqual(try Data(contentsOf: url), Data("c\n".utf8), "over the limit it starts again")
+        XCTAssertEqual(try Data(contentsOf: dir.appendingPathComponent("manager-events.1.jsonl")).count, 202,
+                       "and keeps the one before")
+    }
+
     func testAMissingTranscriptSaysSoRatherThanLookingEmpty() {
         let tail = TranscriptTail.read(path: "/nonexistent/\(UUID().uuidString).jsonl", chars: 100)
         XCTAssertEqual(tail["note"] as? String, "transcript file missing")

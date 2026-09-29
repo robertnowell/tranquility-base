@@ -644,6 +644,7 @@ class Manager(FrameProcessor):
         self._last_intent_at = 0.0
         self.stage: dict | None = None
         self._wire_task = None  # hosted: drains wire.outbox into transport messages
+        self._log_task = None  # hosted: drains wire.logbox, the model calls, behind it
         self._idle_task = None  # hosted: ends the session after IDLE_SECS without speech
         self._mac_task = None   # hosted: follows the panel's stage (hf-16)
         self._last_heard = time.monotonic()
@@ -691,6 +692,22 @@ class Manager(FrameProcessor):
             msg = await q.get()
             await self.push_frame(OutputTransportMessageUrgentFrame(message=msg))
 
+    async def _drain_log(self):
+        """Hosted: every model call, in full, to this session's Mac (hf-14).
+        Written off the turn: `record` only queues, and this sends a part at a
+        time, each after the outbox has nothing waiting, so a record never
+        delays a line the panel or a door is waiting for."""
+        import calls
+        from pipecat.frames.frames import OutputTransportMessageFrame
+        from wire import logbox, outbox
+        box, lines = logbox(), outbox()
+        while True:
+            rec = await box.get()
+            for part in calls.parts(rec, uuid.uuid4().hex[:8]):
+                while not lines.empty():
+                    await asyncio.sleep(0.05)
+                await self.push_frame(OutputTransportMessageFrame(message=part))
+
     async def _end_when_idle(self):
         started = time.monotonic()
         while True:
@@ -717,7 +734,7 @@ class Manager(FrameProcessor):
             return
 
     async def cleanup(self):
-        for name in ("_wire_task", "_idle_task", "_mac_task"):
+        for name in ("_wire_task", "_log_task", "_idle_task", "_mac_task"):
             task = getattr(self, name)
             if task:
                 await self.cancel_task(task)
@@ -739,6 +756,7 @@ class Manager(FrameProcessor):
                 self._turns_task = self.create_task(self._turns.run())
             if os.getenv("TB_HOSTED") and self._wire_task is None:
                 self._wire_task = self.create_task(self._drain_wire())
+                self._log_task = self.create_task(self._drain_log())
                 self._mac_task = self.create_task(self._follow_mac())
                 self._last_heard = time.monotonic()
                 self._idle_task = self.create_task(self._end_when_idle())
@@ -896,7 +914,7 @@ class Manager(FrameProcessor):
         p, intent, _, _ = await self._judge(text)
         if p >= THRESHOLD and intent is Intent.MUTE and self._turns.cut("told to stop"):
             await self.broadcast_interruption()
-            await emit(self, "listening", p=round(p, 2), intent=intent.value, text=text[:120])
+            await emit(self, "listening", p=round(p, 2), intent=intent.value, text=text)
 
     async def _turn(self, text, frame, direction):
         p, intent, ms, jev = await self._judge(text)
@@ -905,7 +923,7 @@ class Manager(FrameProcessor):
         logger.info(f"gate p={p:.2f} {intent.value} {ms}ms {'SPEAK' if speak else 'silent'} :: {text[:80]}")
         note(Line(Role.USER, LineKind.COMMAND if speak else LineKind.TALK, text))
         await emit(self, "addressed" if speak else "listening",
-                   p=round(p, 2), intent=intent.value if speak else None, ms=ms, text=text[:120])
+                   p=round(p, 2), intent=intent.value if speak else None, ms=ms, text=text)
         if not speak:
             return
         # One sentence, one action. 02:58, 22 Sep: "Okay, can you invite the
@@ -915,7 +933,7 @@ class Manager(FrameProcessor):
         now = time.monotonic()
         if intent == self._last_intent and now - self._last_intent_at < REPEAT_SECS:
             logger.info(f"dropping a second {intent.value} {now - self._last_intent_at:.1f}s after the first")
-            await emit(self, "listening", p=round(p, 2), ms=ms, text=text[:120])
+            await emit(self, "listening", p=round(p, 2), ms=ms, text=text)
             return
         self._last_intent, self._last_intent_at = intent, now
         self.addressed += 1
@@ -1058,7 +1076,7 @@ class Manager(FrameProcessor):
             await self._say(answer)
             return
         sid = stage["sessionId"]
-        await emit(self, "speaking", voice="agent", session=sid, text=answer[:160])
+        await emit(self, "speaking", voice="agent", session=sid, text=answer)
         note(Line(Role.AGENT, LineKind.SPOKEN, answer, speaker=stage.get("name") or stage.get("goal") or sid[:8]))
         await self._app_speaks(f"{SCHEME}://say?session={sid}&text={quote(answer)}", answer, sid)
 
@@ -1443,7 +1461,7 @@ class Manager(FrameProcessor):
             words = message.split()
             said = " ".join(words[:READ_BACK_WORDS])
             rest = len(words) - READ_BACK_WORDS
-            await emit(self, "speaking", voice="manager", text=f"would send: {message[:160]}")
+            await emit(self, "speaking", voice="manager", text=f"would send: {message}")
             await self._say(spoken(f"To {name}, I'd send: {said}"
                                    + (f" ... and {rest} more words." if rest > 0 else "")))
             return
@@ -1455,7 +1473,7 @@ class Manager(FrameProcessor):
         if target["sessionId"] != who.get("sessionId"):
             await self._take_stage(target)
         name = target.get("name") or target.get("project") or "the agent"
-        await emit(self, "speaking", voice="manager", text=f"message: {message[:160]}")
+        await emit(self, "speaking", voice="manager", text=f"message: {message}")
         note(Line(Role.MANAGER, LineKind.ACTION, message, target=target["sessionId"],
                   target_name=target.get("name") or target.get("goal") or name))
         await self._send(target["sessionId"], message)

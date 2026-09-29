@@ -20,6 +20,7 @@ CALLS = os.path.join(HERE, "calls.jsonl")
 TRANSCRIPT = os.path.join(HERE, "transcript.md")
 LOG = os.path.join(HERE, "bot.log")
 PORT = int(os.getenv("TB_TAIL_PORT", "7861"))
+HOSTED = bool(os.getenv("TB_EVENTS_FILE"))
 GATE = re.compile(r"^(\S+ \S+) \| (\w+)\s+\| .*?(gate p=.*|manager read failed.*|manager turn failed.*|exec .*|Starting tb-voice.*)$")
 
 PAGE = """<!DOCTYPE html><html><head><meta charset="utf-8"><title>Tranquility · events</title>
@@ -42,7 +43,7 @@ h2{font-size:11px;letter-spacing:.1em;color:#8a877e;margin:8px 0}
 .x{color:#c9c6bd}.l{padding:3px 0;border-bottom:1px dashed #2c2b27;white-space:pre-wrap}.l.speak{color:#f3f1e9}.l.err{color:#d86f6f}
 </style></head><body>
 <header><b>TRANQUILITY · EVENTS</b><span id="s">connecting…</span></header>
-<main><section><h2>transcript.md · who said what</h2><div id="tr"></div><h2>events.jsonl</h2><div id="ev"></div></section><section><h2>calls.jsonl · every model call, full request and response (click)</h2><div id="ca"></div></section><section><h2>bot.log · gate verdicts and tools</h2><div id="lg"></div></section></main>
+<main><section><h2>transcript.md · who said what</h2><div id="tr"></div><h2>events.jsonl</h2><div id="ev"></div></section><section><h2>every model call, full request and response (click)</h2><div id="ca"></div></section><section><h2>gate verdicts and tools</h2><div id="lg"></div></section></main>
 <script>
 const ev=document.getElementById('ev'),lg=document.getElementById('lg'),s=document.getElementById('s');
 function ts(t){const d=new Date(t*1000);return d.toTimeString().slice(0,8)+'.'+String(d.getMilliseconds()).padStart(3,'0').slice(0,1)}
@@ -60,6 +61,7 @@ const ca=document.getElementById('ca'),tr=document.getElementById('tr');
 es.addEventListener('call',m=>{const c=JSON.parse(m.data);const d=document.createElement('div');d.className='c '+c.kind;
  let sum='';try{if(c.kind==='jev'){const a=c.response.answers||{};sum='addressed '+(a.addressed?a.addressed.noul.toFixed(2):'?')+' · '+(a.intent?a.intent.choice+' '+a.intent.confidence.toFixed(2):'')+' · "'+(c.request.state.text_to_judge||c.request.state.utterance||'').slice(0,60)+'"';}
  else if(c.kind==='brain'){sum='"'+(c.request.messages[1].content.split('Question: ').pop()||'').slice(0,60)+'" → '+(c.response.choices[0].message.content||'').slice(0,80);}
+ else if(c.kind==='loop'){const msgs=c.request.messages||[];const q=(msgs[1]&&String(msgs[1].content).split('\\n').pop())||'';const m=(c.response.choices||[{}])[0].message||{};sum=msgs.length+' msgs · '+q.slice(0,50)+' → '+((m.tool_calls||[]).length?'tools '+m.tool_calls.map(t=>t.function.name).join(','):'')+' '+String(m.content||'').slice(0,60);}
  else if(c.kind==='llm'){const msgs=c.request.messages||[];const last=msgs[msgs.length-1]||{};sum=msgs.length+' msgs · last '+(last.role||'')+': '+String(last.content||'').slice(0,50)+' → '+(c.response.tool_calls.length?'tools '+c.response.tool_calls.map(t=>t.name).join(','):'')+' '+(c.response.content||'').slice(0,60);}}catch(e){sum='(unparsed)'}
  d.innerHTML='<div class="h"><span class="t">'+ts(c.t)+'</span> <b>'+c.kind+'</b> <span class="t">'+(c.ms||'?')+'ms</span> '+sum.replace(/</g,'&lt;')+'</div><pre>REQUEST\\n'+JSON.stringify(c.request,null,1).replace(/</g,'&lt;')+'\\n\\nRESPONSE\\n'+JSON.stringify(c.response,null,1).replace(/</g,'&lt;')+'</pre>';
  d.querySelector('.h').onclick=()=>d.classList.toggle('open');ca.append(d);while(ca.children.length>200)ca.firstChild.remove();ca.parentElement.scrollTop=ca.parentElement.scrollHeight;});
@@ -73,6 +75,8 @@ def follow(path, start_at_end=True):
     pos = os.path.getsize(path) if start_at_end and os.path.exists(path) else 0
     while True:
         if os.path.exists(path):
+            if os.path.getsize(path) < pos:
+                pos = 0  # rotated (EventsLog.swift): start on the new file
             with open(path, errors="replace") as f:
                 f.seek(pos)
                 for line in f:
@@ -97,8 +101,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
         # replay the last 40 events, then follow both files
         try:
             with open(EVENTS, errors="replace") as f:
-                for line in f.readlines()[-40:]:
-                    self._send("event", line.strip())
+                recent = f.readlines()[-2000:]
+            # The calls and verdicts from further back, then the last 40 in full.
+            replay: dict[str, list] = {}
+            for i, line in enumerate(recent):
+                self._event(line.strip(), replay, quiet=i < len(recent) - 40)
         except FileNotFoundError:
             pass
         try:
@@ -117,6 +124,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             except FileNotFoundError:
                 pass
         ev, lg = follow(EVENTS), follow(LOG)
+        parts: dict[str, list] = {}
         ca, trf = follow(CALLS), follow(TRANSCRIPT)
         try:
             while True:
@@ -129,7 +137,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     idle = False; self._send("transcript", json.dumps({"line": line}))
                 for line in ev:
                     if line is None: break
-                    idle = False; self._send("event", line)
+                    idle = False; self._event(line, parts)
                 for line in lg:
                     if line is None: break
                     m = GATE.match(line)
@@ -140,6 +148,31 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     self.wfile.write(b": keepalive\n\n"); self.wfile.flush(); time.sleep(0.3)
         except (BrokenPipeError, ConnectionResetError):
             return
+
+    def _event(self, line, parts, quiet=False):
+        """One line of the event stream. Hosted, the model calls and the gate
+        verdicts arrive here too (hf-14): a call comes in parts, joined back
+        into the calls column; a verdict is also the gate column's line.
+        `quiet` replays only the calls and verdicts, not the whole stream."""
+        try:
+            e = json.loads(line)
+        except ValueError:
+            return
+        if e.get("event") == "call":
+            got = parts.setdefault(e.get("id"), [None] * int(e.get("parts") or 1))
+            if 0 <= int(e.get("part", -1)) < len(got):
+                got[int(e["part"])] = e.get("text") or ""
+            if all(p is not None for p in got):
+                parts.pop(e.get("id"), None)
+                self._send("call", "".join(got))
+            return
+        if HOSTED and e.get("event") in ("listening", "addressed"):
+            verdict = (f"gate p={e.get('p', 0):.2f} {e.get('intent') or ''} {e.get('ms') or '?'}ms "
+                       f"{'SPEAK' if e['event'] == 'addressed' else 'silent'} :: {e.get('text') or ''}")
+            t = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(e.get("t") or 0)) + f".{int((e.get('t') or 0) % 1 * 1000):03d}"
+            self._send("log", json.dumps({"time": t, "level": "INFO", "line": verdict}))
+        if not quiet:
+            self._send("event", line)
 
     def _send(self, kind, data):
         self.wfile.write(f"event: {kind}\ndata: {data}\n\n".encode()); self.wfile.flush()
