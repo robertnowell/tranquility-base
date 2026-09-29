@@ -171,7 +171,13 @@ do {
 
     case "status" where args.contains("--json"):
         // The manager's read door. Shape is `ManagerJSON.Status`, tested in Core.
-        print(ManagerJSON.encode(try ManagerJSON.status(store: store)))
+        //
+        // Live sessions only. Same probe `targets` uses, so the two doors agree
+        // about who exists -- they disagreed on 28 Sep and the manager believed
+        // the wrong one.
+        let liveNow = Set(((ClaudeAgentsCLI().sessions() ?? [])
+            + FileSessionOwnershipStore.shared.liveNonRegistrySessions()).map(\.sessionId))
+        print(ManagerJSON.encode(try ManagerJSON.status(store: store, live: liveNow)))
 
     case "brief":
         // `tbase brief <id|prefix> --json`: the latest brief and its ladder for one
