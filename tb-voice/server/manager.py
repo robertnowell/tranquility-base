@@ -418,6 +418,28 @@ LOOP_AS_AGENT = ("\n- You are answering AS the agent on stage, in its own voice:
                  "plural ('we found', 'we propose').")
 
 
+def _speech_deadline(text: str) -> float:
+    """How long to hold the mouth for this line before giving up on its stop.
+
+    It was 12 seconds for every line, and the line the manager says most often
+    is 328 characters. Measured from this Mac's ledger, 22-29 Sep: that line
+    reached its stop in 10.5 s and in 18.0 s, and the 222-character version in
+    12.9, 13.7 and 14.4 s. Over the 210 utterances recorded, speech runs at a
+    median 0.061 s per character -- about 16 characters a second.
+
+    So on the longest lines the wait expired while the voice was still going,
+    the lock was handed to whatever was queued, and two voices played at once.
+    The deadline has to be a property of the words, not a constant:
+
+        4 s of setup, then a second per 10 characters -- 60% slower than the
+        measured rate, because a deadline that is too long only delays the
+        crash guard while one that is too short is the bug itself.
+
+    Never shorter than the old 12 s, so no short line loses time it had; capped
+    at 90 s, because past that a stop frame is not late, it is lost."""
+    return min(90.0, max(12.0, 4.0 + len(text) / 10.0))
+
+
 def _now_line() -> str:
     """The time, so 'yesterday' and 'the last ten minutes' can become a window.
     In the Mac's zone (its hello says), else TB_TZ, else UTC, named."""
@@ -532,7 +554,7 @@ class Brain:
         """Which of the developer's own lines are the message, or which part of
         the request is (span.py). The model only points; it writes nothing that
         is sent. Returns its answer as JSON, checked by span.check."""
-        numbered = "\n".join(f"[{c.n}] {c.text}" for c in cands) or "(none)"
+        numbered = span.numbered(cands)
         msgs = [
             {"role": "system", "content": (
                 "A developer speaking to a voice assistant has asked it to send a message to a coding agent. "
@@ -545,13 +567,18 @@ class Brain:
                 '{"none": true}  when they have not said the message yet, or you cannot tell which words are it.\n'
                 "A request that only says where or whether to send (\"send that to it\", \"to the same agent\", "
                 "\"send it over\") is not itself the message: point at their earlier lines, or answer none.\n"
+                "A line marked \"(said to you)\" is one they said to the assistant rather than to the agent. It "
+                "can still be the message -- a question they asked out loud and now want the agent to answer is "
+                "the ordinary case -- but a line that only directs a send never is.\n"
                 "Examples:\n"
                 "Lines [4] The deploy script skips the second agent. [5] Can you make it deploy both. "
                 "Request: send that to the deploy agent -> {\"lines\": [4, 5]}\n"
                 "Lines [9] Right. Request: tell it yes, merge it -> {\"quote\": \"yes, merge it\"}\n"
                 "Lines [2] Coffee's cold again. Request: send a message to the build agent -> {\"none\": true}\n"
                 "Lines [6] The export drops the footer. [7] Also the images are stale. "
-                "Request: and to the same one -> {\"lines\": [6, 7]}")},
+                "Request: and to the same one -> {\"lines\": [6, 7]}\n"
+                "Lines [13] Oh, can we start? [14] (said to you) Is this deterministic per run? "
+                "Request: send that message, everything I just said, to the agent -> {\"lines\": [14, 14]}")},
             {"role": "user", "content": (
                 f"Agent: {agent}" + (f", working on: {goal}" if goal else "") + "\n"
                 f"Request: {request}\n"
@@ -616,6 +643,7 @@ class Manager(FrameProcessor):
         self.addressed = 0
         self._bot_stopped = asyncio.Event()
         self._voice = asyncio.Lock()        # one voice at a time, manager or agent
+        self._utterance: dict | None = None  # the line being spoken, so its stop can name it
         self._held: str | None = None       # a turn that ended mid-sentence, waiting for its rest
         self._user_speaking = False         # between on_user_turn_started and the next context frame
         self._held_task: asyncio.Task | None = None
@@ -753,7 +781,15 @@ class Manager(FrameProcessor):
             voice["speaking"] = False
             voice["stopped_at"] = time.monotonic()
             self._bot_stopped.set()
-            await emit(None, "quiet")  # the manager's voice stopped; the orb goes back to rest
+            # The manager's voice stopped; the orb goes back to rest. It says
+            # WHICH line it stopped, because a stop with no name cannot be
+            # paired with its start: on 29 Sep, 57 of 210 utterances had no
+            # `quiet` within twelve seconds and there was no way to tell an
+            # overrun from a lost frame from somebody else's stop.
+            u, self._utterance = self._utterance, None
+            await emit(None, "quiet", **({"id": u["id"], "chars": u["chars"], "voice": u["voice"],
+                                          "secs": round(time.monotonic() - u["at"], 1),
+                                          **({"over": True} if u.get("over") else {})} if u else {}))
         if not isinstance(frame, LLMContextFrame):
             await self.push_frame(frame, direction)
             return
@@ -1145,7 +1181,10 @@ class Manager(FrameProcessor):
                                      "what was said"}
 
         async def said(a):
-            return [f"[{c.n}] {c.text}" for c in await span.candidates()]
+            # The same list, marked the same way, as the picker is shown: the
+            # loop deciding whether to send and the picker choosing the words
+            # must not be reading two different accounts of what was said.
+            return span.numbered(await span.candidates()).splitlines()
 
         async def notes_read(a):
             return await self._notes((a.get("query") or "").strip(), a.get("since_minutes"),
@@ -1284,7 +1323,7 @@ class Manager(FrameProcessor):
         """Send (or note) by pointing (hf-6 step 2): the loop ends in one act,
         send, ask or wait, and nothing it writes is ever the message. The send
         itself happens here, after the loop, through the app's own Send."""
-        cands = await span.candidates()
+        cands = await span.candidates(request)
         who = self.stage or {}
         context = []
         if who:
@@ -1306,8 +1345,8 @@ class Manager(FrameProcessor):
         if before:
             context.append("What was said just before, oldest first (you = the developer):\n" + "\n".join(before))
         context.append("Their lines since the last message was sent (oldest first):\n"
-                       + ("\n".join(f"[{c.n}] {c.text}" for c in cands)
-                          or "(none since the last send; anything said earlier is reached with `range`)"))
+                       + (span.numbered(cands) if cands else
+                          "(none since the last send; anything said earlier is reached with `range`)"))
         context.append(f"It is now {_now_line()}.")
         if dry_run:
             context.append("This is a dry run: they asked what you WOULD send. Choose exactly as for a "
@@ -1385,6 +1424,27 @@ class Manager(FrameProcessor):
             pick = span.check(answer, words, request)
             logger.info(f"span: {len(words)} candidate lines; answer {answer}; pick {pick}")
             if not pick:
+                # Nothing to point at is not an answer, it is a missing
+                # argument. Measured 29 Sep, 8 runs of "send what I said about
+                # the landing page to the landing agent" with another agent on
+                # stage: the loop named the right agent every time and left
+                # `range` out on 3 of them. Without it the picker is handed the
+                # lines since the last send -- here none -- and can only say
+                # none, so the turn ended in a listening cue with the developer
+                # believing the message had gone.
+                #
+                # The loop is told, rather than the developer: a tool error is
+                # not terminal, so it hears why and calls send again with the
+                # range it should have passed. It cannot recur on the retry,
+                # because the retry carries a range. The quote path is
+                # untouched -- a message inside the request itself ("tell it
+                # yes, go ahead") checks out with no candidate lines at all,
+                # and never reaches here.
+                if not words and not rng:
+                    return {"error": "nothing was said since the last message, so there are no words to "
+                                     "point at. If the request names a stretch of what they said ('what I "
+                                     "said about pricing', 'the last ten minutes'), call send again with "
+                                     "`range`. If they have not said the message yet, call wait."}
                 return {"done": True, "waited": True, "target": target, "notes": to_notes}
             text = span.text_of(pick, words)
             if request_on_top and pick.lines is not None:
@@ -1596,15 +1656,26 @@ class Manager(FrameProcessor):
                 if self._manager_voice is None:
                     self._manager_voice = self._tts._settings.voice
                 await self._tts.use_voice(voice_id or self._manager_voice)
-            await emit(self, "speaking", voice=voice, session=session, text=text)
+            token = uuid.uuid4().hex[:8]
+            self._utterance = {"id": token, "chars": len(text), "voice": voice, "at": time.monotonic()}
+            await emit(self, "speaking", voice=voice, session=session, text=text,
+                       id=token, chars=len(text))
             self._bot_stopped.clear()
             # The synthesizer notes the line when it speaks it (tts.py), so every
             # path the manager's voice takes lands in the transcript exactly once.
             await self.push_frame(TTSSpeakFrame(text))
+            deadline = _speech_deadline(text)
             try:
-                await asyncio.wait_for(self._bot_stopped.wait(), 12.0)
+                await asyncio.wait_for(self._bot_stopped.wait(), deadline)
             except TimeoutError:
-                pass
+                # The lock is released here whether or not the speech stopped,
+                # so a deadline that is too short IS the two-voices bug. Say so
+                # in the log, and mark the utterance: when its stop finally
+                # arrives, the `quiet` that carries it says `over`.
+                logger.warning(f"voice: {token} did not report stopping in {deadline:.0f}s "
+                               f"({len(text)} chars); releasing the mouth")
+                if (self._utterance or {}).get("id") == token:
+                    self._utterance["over"] = True
 
     async def _app_speaks(self, url: str, text: str, session_id: str | None = None):
         """A session's line: the card opens on the Mac, the voice comes from here.

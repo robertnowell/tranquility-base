@@ -17,9 +17,32 @@ and the text sent is copied from the lines or the request, never generated.
 Any answer that does not check out is treated as none: the manager keeps
 listening rather than sends something unsaid.
 
-Which lines are candidates is decided on types (hf-26): the developer's TALK
-and DICTATION lines. A COMMAND line is the developer speaking to the manager and
-is never part of a range; its own words reach a send only as a checked quote.
+Which lines are candidates is decided on types (hf-26): every line the
+developer said, including a COMMAND -- one they said to the manager -- which is
+marked as such so the model can tell it apart.
+
+COMMAND lines were excluded until 29 Sep, on the reasoning that words said to
+the manager are not words for an agent, and that a developer who wants them
+sent will say them again inside the request. Measured, that reasoning cost a
+message. The ledger of 17:01:
+
+  [13] talk     Oh, can we start?
+  [14] command  And is this going to be deterministic per run or non-deterministic?
+  [16] spoken   The record does not say.
+  [17] command  You know, send that message, everything I just said, to the agent.
+
+Line 14 is the message. The gate heard it as addressed to the manager, which it
+was -- he asked it out loud and the manager answered -- and that verdict took
+the line out of the candidate list, so the picker was shown three fragments
+("Okay, let's", "Let's see. We want to say.", "Oh, can we start?"), answered
+{"none": true}, and was right to. Nothing was sent and, until #688, nothing
+said so.
+
+A line being addressed to the manager is not evidence about whom it is FOR. So
+every line is a candidate now, the ones said to the manager are marked, and the
+model is told that a line which only directs the send is never the message. The
+request's own line is dropped outright: it is given separately, and pointing at
+it is how the manager comes to type "send that to the agent" into an agent.
 """
 
 import json
@@ -31,8 +54,9 @@ from loguru import logger
 import session
 from vocab import Line, LineKind, Role
 
-# Lines the developer said that can be part of what is sent.
-SENDABLE = {LineKind.TALK, LineKind.DICTATION}
+# Lines the developer said that can be part of what is sent. A COMMAND is in
+# here and marked, never dropped: see the docstring, 29 Sep 17:01.
+SENDABLE = {LineKind.TALK, LineKind.DICTATION, LineKind.COMMAND}
 # How far back a send may reach.
 MAX_CANDIDATES = 60
 
@@ -41,6 +65,22 @@ MAX_CANDIDATES = 60
 class Candidate:
     n: int
     text: str
+    to_manager: bool = False   # they said this line to the manager (a COMMAND)
+
+
+def numbered(cands: list[Candidate]) -> str:
+    """The candidate lines as the model is shown them, in one place so the
+    picker and the loop cannot be shown different lists."""
+    return "\n".join(f"[{c.n}] " + ("(said to you) " if c.to_manager else "") + c.text
+                      for c in cands) or "(none)"
+
+
+def _same_utterance(a: str, b: str) -> bool:
+    """One spoken line and another, compared as the transcriber gave them:
+    case, spacing and punctuation do not distinguish two utterances."""
+    def key(t: str) -> str:
+        return re.sub(r"[^a-z0-9]+", " ", t.lower()).strip()
+    return bool(key(a)) and key(a) == key(b)
 
 
 @dataclass(frozen=True)
@@ -50,17 +90,28 @@ class Pick:
     quote: str | None = None
 
 
-def from_lines(lines: list[Line]) -> list[Candidate]:
+def from_lines(lines: list[Line], request: str = "") -> list[Candidate]:
     """This session's exchange since the manager last acted, numbered here."""
     start = 0
     for i, ln in enumerate(lines):
         if ln.kind is LineKind.ACTION:
             start = i + 1
-    return [Candidate(n=i + 1, text=ln.text) for i, ln in enumerate(lines[start:], start=start)
-            if ln.role is Role.USER and ln.kind in SENDABLE][-MAX_CANDIDATES:]
+    out = [Candidate(n=i + 1, text=ln.text, to_manager=ln.kind is LineKind.COMMAND)
+           for i, ln in enumerate(lines[start:], start=start)
+           if ln.role is Role.USER and ln.kind in SENDABLE]
+    return _without_the_request(out, request)[-MAX_CANDIDATES:]
 
 
-def from_ledger_rows(rows: list[dict]) -> list[Candidate]:
+def _without_the_request(cands: list[Candidate], request: str) -> list[Candidate]:
+    """The line that IS the request is not a candidate. It is given to the model
+    on its own, and a model that points at it makes the manager type "send that
+    to the agent" into an agent."""
+    if not request:
+        return cands
+    return [c for c in cands if not _same_utterance(c.text, request)]
+
+
+def from_ledger_rows(rows: list[dict], request: str = "") -> list[Candidate]:
     """The Mac's ledger since the last action (wire v1 `ledger`), parsed into
     types at this boundary. A row with an unknown role or kind is skipped and
     logged, never guessed."""
@@ -72,20 +123,20 @@ def from_ledger_rows(rows: list[dict]) -> list[Candidate]:
             logger.error(f"span: ledger row with unknown role/kind {r.get('role')!r}/{r.get('kind')!r}; skipped")
             continue
         if role is Role.USER and kind in SENDABLE and isinstance(r.get("n"), int) and r.get("text"):
-            out.append(Candidate(n=r["n"], text=r["text"]))
-    return out[-MAX_CANDIDATES:]
+            out.append(Candidate(n=r["n"], text=r["text"], to_manager=kind is LineKind.COMMAND))
+    return _without_the_request(out, request)[-MAX_CANDIDATES:]
 
 
-async def candidates() -> list[Candidate]:
+async def candidates(request: str = "") -> list[Candidate]:
     """The ledger on the Mac when it offers one (every line, across sessions);
-    otherwise this session's own exchange."""
+    otherwise this session's own exchange. The request's own line is left out."""
     import wire
     r = await wire.call(wire.Tool.LEDGER, {})
     if r is not None and r.get("ok"):
-        return from_ledger_rows(r.get("data") or [])
+        return from_ledger_rows(r.get("data") or [], request)
     if r is not None:
         logger.warning(f"span: ledger call failed ({(r.get('error') or {}).get('code')}); using this session's lines")
-    return from_lines(session.current().exchange)
+    return from_lines(session.current().exchange, request)
 
 
 def parse_answer(raw: str) -> dict | None:
