@@ -3,8 +3,8 @@ import TranquilityCore
 
 /// The app's half of the hands-free manager (19 Sep 2026).
 ///
-/// The manager is a stdio child that listens all day and drives the fleet
-/// through the doors the app already has. This file holds the one thing it
+/// The manager is hosted, listens all day, and acts on this Mac only through
+/// the wire v1 tools the app offers. This file holds the one thing it
 /// cannot do from outside: speak a line in a SESSION's own voice, with the
 /// panel in sync. `rung` and `say` deep links land here. Nothing in it records,
 /// sends, or types; it is the ⌃⌃ ladder's speaking half, reached by URL.
@@ -102,11 +102,11 @@ extension AppDelegate {
     }
 }
 
-// MARK: - Manager mode: the child, its events, and the orb
+// MARK: - Manager mode: the peer, its events, and the orb
 
 extension AppDelegate {
 
-    var managerIsOn: Bool { managerTransport != nil || managerPeer != nil || managerStarting }
+    var managerIsOn: Bool { managerPeer != nil || managerStarting }
 
     /// Tell the hands-free manager who is in focus now (hf-16, "follow", ruled
     /// 27 Sep). A shortcut acts at once, as it always has; the manager is told
@@ -132,10 +132,8 @@ extension AppDelegate {
 
     @MainActor
     func startManager() {
-        // A hosted manager when configured and no local command is: the same
-        // event lines arrive over a socket instead of a pipe, and the bot asks
-        // WebRTC first when it is configured, whatever else is: it is the
-        // only path where talking over the manager reaches it.
+        // The dev shim first when it is configured (a bot of the
+        // developer's own, hosted or on localhost); otherwise the Gateway.
         if let rtc = ManagerConfig.webrtc() { startWebRTCManager(rtc); return }
         switch ManagerConfig.availability() {
         case .managed:
@@ -147,46 +145,10 @@ extension AppDelegate {
             hud.showResult("Hands-free could not reach your account.")
             return
         case .unset:
-            // Nothing to start. The managed path (a session issued by the
-            // Gateway to a signed-in account) fills this slot when it lands.
-            hud.showResult("Hands-free is not set up on this Mac: no manager is configured.")
-            Permissions.log("manager: not configured (not signed in, no manager.webrtc, no manager.command, no local checkout)")
+            // Nothing to start: not signed in, and no dev shim.
+            hud.showResult("Hands-free is not set up on this Mac: sign in to use it.")
+            Permissions.log("manager: not configured (not signed in, no manager.webrtc)")
             return
-        case .local:
-            break
-        }
-        let argv = ManagerConfig.command()
-        let cwd = (argv[0] as NSString).deletingLastPathComponent
-        let transport = ACPProcessTransport(command: argv, cwd: cwd,
-                                            environment: ManagerConfig.environment())
-        do { try transport.start() } catch {
-            hud.showResult("Manager could not start: \(error.localizedDescription)")
-            Permissions.log("manager: start failed \(error)")
-            return
-        }
-        managerTransport = transport
-        hud.setManager(on: true)  // breathing, "connecting", until the child says ready
-        Permissions.log("manager: started \(argv.joined(separator: " "))")
-        managerTask = Task { @MainActor [weak self] in
-            for await line in transport.lines() {
-                guard let self, let event = ManagerEvent.parse(line) else { continue }
-                self.handle(event)
-            }
-            guard let self else { return }
-            let status = transport.exitStatus
-            Permissions.log("manager: child ended (exit \(status.map(String.init) ?? "?"))")
-            // 75 is the child's own "reload me": its source changed under it.
-            // Restart in place; the orb never drops. Anything else is the end.
-            if status == 75, self.managerTransport === transport {
-                self.managerTransport = nil
-                self.hud.setManagerState(StatusHUD.orbState, line: "reloading")
-                try? await Task.sleep(nanoseconds: 300_000_000)
-                self.startManager()
-                return
-            }
-            self.hud.setManager(on: false)
-            self.managerTransport = nil
-            self.rebuildMenu()
         }
     }
 
@@ -195,8 +157,6 @@ extension AppDelegate {
         managerTask?.cancel()
         managerTask = nil
         managerStarting = false
-        if let transport = managerTransport { Task { await transport.close() } }
-        managerTransport = nil
         if let peer = managerPeer { Task { await peer.close() } }
         managerPeer = nil
         endManagerLease()
@@ -616,8 +576,6 @@ extension AppDelegate {
             if e.voice != "agent", let text = e.text, !text.isEmpty {
                 hud.showManagerLine(text)
             }
-        case .reloading:
-            hud.setManagerState(StatusHUD.orbState, line: "reloading")
         case .quiet:
             // Voice over: colour back to rest, the last words stay readable.
             hud.setManagerState(StatusHUD.orbState, line: orbLine(managerLastLine == "speaking" ? "listening" : managerLastLine))

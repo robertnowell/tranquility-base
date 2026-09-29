@@ -2,48 +2,34 @@
 an `open`, by the wire v1 tool that does it. The model tools that used to live here went
 with Pipecat's LLM stage (hf-6); the manager's loop has its own (loop.py)."""
 
-import asyncio
 import json
-import os
 import uuid
 
 from loguru import logger
 
 import wire
 from events import line
-from wire import HOSTED
 
-TBASE = os.getenv("TBASE_BIN", "tbase")
-SCHEME = os.getenv("TB_URL_SCHEME", "tranquilitybase")
+# The name the bot's own calls use for the CLI; the Mac maps each to a tool.
+TBASE = "tbase"
 
 
 async def _run(*argv: str, timeout: float = 45.0) -> tuple[int, str]:
+    """Every door by name (hf-6, one door): the Mac runs only the tools it
+    offers, and no longer any argv it is sent. An app from before that release
+    offers fewer, and still answers request:run for the rest; that fallback
+    goes once the Prod release offers them all."""
     logger.info("exec " + " ".join(argv))
     line("tool", argv=list(argv))
-    if HOSTED:
-        # Every door by name (hf-6, one door): the Mac runs only the tools it
-        # offers, and no longer any argv it is sent. An app from before this
-        # release offers fewer, and still answers request:run for the rest;
-        # that fallback goes once the Prod release offers them all.
-        v1 = _as_call(argv)
-        if v1 is not None:
-            tool, args = v1
-            idem = uuid.uuid4().hex if tool in wire.EFFECTS else None
-            r = await wire.call(tool, args, idem=idem)
-            if r is not None:
-                return _answer(r)
-        name = "tbase" if argv[0] == TBASE else argv[0]
-        r = await wire.request("run", timeout=timeout, argv=[name, *argv[1:]])
-        return int(r.get("code", 1)), str(r.get("out", ""))
-    p = await asyncio.create_subprocess_exec(
-        *argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT
-    )
-    try:
-        out, _ = await asyncio.wait_for(p.communicate(), timeout)
-    except TimeoutError:
-        p.kill()
-        return 124, "timed out"
-    return p.returncode or 0, out.decode(errors="replace")
+    v1 = _as_call(argv)
+    if v1 is not None:
+        tool, args = v1
+        idem = uuid.uuid4().hex if tool in wire.EFFECTS else None
+        r = await wire.call(tool, args, idem=idem)
+        if r is not None:
+            return _answer(r)
+    r = await wire.request("run", timeout=timeout, argv=list(argv))
+    return int(r.get("code", 1)), str(r.get("out", ""))
 
 
 def _answer(r: dict) -> tuple[int, str]:

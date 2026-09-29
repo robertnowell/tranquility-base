@@ -5,7 +5,7 @@ before the next is judged, and what was said meanwhile keeps its order. Since
 compose mode was removed (24 Sep) there is no dictation state to route by; the
 property left is order and exclusion, which is what the queue is for.
 
-    TB_HOSTED=1 uv run python drills/turn_order_drill.py
+    uv run python drills/turn_order_drill.py
 """
 
 import asyncio

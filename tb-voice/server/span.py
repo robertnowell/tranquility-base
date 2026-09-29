@@ -80,12 +80,11 @@ async def candidates() -> list[Candidate]:
     """The ledger on the Mac when it offers one (every line, across sessions);
     otherwise this session's own exchange."""
     import wire
-    if wire.HOSTED:
-        r = await wire.call(wire.Tool.LEDGER, {})
-        if r is not None and r.get("ok"):
-            return from_ledger_rows(r.get("data") or [])
-        if r is not None:
-            logger.warning(f"span: ledger call failed ({(r.get('error') or {}).get('code')}); using this session's lines")
+    r = await wire.call(wire.Tool.LEDGER, {})
+    if r is not None and r.get("ok"):
+        return from_ledger_rows(r.get("data") or [])
+    if r is not None:
+        logger.warning(f"span: ledger call failed ({(r.get('error') or {}).get('code')}); using this session's lines")
     return from_lines(session.current().exchange)
 
 

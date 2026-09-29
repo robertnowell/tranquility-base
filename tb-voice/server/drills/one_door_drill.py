@@ -15,7 +15,7 @@ when it changes something, and none falls back to request:run:
 Then a Mac from before this release, which offers only the reads, still gets
 its effects over request:run (Prod can lag Dev by a release).
 
-    TB_HOSTED=1 uv run python drills/one_door_drill.py
+    uv run python drills/one_door_drill.py
 """
 
 import asyncio
@@ -85,7 +85,7 @@ async def run(offered: set) -> tuple[list, list, dict]:
     out["brief"] = await m._brief(SID)
     out["voice"] = await m._voice_for(SID)
     out["reg"] = await m._new_agent([M.TBASE, "new", "--codex"], "Codex")
-    out["notes"] = await m._new_notes_agent(True)
+    out["notes"] = await m._new_notes_agent()
     await m._do_mute("stop", None, None)
     await m._app_speaks(f"{M.SCHEME}://hear?session={SID}", "done", SID)
     return calls, runs, out

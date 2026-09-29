@@ -176,11 +176,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var repliedToEventId: String?
     /// The one announcement allowed to exist. See `announceNext`.
     var announceTask: Task<Void, Never>?
-    /// Manager mode (19 Sep): the stdio child, its reader, and its lamp.
-    var managerTransport: ACPProcessTransport?
-    /// Hosted manager (21 Sep): the socket to the bot we host, when
-    /// `manager.hosted` is configured and no local command is.
-    /// Hands-free over WebRTC, when `manager.webrtc` is configured.
+    /// Hands-free: the WebRTC peer to the hosted manager (Gateway or dev shim).
     var managerPeer: ManagerPeer?
     /// True from the moment a start begins until a peer exists or it fails.
     ///
@@ -1116,7 +1112,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hud.onPickWaiting = { [weak self] id in self?.announceNext(only: id) }
         hud.onNewSession = { [weak self] in self?.newSession() }
         hud.onManagerToggle = { [weak self] in self?.toggleManagerMode() }
-        hud.managerAvailable = ManagerConfig.availability() != .unset
+        hud.managerAvailable = ManagerConfig.webrtc() != nil || ManagerConfig.availability() != .unset
         hud.onContinueWork = { [weak self] id, name in
             self?.continueWork(from: id, name: name)
         }

@@ -257,6 +257,13 @@ No Python runtime is ever shipped inside the app or bootstrapped on a user's Mac
 Research: 2026-09-21-voice-agent-runtime-shape; audit: hosting-build-vs-buy; plan:
 hands-free-execution-plan.
 
+*Amended 29 Sep (hf-24):* local mode is gone. It was a second copy of every door
+(`tbase` and deep links run from the bot, a transcript and notes file on disk), and
+16 of 16 hands-free starts in the two days before it went bought a Gateway session.
+The developer and BYOK door is now `manager.webrtc` in `hq.json` pointed at a bot you
+run yourself (`uv run bot.py -t webrtc`, your keys in `.env`): the same wire, the same
+tools on the Mac, one code path.
+
 **Identity and money.** A hosted voice session is a managed-credits operation on the
 Gateway: the same sign-in, the same DPoP bearer with one more scope (`voice:session`),
 the same personal account, the same credit-standing state when the balance runs out.
