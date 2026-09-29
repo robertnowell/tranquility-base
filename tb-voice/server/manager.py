@@ -532,7 +532,7 @@ class Brain:
         """Which of the developer's own lines are the message, or which part of
         the request is (span.py). The model only points; it writes nothing that
         is sent. Returns its answer as JSON, checked by span.check."""
-        numbered = "\n".join(f"[{c.n}] {c.text}" for c in cands) or "(none)"
+        numbered = span.numbered(cands)
         msgs = [
             {"role": "system", "content": (
                 "A developer speaking to a voice assistant has asked it to send a message to a coding agent. "
@@ -545,13 +545,18 @@ class Brain:
                 '{"none": true}  when they have not said the message yet, or you cannot tell which words are it.\n'
                 "A request that only says where or whether to send (\"send that to it\", \"to the same agent\", "
                 "\"send it over\") is not itself the message: point at their earlier lines, or answer none.\n"
+                "A line marked \"(said to you)\" is one they said to the assistant rather than to the agent. It "
+                "can still be the message -- a question they asked out loud and now want the agent to answer is "
+                "the ordinary case -- but a line that only directs a send never is.\n"
                 "Examples:\n"
                 "Lines [4] The deploy script skips the second agent. [5] Can you make it deploy both. "
                 "Request: send that to the deploy agent -> {\"lines\": [4, 5]}\n"
                 "Lines [9] Right. Request: tell it yes, merge it -> {\"quote\": \"yes, merge it\"}\n"
                 "Lines [2] Coffee's cold again. Request: send a message to the build agent -> {\"none\": true}\n"
                 "Lines [6] The export drops the footer. [7] Also the images are stale. "
-                "Request: and to the same one -> {\"lines\": [6, 7]}")},
+                "Request: and to the same one -> {\"lines\": [6, 7]}\n"
+                "Lines [13] Oh, can we start? [14] (said to you) Is this deterministic per run? "
+                "Request: send that message, everything I just said, to the agent -> {\"lines\": [14, 14]}")},
             {"role": "user", "content": (
                 f"Agent: {agent}" + (f", working on: {goal}" if goal else "") + "\n"
                 f"Request: {request}\n"
@@ -1132,7 +1137,10 @@ class Manager(FrameProcessor):
                                      "what was said"}
 
         async def said(a):
-            return [f"[{c.n}] {c.text}" for c in await span.candidates()]
+            # The same list, marked the same way, as the picker is shown: the
+            # loop deciding whether to send and the picker choosing the words
+            # must not be reading two different accounts of what was said.
+            return span.numbered(await span.candidates()).splitlines()
 
         async def notes_read(a):
             return await self._notes((a.get("query") or "").strip(), a.get("since_minutes"),
@@ -1271,7 +1279,7 @@ class Manager(FrameProcessor):
         """Send (or note) by pointing (hf-6 step 2): the loop ends in one act,
         send, ask or wait, and nothing it writes is ever the message. The send
         itself happens here, after the loop, through the app's own Send."""
-        cands = await span.candidates()
+        cands = await span.candidates(request)
         who = self.stage or {}
         context = []
         if who:
@@ -1293,8 +1301,8 @@ class Manager(FrameProcessor):
         if before:
             context.append("What was said just before, oldest first (you = the developer):\n" + "\n".join(before))
         context.append("Their lines since the last message was sent (oldest first):\n"
-                       + ("\n".join(f"[{c.n}] {c.text}" for c in cands)
-                          or "(none since the last send; anything said earlier is reached with `range`)"))
+                       + (span.numbered(cands) if cands else
+                          "(none since the last send; anything said earlier is reached with `range`)"))
         context.append(f"It is now {_now_line()}.")
         if dry_run:
             context.append("This is a dry run: they asked what you WOULD send. Choose exactly as for a "
