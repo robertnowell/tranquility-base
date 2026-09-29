@@ -27,6 +27,17 @@ public enum ManagerToolName: String, CaseIterable, Sendable {
     case notes
     /// The app's own Send, tray and all (hf-12). Effectful: needs `idem`.
     case send
+    /// The ElevenLabs voice this Mac assigned an agent, so it is announced in it.
+    case voice
+    /// The rest of what the manager does on the Mac, each one named, so the
+    /// bot can no longer ask for an arbitrary `tbase` argv (hf-6, one door).
+    /// All effectful. `start_agent` is `tbase new`, `enroll` lets a session
+    /// take sends, `quiet_send` is `tbase send` without the tray (the Notes
+    /// agent's seed and its ranges), `open` is the app's own deep-link handler.
+    case startAgent = "start_agent"
+    case enroll
+    case quietSend = "quiet_send"
+    case open
 }
 
 /// Why a call failed, as the bot reads it (docs/wire-v1.md).

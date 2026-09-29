@@ -21,8 +21,9 @@ retried. v1 replaces that with named tools.
 - A result over its cap is cut from the end the tool does not keep and marked
   `truncated: true`. No frame exceeds 64 KB, so audio never queues behind one.
 - Calls are answered off the transport's receive loop.
-- `request:run` stays until no bot path and no shipped app needs it. A bot that
-  gets no `hello` within 1.5 s of the session start keeps using it.
+- `request:run` is gone from the app (hf-6, one door, 28 Sep): a Mac runs only
+  the tools it offers. The bot still falls back to it for a tool an older app
+  does not offer, and that fallback goes once the Prod release offers them all.
 
 ## Frames (JSON text, discriminator `wire`)
 
@@ -54,12 +55,19 @@ Error codes: `unknown_tool`, `bad_args`, `not_found`, `refused`, `timeout`,
 
 | `send` | `agent`, `text`; `idem` required | `{outcome}`: `typed`, `queued`, `not_dispatched` or `ambiguous` | 20 s | 1 KB |
 
+| `voice` | `agent` | `{cloud, system}`: the voice this Mac assigned the agent | 2 s | 1 KB |
+| `start_agent` | `harness` (`claude` or `codex`); `idem` | `{exit, out}` of `tbase new` | 75 s | 4 KB |
+| `enroll` | `agent`; `idem` | `{exit, out}` of `tbase enroll` | 10 s | 2 KB |
+| `quiet_send` | `agent`, `text`; `idem` | `{exit, out}` of `tbase send`, no tray | 45 s | 2 KB |
+| `open` | `url`; `idem` | `{}`; handed to the app's own deep-link handler | 3 s | 256 B |
+| `notes` | see `ManagerNotes` | what the developer said, by words or time | 4 s | 48 KB |
+| `ledger` | `from`/`to` or `last` | the numbered hands-free lines | 2 s | 32 KB |
+
 `send` is the panel's own Send (`AppDelegate.sendTyped`, hf-12): the words go
 in verbatim, and everything the developer has staged, for whichever agent,
 rides with them. `ambiguous` (and a `timeout`) means it may have landed: the
-bot says so and never retries. Quiet sends (notes, seeding) and `start_agent`,
-`enroll` and `open` stay on `request:run`, as does every send to an app that
-does not offer `send`.
+bot says so and never retries. Quiet sends (the Notes agent's seed and its
+ranges) take no tray and go by `quiet_send`.
 
 ## Where it lives
 
@@ -67,7 +75,7 @@ does not offer `send`.
   `ManagerTools.swift` (the tools, `ManagerCommand`, `TranscriptTail`); the
   WebSocket (`ManagerSocket`) and WebRTC (`ManagerPeer`) transports both send
   `hello` and hand `wire` frames to one host.
-- Bot: `wire.call()` and `take_reply` in `wire.py`; `tools._run` routes the
-  three reads through v1 when offered; the loop's `transcript` tool (`Manager._transcript`) reads the transcript, latest or by query. Claude Code and Codex files are both read.
-- Proof: `ManagerToolHostTests` (15), `drills/isolation_drill.py` (wire
+- Bot: `wire.call()` and `take_reply` in `wire.py`; `tools._run` routes each
+  of the bot's own doors to its tool (`tools._as_call`); the loop's `transcript` tool (`Manager._transcript`) reads the transcript, latest or by query. Claude Code and Codex files are both read.
+- Proof: `ManagerToolHostTests` (27), `drills/one_door_drill.py`, `drills/isolation_drill.py` (wire
   checks), `drills/wire_v1_drill.py` (end to end, with and without hello).

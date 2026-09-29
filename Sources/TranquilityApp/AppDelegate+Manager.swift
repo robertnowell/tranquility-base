@@ -371,9 +371,7 @@ extension AppDelegate {
             }
             let peer = ManagerPeer(signal: signaller,
                                    toolHost: Self.managerToolHost, appVersion: Self.managerAppVersion,
-                                   iceServers: ice) { argv in
-                await AppDelegate.answerManagerRequest(argv)
-            }
+                                   iceServers: ice)
             peer.onTrace = { [weak self] line in
                 Permissions.log("manager wire: \(line)")
                 // A microphone that stops without saying so is indistinguishable
@@ -475,15 +473,12 @@ extension AppDelegate {
 
     /// The grid's display names, for the transcriber's key terms.
     static func fleetNames() async -> [String] {
-        let (code, out) = await answerManagerRequest(["tbase", "targets", "--json"])
-        guard code == 0, let data = out.data(using: .utf8),
+        guard let (code, out) = try? await ManagerCommand.run(ManagerConfig.tbasePath(), ["targets", "--json"]),
+              code == 0, let data = out.data(using: .utf8),
               let rows = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return [] }
         return rows.compactMap { ($0["name"] as? String)?.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
     }
 
-    /// The bot's doors, done here. `tbase …` runs the CLI this Mac has;
-    /// `open <scheme>://…` is handed to the app's own deep-link handler, so
-    /// the scheme the bot wrote does not matter. Anything else is refused.
     /// Everything said in hands-free, numbered and whole, on this Mac (hf-5).
     static let managerLedger: ManagerLedger = {
         let ledger = ManagerLedger(
@@ -496,61 +491,35 @@ extension AppDelegate {
     /// an idempotency key outlives a reconnect (hf-3). `send` is the panel's
     /// own Send (`sendTyped`), with the developer's whole tray riding (hf-12).
     static let managerToolHost = ManagerToolHost(
-        tools: ManagerTools.standard(tbase: ManagerConfig.tbasePath(), ledger: managerLedger) { agent, text in
-            await MainActor.run { NSApp.delegate as? AppDelegate }?
-                .sendTyped(text, to: agent, tray: .developer, provider: "manager")
-        },
+        tools: ManagerTools.standard(
+            tbase: ManagerConfig.tbasePath(), ledger: managerLedger,
+            sender: { agent, text in
+                await MainActor.run { NSApp.delegate as? AppDelegate }?
+                    .sendTyped(text, to: agent, tray: .developer, provider: "manager")
+            },
+            // Answered by the app, not the CLI on disk: on 23 Sep a two-day-old
+            // `tbase` had never heard of `voice`, exited 1, and every agent
+            // talked in the manager's voice. The app assigns voices and ships
+            // with the bot's changes, so the app answers.
+            voice: { agent in
+                guard let coordinator = await MainActor.run(body: {
+                    (NSApp.delegate as? AppDelegate)?.coordinator
+                }) else { return nil }
+                let voices = coordinator.voices(for: agent)
+                Permissions.log("manager: \(agent.prefix(8)) speaks as \(voices.cloud ?? "—")")
+                return (voices.cloud, voices.system)
+            },
+            // The app's own deep-link handler, so the scheme the bot wrote
+            // does not matter and nothing reaches the system's URL opener.
+            opener: { url in
+                await MainActor.run {
+                    (NSApp.delegate as? AppDelegate)?.application(NSApp, open: [url])
+                }
+            }),
         idempotency: ManagerIdempotency(url: QueueStore.supportDirectory.appendingPathComponent("manager-idem.json")))
 
     static var managerAppVersion: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
-    }
-
-    static func answerManagerRequest(_ argv: [String]) async -> (code: Int, out: String) {
-        switch argv.first {
-        // Answered here, not by the CLI on disk.
-        //
-        // The bot asks which voice a session speaks in, because it reads that
-        // session's announcements now and has to sound like the right agent.
-        // Routing that through `tbase` meant the answer came from whatever
-        // build happened to be at the configured path — on 23 Sep that was a
-        // binary from two days earlier, which had never heard of the
-        // subcommand, exited 1, and left every agent talking in the manager's
-        // voice. The app is the thing that assigns voices and the thing that
-        // ships with the bot's changes, so the app answers.
-        case "tbase" where argv.count > 2 && argv[1] == "voice":
-            let session = argv[2]
-            guard let coordinator = await MainActor.run(body: {
-                (NSApp.delegate as? AppDelegate)?.coordinator
-            }) else { return (1, "no coordinator") }
-            let voices = coordinator.voices(for: session)
-            let json = ManagerJSON.encode(
-                ["cloud": voices.cloud, "system": voices.system] as [String: String?])
-            Permissions.log("manager: \(session.prefix(8)) speaks as \(voices.cloud ?? "—")")
-            return (0, json)
-        case "tbase":
-            // The exit status is the answer (send maps 0/2/3/4/5), so this is a
-            // plain Process rather than Subprocess.run, which folds status into a message.
-            return await Task.detached { () -> (code: Int, out: String) in
-                let p = Process()
-                p.executableURL = URL(fileURLWithPath: ManagerConfig.tbasePath())
-                p.arguments = Array(argv.dropFirst())
-                let pipe = Pipe()
-                p.standardOutput = pipe; p.standardError = pipe
-                do { try p.run() } catch { return (127, "\(error)") }
-                let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                p.waitUntilExit()
-                return (Int(p.terminationStatus), String(decoding: data, as: UTF8.self))
-            }.value
-        case "open":
-            guard argv.count > 1, let url = URL(string: argv[1]) else { return (2, "no url") }
-            await MainActor.run {
-                (NSApp.delegate as? AppDelegate)?.application(NSApp, open: [url])
-            }
-            return (0, "")
-        default:
-            return (2, "refused: \(argv.first ?? "")")
-        }
     }
 
     /// Paint the highlight when the word is meant to be HEARD, not when its

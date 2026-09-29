@@ -25,8 +25,6 @@ import TranquilityCore
 ///   - A running module will not change microphones underneath itself:
 ///     `trySetInputDevice` returns true and does nothing. Stop, set, start.
 final class ManagerPeer: NSObject, ManagerTransport, @unchecked Sendable {
-    typealias RequestHandler = @Sendable ([String]) async -> (code: Int, out: String)
-
     /// One signalling message, and its reply.
     ///
     /// Two callers, two roads. The dev shim posts straight at the host with a
@@ -35,7 +33,6 @@ final class ManagerPeer: NSObject, ManagerTransport, @unchecked Sendable {
     /// endpoint refuses anything without one. The peer does not care which.
     typealias Signaller = @Sendable (_ method: String, _ body: [String: Any]) async throws -> [String: Any]
     private let signal: Signaller
-    private let onRequest: RequestHandler
     /// Wire v1 (hf-3): announced with `hello` once a data channel is open.
     private let toolHost: ManagerToolHost?
     private let appVersion: String
@@ -63,13 +60,11 @@ final class ManagerPeer: NSObject, ManagerTransport, @unchecked Sendable {
     private let iceServers: [IceServer]
 
     init(signal: @escaping Signaller, toolHost: ManagerToolHost? = nil, appVersion: String = "",
-         iceServers: [IceServer] = IceServers.stunOnly,
-         onRequest: @escaping RequestHandler) {
+         iceServers: [IceServer] = IceServers.stunOnly) {
         self.iceServers = iceServers.isEmpty ? IceServers.stunOnly : iceServers
         self.signal = signal
         self.toolHost = toolHost
         self.appVersion = appVersion
-        self.onRequest = onRequest
         LKRTCInitializeSSL()
         factory = LKRTCPeerConnectionFactory(
             audioDeviceModuleType: .platformDefault,
@@ -311,7 +306,7 @@ final class ManagerPeer: NSObject, ManagerTransport, @unchecked Sendable {
     }
 }
 
-// MARK: - the bot's lines and its door requests
+// MARK: - the bot's lines and its wire frames
 
 extension ManagerPeer: LKRTCDataChannelDelegate {
     func dataChannelDidChangeState(_ dataChannel: LKRTCDataChannel) {
@@ -322,7 +317,7 @@ extension ManagerPeer: LKRTCDataChannelDelegate {
     /// `hello` (what this Mac offers) on each channel that is current and
     /// open. Ours can open before the bot opens its own and becomes the one
     /// we send on; the bot keeps the latest hello, so a second is harmless and
-    /// a missing one would leave it on `request:run`.
+    /// a missing one would leave the bot with no way to act on this Mac.
     private func sendHello(on dataChannel: LKRTCDataChannel) {
         lock.lock()
         let due = toolHost != nil && dataChannel === channel && helloChannel !== dataChannel
@@ -346,28 +341,6 @@ extension ManagerPeer: LKRTCDataChannelDelegate {
             Task { [weak self] in
                 guard let reply = await toolHost.handle(data) else { return }
                 self?.send(ManagerDataChannel.stamped(reply))
-            }
-            return
-        }
-        if obj["request"] as? String == "run", let id = obj["id"] as? String,
-           let argv = obj["argv"] as? [String] {
-            onTrace?("frame request:run \(data.count)b")
-            let handler = onRequest
-            let started = Date()
-            Task { [weak self] in
-                let (code, out) = await handler(argv)
-                // `type` is not decoration: the bot's data channel reads
-                // `json_message["type"]` on every message and throws away
-                // anything without one ("Error parsing JSON message",
-                // connection.py:365). Our replies had no type, so every door
-                // answer was discarded and every invite timed out after 45 s
-                // (23 Sep). Anything but "signalling", which is reserved.
-                guard let payload = try? JSONSerialization.data(withJSONObject: [
-                    "type": ManagerDataChannel.carriageType, "reply": id, "code": code, "out": out,
-                ] as [String: Any]) else { return }
-                self?.send(payload)
-                self?.onTrace?("answered \(argv.prefix(2).joined(separator: " ")) -> \(code) "
-                               + "in \(Int(Date().timeIntervalSince(started) * 1000)) ms")
             }
             return
         }

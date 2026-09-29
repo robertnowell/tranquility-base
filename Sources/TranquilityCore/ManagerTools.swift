@@ -1,8 +1,8 @@
 import Foundation
 
 /// The tools this Mac offers the hands-free manager in wire v1 (hf-3, hf-4).
-/// Reads only for now; `send` joins when it goes through the app's own Send
-/// (hf-12), and until then the bot keeps using `request:run` for effects.
+/// These are the whole of what it may do here: `request:run`, which ran any
+/// `tbase` argv it sent, is gone from the app (hf-6, one door).
 public enum ManagerTools {
     /// What a manager send came to, as the bot reads it (docs/wire-v1.md).
     public enum SendOutcome: String, Sendable {
@@ -29,9 +29,17 @@ public enum ManagerTools {
     /// The app's own Send, for the `send` tool: the words, to this agent, with
     /// the developer's tray riding along. Returns how it ended.
     public typealias Sender = @Sendable (_ agent: String, _ text: String) async -> Coordinator.ReplyOutcome?
+    /// The voice this Mac assigned a session: `cloud` is ElevenLabs, `system` the Mac's own.
+    public typealias VoiceLookup = @Sendable (_ agent: String) async -> (cloud: String?, system: String?)?
+    /// Hand a URL to the app's own deep-link handler, never to the system.
+    public typealias Opener = @Sendable (_ url: URL) async -> Void
+
+    /// Which agent `start_agent` starts. Parsed at the door: anything else is bad_args.
+    public enum Harness: String, Sendable { case claude, codex }
 
     public static func standard(tbase: String, ledger: ManagerLedger? = nil,
-                                sender: Sender? = nil) -> [ManagerTool] {
+                                sender: Sender? = nil, voice: VoiceLookup? = nil,
+                                opener: Opener? = nil) -> [ManagerTool] {
         var tools: [ManagerTool] = [
             ManagerTool(name: .agents, deadlineMs: 3000, capBytes: 16 * 1024) { _ in
                 try await tbaseJSON(tbase, ["targets", "--json"])
@@ -73,6 +81,43 @@ public enum ManagerTools {
                 return ["outcome": outcome.rawValue]
             })
         }
+        // The CLI's effects, each by name. They answer as the CLI did, exit
+        // status and output, so the bot reads them exactly as it read
+        // `request:run` (0 sent, 2 not dispatched, 3 deferred, 4 ambiguous,
+        // 5 failed for a send; `registered: <id>` for a start).
+        tools.append(ManagerTool(name: .startAgent, deadlineMs: 75_000, capBytes: 4096, effectful: true) { args in
+            let raw = (args["harness"] as? String) ?? Harness.claude.rawValue
+            guard let harness = Harness(rawValue: raw) else {
+                throw ManagerToolFailure(.badArgs, "harness is claude or codex")
+            }
+            return try await tbaseExit(tbase, ["new"] + (harness == .codex ? ["--codex"] : []))
+        })
+        tools.append(ManagerTool(name: .enroll, deadlineMs: 10_000, capBytes: 2048, effectful: true) { args in
+            try await tbaseExit(tbase, ["enroll", try agent(args)])
+        })
+        tools.append(ManagerTool(name: .quietSend, deadlineMs: 45_000, capBytes: 2048, effectful: true) { args in
+            guard let text = args["text"] as? String, !text.trimmingCharacters(in: .whitespaces).isEmpty else {
+                throw ManagerToolFailure(.badArgs, "text is required")
+            }
+            return try await tbaseExit(tbase, ["send", try agent(args), text])
+        })
+        if let voice {
+            tools.append(ManagerTool(name: .voice, deadlineMs: 2000, capBytes: 1024) { args in
+                guard let v = await voice(try agent(args)) else {
+                    throw ManagerToolFailure(.notFound, "no voice for that agent")
+                }
+                return ["cloud": v.cloud as Any? ?? NSNull(), "system": v.system as Any? ?? NSNull()]
+            })
+        }
+        if let opener {
+            tools.append(ManagerTool(name: .open, deadlineMs: 3000, capBytes: 256, effectful: true) { args in
+                guard let raw = args["url"] as? String, let url = URL(string: raw), url.scheme != nil else {
+                    throw ManagerToolFailure(.badArgs, "url is required")
+                }
+                await opener(url)
+                return [String: Any]()
+            })
+        }
         if let ledger {
             // Everything the developer has said, hands-free and dictated, over
             // any stretch of time or matching words (ManagerNotes): the manager
@@ -111,6 +156,12 @@ public enum ManagerTools {
             throw ManagerToolFailure(.badArgs, "agent is required")
         }
         return id
+    }
+
+    /// A CLI effect's answer, as the bot reads it: the exit status is the verdict.
+    static func tbaseExit(_ tbase: String, _ args: [String]) async throws -> Any {
+        let (code, out) = try await ManagerCommand.run(tbase, args)
+        return ["exit": code, "out": String(out.suffix(1500))]
     }
 
     static func tbaseJSON(_ tbase: String, _ args: [String]) async throws -> Any {
