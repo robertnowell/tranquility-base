@@ -25,6 +25,9 @@ final class HubConnect {
     var onChange: (() -> Void)?
 
     private var inFlight = false
+    /// The code this Mac invented for the pairing in flight. Only the Hub
+    /// window reads it, to recognise its own Connect page (HubWindow).
+    private(set) var pendingCode: String?
 
     /// The hub this Mac talks to. hq.json when it says, else the one built in.
     /// NEVER a link's idea of where the archive lives.
@@ -48,9 +51,15 @@ final class HubConnect {
         }
         inFlight = true
         phrase = session.phrase
-        // Says what to DO, with the phrase first: "showing B12-C21. Approve it
-        // in the browser" sent Gary looking for somewhere to type it (14 Sep).
-        note = "\(session.phrase) in the Hub window? Then press Connect there"
+        pendingCode = session.code
+        HubWindow.shared.ownConnectCode = { [weak self] in
+            MainActor.assumeIsolated { self?.pendingCode }
+        }
+        // One code, the email one (29 Sep, Robert: "it's confirming the same
+        // app"). In the Hub window the app recognises its own Connect page
+        // and presses Connect itself, so there is no phrase to compare. Only
+        // the browser fallback still asks for the comparison.
+        note = "sign in with the code from your email in the Hub window. This Mac connects itself"
         onChange?()
         Permissions.log("hub: pairing started, phrase \(session.phrase)")
         // In the app's own Hub window, not the default browser: the sign-in
@@ -58,7 +67,13 @@ final class HubConnect {
         // and the hub are one login from the first install (29 Sep, Robert:
         // "auth via tb works for both"). A browser is the fallback only for a
         // hub address the window does not show.
-        if !HubWindow.shared.show(session.url) { NSWorkspace.shared.open(session.url) }
+        if !HubWindow.shared.show(session.url) {
+            NSWorkspace.shared.open(session.url)
+            // Says what to DO, with the phrase first: "showing B12-C21. Approve
+            // it in the browser" sent Gary looking for somewhere to type it.
+            note = "\(session.phrase) in your browser? Then press Connect there"
+            onChange?()
+        }
 
         Task { [weak self] in
             let outcome = await pairing.collect(session)
@@ -69,6 +84,7 @@ final class HubConnect {
     private func finish(_ outcome: HubPairing.Outcome, base: URL) {
         inFlight = false
         phrase = nil
+        pendingCode = nil
         switch outcome {
         case let .connected(token, device):
             do {

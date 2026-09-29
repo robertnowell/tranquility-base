@@ -78,7 +78,7 @@ public enum CreditStanding: Sendable, Equatable {
         case .floored(.outOfCredits, _) where ownKey:
             return "starting credits used · your own keys carry on for summaries, hearing and speaking. Buying credits is coming"
         case .notOnCredits(connectAgain: false):
-            return "sign in to your hub and summaries run on us, ten dollars to start"
+            return "comes with your hub sign-in: summaries on us, ten dollars to start"
         case .notOnCredits(connectAgain: true), .floored(.connectAgain, _):
             return "sign in with your hub account and summaries run on credits"
         case .onCredits:
