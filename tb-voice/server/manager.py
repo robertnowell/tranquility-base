@@ -773,7 +773,7 @@ class Manager(FrameProcessor):
             if isinstance(message, dict):
                 _wire.take_reply(message)
         if isinstance(frame, InterruptionFrame):
-            self._interrupted()
+            await self._interrupted()
         if isinstance(frame, BotStartedSpeakingFrame):
             session.current().bot_voice["speaking"] = True  # the echo gate reads this
         if isinstance(frame, BotStoppedSpeakingFrame):
@@ -788,7 +788,7 @@ class Manager(FrameProcessor):
             # overrun from a lost frame from somebody else's stop.
             u, self._utterance = self._utterance, None
             await emit(None, "quiet", **({"id": u["id"], "chars": u["chars"], "voice": u["voice"],
-                                          "secs": round(time.monotonic() - u["at"], 1),
+                                          "took": round(time.monotonic() - u["at"], 1),
                                           **({"over": True} if u.get("over") else {})} if u else {}))
         if not isinstance(frame, LLMContextFrame):
             await self.push_frame(frame, direction)
@@ -825,14 +825,30 @@ class Manager(FrameProcessor):
             return
         self._enqueue(text, frame, direction)
 
-    def _interrupted(self):
+    async def _interrupted(self):
         """Talked over: the voice stops (Pipecat's own interruption, which only
         a client that cancels its echo lets through) and so does the turn it
         belonged to, so the rest of that turn is never said. Every turn start
         is an interruption frame; only one said over the manager's voice is a
-        barge-in."""
+        barge-in.
+
+        And it says so. Until 29 Sep a barge-in left no trace anywhere: the
+        turn was cut, the voice stopped, and the record went straight from
+        `speaking` to the next thing. "I can't see the interrupt event in the
+        logs" was exactly right -- there was none to see, so neither the
+        developer nor the panel could tell a line that was cut off from one
+        that finished. The panel needs that difference: a cut line must light
+        the rest of its words, because dim means NOT REACHED YET and nothing
+        more is coming.
+
+        It carries the line it cut, by the id `speaking` gave it, and how far
+        in the voice was."""
         if session.current().bot_voice.get("speaking"):
             self._turns.cut("talked over")
+            u = self._utterance or {}
+            await emit(self, "interrupted",
+                       **({"id": u["id"], "chars": u["chars"], "voice": u["voice"],
+                           "took": round(time.monotonic() - u["at"], 1)} if u else {}))
 
     def _enqueue(self, text, frame, direction):
         self.heard += 1

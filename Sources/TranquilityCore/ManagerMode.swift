@@ -22,6 +22,9 @@ public struct ManagerEvent: Codable, Equatable, Sendable {
         case speaking
         /// The manager's own voice stopped.
         case quiet
+        /// The developer talked over the manager: the line was cut where it
+        /// was, and the rest of it will never be said.
+        case interrupted
         /// A session took the stage.
         case stage
         /// The manager asks the app to play a cue by name.
@@ -59,6 +62,13 @@ public struct ManagerEvent: Codable, Equatable, Sendable {
     public var meaning: String?
     public var reason: String?
     public var secs: Int?
+    /// `quiet` and `interrupted`: how long that line's voice ran, in seconds
+    /// and fractions of one. NOT `secs`, which is whole seconds and belongs to
+    /// the session's own life (`idle`, `rotate`). A fraction decoded into an
+    /// Int fails the WHOLE event, and a `quiet` that does not decode is a card
+    /// left half lit for ever -- which is what shipped on 29 Sep for the hour
+    /// between the stop carrying a duration and this line existing.
+    public var took: Double?
     /// `spoke`: characters of `text` said so far.
     public var upTo: Int?
     /// `spoke`: when this word is MEANT to be heard, in seconds on the bot's
