@@ -192,6 +192,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// the first had already reserved the block. Two real sessions, real money,
     /// from one gesture.
     var managerStarting = false
+    /// The word clock for the line being spoken: the first word's own timestamp
+    /// and the moment it reached us. Every later word is painted that far after
+    /// it, so a burst of events becomes a line lighting up in time with the
+    /// voice. Cleared when a new line starts.
+    var spokenClock: (firstWordAt: Double, anchoredAt: Date)?
     var managerTask: Task<Void, Never>?
     var managerLastLine = "listening"
     /// Who the developer is talking to right now, carried under the orb until
