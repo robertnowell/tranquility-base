@@ -93,12 +93,18 @@ extension StatusHUD {
         /// the switch, because a switch that lies about why it did nothing is
         /// worse than one that does nothing.
         case notRevived(String)
+        /// A folder change on the grid, with the way back: "MOVED TO MIRAI ·
+        /// UNDO". It was a row at the top of the grid for one deploy, and every
+        /// row beneath jumped down to make room for it (29 Sep, "it moves all
+        /// the rows below it"). The top band has one notice at a time, and
+        /// this is one of them: a new receipt replaces it, never overlaps it.
+        case folderChange(String)
 
         /// Green is for a thing that landed. Reviving is in flight, and a
         /// refusal did not land at all.
         var landed: Bool {
             switch self {
-            case .sent, .queued, .revived: return true
+            case .sent, .queued, .revived, .folderChange: return true
             case .sending, .reviving, .alreadyAwake, .notRevived: return false
             }
         }
@@ -108,7 +114,7 @@ extension StatusHUD {
         var inFlight: Bool {
             switch self {
             case .sending, .reviving: return true
-            case .sent, .queued, .revived, .alreadyAwake, .notRevived: return false
+            case .sent, .queued, .revived, .alreadyAwake, .notRevived, .folderChange: return false
             }
         }
 
@@ -133,6 +139,7 @@ extension StatusHUD {
                     ? target.prefix(19).trimmingCharacters(in: .whitespaces) + "…"
                     : target
                 return "→ \(name.uppercased()) · SENDING"
+            case .folderChange(let what): return "✓ \(what.uppercased()) · UNDO"
             case .sent: return "✓ SENT"
             case .queued: return "✓ QUEUED · SENDS AFTER THIS TURN"
             }
@@ -167,6 +174,10 @@ extension StatusHUD {
             // right, which is the clean space. Pinned to that corner so a
             // resize keeps it there.
             chip.autoresizingMask = [.minXMargin, .minYMargin]
+            // A folder change's receipt is its own undo: a click on the chip
+            // puts the folders back while that notice is the one showing.
+            chip.addGestureRecognizer(NSClickGestureRecognizer(
+                target: self, action: #selector(undoDropTapped)))
             host.addSubview(chip)
             receiptChip = chip
         }
