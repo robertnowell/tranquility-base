@@ -26,11 +26,10 @@ to the grid rather than reversing anything.
    blue. A lamp turning blue drops to the bottom of its folder, never out of it.
    Read state still never moves a row.
 
-3. **A folder with a green or amber lamp rises to the top of the folders.**
-   Switch 1, "Rise to top" (recommended against; ruled for). Folders with a lit
-   ask order by their newest asking member; folders without one keep the order
-   the user dragged them into, below. Dragging a header sets that user order;
-   it cannot hold a folder above one that lights up.
+3. **Folders keep the order the user drags them into, and it is sticky.**
+   A lamp lighting never moves a folder; only the rows inside it move.
+   RE-RULED 29 Sep 2026, the same day, after using it on Dev: *"yes folders
+   orders are sticky."* See "Why rule 3 changed" below.
 
 4. **A collapsed folder shows one lamp and a count.** Switch 2, "Lamp and
    count". The header wears its most urgent member's lamp (green or amber, then
@@ -53,10 +52,12 @@ to the grid rather than reversing anything.
 8. **Past Agents stays one flat list.** Each row carries its folder's chip.
    Reviving an agent returns it to its folder if the folder still exists.
 
-## Why rule 3 went the way it did
+## Why rule 3 changed
 
-The alternative, folders that hold their place, was recommended on the
-adaptive-menu literature and on the 14 Sep ruling that a row which moves is hard
-to find twice. Robert tried both in the mockup and chose movement: a folder is
-a project, and a project with something waiting for you belongs at the top. The
-14 Sep ruling still governs rows: hearing a row does not move it.
+Rule 3 first said a folder with a green or amber lamp rises above the others,
+chosen on the mockup's switch against the recommendation to keep folders
+still. Used on Dev the same afternoon, it collided with the ask to "drag
+folders above and below other folders easily": a folder dragged above another
+snapped back the moment the other lit up, so the drag could not be trusted.
+The observed conflict, not an argument, is what reversed it. It also brings
+folders under the 14 Sep ruling that a row which moves is hard to find twice.
