@@ -179,6 +179,11 @@ extension StatusHUD {
         // Refused is not the same as swallowed: an idle panel still gets the
         // amber strip, which belongs to nobody in particular.
         let saidItAnyway = notice != nil
+        // The fixture leaves the panel with nothing adopted: see
+        // `forgetDrillAdoption`. Asserted, not assumed -- the whole failure
+        // was a cleanup nobody had noticed was missing.
+        forgetDrillAdoption()
+        let leftNothingBehind = lastAddressed == nil
         SelfTest.report("launchQuestion", [
             ("spinnerBeforeTheQuestion", spinnerFirst),
             ("spinnerDownAfterIt", spinnerDown),
@@ -188,6 +193,33 @@ extension StatusHUD {
             ("stillAdoptsItsAgent", stillAdoptsItsAgent),
             ("refusedWhenNoCardIsWaiting", refusedWithNoCard),
             ("stillSaysItOnTheStrip", saidItAnyway),
+            ("leavesNoFixtureAdopted", leftNothingBehind),
+        ])
+    }
+
+    /// A hands-free fault is about the account, so it wears nobody's name.
+    ///
+    /// 29 Sep, from a screenshot: "Hands-free could not reserve credit for a
+    /// session" came up titled `adopted`, with a GO TO AGENT door onto a
+    /// session id that has never existed. Two faults in one card -- the drill
+    /// above stops leaving the fixture, and this proves the card would be
+    /// right even if something real were on stage.
+    func handsFreeFaultDrill() {
+        showIdle(rows: [])
+        _ = showGreeting(line: "Starting.", label: "Landing page")
+        _ = bindGreeting(sessionId: "a-real-agent", pid: nil, label: "Landing page", cwd: nil)
+        let named = face.title == "Landing page" && currentTarget != nil
+        showHandsFreeFault("Hands-free reserves its first thirty minutes up front.")
+        let noTitle = face.title.isEmpty
+        let noDoor = currentTarget == nil
+        let saidIt = face.body.contains("thirty minutes")
+        showIdle(rows: [])
+        forgetDrillAdoption()
+        SelfTest.report("handsFreeFault", [
+            ("anAgentCardIsNamed", named),
+            ("theFaultCardIsNot", noTitle),
+            ("andOffersNoDoorToAnAgent", noDoor),
+            ("whileStillSayingWhatHappened", saidIt),
         ])
     }
 

@@ -125,6 +125,14 @@ public enum CreditStanding: Sendable, Equatable {
         }
     }
 
+    /// The balance as money, when the last check knew it; nil when it did not.
+    /// Added 29 Sep so a card can say the number instead of sending somebody
+    /// to go and look at it.
+    public var lastKnownBalance: String? {
+        if case let .good(micros, _) = self { return Self.dollars(micros) }
+        return nil
+    }
+
     static func dollars(_ micros: String) -> String {
         guard let value = Int64(micros) else { return "$?" }
         let cents = (value + 5_000) / 10_000
