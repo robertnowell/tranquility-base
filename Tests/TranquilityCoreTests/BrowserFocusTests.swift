@@ -100,11 +100,11 @@ final class BrowserFocusTests: XCTestCase {
         // this runs, so the tab it raises is stale by construction.
         let page = URL(fileURLWithPath: "/tmp/agents/abc/index.html")
         let script = BrowserFocus.script(for: page)
-        XCTAssertTrue(script.contains("reload tab t of window w"))
+        XCTAssertTrue(script.contains("reload tab t of theWindow"))
         // And the reload happens on the tab that MATCHED, after it has been
         // selected — not on whatever tab happened to be active.
-        let selected = script.range(of: "set active tab index of window w to t")
-        let reloaded = script.range(of: "reload tab t of window w")
+        let selected = script.range(of: "set active tab index of theWindow to t")
+        let reloaded = script.range(of: "reload tab t of theWindow")
         XCTAssertNotNil(selected)
         XCTAssertNotNil(reloaded)
         XCTAssertTrue(selected!.upperBound <= reloaded!.lowerBound)
@@ -125,7 +125,7 @@ final class BrowserFocusTests: XCTestCase {
     func testAnAppAddressReusesWhateverTabIsOnTheApp() {
         let script = BrowserFocus.navigateScript(to: door, within: app)
         XCTAssertTrue(script.contains("if u starts with \"https://hq.example.test/\""))
-        XCTAssertTrue(script.contains("set URL of tab t of window w to \"https://hq.example.test/open?session=abc&slug=plan\""))
+        XCTAssertTrue(script.contains("set URL of tab t of theWindow to \"https://hq.example.test/open?session=abc&slug=plan\""))
         XCTAssertFalse(script.contains("reload"), "the navigation is the reload")
         XCTAssertTrue(script.hasPrefix("if application \"Google Chrome\" is running"))
     }
@@ -142,12 +142,74 @@ final class BrowserFocusTests: XCTestCase {
         XCTAssertEqual(BrowserFocus.reveal(door, app: app, run: run), .focused)
         XCTAssertTrue(seen[0].contains("set URL of tab"))
         XCTAssertEqual(BrowserFocus.reveal(page, app: app, run: run), .focused)
-        XCTAssertTrue(seen[1].contains("reload tab t of window w"))
+        XCTAssertTrue(seen[1].contains("reload tab t of theWindow"))
         XCTAssertFalse(seen[1].contains("set URL of tab"))
     }
 
     func testNoAppTabFallsBack() {
         XCTAssertEqual(BrowserFocus.reveal(door, app: app) { _ in .success("false") }, .notFound)
         XCTAssertEqual(BrowserFocus.reveal(door, app: nil) { _ in .success("false") }, .notFound)
+    }
+}
+
+/// The scripts above are asserted as text; this runs them. The window bug of
+/// 29 Sep passed every string test in this file, because each line was right
+/// and only their order against a live window list was wrong. Opt-in, because
+/// it launches a browser: an isolated Chrome for Testing with its own profile,
+/// never the Chrome a person is using. TB_BROWSER_DRILL=<path to the .app>.
+final class BrowserFocusDrillTests: XCTestCase {
+    private let browserName = "Google Chrome for Testing"
+
+    private func tabs(_ run: (String) -> Result<String, ScriptError>) -> [String] {
+        let listing = """
+        tell application "\(browserName)"
+          set out to {}
+          repeat with w from 1 to (count of windows)
+            set end of out to (URL of tabs of window w) as text
+          end repeat
+          set AppleScript's text item delimiters to "|"
+          return out as text
+        end tell
+        """
+        guard case .success(let text) = run(listing) else { return [] }
+        return text.split(separator: "|").map(String.init)
+    }
+
+    func testTheMatchedWindowIsTheOneThatMoves() throws {
+        guard let app = ProcessInfo.processInfo.environment["TB_BROWSER_DRILL"] else {
+            throw XCTSkip("set TB_BROWSER_DRILL to a Chrome for Testing .app to run")
+        }
+        let profile = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".tb-browser-drill-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: profile) }
+        let browser = Process()
+        browser.executableURL = URL(fileURLWithPath: app).appendingPathComponent("Contents/MacOS/\(browserName)")
+        browser.arguments = ["--user-data-dir=\(profile.path)", "--no-first-run",
+                             "--no-default-browser-check", "data:text/html,HUB-old"]
+        try browser.run()
+        defer { _ = AppleScript.run(script: "tell application \"\(browserName)\" to quit") }
+        Thread.sleep(forTimeInterval: 4)
+        // The hub opened first, so the mail window is in front: window 1.
+        _ = AppleScript.run(script: """
+        tell application "\(browserName)"
+          make new window
+          set URL of active tab of window 1 to "data:text/html,MAIL-draft"
+        end tell
+        """)
+        Thread.sleep(forTimeInterval: 2)
+        XCTAssertEqual(tabs { AppleScript.run(script: $0) }.sorted(),
+                       ["data:text/html,HUB-old", "data:text/html,MAIL-draft"])
+
+        let script = BrowserFocus.walk(browser: browserName,
+                                       matching: "u starts with \"data:text/html,HUB\"",
+                                       acting: "set URL of tab t of theWindow to \"data:text/html,HUB-new\"")
+        guard case .success(let matched) = AppleScript.run(script: script) else {
+            return XCTFail("the walk failed to run")
+        }
+        XCTAssertEqual(matched.trimmingCharacters(in: .whitespacesAndNewlines), "true")
+        Thread.sleep(forTimeInterval: 1)
+        let after = tabs { AppleScript.run(script: $0) }.sorted()
+        XCTAssertEqual(after, ["data:text/html,HUB-new", "data:text/html,MAIL-draft"],
+                       "the mail tab must survive; the hub tab is the one sent")
     }
 }
