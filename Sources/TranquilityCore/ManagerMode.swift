@@ -101,15 +101,46 @@ public enum ManagerConfig {
 
     /// The `tbase` a hosted bot's door requests run: `manager.tbase` in
     /// `hq.json`, else the default checkout's debug build beside the app's own.
-    public static func tbasePath(config: URL = HubApp.configPath) -> String {
+    /// Where the app finds `tbase`, the helper it executes for every question
+    /// the manager asks about the fleet.
+    ///
+    /// **The bundled copy is the answer, and it was missing until 29 Sep.**
+    /// Before this the order was: a path in hq.json, else a hardcoded path
+    /// inside a source checkout. Both are a file somebody has to build by hand,
+    /// and nothing in any deploy builds it -- so a merged fix to `Sources/tbase`
+    /// passed CI, merged, installed, and did not run. Measured 28 Sep: the
+    /// binary the app was executing had been built on the 21st, seven days and
+    /// five shipped fixes earlier, and was still answering `status --json` with
+    /// 200 rows while the fixed source answered with 15.
+    ///
+    /// Worse for anyone who is not the developer: that fallback points into a
+    /// checkout of this repository. On a Mac without one there is no `tbase` at
+    /// all, and every fleet question the manager asks fails.
+    ///
+    /// So: the override first, because a developer pointing at a local build is
+    /// doing it deliberately and must keep winning. Then the copy inside the
+    /// app, which an install updates like everything else. The old checkout
+    /// path stays last, for a build running out of a checkout with no bundle
+    /// around it.
+    public static func tbasePath(config: URL = HubApp.configPath,
+                                 bundled: String? = Self.bundledTbase) -> String {
         if let data = try? Data(contentsOf: config),
            let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
            let manager = obj["manager"] as? [String: Any],
            let path = manager["tbase"] as? String, !path.isEmpty {
             return (path as NSString).expandingTildeInPath
         }
+        if let bundled { return bundled }
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         return "\(home)/Projects/voice-controlled-coding-agents/.build/arm64-apple-macosx/debug/tbase"
+    }
+
+    /// `tbase` as shipped inside the app, or nil when there is no bundle around
+    /// us -- a unit test, or the CLI itself asking.
+    public static var bundledTbase: String? {
+        guard let url = Bundle.main.url(forResource: "tbase", withExtension: nil),
+              FileManager.default.isExecutableFile(atPath: url.path) else { return nil }
+        return url.path
     }
 
     /// What HANDS-FREE would do if pressed.
