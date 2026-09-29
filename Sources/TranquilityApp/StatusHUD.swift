@@ -2449,7 +2449,8 @@ final class StatusHUD: NSObject {
     var namingFolders: Set<String> = []
     /// Whether a new folder asks the model for its name. Off in a drill.
     var nameFoldersWithModel = true
-    /// The last drop, for five seconds: what it said and the book before it.
+    /// The last drop, while its notice is up: what it said and the book
+    /// before it. The notice is the top band's receipt chip, never a row.
     var undoDrop: (text: String, before: ProjectBook, until: Date)?
     /// Every line the grid drew this paint, for hit-testing a drag.
     var gridLines: [(view: NSView, line: ProjectLayout.Line)] = []
@@ -3384,9 +3385,6 @@ final class StatusHUD: NSObject {
                 ceil(($0.aux as NSString)
                     .size(withAttributes: [.font: GridRowView.auxFont]).width)
             }.max() ?? 0)
-        if let undo = undoDrop, undo.until > Date() {
-            waitingRows.addArrangedSubview(undoLine(undo.text))
-        }
         let lines = ProjectLayout.lines(shown, book: book, origin: SessionLineage.lastKnownOrigin)
         for (index, line) in lines.enumerated() {
             let item: SessionRow

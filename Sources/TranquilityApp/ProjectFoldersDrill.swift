@@ -94,6 +94,8 @@ extension StatusHUD {
         // The drag: l1 rests on the middle of l2, the hold elapses, the drop
         // makes a folder named by the fallback (no model in a drill).
         var dragMadeFolder = false
+        var wholeRowIsTheTarget = false
+        var ghostDoesNotSnap = false
         var dropDidNotOpenACard = false
         if let source = gridLines.first(where: { $0.line.row?.id == "l1" })?.view,
            let target = gridLines.first(where: { $0.line.row?.id == "l2" })?.view,
@@ -112,6 +114,22 @@ extension StatusHUD {
                 gridDrag?.resting?.since = Date().addingTimeInterval(-1)
                 rowDragged("l1", from: source, phase: .moved, event: over)
                 let armed = gridDrag?.target == .makeFolder(with: "l2")
+                // Armed stays armed anywhere on the row, and the ghost stays
+                // where the pointer is when the hold's timer re-asks.
+                let nearEdge = target.convert(NSPoint(x: target.bounds.minX + 12,
+                                                      y: target.bounds.minY + 5), to: nil)
+                var stillArmed = false
+                var ghostStays = false
+                if let edge = event(.leftMouseDragged, nearEdge) {
+                    rowDragged("l1", from: source, phase: .moved, event: edge)
+                    let before = gridDrag?.ghost.frame.origin
+                    retarget()
+                    stillArmed = gridDrag?.target == .makeFolder(with: "l2")
+                    ghostStays = gridDrag?.ghost.frame.origin == before
+                    rowDragged("l1", from: source, phase: .moved, event: over)
+                }
+                wholeRowIsTheTarget = stillArmed
+                ghostDoesNotSnap = ghostStays
                 let stateBefore = state
                 rowDragged("l1", from: source, phase: .ended, event: over)
                 let made = store.current.folder(of: "l1")
@@ -120,8 +138,11 @@ extension StatusHUD {
                 dropDidNotOpenACard = state == stateBefore
             }
         }
-        let undoOffered = gridLines.isEmpty == false
-            && waitingRows.arrangedSubviews.contains { $0.identifier?.rawValue == "folder-undo" }
+        // The undo is the top band's one receipt, never a row that pushes the
+        // grid down.
+        let undoInTheTopBand = (panel?.isVisible != true
+                                || receiptChip?.stringValue.hasSuffix("· UNDO") == true)
+            && !waitingRows.arrangedSubviews.contains { $0.identifier?.rawValue == "folder-undo" }
 
         // Dragging the last agents out closes the folder.
         if let made = store.current.folder(of: "l1")?.id {
@@ -165,7 +186,9 @@ extension StatusHUD {
             ("abandonedDragLetsGo", abandonedDragLetsGo),
             ("dragMadeFolder", dragMadeFolder),
             ("dropDidNotOpenACard", dropDidNotOpenACard),
-            ("undoOffered", undoOffered),
+            ("undoInTheTopBand", undoInTheTopBand),
+            ("wholeRowIsTheTarget", wholeRowIsTheTarget),
+            ("ghostDoesNotSnap", ghostDoesNotSnap),
             ("lastOutClosesIt", lastOutClosesIt),
             ("renameTakesAndReturnsKeys", renameTakesAndReturnsKeys),
             ("reviveGoesHome", reviveGoesHome),
@@ -206,7 +229,7 @@ extension StatusHUD {
             if name == "folders-collapsed" { $0.setCollapsed("tb", true) }
         }
         showIdle(rows: rows)
-        guard name == "folders-drag",
+        guard name == "folders-drag" || name == "folders-undo",
               let source = gridLines.first(where: { $0.line.row?.id == "ee3ef1b7" })?.view,
               let target = gridLines.first(where: { $0.line.row?.id == "5c0ffee1" })?.view,
               let window = source.window else { return }
@@ -222,5 +245,8 @@ extension StatusHUD {
         rowDragged("ee3ef1b7", from: source, phase: .moved, event: move)
         gridDrag?.resting?.since = Date().addingTimeInterval(-1)
         rowDragged("ee3ef1b7", from: source, phase: .moved, event: move)
+        if name == "folders-undo" {
+            rowDragged("ee3ef1b7", from: source, phase: .ended, event: move)
+        }
     }
 }
