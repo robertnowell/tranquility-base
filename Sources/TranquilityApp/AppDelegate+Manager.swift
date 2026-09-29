@@ -142,11 +142,11 @@ extension AppDelegate {
             // with a peer connection and its relay; the dev shim above is the
             // same transport with the session bought differently.
             if let credits = managedCredits { startWebRTCManager(.managed(credits)); return }
-            hud.showResult("Hands-free could not reach your account.")
+            hud.showHandsFreeFault("Hands-free could not reach your account.")
             return
         case .unset:
             // Nothing to start: not signed in, and no dev shim.
-            hud.showResult("Hands-free is not set up on this Mac: sign in to use it.")
+            hud.showHandsFreeFault("Hands-free is not set up on this Mac: sign in to use it.")
             Permissions.log("manager: not configured (not signed in, no manager.webrtc)")
             return
         }
@@ -184,8 +184,19 @@ extension AppDelegate {
         // holding the reservation. Telling somebody their money is gone when
         // it is not sends them to a billing page to fix a bug in the panel.
         case "insufficient_credit":
-            return "Hands-free could not reserve credit for a session. "
-                + "Check the balance in Setup."
+            // Say the number. "Check the balance in Setup" sent Robert to a
+            // line reading $2.21 on 29 Sep, which looks like plenty until you
+            // know a session reserves its whole first block up front -- $2.55
+            // at the price of the day. A message that points at a number
+            // without saying what the number has to beat is a dead end.
+            //
+            // The cause is still not asserted, for the 27 Sep reason above:
+            // this says what the balance was and what a session takes, and
+            // leaves the person to see which of the two explanations fits.
+            let held = CreditStanding.current.lastKnownBalance
+            return "Hands-free reserves its first thirty minutes up front"
+                + (held.map { ", and your balance was \($0) at the last check" } ?? "")
+                + ". Top up, or try again in a minute if a session just ended."
         case "service_unavailable", "not_connected": return "Hands-free is unavailable right now."
         default: return "Hands-free could not start a session (\(code))."
         }
@@ -324,7 +335,7 @@ extension AppDelegate {
                     label = lease.id.uuidString.lowercased()
                 }
             } catch {
-                self.hud.showResult(Self.managerStartMessage(for: error))
+                self.hud.showHandsFreeFault(Self.managerStartMessage(for: error))
                 Permissions.log("manager: webrtc start failed \(error)")
                 self.hud.setManager(on: false)
                 return
@@ -347,7 +358,7 @@ extension AppDelegate {
                 }
             }
             do { try peer.start() } catch {
-                self.hud.showResult("Hands-free could not open the microphone: \(error.localizedDescription)")
+                self.hud.showHandsFreeFault("Hands-free could not open the microphone: \(error.localizedDescription)")
                 Permissions.log("manager: webrtc peer failed \(error)")
                 self.hud.setManager(on: false)
                 return
@@ -392,7 +403,7 @@ extension AppDelegate {
             // giving up early is what the person actually feels.
             guard self.managerReconnects <= 5 else {
                 Permissions.log("manager: webrtc reconnect gave up after 5 tries")
-                self.hud.showResult("Hands-free lost its connection three times; press the chord to try again.")
+                self.hud.showHandsFreeFault("Hands-free lost its connection three times; press the chord to try again.")
                 self.managerReconnects = 0
                 self.hud.setManager(on: false)
                 self.rebuildMenu()

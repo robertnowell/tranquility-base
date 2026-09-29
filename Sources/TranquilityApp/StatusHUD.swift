@@ -454,7 +454,7 @@ final class StatusHUD: NSObject {
     /// wait already served. That is right, and it left the failure card painting
     /// from idle with no target: no title, and no door, on a card whose whole
     /// message was "check the tab" (18 Aug).
-    private var lastAddressed: (sessionId: String, pid: Int?, label: String)?
+    var lastAddressed: (sessionId: String, pid: Int?, label: String)?
 
     /// True between a greeting card painting and its session binding to it.
     ///
@@ -1723,6 +1723,43 @@ final class StatusHUD: NSObject {
             face = Face(title: currentTarget?.label ?? "", body: message)
         }
         render()
+    }
+
+    /// Hands-free could not start, or could not carry on. Same shape as
+    /// `showDeviceFault` and for the same reason: no title, because it is
+    /// about the ACCOUNT or the mode, not about any agent.
+    ///
+    /// Earned 29 Sep. A credit refusal took the ordinary `showResult` path,
+    /// which names the session a failure is about and falls back to
+    /// `lastAddressed` when the panel has gone home. `lastAddressed` was a
+    /// launch drill's fixture, so the card came up titled "adopted" with a GO
+    /// TO AGENT door onto `question-drill`, a session that has never existed.
+    /// The drill's litter is fixed separately; this is the half that would
+    /// still be wrong with a real agent there, because "hands-free could not
+    /// reserve credit" is not that agent's fault and its door goes nowhere
+    /// useful.
+    func showHandsFreeFault(_ message: String) {
+        Failures.notice(message, session: nil)
+        guard transition(to: .result, because: "hands-free could not start") else { return }
+        awaitingGreetingBinding = false
+        currentTarget = nil
+        currentEventId = nil
+        face = Face(body: message)
+        render()
+    }
+
+    /// A drill's fixture must not outlive the drill.
+    ///
+    /// `adoptTarget` records `lastAddressed`, which `showResult` reaches for
+    /// hours later when the panel has gone home and a failure names no
+    /// session. A drill that adopts a fake agent therefore leaves a name and a
+    /// door behind for the next real failure to wear (29 Sep, "adopted").
+    /// Drills run in the shipped panel on every launch, so cleaning up is not
+    /// tidiness, it is the difference between a fixture and a lie.
+    func forgetDrillAdoption() {
+        lastAddressed = nil
+        currentTarget = nil
+        currentEventId = nil
     }
 
     /// The microphone is open and nothing is arriving from it — the third tier
