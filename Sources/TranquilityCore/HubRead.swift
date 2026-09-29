@@ -90,6 +90,19 @@ public enum HubRead {
         token: String? = Secrets.read(.hubToken),
         send: (URLRequest) async throws -> (Data, URLResponse) = { try await NoRedirect.send($0) }
     ) async -> Result<String, Failure> {
+        await fetchLanding(arg, base: base, token: token, send: send).map(\.html)
+    }
+
+    /// `fetch`, and the address the chain ended on. The Hub window needs the
+    /// landing address to tell a document (`/d/<id>/raw`) from anything else
+    /// a redirect can end at, such as an agent's page for a slug not yet
+    /// mirrored.
+    public static func fetchLanding(
+        _ arg: String,
+        base: URL? = HubApp.baseURL,
+        token: String? = Secrets.read(.hubToken),
+        send: (URLRequest) async throws -> (Data, URLResponse) = { try await NoRedirect.send($0) }
+    ) async -> Result<(html: String, landed: URL), Failure> {
         guard let base, let token, !token.isEmpty else { return .failure(.notConnected) }
         guard var url = resolve(arg, base: base) else { return .failure(.notTheHub(arg)) }
         for _ in 0..<maxHops {
@@ -110,7 +123,7 @@ public enum HubRead {
                 continue
             }
             guard (200..<300).contains(status) else { return .failure(.http(status)) }
-            return .success(String(decoding: data, as: UTF8.self))
+            return .success((String(decoding: data, as: UTF8.self), url))
         }
         return .failure(.http(310))
     }
