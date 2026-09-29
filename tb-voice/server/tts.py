@@ -53,12 +53,28 @@ class SpokenTTSService(ElevenLabsTTSService):
         """
         if isinstance(frame, AggregatedTextProgressFrame):
             from events import emit
-            # `upTo` and nothing else. The card already holds the line -- the
-            # highlight is a character count into text the panel painted when
-            # the `speaking` event arrived -- so sending the sentence again with
-            # every word is the same paragraph on the wire eight times for an
-            # eight-word line, and the viewer printed all eight (27 Sep).
-            await emit(None, "spoke", upTo=len(frame.accumulated_text))
+            # `upTo` and WHEN, and nothing else.
+            #
+            # The card already holds the line, so sending the sentence again
+            # with every word put the same paragraph on the wire eight times for
+            # an eight-word line and the viewer printed all eight (27 Sep).
+            #
+            # `at` is the fix for the other half of that, reported 28 Sep: "the
+            # speaking each word highlighting doesn't work, it all flashes in at
+            # once". ElevenLabs returns the whole utterance's alignment with the
+            # audio, so every progress frame arrives in the same tick -- eight
+            # events at one timestamp, while the voice went on for another three
+            # seconds. Painting them as they arrive lights the whole line
+            # instantly and then waits.
+            #
+            # Pipecat stamps each frame with a presentation timestamp
+            # (`Frame.pts`, nanoseconds, set in `_build_progress_frame`), which
+            # is when this word is MEANT to be heard. Sent as seconds, the panel
+            # can schedule against it -- which is what the local synthesiser's
+            # own callbacks always gave it (`11labs: onWord upTo=2 t=0.104`) and
+            # what moving the speaking to the bot took away.
+            at = (frame.pts / 1_000_000_000) if frame.pts is not None else None
+            await emit(None, "spoke", upTo=len(frame.accumulated_text), at=at)
         await super().push_frame(frame, direction)
 
     async def run_tts(self, text: str, context_id: str):
