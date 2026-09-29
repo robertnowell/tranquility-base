@@ -243,13 +243,27 @@ extension Coordinator {
                                  provider: String = "typed") async throws -> ReplyOutcome {
         let typed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let target = try store.allKnownSessions().first(where: { $0.sessionId == sessionId })
-        else { return .noTarget }
+        else {
+            // The message dies here, and until 29 Sep it died without a trace:
+            // the store's first record of a reply is made a few lines below, so
+            // a target the store cannot resolve -- exited, filed, an id from a
+            // stale card -- took everything typed with it. The caller then
+            // logged "nothing typed and nothing staged", which is true of a
+            // different failure and actively misleading about this one.
+            //
+            // The send still cannot happen; there is nothing to send it to. But
+            // the words are kept where they can be got back.
+            UnsentText.keep(typed, for: sessionId, because: "the session is not one the store knows")
+            return .noTarget
+        }
         let carrying: Bool = {
             switch tray {
             case .session: return !attachments.staged(for: target.sessionId).isEmpty
             case .developer: return attachments.hasAnythingStaged
             }
         }()
+        // Nothing typed and nothing staged is not a loss: there is nothing to
+        // keep. This is the case the caller's log line was written for.
         guard !typed.isEmpty || carrying else { return .noTarget }
         var utterance = Utterance(id: UUID().uuidString,
                                   eventId: try store.eventId(forRowid: target.latestId),

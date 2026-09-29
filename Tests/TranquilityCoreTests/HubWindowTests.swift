@@ -19,11 +19,19 @@ final class HubWindowTests: XCTestCase {
         XCTAssertTrue(h.isHub(URL(string: "https://hq.tranquilitybase.dev/connect?code=x&device=y")!))
     }
 
-    /// "Open Image in New Window" on an image the page drew itself (29 Sep).
-    func testAnImageThePageDrewOpensHereButADataPageDoesNot() {
-        let h = hub()
-        XCTAssertEqual(h.route(URL(string: "data:image/jpeg;base64,/9j/4AAQ")!, mainFrame: true, clicked: false), .allow)
-        XCTAssertEqual(h.route(URL(string: "data:text/html,<h1>x</h1>")!, mainFrame: true, clicked: false), .cancel)
+    /// "Open Image in New Window" on an image the page carries inline (29 Sep):
+    /// the app decodes it; a data: page is never loaded.
+    func testAnInlineImageIsDecodedHereAndADataPageIsNotLoaded() {
+        let png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+        let image = HubWindow.inlineImage(URL(string: "data:image/png;base64,\(png)")!)
+        XCTAssertEqual(image?.size.width, 1)
+        XCTAssertNil(HubWindow.inlineImage(URL(string: "data:text/html;base64,PGgxPng8L2gxPg==")!))
+        XCTAssertEqual(hub().route(URL(string: "data:text/html,<h1>x</h1>")!, mainFrame: true, clicked: false), .cancel)
+    }
+
+    func testTheLogNeverCarriesASignInTicket() {
+        let d = HubWindow.describe(URL(string: "https://hq.example.test/sign-in?__clerk_ticket=secret")!)
+        XCTAssertEqual(d, "https://hq.example.test/sign-in")
     }
 
     /// One sign-in (29 Sep): the app follows the hub window's session.
@@ -121,5 +129,25 @@ final class HubWindowLiveTests: XCTestCase {
             let png = NSBitmapImageRep(data: image.tiffRepresentation!)!.representation(using: .png, properties: [:])!
             try png.write(to: URL(fileURLWithPath: path))
         }
+    }
+}
+
+final class HubDoorLinkTests: XCTestCase {
+    func testTheHubLinkCarriesItsAddress() {
+        let page = "https://hq.example.test/open?session=abc&slug=plan"
+        let link = URL(string: "tranquilitybase://hub?url=" + page.addingPercentEncoding(withAllowedCharacters: .alphanumerics)!)!
+        guard case let .hub(url) = DeepLink.parse(link) else { return XCTFail("not a hub link") }
+        XCTAssertEqual(url?.absoluteString, page)
+        guard case let .hub(none) = DeepLink.parse(URL(string: "tranquilitybase://hub")!) else { return XCTFail() }
+        XCTAssertNil(none)
+    }
+
+    @MainActor
+    func testTheMarkerNamesTheBundleThatWroteIt() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("hq/hub-window")
+        HubWindow.announce(bundle: URL(fileURLWithPath: "/Applications/Tranquility Base.app"), to: file)
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), "/Applications/Tranquility Base.app")
     }
 }
