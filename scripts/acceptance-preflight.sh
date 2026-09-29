@@ -11,6 +11,11 @@
 #     adopts into the Keychain the first time it sees it
 #   - the provider keys, which would let a "managed" run quietly spend on BYOK
 #     and prove nothing about credits at all
+#   - the Hub window's cookies. Since #681 the web hub runs inside the app in a
+#     WKWebView on the DEFAULT website data store, and since #683 connecting a
+#     Mac happens in that window -- so a signed-in hub session now persists in
+#     ~/Library/WebKit/<bundle id>/ and survives quitting the app. It is a
+#     third door to being somebody, and it did not exist when this was written.
 #
 # Without this, a run that looks clean exercises the owner's own account and
 # reports a pass. That is the worst outcome available: not a failure, a false
@@ -30,6 +35,12 @@ set -uo pipefail
 SERVICE="voice-dispatch"
 LEGACY="$HOME/Library/Application Support/hq/token"
 SUPPORT="${VOICE_DISPATCH_SUPPORT_DIR:-$HOME/Library/Application Support/voice-dispatch}"
+# Every build is its own bundle id, and every bundle id is its own cookie jar.
+WEBKIT_STORES=(
+  "$HOME/Library/WebKit/com.robertnowell.voice-dispatch"
+  "$HOME/Library/WebKit/com.robertnowell.voice-dispatch.dev"
+  "$HOME/Library/WebKit/com.robertnowell.voice-dispatch-test"
+)
 HQ_JSON="$HOME/.claude/hq.json"
 STASH="$HOME/.tranquility-acceptance-stash/$(date -u +%Y%m%dT%H%M%SZ)"
 IDENTITY_KEYS=(hub-token device-key)
@@ -51,6 +62,9 @@ if [[ "${1:-}" == "--restore" ]]; then
     case "$name" in
       hq-token) mkdir -p "$(dirname "$LEGACY")"; mv "$f" "$LEGACY"; echo "  restored $LEGACY" ;;
       support)  mv "$f" "$SUPPORT"; echo "  restored $SUPPORT" ;;
+      webkit)   for w in "$f"/*; do [[ -e "$w" ]] || continue;
+                  mv "$w" "$HOME/Library/WebKit/$(basename "$w")"; echo "  restored WebKit $(basename "$w")"; done
+                rmdir "$f" 2>/dev/null ;;
       *)        security add-generic-password -U -s "$SERVICE" -a "$name" -w "$(cat "$f")" \
                   && rm -f "$f" && echo "  restored keychain $name" ;;
     esac
@@ -91,6 +105,19 @@ if [[ -s "$LEGACY" ]]; then
 else
   note "~/Library/Application Support/hq/token" "absent"
 fi
+
+for store in "${WEBKIT_STORES[@]}"; do
+  if [[ -d "$store" ]]; then
+    found+=("webkit:$(basename "$store")")
+    note "$(basename "$store") cookies" "PRESENT"
+    if (( stash )); then
+      mkdir -p "$STASH/webkit"
+      mv "$store" "$STASH/webkit/$(basename "$store")" && note "  -> stashed" "moved aside"
+    fi
+  else
+    note "$(basename "$store") cookies" "absent"
+  fi
+done
 
 if [[ -e "$SUPPORT" ]]; then
   found+=("dir:support")
