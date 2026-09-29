@@ -11,6 +11,8 @@ extension AppDelegate {
 
     /// Left-click opens the grid; right-click opens the menu. The grid is the
     /// interface, the menu is the toolbox.
+    @objc func hubTapped() { HubWindow.shared.showHub() }
+
     @objc func revealFailureLog() { Diagnostics.revealFailureLog() }
 
     @objc func toggleFailureReports() {
@@ -100,6 +102,17 @@ extension AppDelegate {
         icon?.isTemplate = true
         newSession.image = icon
         menu.addItem(newSession)
+
+        // The hub, in its own window (hf-o8t, 29 Sep): every page every agent
+        // wrote, without a browser tab. Only when this Mac has a hub.
+        if HubApp.baseURL != nil {
+            let hub = NSMenuItem(title: "Hub", action: #selector(hubTapped), keyEquivalent: "")
+            hub.target = self
+            let hubIcon = NSImage(systemSymbolName: "sidebar.left", accessibilityDescription: nil)
+            hubIcon?.isTemplate = true
+            hub.image = hubIcon
+            menu.addItem(hub)
+        }
 
         // Manager mode (19 Sep): the hands-free manager, which
         // listens all day and speaks only when addressed. A checkmark, not a

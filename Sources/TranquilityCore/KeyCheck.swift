@@ -121,7 +121,7 @@ public enum KeyCheck {
         case .hubToken:
             // The hub lists this Mac's own devices: read-only, tenant-scoped,
             // and a 401 is exactly "this token is not yours any more".
-            let base = HubApp.baseURL ?? URL(string: "https://hq.tranquilitybase.dev")!
+            let base = HubApp.hub
             request = URLRequest(url: base.appendingPathComponent("api/devices"))
             request.setValue("Bearer " + value, forHTTPHeaderField: "Authorization")
         case .anthropicAPIKey:

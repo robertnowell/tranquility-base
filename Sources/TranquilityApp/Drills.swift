@@ -3164,3 +3164,94 @@ extension StatusHUD {
         setManager(on: wasOn)
     }
 }
+
+extension StatusHUD {
+
+    /// A dropped keystroke is written down before it is lost (29 Sep 2026).
+    ///
+    /// Earned by a typed message that never reached its agent and could not be
+    /// reconstructed from anything: not the store, whose first record is made
+    /// by `submitTypedReply` well past the point where these die, and not the
+    /// log, which recorded `paste: key 11` — a keycode, not a character.
+    ///
+    /// This drills the recording, not the dropping. The panel still cannot
+    /// deliver a key meant for another window; what it can do is make sure the
+    /// character survives the attempt.
+    func droppedInputDrill() {
+        let before = DroppedInput.all().count
+        DroppedInput.record("hello", keyCode: 4, responder: "SelfTest")
+        DroppedInput.record(nil, keyCode: 123, responder: "SelfTest")   // an arrow
+        let after = DroppedInput.all()
+
+        let mine = after.suffix(2)
+        let text = mine.first
+        let arrow = mine.last
+
+        SelfTest.report("droppedInput", [
+            ("bothWereRecorded", after.count == before + 2),
+            // The whole point: the CHARACTER, not the keycode. A keycode cannot
+            // be read back as text and cannot be pasted.
+            ("theCharactersSurvive", text?.characters == "hello"),
+            ("withTheKeyCodeBesideThem", text?.keyCode == 4),
+            // A key that types nothing is still noted: a run of them is the
+            // shape of somebody navigating a field that is not listening.
+            ("aKeyThatTypesNothingIsStillNoted",
+             arrow?.keyCode == 123 && arrow?.characters.isEmpty == true),
+            // Appended, never rewritten — a second loss must not cost the first.
+            ("earlierLossesAreNotOverwritten", after.count >= before + 2),
+            ("itSurvivesTheProcess", FileManager.default.fileExists(atPath: DroppedInput.url.path)),
+        ])
+    }
+}
+
+extension StatusHUD {
+
+    /// Which keys open the typed line, and which are still somebody else's
+    /// (29 Sep 2026).
+    ///
+    /// The panel used to throw away every key that arrived with no editor
+    /// focused. That is right for a key the card has no use for and wrong for
+    /// somebody typing a message, which is how a typed line went missing with
+    /// no record anywhere. A printable key now gives the typed line the
+    /// keyboard and is delivered into it.
+    ///
+    /// The boundary is what this drills, because it is the part that can do
+    /// harm: opening an editor on a stray ⌘Q, or on a Return that would then
+    /// submit a message nobody wrote.
+    func typingOpensTheLineDrill() {
+        func key(_ chars: String, _ code: UInt16, _ flags: NSEvent.ModifierFlags = []) -> NSEvent? {
+            NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags,
+                             timestamp: 0, windowNumber: 0, context: nil,
+                             characters: chars, charactersIgnoringModifiers: chars,
+                             isARepeat: false, keyCode: code)
+        }
+        func types(_ e: NSEvent?) -> Bool { e.map { ConsolePanel.wouldType($0) } ?? false }
+
+        let arrowLeft = String(UnicodeScalar(0xF702)!)   // NSLeftArrowFunctionKey
+        let f5 = String(UnicodeScalar(0xF708)!)
+
+        SelfTest.report("typingOpensTheLine", [
+            // Typing, in any language: the test is the character, never a
+            // keycode, because a keycode list is a layout assumption.
+            ("aLetterTypes", types(key("a", 0))),
+            ("aSpaceTypes", types(key(" ", 49))),
+            ("punctuationTypes", types(key("?", 44))),
+            ("anAccentedLetterTypes", types(key("é", 14))),
+            ("aNonLatinLetterTypes", types(key("字", 0))),
+            // Not typing: these would either steal a shortcut or invent a
+            // message out of an empty field.
+            ("returnDoesNot", !types(key("\r", 36))),
+            ("escapeDoesNot", !types(key("\u{1B}", 53))),
+            ("tabDoesNot", !types(key("\t", 48))),
+            ("anArrowDoesNot", !types(key(arrowLeft, 123))),
+            ("aFunctionKeyDoesNot", !types(key(f5, 96))),
+            // Somebody else's shortcut, whatever letter it carries.
+            ("commandQDoesNot", !types(key("q", 12, .command))),
+            ("controlCDoesNot", !types(key("c", 8, .control))),
+            // Shift and Option ARE typing: they are how you reach capitals and
+            // half the characters on a European keyboard.
+            ("shiftedLetterTypes", types(key("A", 0, .shift))),
+            ("optionedCharacterTypes", types(key("ø", 37, .option))),
+        ])
+    }
+}
