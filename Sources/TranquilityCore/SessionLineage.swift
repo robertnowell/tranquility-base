@@ -131,8 +131,22 @@ public enum SessionLineage {
         var map = scan()
         for (child, parent) in CodexLineage.scan() { map[child] = parent }
         cached = (Date(), map)
+        snapshotLock.lock(); snapshot = map; snapshotLock.unlock()
         return map
     }
+
+    /// The map as the last scan left it, without scanning and without waiting
+    /// on one in progress. For the main actor: the grid asks which folder a
+    /// row belongs to on every repaint, and `current()` can hold its lock for
+    /// a whole transcript walk. Empty until the first scan, which the grid's
+    /// own assembly performs off-main every few seconds.
+    public static func lastKnown() -> Map {
+        snapshotLock.lock(); defer { snapshotLock.unlock() }
+        return snapshot
+    }
+    public static func lastKnownOrigin(of id: String) -> String { origin(of: id, in: lastKnown()) }
+    private static let snapshotLock = NSLock()
+    nonisolated(unsafe) private static var snapshot: Map = [:]
 
     /// Where a conversation began. Follows the chain back; a loop, which the
     /// harness should never write, stops at the first repeat rather than
