@@ -50,6 +50,8 @@ public final class HubWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, 
     private(set) var hubUser: String??
 
     public private(set) var window: NSWindow?
+    /// The last address this window was asked to show.
+    public private(set) var lastShown: URL?
     public private(set) var webView: WKWebView?
     private let base: () -> URL?
     private var titleWatch: NSKeyValueObservation?
@@ -83,9 +85,26 @@ public final class HubWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, 
         }
         log("hub window: showing \(Self.describe(url))")
         let web = make()
+        lastShown = url
         web.load(URLRequest(url: url))
         present()
         return true
+    }
+
+    /// A page an agent reported on its own, not one the person asked for.
+    /// Ruled 29 Sep (Robert): with the Hub window open, do nothing, neither
+    /// focus it nor move it off the page being read; the toast and the
+    /// sidebar's live order already say a report arrived. With no window,
+    /// open it on the report. True when handled here (including left alone);
+    /// false for an address that is not the hub, which the caller sends on.
+    @discardableResult
+    public func offer(_ url: URL) -> Bool {
+        guard isHub(url) else { return false }
+        if let window, window.isVisible {
+            log("hub window: open already; a report \(Self.describe(url)) arrived and was left for the sidebar")
+            return true
+        }
+        return show(url)
     }
 
     /// Open the window on the hub's home, or on whatever it last showed.
