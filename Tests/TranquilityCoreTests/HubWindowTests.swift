@@ -19,6 +19,40 @@ final class HubWindowTests: XCTestCase {
         XCTAssertTrue(h.isHub(URL(string: "https://hq.tranquilitybase.dev/connect?code=x&device=y")!))
     }
 
+    /// "Open Image in New Window" on an image the page drew itself (29 Sep).
+    func testAnImageThePageDrewOpensHereButADataPageDoesNot() {
+        let h = hub()
+        XCTAssertEqual(h.route(URL(string: "data:image/jpeg;base64,/9j/4AAQ")!, mainFrame: true, clicked: false), .allow)
+        XCTAssertEqual(h.route(URL(string: "data:text/html,<h1>x</h1>")!, mainFrame: true, clicked: false), .cancel)
+    }
+
+    /// One sign-in (29 Sep): the app follows the hub window's session.
+    func testSigningOutInTheHubSignsTheAppOutOnceAndAFirstLoadDoesNot() {
+        let h = hub()
+        var outs = 0, ins: [String] = []
+        h.onSignedOut = { outs += 1 }
+        h.onSignedIn = { ins.append($0) }
+        h.hubSaid(user: nil)            // opened on the sign-in page: not a sign-out
+        XCTAssertEqual(outs, 0)
+        h.hubSaid(user: "user_1")       // signed in here
+        XCTAssertEqual(ins, ["user_1"])
+        h.hubSaid(user: "user_1")       // the next page says the same: nothing
+        XCTAssertEqual(ins, ["user_1"])
+        h.hubSaid(user: nil)            // signed out
+        h.hubSaid(user: nil)            // and the sign-in page it lands on
+        XCTAssertEqual(outs, 1)
+    }
+
+    func testAWindowThatOpensSignedInIsASignInNotASignOut() {
+        let h = hub()
+        var outs = 0, ins = 0
+        h.onSignedOut = { outs += 1 }
+        h.onSignedIn = { _ in ins += 1 }
+        h.hubSaid(user: "user_1")
+        XCTAssertEqual(outs, 0)
+        XCTAssertEqual(ins, 1)
+    }
+
     func testTheHubAndItsOwnSubdomainsAreTheHub() {
         let h = hub()
         XCTAssertTrue(h.isHub(URL(string: "https://hq.example.test/d/x")!))
