@@ -211,11 +211,38 @@ public enum Secrets {
         do {
             let data = try Data(contentsOf: fileURL)
             let dict = try JSONDecoder().decode([String: String].self, from: data)
-            Secrets.trace?("read \(fileURL.path) -> keys \(dict.keys.sorted())")
+            readLog.note("read \(fileURL.path) -> keys \(dict.keys.sorted())")
             return dict
         } catch {
-            Secrets.trace?("read failed at \(fileURL.path): \(error)")
+            readLog.note("read failed at \(fileURL.path): \(error)")
             return [:]
+        }
+    }
+
+    /// A read is logged when its outcome changes, not every time it happens.
+    ///
+    /// The hub token is read uncached on purpose (a re-paired Mac must pick up
+    /// the new one) and a missing key is retried on every call, so the panel
+    /// reads this file about twice a second. Every read was traced, and on
+    /// 28 Sep that was 757 identical lines in six and a half minutes, burying
+    /// every other line in app.log. The trace exists so a failed read explains
+    /// itself; the first failure, a recovery, and a change in the key set all
+    /// still print, and a repeat of the last outcome does not.
+    static let readLog = ChangeLog()
+
+    public final class ChangeLog: @unchecked Sendable {
+        public init() {}
+        private var last: String?
+        private let lock = NSLock()
+        /// Returns true when the line was new and went to the trace.
+        @discardableResult
+        public func note(_ line: String, to trace: ((String) -> Void)? = nil) -> Bool {
+            let fresh: Bool = lock.withLock {
+                if last == line { return false }
+                last = line; return true
+            }
+            if fresh { (trace ?? Secrets.trace)?(line) }
+            return fresh
         }
     }
 
