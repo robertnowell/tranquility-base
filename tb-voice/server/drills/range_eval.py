@@ -140,9 +140,13 @@ CASES = [
      lambda a: has(a, "ten dollar") or has(a, "$10") or has(a, "10 dollar")),
     ("answer", "Did I tell the landing agent to drop the mint colours?", None, lambda a: has(a, "mint")),
     ("answer", "What did I say about the database migration?", None,
+     # "You haven't said anything about a database migration" is the right
+     # answer and scored WRONG until 29 Sep, which is one in every five runs of
+     # this case reported as a failure that never happened.
      lambda a: any(p in (a or "").lower() for p in ("does not say", "doesn't say", "didn't", "did not", "no record",
                                                      "nothing", "not mention", "never", "does not contain",
-                                                     "doesn't contain", "does not show", "does not settle", "no mention"))),
+                                                     "doesn't contain", "does not show", "does not settle", "no mention",
+                                                     "haven't said", "have not said", "hasn't said"))),
     ("send", "Send what I said about the landing page to the landing agent.", MAIL,
      lambda g: g.get("act") == "send" and g.get("to") == SITE["sessionId"] and has(g.get("text"), "hero")
      and not has(g.get("text"), "pricing") and not has(g.get("text"), "hackathon")),
