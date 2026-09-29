@@ -146,6 +146,7 @@ extension AppDelegate {
                     hud.showReceipt(.sent)
                     lastStatusLine = "sent to \(label)"
                     Permissions.log("send: confirmed to \(label)")
+                    tellManagerStage(session: sessionId, name: label, goal: nil, via: "reply")
                     if let dispatchedPid {
                         hud.rebindLivePid(dispatchedPid, sessionId: sessionId)
                     }

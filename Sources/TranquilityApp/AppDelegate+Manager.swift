@@ -108,6 +108,18 @@ extension AppDelegate {
 
     var managerIsOn: Bool { managerTransport != nil || managerPeer != nil || managerStarting }
 
+    /// Tell the hands-free manager who is in focus now (hf-16, "follow", ruled
+    /// 27 Sep). A shortcut acts at once, as it always has; the manager is told
+    /// after, so its "it" is the agent the panel just played or replied to.
+    /// Before this, ⌃⌥ moved the panel on and the manager's stage stayed where
+    /// it was, and "send that to it" could mean the agent before.
+    func tellManagerStage(session: String, name: String?, goal: String?, via: String) {
+        guard let peer = managerPeer else { return }
+        peer.send(ManagerDataChannel.stamped(
+            ManagerDataChannel.stageEvent(session: session, name: name, goal: goal, via: via)))
+        Permissions.log("manager: stage follows the panel (\(via)) -> \(session.prefix(8))")
+    }
+
     @objc func toggleManagerMode() {
         // `managerStarting` is in `managerIsOn` deliberately: a start in flight
         // IS hands-free being on, as far as the person pressing the chord is

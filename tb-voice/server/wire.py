@@ -111,6 +111,14 @@ class WireKind(Enum):
     EVENT = "event"
 
 
+class MacEvent(Enum):
+    """What the Mac tells the manager, unasked (wire `event` frames). Parsed at
+    the door; a name this bot does not know is dropped there."""
+    # The panel moved attention: a shortcut or a click played an agent, or a
+    # reply went to one (hf-16, "follow").
+    STAGE = "stage"
+
+
 class Tool(Enum):
     """The tools a Mac may offer in its hello. A name the bot does not know is
     logged and ignored at the hello; nothing downstream sees it as a string."""
@@ -192,7 +200,12 @@ def _take_wire(obj: dict, w: "Wire") -> bool:
         if fut is not None and not fut.done():
             fut.set_result(obj)
     elif kind is WireKind.EVENT:
-        w.mac_events.put_nowait(obj)  # chords and tray changes; read by later work (hf-16, hf-12)
+        try:
+            MacEvent(obj.get("event"))
+        except ValueError:
+            logger.warning(f"wire: the Mac sent an event this bot does not know, {obj.get('event')!r}; ignored")
+            return True
+        w.mac_events.put_nowait(obj)  # read by Manager._follow_mac
     else:
         logger.error(f"wire: a {kind.value} frame arrived from the Mac, which only the bot sends; ignored")
     return True
