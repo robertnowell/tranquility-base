@@ -39,10 +39,11 @@ extension StatusHUD {
                        lastActivity: Date(timeIntervalSince1970: at))
         }
         let rows = SessionRow.quietRowsLast([
-            row("m1", .ready, 100), row("m2", .working, 300), row("t1", .ready, 50),
+            row("m1", .ready, 100), row("m2", .working, 300), row("t1", .working, 50),
             row("l1", .ready, 200, "Kopi hero defects"), row("l2", .working, 250, "Kopi calendar fill"),
         ])
-        // The user's order puts TB first; Mirai's newer ask must lift it above.
+        // The user's order puts TB first. TB is only working and Mirai asks, so
+        // Mirai must rise above it (rule 3).
         store.update {
             $0.create(name: "TB", with: ["t1"], id: "tb")
             $0.create(name: "Mirai", with: ["m1", "m2"], id: "mirai")
@@ -68,7 +69,7 @@ extension StatusHUD {
         // Collapse: one header, the lamp, the count; its row gone from view.
         toggleFolder("tb")
         let tb = header(for: "tb")
-        let collapsedShowsLampAndCount = tb?.lampForTesting == Lamp.ready.fill.cgColor
+        let collapsedShowsLampAndCount = tb?.lampForTesting == Lamp.working.fill.cgColor
             && tb?.countForTesting == "1" && !drawn().contains("  t1")
         toggleFolder("tb")
 
@@ -79,6 +80,15 @@ extension StatusHUD {
         rowsHeld = false
         rebuildSessionRows()
         let releaseRepaints = !drawn().contains("  m2") && !rowsDirty
+        showIdle(rows: rows)
+
+        // A drag whose mouse-up never came (the panel hid mid-drag) must not
+        // freeze the grid: with the button up, the next repaint lets go.
+        rowsHeld = true
+        gridDrag = GridDrag(source: .row("l1"), ghost: NSImageView(), grab: .zero)
+        showIdle(rows: rows.filter { $0.id != "m2" })
+        let abandonedDragLetsGo = NSEvent.pressedMouseButtons & 1 != 0
+            || (!rowsHeld && gridDrag == nil && !drawn().contains("  m2"))
         showIdle(rows: rows)
 
         // The drag: l1 rests on the middle of l2, the hold elapses, the drop
@@ -152,6 +162,7 @@ extension StatusHUD {
             ("collapsedShowsLampAndCount", collapsedShowsLampAndCount),
             ("heldDidNotRepaint", heldDidNotRepaint),
             ("releaseRepaints", releaseRepaints),
+            ("abandonedDragLetsGo", abandonedDragLetsGo),
             ("dragMadeFolder", dragMadeFolder),
             ("dropDidNotOpenACard", dropDidNotOpenACard),
             ("undoOffered", undoOffered),

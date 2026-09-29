@@ -143,6 +143,28 @@ extension StatusHUD {
         }
     }
 
+    // MARK: - A hold nobody is holding
+
+    /// A held grid whose gesture ended without telling us: the button is up
+    /// with a drag still recorded (the panel hid mid-drag, the mouse-up went
+    /// to another window), or a rename left open for two minutes. Without
+    /// this the grid would stop repainting for good.
+    func heldGridIsStale() -> Bool {
+        if gridDrag != nil { return NSEvent.pressedMouseButtons & 1 == 0 }
+        return Date().timeIntervalSince(rowsHeldSince) > 120
+    }
+
+    func releaseHeldGrid(because reason: String) {
+        gridDrag?.ghost.removeFromSuperview()
+        gridDrag = nil
+        for header in gridLines.compactMap({ $0.view as? FolderHeaderView })
+        where header.editorForTesting != nil {
+            header.finishRename(keep: false)
+        }
+        rowsHeld = false
+        Permissions.log("folders: released a held grid, \(reason)")
+    }
+
     // MARK: - Drag
 
     func rowDragged(_ id: String, from view: NSView, phase: GridDragPhase, event: NSEvent) {

@@ -2437,7 +2437,10 @@ final class StatusHUD: NSObject {
     var projects: ProjectStore = .shared
     /// True while a drag or a rename is live: the five-second beat must not
     /// tear the rows out from under the pointer or the caret.
-    var rowsHeld = false
+    var rowsHeld = false {
+        didSet { if rowsHeld && !oldValue { rowsHeldSince = Date() } }
+    }
+    var rowsHeldSince = Date.distantPast
     /// A repaint that arrived while the rows were held, owed on release.
     var rowsDirty = false
     /// The drag in flight, if any.
@@ -3328,8 +3331,12 @@ final class StatusHUD: NSObject {
 
     func rebuildSessionRows() {
         if rowsHeld {
-            rowsDirty = true
-            return
+            if heldGridIsStale() {
+                releaseHeldGrid(because: "the gesture that held it is gone")
+            } else {
+                rowsDirty = true
+                return
+            }
         }
         rowsDirty = false
         gridLines = []
