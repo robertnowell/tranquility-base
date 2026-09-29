@@ -693,6 +693,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 isRemote: { [weak poller] id in poller?.snapshot.agent(id) != nil })
             // The mirror: every page and turn into the hub, while the panel
             // runs. Nil until this Mac is connected; nothing else changes.
+            HubWindow.shared.log = { Permissions.log($0) }
             if let mirror = HubMirror.fromMachine(store: store) {
                 HubMirror.shared = mirror
                 // The first page this Mac ever mirrors comes forward on its
@@ -701,7 +702,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 HubMirror.revealFirstReport = { url in
                     DispatchQueue.main.async {
                         Permissions.log("hub: revealing the first report")
-                        if BrowserFocus.reveal(url, app: HubApp.baseURL) == .notFound {
+                        if !HubWindow.shared.show(url), BrowserFocus.reveal(url, app: HubApp.baseURL) == .notFound {
                             NSWorkspace.shared.open(url)
                         }
                     }
@@ -1261,7 +1262,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // `PageDestination` is the one resolver; the door resolved it
             // when it was built, so the label and the click cannot disagree.
             let url = destination.url
-            if BrowserFocus.reveal(url, app: HubApp.baseURL) == .notFound {
+            if !HubWindow.shared.show(url), BrowserFocus.reveal(url, app: HubApp.baseURL) == .notFound {
                 NSWorkspace.shared.open(url)
             }
         }
