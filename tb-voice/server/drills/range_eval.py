@@ -102,7 +102,7 @@ def manager(stage=None):
         got.setdefault("act", "say")
         got.setdefault("said", text)
 
-    async def cands():
+    async def cands(request=""):
         return []
 
     m._targets, m._brief, m._notes, m._send, m._say = targets, brief, notes, send, say
