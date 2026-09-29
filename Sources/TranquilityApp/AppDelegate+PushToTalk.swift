@@ -759,6 +759,8 @@ extension AppDelegate {
                             name,
                             announcement.event.cwd)
                         self.lastAnnouncement = announcement
+                        self.tellManagerStage(session: announcement.event.sessionId, name: name,
+                                              goal: announcement.brief.goal, via: "announce")
                         return true
                     },
                     onWord: { [weak self] range in

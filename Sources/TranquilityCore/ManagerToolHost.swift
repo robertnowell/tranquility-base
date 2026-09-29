@@ -317,6 +317,18 @@ public enum ManagerDataChannel {
     public static let carriageType = "tb"
 
     /// The same JSON object with `type` set for the data channel.
+    /// The panel moved the manager's attention (hf-16, "follow", ruled 27 Sep):
+    /// a shortcut or a click played an agent, or a reply went to one. The
+    /// manager's "it" becomes that agent, so "send that to it" after ⌃⌥ means
+    /// the agent just heard, not the one before. `via` says which door.
+    public static func stageEvent(session: String, name: String?, goal: String?, via: String) -> Data {
+        var o: [String: Any] = ["wire": ManagerWireKind.event.rawValue, "event": "stage",
+                                "session": session, "via": via]
+        if let name, !name.isEmpty { o["name"] = name }
+        if let goal, !goal.isEmpty { o["goal"] = goal }
+        return (try? JSONSerialization.data(withJSONObject: o, options: [.sortedKeys])) ?? Data()
+    }
+
     public static func stamped(_ json: Data) -> Data {
         guard var obj = try? JSONSerialization.jsonObject(with: json) as? [String: Any] else { return json }
         obj["type"] = carriageType

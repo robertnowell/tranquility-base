@@ -638,6 +638,7 @@ class Manager(FrameProcessor):
         self.stage: dict | None = None
         self._wire_task = None  # hosted: drains wire.outbox into transport messages
         self._idle_task = None  # hosted: ends the session after IDLE_SECS without speech
+        self._mac_task = None   # hosted: follows the panel's stage (hf-16)
         self._last_heard = time.monotonic()
         self.heard = 0
         self.addressed = 0
@@ -653,6 +654,25 @@ class Manager(FrameProcessor):
 
     async def _say_and_wait(self, text: str, timeout: float = 8.0):
         await self._say(text)  # _say already waits for its own voice to stop
+
+    async def _follow_mac(self):
+        """The panel's attention, followed (hf-16, "follow", ruled 27 Sep). A
+        shortcut acts at once on the Mac; the Mac then says who is in focus, and
+        that agent becomes the stage, so "send that to it" after ⌃⌥ means the
+        agent just heard. Nothing is spoken and nothing else changes."""
+        import wire
+        q = wire.current().mac_events
+        while True:
+            ev = await q.get()
+            if wire.MacEvent(ev.get("event")) is wire.MacEvent.STAGE and ev.get("session"):
+                self._follow_stage(ev)
+
+    def _follow_stage(self, ev: dict):
+        sid = ev["session"]
+        if (self.stage or {}).get("sessionId") == sid:
+            return
+        self.stage = {"sessionId": sid, "name": ev.get("name"), "goal": ev.get("goal"), "project": ""}
+        logger.info(f"stage follows the panel ({ev.get('via')}): {sid[:8]} {ev.get('name') or ''}")
 
     async def _drain_wire(self):
         """Hosted: every event line and door request becomes a text frame on the
@@ -690,7 +710,7 @@ class Manager(FrameProcessor):
             return
 
     async def cleanup(self):
-        for name in ("_wire_task", "_idle_task"):
+        for name in ("_wire_task", "_idle_task", "_mac_task"):
             task = getattr(self, name)
             if task:
                 await self.cancel_task(task)
@@ -712,6 +732,7 @@ class Manager(FrameProcessor):
                 self._turns_task = self.create_task(self._turns.run())
             if os.getenv("TB_HOSTED") and self._wire_task is None:
                 self._wire_task = self.create_task(self._drain_wire())
+                self._mac_task = self.create_task(self._follow_mac())
                 self._last_heard = time.monotonic()
                 self._idle_task = self.create_task(self._end_when_idle())
             # The pipeline is running and the mic is open: now it is listening.

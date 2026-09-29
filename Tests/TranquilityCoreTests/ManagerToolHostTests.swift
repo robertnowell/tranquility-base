@@ -305,6 +305,21 @@ final class ManagerToolHostTests: XCTestCase {
         XCTAssertEqual(turns.last?["text"], "Eight decisions to review.")
     }
 
+    /// "Follow" (hf-16): the panel tells the manager who is in focus, as a
+    /// typed wire event the bot parses at its door.
+    func testTheStageEventNamesTheAgentAndTheDoorAndNothingEmpty() throws {
+        let frame = ManagerDataChannel.stageEvent(session: "abc", name: "Landing page", goal: nil, via: "announce")
+        let obj = try Self.parse(frame)
+        XCTAssertEqual(obj["wire"] as? String, "event")
+        XCTAssertEqual(obj["event"] as? String, "stage")
+        XCTAssertEqual(obj["session"] as? String, "abc")
+        XCTAssertEqual(obj["name"] as? String, "Landing page")
+        XCTAssertEqual(obj["via"] as? String, "announce")
+        XCTAssertNil(obj["goal"], "an absent goal is left out, not sent empty")
+        let stamped = try Self.parse(ManagerDataChannel.stamped(frame))
+        XCTAssertEqual(stamped["type"] as? String, ManagerDataChannel.carriageType)
+    }
+
     func testAMissingTranscriptSaysSoRatherThanLookingEmpty() {
         let tail = TranscriptTail.read(path: "/nonexistent/\(UUID().uuidString).jsonl", chars: 100)
         XCTAssertEqual(tail["note"] as? String, "transcript file missing")
