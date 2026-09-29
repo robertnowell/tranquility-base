@@ -72,8 +72,24 @@ extension StatusHUD {
                     super.sendEvent(event)
                     return
                 }
-                Permissions.log("paste: key \(event.keyCode) with no typed line editing (first responder "
-                    + "\(String(describing: type(of: firstResponder)))); releasing")
+                // The key is dropped -- it was meant for a window that is not
+                // this one and there is nowhere to forward it. But it is NOT
+                // dropped silently any more (29 Sep).
+                //
+                // Robert, after a typed message never reached its agent: "we
+                // cannot ever fucking lose user input ever ever ever... i can't
+                // believe fucking user input was lost even from our fucking
+                // logs". He is right on both counts. This logged a KEYCODE --
+                // `paste: key 11` -- so even the record could not say what the
+                // character was, and the store never saw it because nothing
+                // reaches the store until a send is submitted. Two keystrokes
+                // went this way on 29 Sep and neither can be recovered.
+                //
+                // So the character is written down, verbatim, before it goes.
+                // This does not make the key arrive; it makes the loss legible
+                // and recoverable, which is the part that was missing.
+                DroppedInput.record(event.characters, keyCode: event.keyCode,
+                                    responder: String(describing: type(of: firstResponder)))
                 onPasteReleased?()
                 return
             }

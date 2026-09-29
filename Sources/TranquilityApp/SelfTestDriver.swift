@@ -2241,6 +2241,7 @@ extension StatusHUD {
         speechCallbackDrill()
         dismissKeepsTheTurnDrill()
         handsFreePanelDrill()
+        droppedInputDrill()
 
         endCapture(because: "selftest cleanup")
         showIdle(rows: [])

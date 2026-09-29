@@ -3164,3 +3164,42 @@ extension StatusHUD {
         setManager(on: wasOn)
     }
 }
+
+extension StatusHUD {
+
+    /// A dropped keystroke is written down before it is lost (29 Sep 2026).
+    ///
+    /// Earned by a typed message that never reached its agent and could not be
+    /// reconstructed from anything: not the store, whose first record is made
+    /// by `submitTypedReply` well past the point where these die, and not the
+    /// log, which recorded `paste: key 11` — a keycode, not a character.
+    ///
+    /// This drills the recording, not the dropping. The panel still cannot
+    /// deliver a key meant for another window; what it can do is make sure the
+    /// character survives the attempt.
+    func droppedInputDrill() {
+        let before = DroppedInput.all().count
+        DroppedInput.record("hello", keyCode: 4, responder: "SelfTest")
+        DroppedInput.record(nil, keyCode: 123, responder: "SelfTest")   // an arrow
+        let after = DroppedInput.all()
+
+        let mine = after.suffix(2)
+        let text = mine.first
+        let arrow = mine.last
+
+        SelfTest.report("droppedInput", [
+            ("bothWereRecorded", after.count == before + 2),
+            // The whole point: the CHARACTER, not the keycode. A keycode cannot
+            // be read back as text and cannot be pasted.
+            ("theCharactersSurvive", text?.characters == "hello"),
+            ("withTheKeyCodeBesideThem", text?.keyCode == 4),
+            // A key that types nothing is still noted: a run of them is the
+            // shape of somebody navigating a field that is not listening.
+            ("aKeyThatTypesNothingIsStillNoted",
+             arrow?.keyCode == 123 && arrow?.characters.isEmpty == true),
+            // Appended, never rewritten — a second loss must not cost the first.
+            ("earlierLossesAreNotOverwritten", after.count >= before + 2),
+            ("itSurvivesTheProcess", FileManager.default.fileExists(atPath: DroppedInput.url.path)),
+        ])
+    }
+}
