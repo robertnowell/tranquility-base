@@ -786,7 +786,7 @@ final class StatusHUD: NSObject {
         // the orb above it says the mode. Titling it HANDS-FREE printed the
         // same two words twice, one line apart.
         face = Face(title: "", body: text,
-                    placardOverride: "\(StateLegend.Glyph.speaking) \(StateLegend.managerOnTitle)")
+                    placardOverride: "\(StateLegend.Glyph.speaking) \(StateLegend.managerOnTitle.uppercased())")
         render()
         return true
     }
@@ -2449,7 +2449,8 @@ final class StatusHUD: NSObject {
     var namingFolders: Set<String> = []
     /// Whether a new folder asks the model for its name. Off in a drill.
     var nameFoldersWithModel = true
-    /// The last drop, for five seconds: what it said and the book before it.
+    /// The last drop, while its notice is up: what it said and the book
+    /// before it. The notice is the top band's receipt chip, never a row.
     var undoDrop: (text: String, before: ProjectBook, until: Date)?
     /// Every line the grid drew this paint, for hit-testing a drag.
     var gridLines: [(view: NSView, line: ProjectLayout.Line)] = []
@@ -2798,7 +2799,7 @@ final class StatusHUD: NSObject {
             // the stack's left inset is 14, so 30 puts the "P" at x 44 with an
             // 8pt gap). The placardClearsChevron drill holds this geometry.
             stateLabel.attributedStringValue = Widgets.letterspaced(
-                StateLegend.pastAgentsTitle, size: 10, tracking: 3.2,
+                StateLegend.pastAgentsTitle.uppercased(), size: 10, tracking: 3.2,
                 color: StateLegend.Lens.chrome.color, headIndent: 30)
             // One row, like the grid's: chevron, placard, gear. The gear stays
             // — settings is reachable from here as it is from everywhere — and
@@ -3049,7 +3050,7 @@ final class StatusHUD: NSObject {
         guard !face.title.isEmpty else { titleLabel.stringValue = ""; return }
         let truncating = NSMutableParagraphStyle()
         truncating.lineBreakMode = .byTruncatingTail
-        let font = ChromeType.mono(ofSize: 13, weight: .semibold)
+        let font = StateLegend.Face.message(14, .semibold)
         let attributes: [NSAttributedString.Key: Any] = [
             .font: font,
             .foregroundColor: StateLegend.Palette.ink,
@@ -3384,10 +3385,19 @@ final class StatusHUD: NSObject {
                 ceil(($0.aux as NSString)
                     .size(withAttributes: [.font: GridRowView.auxFont]).width)
             }.max() ?? 0)
-        if let undo = undoDrop, undo.until > Date() {
-            waitingRows.addArrangedSubview(undoLine(undo.text))
-        }
         let lines = ProjectLayout.lines(shown, book: book, origin: SessionLineage.lastKnownOrigin)
+        // Inside a folder the rule between two of its rows starts at the
+        // guide line and carries the guide's own pixel, so the guide runs
+        // unbroken from header to last row. A full-width rule there cut the
+        // guide at every row and crossed it (29 Sep, "these lines are a
+        // little jank").
+        func staysInFolder(after index: Int) -> Bool {
+            guard index + 1 < lines.count, case let .row(_, next?) = lines[index + 1] else { return false }
+            switch lines[index] {
+            case let .header(folder, _, _, _): return folder.id == next
+            case let .row(_, folder): return folder == next
+            }
+        }
         for (index, line) in lines.enumerated() {
             let item: SessionRow
             switch line {
@@ -3395,7 +3405,9 @@ final class StatusHUD: NSObject {
                 let header = folderHeader(folder, lamp: lamp, lit: lit, members: members)
                 waitingRows.addArrangedSubview(header)
                 gridLines.append((header, line))
-                waitingRows.addArrangedSubview(hairline(StateLegend.Palette.hairlineSoft))
+                waitingRows.addArrangedSubview(staysInFolder(after: index)
+                    ? FolderMemberView.rule(width: Self.gridWidth)
+                    : hairline(StateLegend.Palette.hairlineSoft))
                 continue
             case let .row(row, _):
                 item = row
@@ -3446,7 +3458,9 @@ final class StatusHUD: NSObject {
                 gridLines.append((row, line))
             }
             if index < lines.count - 1 {
-                waitingRows.addArrangedSubview(hairline(StateLegend.Palette.hairlineSoft))
+                waitingRows.addArrangedSubview(staysInFolder(after: index)
+                    ? FolderMemberView.rule(width: Self.gridWidth)
+                    : hairline(StateLegend.Palette.hairlineSoft))
             }
         }
         // The proactive half (ruled 05 Aug addendum): the "+" placard kicks off

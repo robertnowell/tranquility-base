@@ -132,7 +132,10 @@ final class GridRowView: NSControl {
         // and it is the SAME answer on every face. A row that is merely
         // alive rests at the same level as one you have already heard,
         // because neither is asking; only their lamps differ.
-        name.font = ChromeType.mono(ofSize: 13, weight: .medium)
+        // Names are words (ruled 29 Sep 2026): an agent's name is read, not
+        // parsed, so it takes the system sans the hub already sets it in. Mono
+        // stays for what is machine: the id beside it, labels, file names.
+        name.font = StateLegend.Face.message(13, .medium)
         // FULL INK IS RESERVED FOR ROWS THAT WANT YOU, and after this change
         // that is exactly the green and amber ones you have not heard.
         //

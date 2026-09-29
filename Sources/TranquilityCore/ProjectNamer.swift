@@ -71,6 +71,21 @@ public enum ProjectNamer {
            folders.allSatisfy({ $0.caseInsensitiveCompare(first) == .orderedSame }) {
             return tidy(first)
         }
+        // Titles that open with the same words name their project there:
+        // "U Vape checkout flow" and "U Vape newsletter drafts" are U Vape.
+        // Raw words, so a one-letter word like the U survives.
+        let raw = agents.map { $0.title.split(whereSeparator: \.isWhitespace).map(String.init) }
+        if agents.count > 1, let first = raw.first {
+            var shared: [String] = []
+            for (index, word) in first.prefix(2).enumerated()
+            where raw.allSatisfy({ $0.count > index && $0[index].caseInsensitiveCompare(word) == .orderedSame }) {
+                shared.append(word)
+            }
+            if shared.count == min(2, first.count) || (shared.count == 1 && shared[0].count > 1),
+               let lead = shared.first, !stopwords.contains(lead.lowercased()) {
+                return tidy(shared.joined(separator: " "))
+            }
+        }
         let wordSets = agents.map { Set(words($0.title).map { $0.lowercased() }) }
         if let first = agents.first {
             for word in words(first.title)

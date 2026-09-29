@@ -316,7 +316,7 @@ final class TrayRowView: NSStackView, NSTextFieldDelegate {
         compose.isBezeled = false
         compose.drawsBackground = false
         compose.focusRingType = .none
-        compose.font = ChromeType.mono(ofSize: 11, weight: .regular)
+        compose.font = StateLegend.Face.message(12)  // your words: the sans (29 Sep 2026)
         compose.textColor = StateLegend.Lens.content.color
         // A plain attributed string, NOT through the mark composer: the
         // composer sets a baseline offset, and a placeholder on one baseline

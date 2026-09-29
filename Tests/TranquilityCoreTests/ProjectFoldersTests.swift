@@ -215,6 +215,12 @@ final class ProjectFoldersTests: XCTestCase {
         XCTAssertEqual(ProjectNamer.fallback(agents), "Kopi")
     }
 
+    func testFallbackKeepsASharedOpeningIncludingOneLetterWords() {
+        let agents = [ProjectNamer.Agent(title: "U Vape checkout flow", folder: nil),
+                      ProjectNamer.Agent(title: "U Vape newsletter drafts", folder: nil)]
+        XCTAssertEqual(ProjectNamer.fallback(agents), "U Vape")
+    }
+
     func testFallbackKeepsTheUsersCapitals() {
         let agents = [ProjectNamer.Agent(title: "BlankShirts order sync", folder: nil),
                       ProjectNamer.Agent(title: "Weekly report", folder: nil)]

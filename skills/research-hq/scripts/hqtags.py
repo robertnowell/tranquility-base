@@ -21,6 +21,10 @@ import sys
 from collections import Counter
 from pathlib import Path
 
+# These scripts run from inside the signed app bundle, and an import would
+# leave __pycache__ there: one .pyc broke the Dev app's seal on 29 Sep, and
+# switch-app.sh refused it as "an invalid signature".
+sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from hqconfig import roots  # noqa: E402
 
