@@ -4084,6 +4084,23 @@ final class StatusHUD: NSObject {
     ///
     /// Everything up to the cursor is shown at full strength and the rest dimmed, so
     /// the eye can follow the voice without the jitter of a per-word box.
+    /// Light the whole line, because nothing more is coming.
+    ///
+    /// Ruled 29 Sep: "text should highlight everything when interrupted by
+    /// user." Dim means NOT REACHED YET, which is true while a voice is running
+    /// and false the moment it stops. Cutting the manager off mid-sentence used
+    /// to leave half a bright line and half a grey one, frozen, for as long as
+    /// the card stayed up -- a promise the card could no longer keep.
+    ///
+    /// Counted in the DISPLAYED text, not the spoken text: this is the end of
+    /// the line by definition, and `displayIndex(forSpoken:)` maps a spoken
+    /// cursor that no longer has a next word to map.
+    func completeHighlight() {
+        guard let body = bodyLabel?.stringValue, !body.isEmpty else { return }
+        face.spokenUpTo = body.count
+        paintInk(displayCursor: body.count)
+    }
+
     func highlight(upTo index: Int) {
         guard let body = bodyLabel?.stringValue, !body.isEmpty else {
             Permissions.log("highlight upTo=\(index) SKIPPED: no body text")
