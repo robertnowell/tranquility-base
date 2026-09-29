@@ -1372,6 +1372,27 @@ class Manager(FrameProcessor):
             pick = span.check(answer, words, request)
             logger.info(f"span: {len(words)} candidate lines; answer {answer}; pick {pick}")
             if not pick:
+                # Nothing to point at is not an answer, it is a missing
+                # argument. Measured 29 Sep, 8 runs of "send what I said about
+                # the landing page to the landing agent" with another agent on
+                # stage: the loop named the right agent every time and left
+                # `range` out on 3 of them. Without it the picker is handed the
+                # lines since the last send -- here none -- and can only say
+                # none, so the turn ended in a listening cue with the developer
+                # believing the message had gone.
+                #
+                # The loop is told, rather than the developer: a tool error is
+                # not terminal, so it hears why and calls send again with the
+                # range it should have passed. It cannot recur on the retry,
+                # because the retry carries a range. The quote path is
+                # untouched -- a message inside the request itself ("tell it
+                # yes, go ahead") checks out with no candidate lines at all,
+                # and never reaches here.
+                if not words and not rng:
+                    return {"error": "nothing was said since the last message, so there are no words to "
+                                     "point at. If the request names a stretch of what they said ('what I "
+                                     "said about pricing', 'the last ten minutes'), call send again with "
+                                     "`range`. If they have not said the message yet, call wait."}
                 return {"done": True, "waited": True, "target": target, "notes": to_notes}
             text = span.text_of(pick, words)
             if request_on_top and pick.lines is not None:
