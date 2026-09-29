@@ -108,6 +108,7 @@ class Intent(Enum):
     RUNG_WHY = "rung_why"
     CUSTOM = "custom"
     SEND_MESSAGE = "send_message"
+    READ_BACK = "read_back"
     START_AGENT = "start_agent"
     SUMMARIZE_RECENT = "summarize_recent"
     TEACH = "teach"
