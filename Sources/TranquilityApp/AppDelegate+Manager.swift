@@ -514,7 +514,10 @@ extension AppDelegate {
         guard wait > 0.02 else { hud.highlight(upTo: upTo); return }
         Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
-            guard let self, self.managerIsOn else { return }
+            // `spokenClock` is nil once the voice has stopped, and a word that
+            // arrives after that must not repaint a shorter cursor over the
+            // completed line.
+            guard let self, self.managerIsOn, self.spokenClock != nil else { return }
             self.hud.highlight(upTo: upTo)
         }
     }
@@ -578,6 +581,23 @@ extension AppDelegate {
             }
         case .quiet:
             // Voice over: colour back to rest, the last words stay readable.
+            //
+            // And the highlight finishes. Ruled 29 Sep: "interrupt doesn't make
+            // the whole thing read on the highlight, text should highlight
+            // everything when interrupted by user."
+            //
+            // Dim means NOT REACHED YET. That is true while the voice is
+            // running and false the moment it stops: nothing more is coming, so
+            // a line left half dim is a promise the card cannot keep. Cutting
+            // the manager off mid-sentence left exactly that -- half a bright
+            // line and half a grey one, frozen, for as long as the card stayed
+            // up.
+            //
+            // The scheduled paints go first, or a word still waiting on the
+            // clock would repaint a shorter cursor over the completed line a
+            // moment later and undo it.
+            spokenClock = nil
+            hud.completeHighlight()
             hud.setManagerState(StatusHUD.orbState, line: orbLine(managerLastLine == "speaking" ? "listening" : managerLastLine))
         case .stage:
             managerStageName = e.name ?? e.goal ?? e.project

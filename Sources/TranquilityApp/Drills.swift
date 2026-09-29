@@ -3255,3 +3255,39 @@ extension StatusHUD {
         ])
     }
 }
+
+
+extension StatusHUD {
+
+    /// The highlight finishes when the voice stops (29 Sep 2026).
+    ///
+    /// "interrupt doesn't make the whole thing read on the highlight, text
+    /// should highlight everything when interrupted by user."
+    ///
+    /// Dim means NOT REACHED YET. True while a voice is running, false the
+    /// moment it stops: nothing more is coming, so a line left half dim is a
+    /// promise the card cannot keep. Cutting the manager off mid-sentence left
+    /// exactly that, frozen, for as long as the card stayed up.
+    func interruptedLineIsFullyLitDrill() {
+        let line = "Inviting promotions copy to speak. It has one question waiting."
+        _ = showManagerLine(line)
+
+        highlight(upTo: 8)              // eight characters in, as if cut off there
+        let partway = face.spokenUpTo
+
+        completeHighlight()
+        let finished = face.spokenUpTo
+
+        // An empty card must not be "completed" into a cursor past its own end.
+        showIdle(rows: [])
+        completeHighlight()
+        let onNothing = face.spokenUpTo
+
+        SelfTest.report("interruptedLineIsFullyLit", [
+            ("theCursorStartsPartway", partway == 8),
+            ("andEndsAtTheEndOfTheLine", finished == line.count),
+            ("whichIsMoreThanItWas", (finished ?? 0) > (partway ?? 0)),
+            ("anEmptyCardIsLeftAlone", (onNothing ?? 0) == 0),
+        ])
+    }
+}

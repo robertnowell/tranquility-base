@@ -16,6 +16,7 @@ extension AppDelegate {
     /// tranquilitybase://hear?session=ID               speak that session's summary
     /// tranquilitybase://reply?session=ID              open the mic, route the reply there
     /// tranquilitybase://show                          raise the panel
+    /// tranquilitybase://hub?url=HUB_URL               that hub page in the Hub window
     ///
     /// `discuss` is the one a generated page links to, and it is deliberately
     /// the calmest of the four: it puts you in front of the agent — panel up,
@@ -63,7 +64,7 @@ extension AppDelegate {
             case let .rung(s, _):    session = s; ref = nil
             case let .say(s, _):     session = s; ref = nil
             case .mute:              session = nil; ref = nil
-            case .show, .connect, .new, .unknown: session = nil; ref = nil
+            case .show, .connect, .new, .hub, .unknown: session = nil; ref = nil
             }
             Permissions.log("deeplink: \(action) session=\(session?.prefix(8) ?? "-")")
             var link: [String: TrackValue] = ["action": Track.token(from: action),
@@ -75,6 +76,11 @@ extension AppDelegate {
             hud.acknowledge(.recognized)
 
             switch action {
+            case "hub":
+                // A page for the Hub window. No address, or not the hub's:
+                // the window's home, which is never wrong to show.
+                if case let .hub(url) = parsed, let url, HubWindow.shared.show(url) { break }
+                HubWindow.shared.showHub()
             case "discuss":
                 discuss(session: session, ref: ref)
             case "hear":

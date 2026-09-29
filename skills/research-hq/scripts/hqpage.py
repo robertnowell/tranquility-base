@@ -108,13 +108,13 @@ def main(argv):
     start = page.index("/* TOKENS.")
     end = page.index("/* HOUSE CONSTANTS")
     page = page[:start] + "/* TOKENS from hq-theme, " + time.strftime("%Y-%m-%d") + " */\n" + tokens + "\n" + page[end:]
-    page = page.replace('<meta name="intranet:session" content="<!-- FULL SESSION ID -->">',
+    page = page.replace('<meta name="intranet:session" content="FILL: FULL SESSION ID">',
                         f'<meta name="intranet:session" content="{session}">')
     today = time.strftime("%-d %b %Y")
     page = page.replace("<!-- KICKER: two items, brand and date. Nothing else. -->",
                         f"{nameplate} · {today}")
     if brand:
-        page = page.replace('<meta name="intranet:brand" content="<!-- BRAND -->">',
+        page = page.replace('<meta name="intranet:brand" content="FILL: BRAND">',
                             f'<meta name="intranet:brand" content="{brand}">')
     title = opts.get("title")
     if title:
