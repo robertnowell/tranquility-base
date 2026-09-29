@@ -31,11 +31,35 @@ extension StatusHUD {
         /// the panel's to know.
         var typedLineIsEditing: (() -> Bool)?
         var onPasteRequested: (() -> Void)?
+        /// Give the typed line the keyboard, right now, and say whether it
+        /// took. Called for a key that would otherwise be thrown away: if the
+        /// line takes the keys, the key is delivered into it instead of lost.
+        var focusTypedLine: (() -> Bool)?
         /// The keyboard left while armed: another window took key, or a key
         /// that was not Command-V arrived. The panel releases through this.
         var onPasteReleased: (() -> Void)?
         override var canBecomeKey: Bool { acceptsKey }
         override var canBecomeMain: Bool { false }
+
+        /// Would this key put a character into a text field?
+        ///
+        /// The test is the character itself, not a list of keycodes: a keycode
+        /// list is a layout assumption, and this has to be true for somebody
+        /// typing in any language. A control character is not typing — Return,
+        /// Escape, Tab, the arrows and the function keys all arrive with
+        /// characters in the Unicode private-use or control ranges, and none of
+        /// them is somebody composing a message.
+        static func wouldType(_ event: NSEvent) -> Bool {
+            let held = event.modifierFlags.intersection([.command, .control])
+            guard held.isEmpty else { return false }      // somebody else's shortcut
+            guard let chars = event.charactersIgnoringModifiers, !chars.isEmpty else { return false }
+            return chars.unicodeScalars.allSatisfy { scalar in
+                // Printable, and outside the private-use block AppKit uses for
+                // arrows, function keys, page up and the rest.
+                !CharacterSet.controlCharacters.contains(scalar)
+                    && !(0xF700...0xF8FF).contains(scalar.value)
+            }
+        }
 
         /// AppKit's own release. Clicking any other window makes it key and
         /// lands here: no event tap, no timer, no "did they click away" guess.
@@ -72,8 +96,52 @@ extension StatusHUD {
                     super.sendEvent(event)
                     return
                 }
-                Permissions.log("paste: key \(event.keyCode) with no typed line editing (first responder "
-                    + "\(String(describing: type(of: firstResponder)))); releasing")
+                // A key that would type something opens the typed line and
+                // lands in it, instead of being thrown away (29 Sep).
+                //
+                // "we cannot ever fucking lose user input ever ever ever." The
+                // panel used to drop this key, and the reasoning was sound as
+                // far as it went: a key arriving with nothing focused was meant
+                // for another window and there is nowhere to forward it. But
+                // that is only true of a key the card has no use for. A
+                // PRINTABLE key, on an armed card, in front of a line whose
+                // whole purpose is to take typing, is not ambiguous -- somebody
+                // is typing a message.
+                //
+                // So it is offered to the typed line first. If the line takes
+                // the keyboard the event is delivered into it and nothing is
+                // lost; if it refuses, we fall through and record the loss as
+                // before. Only printable keys, and never with Command or
+                // Control held: those are somebody else's shortcuts, and a
+                // stray ⌘Q must not open an editor.
+                //
+                // Return and Escape are excluded on purpose. Return means send,
+                // and a Return that opened an empty editor and submitted it
+                // would invent a message nobody typed.
+                if Self.wouldType(event), focusTypedLine?() == true {
+                    Permissions.log("paste: key \(event.characters?.debugDescription ?? "?") "
+                        + "arrived with no editor; gave the typed line the keys and delivered it")
+                    super.sendEvent(event)
+                    return
+                }
+                // Nothing took it. It was meant for a window that is not this
+                // one and there is nowhere to forward it -- but it is NOT
+                // dropped silently any more (29 Sep).
+                //
+                // Robert, after a typed message never reached its agent: "we
+                // cannot ever fucking lose user input ever ever ever... i can't
+                // believe fucking user input was lost even from our fucking
+                // logs". He is right on both counts. This logged a KEYCODE --
+                // `paste: key 11` -- so even the record could not say what the
+                // character was, and the store never saw it because nothing
+                // reaches the store until a send is submitted. Two keystrokes
+                // went this way on 29 Sep and neither can be recovered.
+                //
+                // So the character is written down, verbatim, before it goes.
+                // This does not make the key arrive; it makes the loss legible
+                // and recoverable, which is the part that was missing.
+                DroppedInput.record(event.characters, keyCode: event.keyCode,
+                                    responder: String(describing: type(of: firstResponder)))
                 onPasteReleased?()
                 return
             }
@@ -410,6 +478,17 @@ extension StatusHUD {
             self?.onAttach?()
         }
         panel.typedLineIsEditing = { [weak self] in self?.trayRow.compose.currentEditor() != nil }
+        // The typed line takes the keyboard on demand, so a printable key that
+        // arrived before it had focus lands in it rather than on the floor.
+        panel.focusTypedLine = { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, let panel = self.panel else { return false }
+                self.trayRow.setComposing(true)
+                let took = panel.makeFirstResponder(self.trayRow.compose)
+                if took { self.trayRow.hideCaret() }
+                return took
+            }
+        }
         // A keystroke changes exactly one thing on the panel, whether Send
         // stands in for Controls, so a keystroke repaints exactly that. The
         // first cut ran the whole render() per key, and render() rebuilds
