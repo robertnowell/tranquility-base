@@ -322,6 +322,16 @@ sparkle_sign "$APP_SRC" "$IDENTITY" --timestamp
 # stayed on 0.3.1307 while 30-plus merges piled up behind it.
 webrtc_sign "$APP_SRC" "$IDENTITY" --options runtime --timestamp \
   || fail "could not sign LiveKitWebRTC.framework with the Developer ID"
+# tbase has shipped inside the app since #677 (29 Sep) and arrived here with
+# the build job's throwaway signature, so every release from that merge on
+# was "Invalid" at notarization and Prod stayed on 0.3.1399. Nested, so it is
+# signed before the outer bundle is sealed.
+TBASE_BIN="$APP_SRC/Contents/Resources/tbase"
+if [ -f "$TBASE_BIN" ]; then
+  codesign --force --sign "$IDENTITY" --identifier "$BUNDLE_ID.tbase" \
+    --options runtime --timestamp "$TBASE_BIN" \
+    || fail "could not sign the bundled tbase with the Developer ID"
+fi
 codesign --force --sign "$IDENTITY" --identifier "$BUNDLE_ID" \
   --entitlements TranquilityBase.entitlements \
   --options runtime --timestamp "$APP_SRC"
@@ -332,12 +342,15 @@ echo "$SIGN_INFO" | grep -E "^(Authority|TeamIdentifier|Timestamp)=" || true
 # Checked here, before the upload, because Apple's answer takes minutes and
 # says only "Invalid". Every nested framework binary must carry our team and a
 # timestamp, or the notarization that follows cannot pass.
-for nested in "$APP_SRC"/Contents/Frameworks/*.framework/Versions/[!C]*/*; do
-  [ -f "$nested" ] && file -b "$nested" | grep -q "Mach-O" || continue
+# Every Mach-O in the bundle, not only the frameworks: the next helper added
+# anywhere fails here in seconds instead of at Apple an hour later (29 Sep:
+# tbase in Contents/Resources was outside the old frameworks-only glob).
+while IFS= read -r -d '' nested; do
+  file -b "$nested" | grep -q "Mach-O" || continue
   NESTED=$(codesign -dv --verbose=4 "$nested" 2>&1)
   case "$NESTED" in *"TeamIdentifier=$TEAM_ID"*) ;; *) fail "${nested#"$APP_SRC/"} is not signed by team $TEAM_ID" ;; esac
   case "$NESTED" in *"Timestamp="*) ;; *) fail "${nested#"$APP_SRC/"} has no secure timestamp" ;; esac
-done
+done < <(find "$APP_SRC/Contents" -type f ! -path "*/Versions/Current/*" -print0)
 
 step "notarizing and stapling the installable app"
 rm -f "$APP_NOTARY_ARCHIVE"
