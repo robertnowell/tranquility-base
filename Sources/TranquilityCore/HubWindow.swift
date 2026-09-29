@@ -12,7 +12,8 @@ import WebKit
 /// engine Safari uses. There is one hub and it has one look.
 ///
 /// Sign-in is the hub's own, an email code (hq-app .env.example), done once
-/// in this window. Clerk's cookie is first-party (clerk.hq.tranquilitybase.dev),
+/// in this window, and on a fresh install it is the same sign-in that
+/// connects the Mac: pairing opens here (HubConnect), so one login is both. Clerk's cookie is first-party (clerk.hq.tranquilitybase.dev),
 /// so it persists in the default data store across launches. A document is
 /// still the web app's sandboxed frame, so its isolation is the browser's.
 ///
@@ -30,12 +31,39 @@ public final class HubWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, 
     /// Where a link off the hub goes. Injectable for tests.
     public var openExternally: (URL) -> Void = { NSWorkspace.shared.open($0) }
 
+    /// The hub's sign-in, followed by the app (29 Sep, Robert: "the hub and
+    /// tb are the same app"). Signing out here signs the app out; signing in
+    /// here, on a Mac that is not connected, connects it. The window reads the
+    /// hub's own session (Clerk) and reports only its changes.
+    public var onSignedOut: () -> Void = {}
+    public var onSignedIn: (_ user: String) -> Void = { _ in }
+    /// Who the hub last said was signed in: nil until it has said anything,
+    /// `.some(nil)` for nobody. Kept across page loads, so a sign-out that
+    /// ends on the sign-in page is one change, and a first load that finds
+    /// nobody signed in is not a sign-out.
+    private(set) var hubUser: String??
+
     public private(set) var window: NSWindow?
     public private(set) var webView: WKWebView?
     private let base: () -> URL?
     private var titleWatch: NSKeyValueObservation?
 
-    public init(base: @escaping () -> URL? = { HubApp.baseURL }) {
+    /// The marker `hq-open` reads before sending a page here rather than to
+    /// the browser (hf-o8t.4). It holds this app's bundle path, so a marker
+    /// left by an app since deleted is stale, and an app too old to know
+    /// `tranquilitybase://hub` never wrote one: either way the page goes to
+    /// the browser, which is always the fallback.
+    public static let marker = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent("Library/Application Support/hq/hub-window")
+
+    /// Written at launch by an app that has the window.
+    public static func announce(bundle: URL = Bundle.main.bundleURL, to file: URL = marker) {
+        try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(),
+                                                 withIntermediateDirectories: true)
+        try? Data(bundle.path.utf8).write(to: file, options: .atomic)
+    }
+
+    public init(base: @escaping () -> URL? = { HubApp.hub }) {
         self.base = base
     }
 
@@ -43,7 +71,11 @@ public final class HubWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, 
     /// the hub: the caller keeps its old door for that.
     @discardableResult
     public func show(_ url: URL) -> Bool {
-        guard isHub(url) else { return false }
+        guard isHub(url) else {
+            log("hub window: \(Self.describe(url)) is not the hub; left to the caller")
+            return false
+        }
+        log("hub window: showing \(Self.describe(url))")
         let web = make()
         web.load(URLRequest(url: url))
         present()
@@ -52,8 +84,9 @@ public final class HubWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, 
 
     /// Open the window on the hub's home, or on whatever it last showed.
     public func showHub() {
-        guard let home = base() else { return }
+        guard let home = base() else { log("hub window: no hub address; nothing to show"); return }
         let web = make()
+        log("hub window: opened\(web.url == nil ? " on the hub's home" : ", on \(Self.describe(web.url))")")
         if web.url == nil { web.load(URLRequest(url: home)) }
         present()
     }
@@ -77,10 +110,16 @@ public final class HubWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, 
         // The default store: the sign-in has to survive a relaunch.
         config.websiteDataStore = dataStore
         config.applicationNameForUserAgent = "TranquilityBase"
+        config.userContentController.add(AuthMessages(self), name: "tbAuth")
+        config.userContentController.addUserScript(WKUserScript(
+            source: Self.authWatch, injectionTime: .atDocumentEnd, forMainFrameOnly: true))
         let web = WKWebView(frame: NSRect(x: 0, y: 0, width: 1280, height: 860), configuration: config)
         web.navigationDelegate = self
         web.uiDelegate = self
         web.allowsBackForwardNavigationGestures = true
+        // Pinch and ⌘+/⌘- zoom, as in Safari (29 Sep: "can't zoom in with
+        // touchpad"). A web view does not magnify unless asked to.
+        web.allowsMagnification = true
 
         let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1280, height: 860),
                          styleMask: [.titled, .closable, .miniaturizable, .resizable],
@@ -104,8 +143,35 @@ public final class HubWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, 
 
     public func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction,
                         decisionHandler: @escaping @MainActor (WKNavigationActionPolicy) -> Void) {
-        decisionHandler(route(action.request.url, mainFrame: action.targetFrame?.isMainFrame ?? true,
-                              clicked: action.navigationType == .linkActivated))
+        let url = action.request.url
+        let mainFrame = action.targetFrame?.isMainFrame ?? true
+        let policy = route(url, mainFrame: mainFrame, clicked: action.navigationType == .linkActivated)
+        if mainFrame, policy == .cancel {
+            log("hub window: not loading \(Self.describe(url)) here (\(isHub(url ?? URL(string: "about:x")!) ? "hub" : "off the hub"))")
+        }
+        decisionHandler(policy)
+    }
+
+    // What the window did, for app.log (29 Sep: a blank window and nothing
+    // anywhere saying why). Addresses are cut to scheme, host and path: a
+    // sign-in link carries a one-time ticket in its query.
+    public func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        log("hub window: loading \(Self.describe(webView.url))")
+    }
+    public func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        log("hub window: loaded \(Self.describe(webView.url))")
+    }
+    public func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        log("hub window: could not load \(Self.describe(webView.url)): \(error.localizedDescription)")
+    }
+    public func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        log("hub window: load failed \(Self.describe(webView.url)): \(error.localizedDescription)")
+    }
+
+    static func describe(_ url: URL?) -> String {
+        guard let url else { return "nothing" }
+        if url.scheme?.lowercased() == "data" { return "an inline \(url.absoluteString.prefix(20))…" }
+        return "\(url.scheme ?? "?")://\(url.host ?? "")\(url.path)"
     }
 
     /// The hub stays here; Discuss and the app's other links go to the app;
@@ -124,14 +190,111 @@ public final class HubWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, 
         // target=_blank and window.open: the hub opens in place, the rest in
         // the browser. A document's own external links are marked _blank by
         // the hub, so this is where they arrive.
-        if let url = action.request.url {
-            if isHub(url) { webView.load(URLRequest(url: url)) } else { openExternally(url) }
+        guard let url = action.request.url else { return nil }
+        if isHub(url) {
+            webView.load(URLRequest(url: url))
+        } else if let image = Self.inlineImage(url) {
+            // "Open Image in New Window" on an image the page carries inline.
+            // Given to the system, a data: address put up Finder's "no
+            // application set to open the URL"; given to a new web view, it
+            // is a top-level data: navigation, which WebKit refuses, and the
+            // window stayed blank (both 29 Sep). So the app shows it itself.
+            showImage(image)
+        } else {
+            log("hub window: opening \(Self.describe(url)) in the browser")
+            openExternally(url)
         }
         return nil
+    }
+
+    /// The picture in a `data:image/…;base64,` address, or nil.
+    static func inlineImage(_ url: URL) -> NSImage? {
+        let raw = url.absoluteString
+        guard raw.lowercased().hasPrefix("data:image/"), let comma = raw.firstIndex(of: ","),
+              raw[..<comma].lowercased().hasSuffix(";base64"),
+              let data = Data(base64Encoded: String(raw[raw.index(after: comma)...]).removingPercentEncoding ?? "")
+        else { return nil }
+        return NSImage(data: data)
+    }
+
+    /// Windows opened from the hub, kept until they close.
+    private var popups: [NSWindow] = []
+
+    private func showImage(_ image: NSImage) {
+        let view = NSImageView(image: image)
+        view.frame = NSRect(origin: .zero, size: image.size)
+        let scroll = NSScrollView()
+        scroll.documentView = view
+        scroll.hasVerticalScroller = true
+        scroll.hasHorizontalScroller = true
+        scroll.allowsMagnification = true   // pinch, as in Preview
+        scroll.minMagnification = 0.1
+        scroll.maxMagnification = 8
+        let size = NSSize(width: min(image.size.width, 1400), height: min(image.size.height, 1000))
+        let w = NSWindow(contentRect: NSRect(origin: .zero, size: size),
+                         styleMask: [.titled, .closable, .miniaturizable, .resizable],
+                         backing: .buffered, defer: false)
+        w.title = window?.title ?? "Hub"
+        w.isReleasedWhenClosed = false
+        w.contentView = scroll
+        w.cascadeTopLeft(from: window?.frame.origin ?? .zero)
+        popups.append(w)
+        NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: w, queue: .main) { [weak self, weak w] _ in
+            MainActor.assumeIsolated { self?.popups.removeAll { $0 === w } }
+        }
+        log("hub window: showing an image \(Int(image.size.width))×\(Int(image.size.height)) in its own window")
+        if activates { w.makeKeyAndOrderFront(nil) }
+    }
+
+    /// Reports the hub's signed-in user (or null) once Clerk has loaded, and
+    /// again whenever it changes. Main frame only: a document's sandboxed
+    /// frame has no session to report.
+    static let authWatch = """
+    (function () {
+      var last;
+      function report() {
+        var c = window.Clerk; if (!c || !c.loaded) return;
+        var id = c.user ? c.user.id : null;
+        if (id === last) return; last = id;
+        window.webkit.messageHandlers.tbAuth.postMessage({ user: id });
+      }
+      var tries = 0, t = setInterval(function () {
+        if (window.Clerk && window.Clerk.loaded) { clearInterval(t); report(); window.Clerk.addListener(report); }
+        else if (++tries > 120) clearInterval(t);
+      }, 250);
+    })();
+    """
+
+    /// One report from the page. Only a change is acted on.
+    func hubSaid(user: String?) {
+        let before = hubUser
+        hubUser = .some(user)
+        switch (before, user) {
+        case let (.some(.some(_)), nil):
+            log("hub window: signed out in the hub; signing the app out")
+            onSignedOut()
+        case let (_, .some(id)) where before != .some(.some(id)):
+            log("hub window: signed in to the hub")
+            onSignedIn(id)
+        default:
+            break
+        }
     }
 
     public func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         log("hub window: web content process ended; reloading")
         webView.reload()
+    }
+}
+
+/// The page's reports, held weakly: a content controller keeps its handlers
+/// alive, and the window must not be kept alive by its own page.
+private final class AuthMessages: NSObject, WKScriptMessageHandler {
+    weak var window: HubWindow?
+    init(_ window: HubWindow) { self.window = window }
+    func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
+        guard let body = message.body as? [String: Any] else { return }
+        let user = body["user"] as? String
+        MainActor.assumeIsolated { window?.hubSaid(user: user) }
     }
 }
