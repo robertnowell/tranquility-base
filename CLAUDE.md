@@ -170,3 +170,15 @@ Multiple Claude sessions work this repo in parallel. The rules that keep it safe
     Rule 6's courtesy announcements survive only where they clear the
     CRITICAL bar above; everything else is a ledger entry. A session that
     cannot meet all three conditions surfaces the issue to its user.
+
+12. **Name the branch after the bead.** A branch that carries the beads
+    issue id it serves, as `hf-26-typed-vocabulary` and sixteen other
+    hands-free branches already did by 28 Sep 2026, joins the issue to its
+    pull request everywhere the hub looks: the issue sits at the pull
+    request's stage on the work strip (Proposed, Merged, Dev, Released,
+    Prod) with no further bookkeeping, and the observer fetches the pull
+    request by number even after it leaves the recent window. The id must
+    be word-bounded (`hf-6-loop`, never `hf-60`); the pull request title or
+    a `PR #n` citation in the issue's description or close reason joins
+    too, but the branch is the one that costs nothing. An issue with no
+    branch shows as Planned with "no branch yet", which is the honest state.
