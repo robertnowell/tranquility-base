@@ -71,29 +71,46 @@ public enum BrowserFocus {
     /// space. Comparing on both the exact string and its percent-decoded form
     /// covers the cases seen without resorting to fuzzy matching, which would
     /// eventually focus the wrong tab.
-    static func script(for url: URL, reloading: Bool = true) -> String {
+    static func script(for url: URL, reloading: Bool = true,
+                       browser: String = "Google Chrome") -> String {
         let exact = escaped(url.absoluteString)
         let decoded = escaped(url.absoluteString.removingPercentEncoding ?? url.absoluteString)
+        return walk(browser: browser,
+                    matching: "u is \"\(exact)\" or u is \"\(decoded)\"",
+                    acting: reloading ? "reload tab t of theWindow" : "")
+    }
+
+    /// The tab walk both doors share, holding the matched window BY ID.
+    ///
+    /// `window w` is a z-order position, not a window. Measured 29 Sep 2026:
+    /// the walk matched the hub tab in the second window, `set index of
+    /// window w to 1` brought that window forward, which renumbered the
+    /// windows, and the next line's `window w` was then the window that had
+    /// been in front. Its first tab, a Gmail draft, was navigated to the hub
+    /// and the hub tab was left where it was. Reproduced in an isolated
+    /// Chrome for Testing before the fix and not after (BrowserFocusDrillTests,
+    /// opt-in with TB_BROWSER_DRILL). So the window is resolved to its id once,
+    /// the action runs on that, and raising it comes last.
+    static func walk(browser: String, matching condition: String, acting action: String) -> String {
+        let app = escaped(browser)
         return """
-        if application "Google Chrome" is running then
-          tell application "Google Chrome"
-            set matched to false
+        if application "\(app)" is running then
+          tell application "\(app)"
             repeat with w from 1 to (count of windows)
-              set urls to URL of tabs of window w
+              set theWindow to window id (id of window w)
+              set urls to URL of tabs of theWindow
               repeat with t from 1 to (count of urls)
                 set u to item t of urls
-                if u is "\(exact)" or u is "\(decoded)" then
-                  set index of window w to 1
-                  set active tab index of window w to t
-                  \(reloading ? "reload tab t of window w" : "")
-                  set matched to true
-                  exit repeat
+                if \(condition) then
+                  set active tab index of theWindow to t
+                  \(action)
+                  set index of theWindow to 1
+                  activate
+                  return true
                 end if
               end repeat
-              if matched then exit repeat
             end repeat
-            if matched then activate
-            return matched
+            return false
           end tell
         else
           return false
@@ -112,35 +129,14 @@ public enum BrowserFocus {
     /// to the new address and raised. No reload: the navigation is the reload.
     ///
     /// Same three silent declines as above, and the same fallback.
-    static func navigateScript(to url: URL, within base: URL) -> String {
+    static func navigateScript(to url: URL, within base: URL,
+                               browser: String = "Google Chrome") -> String {
         let target = escaped(url.absoluteString)
         let prefix = escaped(base.absoluteString.hasSuffix("/") ? base.absoluteString
                                                                 : base.absoluteString + "/")
-        return """
-        if application "Google Chrome" is running then
-          tell application "Google Chrome"
-            set matched to false
-            repeat with w from 1 to (count of windows)
-              set urls to URL of tabs of window w
-              repeat with t from 1 to (count of urls)
-                set u to item t of urls
-                if u starts with "\(prefix)" then
-                  set index of window w to 1
-                  set active tab index of window w to t
-                  set URL of tab t of window w to "\(target)"
-                  set matched to true
-                  exit repeat
-                end if
-              end repeat
-              if matched then exit repeat
-            end repeat
-            if matched then activate
-            return matched
-          end tell
-        else
-          return false
-        end if
-        """
+        return walk(browser: browser,
+                    matching: "u starts with \"\(prefix)\"",
+                    acting: "set URL of tab t of theWindow to \"\(target)\"")
     }
 
     /// Send the tab already on `base` to `url` and raise it, or report that
