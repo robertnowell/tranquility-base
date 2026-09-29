@@ -168,6 +168,7 @@ extension SessionOwnershipStore {
         },
         migratePreference: (String, String) -> Void = {
             LampSwitch.rekey(from: $0, to: $1)
+            ProjectStore.rekey(from: $0, to: $1)
         }
     ) -> [LiveSession] {
         all().filter { $0.harness != ClaudeCodeAdapter().id && ProcessProbe.isAlive($0.pid) }

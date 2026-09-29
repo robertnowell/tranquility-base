@@ -25,6 +25,8 @@ public enum ManagerJSON {
         public var goal: String?
         public var topic: String?
         public var waiting: Bool
+        /// The project folder the user filed it in on the grid, if any.
+        public var folder: String? = nil
     }
 
     public struct WaitingRow: Codable, Equatable, Sendable {
@@ -69,7 +71,9 @@ public enum ManagerJSON {
 
     public static func targets(
         store: QueueStore, live: [LiveSession],
-        isEnrolled: (String, String?) -> Bool
+        isEnrolled: (String, String?) -> Bool,
+        book: ProjectBook = ProjectStore.shared.current,
+        origin: (String) -> String = SessionLineage.lastKnownOrigin
     ) -> [Target] {
         let open = (try? store.waitingSessions()) ?? []
         let waiting = Set(open.map(\.sessionId))
@@ -78,7 +82,7 @@ public enum ManagerJSON {
         // `SessionRow.quietRowsLast` gets from `lastActivity`.
         let askedAt = Dictionary(open.map { ($0.sessionId, $0.latestId) },
                                  uniquingKeysWith: max)
-        return live.sorted { a, b in
+        let sorted = live.sorted { a, b in
             let (x, y) = (Self.gridBand(a, waiting: waiting), Self.gridBand(b, waiting: waiting))
             if x != y { return x < y }
             if x == 0 {
@@ -86,7 +90,22 @@ public enum ManagerJSON {
                 if i != j { return i > j }
             }
             return (a.cwd ?? "") < (b.cwd ?? "")
-        }.map { s in
+        }
+        // The panel's folder order (ruling-project-folders, rules 1 and 3):
+        // folders first, a folder with an ask rising by its newest ask, the
+        // others in the user's order, loose sessions last. Within each group
+        // the order above stands.
+        func folderOf(_ id: String) -> ProjectBook.Folder? { book.folder(of: id, origin: origin) }
+        func firstAsk(_ folderId: String) -> Int? {
+            sorted.firstIndex { waiting.contains($0.sessionId) && folderOf($0.sessionId)?.id == folderId }
+        }
+        let present = book.folders.filter { f in sorted.contains { folderOf($0.sessionId)?.id == f.id } }
+        let folderOrder = present.compactMap { f in firstAsk(f.id).map { (f.id, $0) } }
+            .sorted { $0.1 < $1.1 }.map(\.0)
+            + present.filter { firstAsk($0.id) == nil }.map(\.id)
+        let grouped = folderOrder.flatMap { id in sorted.filter { folderOf($0.sessionId)?.id == id } }
+            + sorted.filter { folderOf($0.sessionId) == nil }
+        return grouped.map { s in
             let stop = try? store.latestStop(for: s.sessionId)
             let brief = stop.flatMap { e in
                 try? store.storedBrief(sessionId: s.sessionId, eventRowid: e.latestId)
@@ -98,7 +117,8 @@ public enum ManagerJSON {
                     ?? GridAssembler.tabDisplayName(live: s, callsign: nil),
                 enrolled: isEnrolled(s.sessionId, s.cwd),
                 goal: brief?.goal, topic: brief?.topic ?? stop?.briefTopic,
-                waiting: waiting.contains(s.sessionId))
+                waiting: waiting.contains(s.sessionId),
+                folder: folderOf(s.sessionId)?.name)
         }
     }
 

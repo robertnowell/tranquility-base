@@ -44,14 +44,19 @@ final class PastAgentsList: NSView {
         /// the swap above — see `openPastAgents`, which is the one place that
         /// knows both halves.
         let tooltip: String?
+        /// The project folder it was filed in on the grid, drawn as a chip.
+        /// The list stays flat (ruling-project-folders, rule 8); the chip only
+        /// says where it came from, and where a revive will put it back.
+        let folder: String?
 
         init(row: SessionRow, revivable: Bool, haystack: String,
-             aux: String? = nil, tooltip: String? = nil) {
+             aux: String? = nil, tooltip: String? = nil, folder: String? = nil) {
             self.row = row
             self.revivable = revivable
             self.haystack = haystack
             self.aux = aux
             self.tooltip = tooltip
+            self.folder = folder
         }
     }
 
@@ -737,6 +742,30 @@ final class PastRowView: NSControl {
         nameLabel = name
         restingName = name.textColor ?? StateLegend.Palette.ink
         addSubview(lamp); addSubview(name); addSubview(idLabel); addSubview(verbLabel)
+        // The folder chip sits between the name and the time, and the name
+        // gives way to it: truncating the title is fine, losing the chip is not.
+        let nameEnd: NSLayoutXAxisAnchor
+        if let folder = item.folder {
+            let chip = NSTextField(labelWithAttributedString: Widgets.letterspaced(
+                folder.uppercased(), size: 9, tracking: 1.4, color: StateLegend.Palette.muted))
+            chip.wantsLayer = true
+            chip.layer?.borderWidth = 1
+            chip.layer?.borderColor = StateLegend.Palette.hairline.cgColor
+            chip.layer?.cornerRadius = 3
+            chip.translatesAutoresizingMaskIntoConstraints = false
+            chip.setContentCompressionResistancePriority(.required, for: .horizontal)
+            chip.lineBreakMode = .byClipping
+            chipLabel = chip
+            addSubview(chip)
+            NSLayoutConstraint.activate([
+                chip.centerYAnchor.constraint(equalTo: centerYAnchor),
+                chip.trailingAnchor.constraint(equalTo: idLabel.leadingAnchor, constant: -10),
+                chip.widthAnchor.constraint(lessThanOrEqualToConstant: 110),
+            ])
+            nameEnd = chip.leadingAnchor
+        } else {
+            nameEnd = idLabel.leadingAnchor
+        }
         NSLayoutConstraint.activate([
             heightAnchor.constraint(equalToConstant: GridRowView.height),
             highlight.leadingAnchor.constraint(equalTo: leadingAnchor,
@@ -752,7 +781,7 @@ final class PastRowView: NSControl {
             name.leadingAnchor.constraint(equalTo: leadingAnchor,
                                           constant: GridRowView.lampColumn),
             name.centerYAnchor.constraint(equalTo: centerYAnchor),
-            name.trailingAnchor.constraint(lessThanOrEqualTo: idLabel.leadingAnchor,
+            name.trailingAnchor.constraint(lessThanOrEqualTo: nameEnd,
                                            constant: -12),
             idLabel.trailingAnchor.constraint(equalTo: trailingAnchor),
             idLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
@@ -773,6 +802,8 @@ final class PastRowView: NSControl {
     /// FRAME rather than from the string, because the failure mode is a name
     /// that is set correctly and rendered at zero points.
     var nameWidthForTesting: CGFloat { nameLabel.frame.width }
+    private(set) var chipLabel: NSTextField?
+    var chipForTesting: String? { chipLabel?.stringValue }
 
     /// Rule 1 of the hover standard (18 Aug): the wash says which row, the
     /// cursor says it is a control.

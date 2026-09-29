@@ -25,6 +25,9 @@ enum SelfTest {
         let verdict = failed.isEmpty ? "PASS" : "FAIL(\(failed.joined(separator: ",")))"
         let fields = checks.map { "\($0.0)=\($0.1)" }.joined(separator: " ")
         Permissions.log("selftest \(name): \(verdict) — \(fields)")
+        if CommandLine.arguments.contains("--selftest-folders") {
+            print("selftest \(name): \(verdict) — \(fields)")
+        }
     }
 
     /// A self-test that could not run is not a self-test that passed. Recorded
