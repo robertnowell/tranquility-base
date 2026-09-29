@@ -12,7 +12,8 @@ import WebKit
 /// engine Safari uses. There is one hub and it has one look.
 ///
 /// Sign-in is the hub's own, an email code (hq-app .env.example), done once
-/// in this window. Clerk's cookie is first-party (clerk.hq.tranquilitybase.dev),
+/// in this window, and on a fresh install it is the same sign-in that
+/// connects the Mac: pairing opens here (HubConnect), so one login is both. Clerk's cookie is first-party (clerk.hq.tranquilitybase.dev),
 /// so it persists in the default data store across launches. A document is
 /// still the web app's sandboxed frame, so its isolation is the browser's.
 ///
@@ -35,7 +36,7 @@ public final class HubWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, 
     private let base: () -> URL?
     private var titleWatch: NSKeyValueObservation?
 
-    public init(base: @escaping () -> URL? = { HubApp.baseURL }) {
+    public init(base: @escaping () -> URL? = { HubApp.hub }) {
         self.base = base
     }
 

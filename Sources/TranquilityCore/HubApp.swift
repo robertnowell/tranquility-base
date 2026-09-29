@@ -24,6 +24,12 @@ public enum HubApp {
     /// the machine's config.
     public static var baseURL: URL? { baseURL(config: configPath) }
 
+    /// The hub a Mac uses before hq.json names one: a fresh install, pairing.
+    public static let defaultBaseURL = URL(string: "https://hq.tranquilitybase.dev")!
+
+    /// hq.json's hub, else the default.
+    public static var hub: URL { baseURL ?? defaultBaseURL }
+
     public static let configPath = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent(".claude/hq.json")
 

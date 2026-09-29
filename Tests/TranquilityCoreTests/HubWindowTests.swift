@@ -11,6 +11,14 @@ final class HubWindowTests: XCTestCase {
         return h
     }
 
+    /// A fresh install has no hq.json yet, and pairing must still open in the
+    /// window, or its sign-in lands in the browser and the app and the hub are
+    /// two logins (29 Sep).
+    func testWithNoConfiguredHubThePairingPageStillOpensInTheWindow() {
+        let h = HubWindow(base: { HubApp.defaultBaseURL })
+        XCTAssertTrue(h.isHub(URL(string: "https://hq.tranquilitybase.dev/connect?code=x&device=y")!))
+    }
+
     func testTheHubAndItsOwnSubdomainsAreTheHub() {
         let h = hub()
         XCTAssertTrue(h.isHub(URL(string: "https://hq.example.test/d/x")!))
