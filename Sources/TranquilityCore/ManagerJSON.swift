@@ -2,9 +2,8 @@ import Foundation
 
 /// The read side of the hands-free manager: what `tbase … --json` prints.
 ///
-/// The manager (tb-voice, a stdio child of the app) never opens the store
-/// itself; the CLI is its one door for reads, the way `tbase send` and `tbase
-/// new` are its doors for actions. These are Codable so the shape is a tested
+/// The manager (tb-voice, hosted) never opens the store itself; the app's
+/// wire v1 tools answer its reads from these, through the CLI. These are Codable so the shape is a tested
 /// contract rather than a pretty-print somebody parses. Everything here is
 /// derived from stored briefs and the live probe — no model call, ever.
 public enum ManagerJSON {

@@ -1,27 +1,22 @@
 """A browser view of the manager's event stream: http://localhost:7861
 
-Tails events.jsonl (one JSON line per event) and bot.log (the gate verdicts) and
-streams both to the page over Server-Sent Events. Stdlib only; run with
-`python3 tail.py` from this directory or `./tail.sh`.
+Tails the event stream the app keeps and streams it to the page over
+Server-Sent Events, in four columns: who said what, the events, every model
+call in full, and the gate's verdicts. Stdlib only; run with `python3 tail.py`
+from this directory or `./tail.sh`.
 """
 
 import http.server
 import json
 import os
-import re
 import socketserver
 import time
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-# Hosted, the bot keeps nothing on disk; the app writes the stream it receives
-# to manager-events.jsonl in its support directory. TB_EVENTS_FILE points here.
-EVENTS = os.getenv("TB_EVENTS_FILE") or os.path.join(HERE, "events.jsonl")
-CALLS = os.path.join(HERE, "calls.jsonl")
-TRANSCRIPT = os.path.join(HERE, "transcript.md")
-LOG = os.path.join(HERE, "bot.log")
+# The stream the app writes as it receives it (EventsLog.swift): every event
+# line, every `said` line, every model call and every gate verdict (hf-14).
+EVENTS = os.getenv("TB_EVENTS_FILE") or os.path.expanduser(
+    "~/Library/Application Support/VoiceDispatch/manager-events.jsonl")
 PORT = int(os.getenv("TB_TAIL_PORT", "7861"))
-HOSTED = bool(os.getenv("TB_EVENTS_FILE"))
-GATE = re.compile(r"^(\S+ \S+) \| (\w+)\s+\| .*?(gate p=.*|manager read failed.*|manager turn failed.*|exec .*|Starting tb-voice.*)$")
 
 PAGE = """<!DOCTYPE html><html><head><meta charset="utf-8"><title>Tranquility · events</title>
 <style>
@@ -43,7 +38,7 @@ h2{font-size:11px;letter-spacing:.1em;color:#8a877e;margin:8px 0}
 .x{color:#c9c6bd}.l{padding:3px 0;border-bottom:1px dashed #2c2b27;white-space:pre-wrap}.l.speak{color:#f3f1e9}.l.err{color:#d86f6f}
 </style></head><body>
 <header><b>TRANQUILITY · EVENTS</b><span id="s">connecting…</span></header>
-<main><section><h2>transcript.md · who said what</h2><div id="tr"></div><h2>events.jsonl</h2><div id="ev"></div></section><section><h2>every model call, full request and response (click)</h2><div id="ca"></div></section><section><h2>gate verdicts and tools</h2><div id="lg"></div></section></main>
+<main><section><h2>who said what</h2><div id="tr"></div><h2>events</h2><div id="ev"></div></section><section><h2>every model call, full request and response (click)</h2><div id="ca"></div></section><section><h2>gate verdicts and tools</h2><div id="lg"></div></section></main>
 <script>
 const ev=document.getElementById('ev'),lg=document.getElementById('lg'),s=document.getElementById('s');
 function ts(t){const d=new Date(t*1000);return d.toTimeString().slice(0,8)+'.'+String(d.getMilliseconds()).padStart(3,'0').slice(0,1)}
@@ -98,62 +93,29 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_response(404); self.end_headers(); return
         self.send_response(200); self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-cache"); self.end_headers()
-        # replay the last 40 events, then follow both files
+        # The calls, verdicts and lines from further back, then the last 40 events in full.
+        parts: dict[str, list] = {}
         try:
             with open(EVENTS, errors="replace") as f:
                 recent = f.readlines()[-2000:]
-            # The calls and verdicts from further back, then the last 40 in full.
-            replay: dict[str, list] = {}
-            for i, line in enumerate(recent):
-                self._event(line.strip(), replay, quiet=i < len(recent) - 40)
         except FileNotFoundError:
-            pass
+            recent = []
+        for i, line in enumerate(recent):
+            self._event(line.strip(), parts, quiet=i < len(recent) - 40)
         try:
-            with open(LOG, errors="replace") as f:
-                for line in f.readlines()[-400:]:
-                    m = GATE.match(line.rstrip("\n"))
-                    if m:
-                        self._send("log", json.dumps({"time": m.group(1), "level": m.group(2), "line": m.group(3)}))
-        except FileNotFoundError:
-            pass
-        for path, kind, n in ((CALLS, "call", 30), (TRANSCRIPT, "transcript", 60)):
-            try:
-                with open(path, errors="replace") as f:
-                    for line in f.readlines()[-n:]:
-                        self._send(kind, line.strip() if kind == "call" else json.dumps({"line": line.rstrip("\n")}))
-            except FileNotFoundError:
-                pass
-        ev, lg = follow(EVENTS), follow(LOG)
-        parts: dict[str, list] = {}
-        ca, trf = follow(CALLS), follow(TRANSCRIPT)
-        try:
-            while True:
-                idle = True
-                for line in ca:
-                    if line is None: break
-                    idle = False; self._send("call", line)
-                for line in trf:
-                    if line is None: break
-                    idle = False; self._send("transcript", json.dumps({"line": line}))
-                for line in ev:
-                    if line is None: break
-                    idle = False; self._event(line, parts)
-                for line in lg:
-                    if line is None: break
-                    m = GATE.match(line)
-                    if m:
-                        idle = False
-                        self._send("log", json.dumps({"time": m.group(1), "level": m.group(2), "line": m.group(3)}))
-                if idle:
+            for line in follow(EVENTS):
+                if line is None:
                     self.wfile.write(b": keepalive\n\n"); self.wfile.flush(); time.sleep(0.3)
+                    continue
+                self._event(line, parts)
         except (BrokenPipeError, ConnectionResetError):
             return
 
     def _event(self, line, parts, quiet=False):
-        """One line of the event stream. Hosted, the model calls and the gate
-        verdicts arrive here too (hf-14): a call comes in parts, joined back
-        into the calls column; a verdict is also the gate column's line.
-        `quiet` replays only the calls and verdicts, not the whole stream."""
+        """One line of the event stream. A `said` line is the transcript column;
+        a model call comes in parts, joined back into the calls column (hf-14);
+        a verdict is also the gate column's line. `quiet` replays only those,
+        not the whole stream."""
         try:
             e = json.loads(line)
         except ValueError:
@@ -166,7 +128,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 parts.pop(e.get("id"), None)
                 self._send("call", "".join(got))
             return
-        if HOSTED and e.get("event") in ("listening", "addressed"):
+        if e.get("event") == "said":
+            who = "you" if e.get("role") == "user" else (e.get("speaker") or "Tranquility")
+            self._send("transcript", json.dumps({"line": f"{time.strftime('%H:%M:%S', time.localtime(e.get('t') or 0))}  "
+                                                         f"{who}: {e.get('text') or ''}"}))
+            return
+        if e.get("event") in ("listening", "addressed"):
             verdict = (f"gate p={e.get('p', 0):.2f} {e.get('intent') or ''} {e.get('ms') or '?'}ms "
                        f"{'SPEAK' if e['event'] == 'addressed' else 'silent'} :: {e.get('text') or ''}")
             t = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(e.get("t") or 0)) + f".{int((e.get('t') or 0) % 1 * 1000):03d}"

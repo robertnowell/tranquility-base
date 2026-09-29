@@ -37,17 +37,14 @@ final class ManagerModeTests: XCTestCase {
         XCTAssertNil(ManagerEvent.parse(Data("not json".utf8)))
     }
 
-    func testCommandDefaultsBesideTheCheckoutAndHonoursConfig() throws {
-        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("hq-\(UUID().uuidString).json")
-        XCTAssertTrue(ManagerConfig.command(config: tmp).first?.hasSuffix("tb-voice/server/run.sh") ?? false)
-        try #"{"manager":{"command":["/usr/local/bin/tb-voice","--quiet"]}}"#.write(to: tmp, atomically: true, encoding: .utf8)
-        XCTAssertEqual(ManagerConfig.command(config: tmp), ["/usr/local/bin/tb-voice", "--quiet"])
+    /// Signed in is the only way to a manager other than the dev shim; the
+    /// local stdio child went on 29 Sep (hf-24).
+    func testAvailabilityIsTheGatewayOrNothing() {
+        XCTAssertEqual(ManagerConfig.availability(signedIn: { true }), .managed)
+        XCTAssertEqual(ManagerConfig.availability(signedIn: { false }), .unset)
     }
 
-    func testEnvironmentMarksTheHostAndExtendsPath() {
-        let env = ManagerConfig.environment(base: ["PATH": "/x"])
-        XCTAssertEqual(env["TB_HOST"], "app")
-        XCTAssertTrue(env["PATH"]?.hasSuffix(":/x") ?? false)
-        XCTAssertTrue(env["PATH"]?.contains("/.local/bin") ?? false)
+    func testAReloadLineIsNoLongerAnEvent() {
+        XCTAssertNil(ManagerEvent.parse(Data(#"{"event":"reloading"}"#.utf8)))
     }
 }

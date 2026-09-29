@@ -16,7 +16,7 @@ spoken anyway. Now:
 In process, with the judgement and the handlers stubbed: this is the queue and
 the cut, not the classifier.
 
-    TB_HOSTED=1 uv run python drills/barge_in_drill.py
+    uv run python drills/barge_in_drill.py
 """
 
 import asyncio

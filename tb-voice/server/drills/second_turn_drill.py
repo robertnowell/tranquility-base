@@ -6,7 +6,7 @@ stop, and the transcriber produced not one word for any of them: no verdict, no
 line, the panel frozen on the last answer. Every drill until now spoke once per
 session, so nothing caught it.
 
-    TB_HOSTED=1 <keys> uv run bot.py -t websocket --port 7863
+    <keys> uv run bot.py -t websocket --port 7863
     uv run python drills/second_turn_drill.py ws://localhost:7863/ws ask.wav
 """
 

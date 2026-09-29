@@ -9,7 +9,7 @@ purple, the hosted manager read the agent's transcript, which before this it
 could not do at all. Without --hello the same session must still run, all on
 request:run.
 
-    TB_HOSTED=1 <keys> uv run bot.py -t websocket --port 7876
+    <keys> uv run bot.py -t websocket --port 7876
     uv run python drills/wire_v1_drill.py ws://localhost:7876/ws next.wav ask.wav --hello
     uv run python drills/wire_v1_drill.py ws://localhost:7876/ws next.wav ask.wav
 """

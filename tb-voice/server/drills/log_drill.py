@@ -13,7 +13,7 @@ behind every line the panel is waiting for. Checks, in process:
   viewer      tail.py joins the parts into the calls column and turns a
               verdict into the gate column's line, with its whole text
 
-    TB_HOSTED=1 uv run python drills/log_drill.py
+    uv run python drills/log_drill.py
 """
 
 import asyncio
@@ -22,7 +22,6 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-os.environ.setdefault("TB_HOSTED", "1")
 
 import calls  # noqa: E402
 import session  # noqa: E402
@@ -49,9 +48,10 @@ async def one(name: str) -> list:
 
 
 async def main():
-    size = os.path.getsize(calls.PATH) if os.path.exists(calls.PATH) else -1
+    here = os.path.join(os.path.dirname(calls.__file__), "calls.jsonl")
+    size = os.path.getsize(here) if os.path.exists(here) else -1
     a, b = await asyncio.gather(asyncio.create_task(one("a")), asyncio.create_task(one("b")))
-    after = os.path.getsize(calls.PATH) if os.path.exists(calls.PATH) else -1
+    after = os.path.getsize(here) if os.path.exists(here) else -1
     check(size == after, "queued: nothing written to calls.jsonl in the container")
     check([r["request"]["who"] for r in a] == ["a"] and [r["request"]["who"] for r in b] == ["b"],
           "isolated: each session's record reached only its own queue")
@@ -85,7 +85,6 @@ async def main():
     check(not held and sent and sent[0]["event"] == "call", "behind: the record waited for the panel's line, then went")
 
     import tail
-    tail.HOSTED = True
     out = []
 
     class H(tail.Handler):
