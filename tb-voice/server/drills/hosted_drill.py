@@ -2,7 +2,7 @@
 16 kHz PCM16 WAV up, collect the JSON lines and the 24 kHz audio down, answer
 the bot's door requests with canned replies. Run the bot first:
 
-    TB_HOSTED=1 <keys in env> uv run bot.py -t websocket --port 7862
+    <keys in env> uv run bot.py -t websocket --port 7862
 
 then:  uv run python drills/hosted_drill.py ws://localhost:7862/ws ask.wav
 """

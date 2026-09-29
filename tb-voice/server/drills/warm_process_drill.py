@@ -7,7 +7,7 @@ same, so two connections to it are two sessions through one process. Never
 point this at the production agent (hf-2): its turns would land in a real
 person's context, which is how the carried turns of 22 Sep got there.
 
-    TB_HOSTED=1 <keys> uv run bot.py -t websocket --port 7871
+    <keys> uv run bot.py -t websocket --port 7871
     uv run python drills/warm_process_drill.py ws://localhost:7871/ws one.wav two.wav
 """
 

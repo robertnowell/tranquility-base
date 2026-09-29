@@ -9,7 +9,7 @@ This drill does not test the canceller, which is Apple's and needs no test. It
 tests the wiring: with `aec` set, does a turn spoken while the bot is talking
 reach a verdict?
 
-    TB_HOSTED=1 <keys> uv run bot.py -t websocket --port 7863
+    <keys> uv run bot.py -t websocket --port 7863
     uv run python drills/interrupt_drill.py ws://localhost:7863/ws ask.wav
 """
 

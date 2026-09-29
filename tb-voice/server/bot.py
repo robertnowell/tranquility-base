@@ -1,9 +1,10 @@
 """tb-voice: the hands-free manager for Tranquility Base.
 
 Cascade: AssemblyAI STT -> Smart Turn v3 -> AddressedGate (Jev) -> MiniMax M2.7 on General
-Compute (tools via tbase) -> ElevenLabs TTS. Design: ../docs/design.md.
+Compute (tools on the Mac, docs/wire-v1.md) -> ElevenLabs TTS. Design: ../docs/design.md.
 
-Run with keys injected from the Keychain: ./run.sh
+Hosted on Pipecat Cloud (deploy.sh). To run it yourself, `uv run bot.py -t webrtc`
+with the keys in .env, and point hq.json's `manager.webrtc` at it.
 """
 
 import asyncio
@@ -14,7 +15,7 @@ import time
 
 from dotenv import load_dotenv
 
-# .env first: manager.py and tools.py read TBASE_BIN and TB_URL_SCHEME at import.
+# .env first: manager.py reads its settings at import.
 load_dotenv(override=True)
 
 from loguru import logger
@@ -84,28 +85,14 @@ def session_body(runner_args) -> dict | None:
 
 
 async def keyterms(body: dict | None = None) -> list[str]:
-    """The fixed names plus every session's display name. Hosted, the app sends
-    them in the session body (wire.py); a fleet read over the wire at startup
-    could only wait for a pipeline that does not exist yet, and did, for its
-    whole 5 s timeout, on every start (02:15:41, 22 Sep). Local, tbase reads."""
-    from tools import TBASE, _run
-
+    """The fixed names plus every session's display name, which the app sends
+    in the session body. A fleet read over the wire at startup could only wait
+    for a pipeline that does not exist yet, and did, for its whole 5 s timeout,
+    on every start (02:15:41, 22 Sep)."""
     names = list(KEYTERMS)
     extra = (body or {}).get("keyterms") if isinstance(body, dict) else None
     if isinstance(extra, list):
         names += [str(n).strip() for n in extra if str(n).strip() and str(n).strip() not in names]
-        return names[:100]
-    if os.getenv("TB_HOSTED"):
-        return names
-    try:
-        code, out = await _run(TBASE, "targets", "--json", timeout=5.0)
-        if code == 0:
-            for t in json.loads(out):
-                name = (t.get("name") or "").strip()
-                if name and name not in names:
-                    names.append(name)
-    except Exception as e:  # noqa: BLE001
-        logger.warning(f"keyterms: fleet names unavailable: {e}")
     return names[:100]
 
 
@@ -223,15 +210,6 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
     runner = WorkerRunner(handle_sigint=runner_args.handle_sigint)
     await runner.add_workers(worker)
 
-    if os.getenv("TB_HOST") == "app":
-        from events import emit
-        from reload import watch
-
-        async def _on_change(files):
-            await emit(None, "reloading", text=", ".join(files))
-
-        asyncio.get_event_loop().create_task(watch(_on_change))
-
     try:
         @transport.event_handler("on_client_connected")
         async def on_client_connected(transport, client):
@@ -303,42 +281,7 @@ async def bot(runner_args: RunnerArguments):
     await run_bot(transport, runner_args)
 
 
-async def run_local():
-    """Hosted by the app (or `--local`): the Mac's mic and speakers, no browser.
-    The runner has no local transport, so this builds one and calls run_bot."""
-    import asyncio
-
-    from pipecat.transports.local.audio import LocalAudioTransport, LocalAudioTransportParams
-
-    transport = LocalAudioTransport(
-        LocalAudioTransportParams(
-            audio_in_enabled=True,
-            audio_out_enabled=True,
-            audio_in_sample_rate=16000,
-            audio_out_sample_rate=48000,  # device native; TTS is resampled up from 24 kHz
-        )
-    )
-
-    class Args:
-        handle_sigint = True
-        body = {}
-        session_id = "local"
-
-    await run_bot(transport, Args())
-
-
 if __name__ == "__main__":
-    import sys
+    from pipecat.runner.run import main
 
-    if "--local" in sys.argv or os.getenv("TB_HOST") == "app":
-        import asyncio
-
-        # The log goes to bot.log here; stdout/stderr are the host's or the envelope's.
-        logger.remove()
-        logger.add("bot.log", level=os.getenv("TB_LOG", "INFO"))
-
-        asyncio.run(run_local())
-    else:
-        from pipecat.runner.run import main
-
-        main()
+    main()

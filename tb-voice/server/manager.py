@@ -35,11 +35,11 @@ import build_stamp
 from events import emit, line
 import session
 import span
-from vocab import Intent, Line, LineKind, Role, line_from_transcript, parse_intent
+from vocab import Intent, Line, LineKind, Role, parse_intent
 from turns import TurnQueue, effect
 from loop import Loop, Tool
 from spoken import spoken
-from tools import _json_or_text, _run
+from tools import TBASE, _json_or_text, _run
 
 JEV_URL = "https://api.typesafe.ai/v1/systemone"
 NAME = os.getenv("TB_MANAGER_NAME", "Tranquility")
@@ -61,10 +61,6 @@ IDLE_SECS = float(os.getenv("TB_IDLE_SECS", "1200"))
 # sentences from silence.
 SESSION_LIFE_SECS = float(os.getenv("TB_SESSION_LIFE_SECS", str(3 * 3600 + 55 * 60)))
 SCHEME = os.getenv("TB_URL_SCHEME", "tranquilitybase")
-SOUNDS = os.getenv("TB_SOUNDS", "")
-TBASE = os.getenv("TBASE_BIN", "tbase")
-if not os.path.exists(TBASE) and TBASE != "tbase":
-    logger.warning(f"TBASE_BIN {TBASE} does not exist; reads will fail closed")
 
 INTENTS: dict[Intent, str] = {
     Intent.INVITE_NEXT: "Invite the next agent or session to speak; 'next agent'; 'who is up'; 'what's next' when no agent is on stage",
@@ -323,8 +319,6 @@ class JevClient:
 
 
 
-TRANSCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "transcript.md")
-NOTES_STATE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "notes-session.txt")
 NOTES_SEED = (
     "You are the Notes keeper for Tranquility Base. Every message you receive from now on is "
     "a note dictated by voice. For each one: append it verbatim under a timestamp heading to "
@@ -338,40 +332,16 @@ def note(ln: Line):
     """What was said, by whom, for a person to read later and for the models to
     see as context. The exchange (the models' tail) and the count are this
     session's own; see session.py. Every line also goes out whole as a `said`
-    event, numbered, so the app holds the full record: every other event that
-    carries the user's words is cut to 120 characters, and hosted there is no
-    transcript on disk at all (hf-20)."""
+    event, numbered, so the app holds the full record; there is no transcript
+    on disk where the bot runs (hf-20)."""
     s = session.current()
     ln = Line(ln.role, ln.kind, ln.text.strip(), ln.speaker, ln.target, ln.target_name)
     s.exchange.append(ln)
     del s.exchange[:-session.EXCHANGE_KEEP]
     s.said += 1
     rec = line("said", n=s.said, **ln.said_fields())
-    if os.getenv("TB_HOSTED"):
-        from wire import outbox
-        outbox().put_nowait(rec)
-        return  # no transcript on disk where the bot is hosted; the app keeps the `said` lines
-    with open(TRANSCRIPT, "a") as f:
-        f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')}  {ln.jev_who} [{ln.jev_status}]: {ln.jev_text}\n")
-
-
-def seed_exchange():
-    """Local only: a restart picks up where the transcript left off. Hosted there
-    is no transcript, and a new session must start empty."""
-    if os.getenv("TB_HOSTED"):
-        return
-    s = session.current()
-    try:
-        with open(TRANSCRIPT) as f:
-            for raw in f.readlines()[-session.EXCHANGE_KEEP:]:
-                parts = raw.rstrip("\n").split("  ", 1)
-                if len(parts) != 2 or ": " not in parts[1]:
-                    continue
-                head, text = parts[1].split(": ", 1)
-                who, _, status = head.partition(" [")
-                s.exchange.append(line_from_transcript(who, status.rstrip("]"), text))
-    except FileNotFoundError:
-        pass
+    from wire import outbox
+    outbox().put_nowait(rec)  # the app keeps the `said` lines; nothing on disk here
 
 
 def exchange_lines(n: int = 8) -> list[str]:
@@ -453,13 +423,8 @@ def _now_line() -> str:
     In the Mac's zone (its hello says), else TB_TZ, else UTC, named."""
     from datetime import datetime
     from zoneinfo import ZoneInfo
-    tz = os.getenv("TB_TZ") or "UTC"
-    if os.getenv("TB_HOSTED"):
-        import wire
-        try:
-            tz = wire.current().tz or tz
-        except Exception:
-            pass
+    import wire
+    tz = wire.current().tz or os.getenv("TB_TZ") or "UTC"
     try:
         now = datetime.now(ZoneInfo(tz))
     except Exception:
@@ -625,7 +590,6 @@ class Manager(FrameProcessor):
         self._manager_voice = None
         self._brain = Brain()
         self._loop = Loop()
-        seed_exchange()
         self._recent: list[str] = []
         self._last_intent: Intent | None = None
         # Each intent's handler, named once. Found by building "_do_<label>"
@@ -754,7 +718,7 @@ class Manager(FrameProcessor):
         if isinstance(frame, StartFrame):
             if self._turns_task is None:
                 self._turns_task = self.create_task(self._turns.run())
-            if os.getenv("TB_HOSTED") and self._wire_task is None:
+            if self._wire_task is None:
                 self._wire_task = self.create_task(self._drain_wire())
                 self._log_task = self.create_task(self._drain_log())
                 self._mac_task = self.create_task(self._follow_mac())
@@ -1204,8 +1168,6 @@ class Manager(FrameProcessor):
                      until_minutes: int | None = None, limit: int = 80, day: str | None = None) -> dict:
         """Everything the developer said, hands-free and dictated, from the Mac
         (ManagerNotes, wire v1 `notes`): the same record as the hub's Notes."""
-        if not os.getenv("TB_HOSTED"):
-            return {"error": "notes are read on the Mac; this bot is not hosted"}
         import wire
         args = {"limit": limit} | ({"query": query} if query else {}) \
             | ({"since_minutes": since_minutes} if since_minutes is not None else {}) \
@@ -1239,20 +1201,16 @@ class Manager(FrameProcessor):
 
     async def _transcript(self, sid: str, chars: int, query: str = "") -> str:
         """The agent's own words, its latest or those matching `query`: from
-        the Mac when hosted (the file is there, hf-4), from its file when local."""
-        if os.getenv("TB_HOSTED"):
-            import wire
-            args = {"agent": sid, "chars": max(chars, 9000) if query else chars} | ({"query": query} if query else {})
-            r = await wire.call(wire.Tool.TRANSCRIPT, args)
-            if r is not None:
-                if not r.get("ok"):
-                    logger.warning(f"transcript for {sid[:8]}: {(r.get('error') or {}).get('code')}")
-                    return ""
-                turns = (r.get("data") or {}).get("turns") or []
-                return "\n".join((f"[turn {t['turn']}] " if t.get("turn") else "") + f"{t.get('who')}: {t.get('text')}"
-                                 for t in turns)[-chars:]
-        path = ((await self._brief(sid)) or {}).get("transcriptPath")
-        return Brain.transcript_search(path, query, max(chars, 9000)) if query else Brain.transcript_tail(path, chars)
+        the Mac, where the file is (hf-4)."""
+        import wire
+        args = {"agent": sid, "chars": max(chars, 9000) if query else chars} | ({"query": query} if query else {})
+        r = await wire.call(wire.Tool.TRANSCRIPT, args)
+        if r is None or not r.get("ok"):
+            logger.warning(f"transcript for {sid[:8]}: {((r or {}).get('error') or {}).get('code') or 'not offered'}")
+            return ""
+        turns = (r.get("data") or {}).get("turns") or []
+        return "\n".join((f"[turn {t['turn']}] " if t.get("turn") else "") + f"{t.get('who')}: {t.get('text')}"
+                         for t in turns)[-chars:]
 
     CAPABILITIES = ("Say what's next to hear the next agent. Ask for the goal, findings, next step "
                     "or why. Say tell it to, then your message. Say stop to mute. Say start an agent.")
@@ -1528,33 +1486,22 @@ class Manager(FrameProcessor):
 
     async def _notes_session(self) -> dict | None:
         live = {t["sessionId"] for t in await self._targets()}
-        hosted = bool(os.getenv("TB_HOSTED"))
-        if hosted:
-            # Never a file where the bot is hosted: the container is shared, and
-            # one account's Notes agent is not another's (session.py).
-            sid = session.current().notes_sid or ""
-        else:
-            try:
-                sid = open(NOTES_STATE).read().strip()
-            except FileNotFoundError:
-                sid = ""
+        # Never a file: the container is shared, and one account's Notes agent
+        # is not another's (session.py).
+        sid = session.current().notes_sid or ""
         if sid and sid in live:
             return {"kind": "agent", "sessionId": sid, "name": "Notes"}
         await self._say("Starting a notes agent.")
-        return await effect(self._new_notes_agent(hosted))
+        return await effect(self._new_notes_agent())
 
-    async def _new_notes_agent(self, hosted: bool) -> dict | None:
+    async def _new_notes_agent(self) -> dict | None:
         await emit(self, "tool", argv=["tbase", "new"])
         code, out = await _run(TBASE, "new", timeout=75)
         reg = next((ln.split(":", 1)[1].strip() for ln in out.splitlines() if ln.startswith("registered:")), None)
         if code != 0 or not reg:
             logger.error(f"notes agent: tbase new failed ({code}): {out[-400:]}")
             return None
-        if hosted:
-            session.current().notes_sid = reg
-        else:
-            with open(NOTES_STATE, "w") as f:
-                f.write(reg + "\n")
+        session.current().notes_sid = reg
         await _run(TBASE, "enroll", reg, timeout=10)
         await self._send(reg, NOTES_SEED, quiet=True)
         return {"kind": "agent", "sessionId": reg, "name": "Notes"}
@@ -1584,8 +1531,6 @@ class Manager(FrameProcessor):
         """Wire v1 `send`: what it came to, or None when this Mac does not offer
         it. One idem key per spoken request and never a retry: a send that timed
         out may have landed, so it reads as ambiguous (docs/wire-v1.md)."""
-        if not os.getenv("TB_HOSTED"):
-            return None
         import wire
         r = await wire.call(wire.Tool.SEND, {"agent": session_id, "text": text}, idem=uuid.uuid4().hex)
         if r is None:
@@ -1669,10 +1614,7 @@ class Manager(FrameProcessor):
         return (data.get("cloud") if isinstance(data, dict) else None) or None
 
     async def _earcon(self, name: str):
-        await emit(self, "earcon", name=name)
-        if SOUNDS and os.getenv("TB_HOST") != "app" and not os.getenv("TB_HOSTED"):  # the app plays it
-            wav = os.path.join(SOUNDS, f"{'needs-you' if name == 'needsYou' else name}.wav")
-            asyncio.create_task(_run("afplay", wav))
+        await emit(self, "earcon", name=name)  # the app plays it
 
     async def _targets(self) -> list[dict]:
         code, out = await _run(TBASE, "targets", "--json")

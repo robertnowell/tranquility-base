@@ -2,34 +2,22 @@
 
 One record per call: {"t", "kind", "ms", "request", "response"}. kind is jev
 (the gate and intents), brain (the span picker) or loop (the manager's loop).
-Nothing is truncated.
-
-Local, the record is calls.jsonl beside the log. Hosted, nothing is written in
-the container, which many developers' sessions share: the record goes to this
-session's own Mac on its logbox (wire.py), drained in parts behind everything
-else (Manager._drain_log), and the app keeps it with the event stream (hf-14).
+Nothing is truncated, and nothing is written where the bot runs, which many
+developers' sessions share: the record goes to this session's own Mac on its
+logbox (wire.py), drained in parts behind everything else
+(Manager._drain_log), and the app keeps it with the event stream (hf-14).
 """
 
 import json
-import os
 import time
-
-PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "calls.jsonl")
-_f = None
 
 
 def record(kind: str, request, response, ms: int | None = None, **extra):
-    global _f
+    from wire import logbox
     rec = {"t": round(time.time(), 3), "kind": kind, "ms": ms, "request": request, "response": response, **extra}
-    if os.getenv("TB_HOSTED"):
-        from wire import logbox
-        box = logbox()
-        if box is not None:
-            box.put_nowait(rec)
-        return rec
-    if _f is None:
-        _f = open(PATH, "a", buffering=1)
-    _f.write(json.dumps(rec, ensure_ascii=False, default=str) + "\n")
+    box = logbox()
+    if box is not None:
+        box.put_nowait(rec)
     return rec
 
 

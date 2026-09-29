@@ -9,7 +9,7 @@ the manager's stage becomes that agent. Checks, in process:
   unknown     an event this bot does not know is dropped at the door
   isolated    one session's event never moves another session's stage
 
-    TB_HOSTED=1 uv run python drills/follow_drill.py
+    uv run python drills/follow_drill.py
 """
 
 import asyncio

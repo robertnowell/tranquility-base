@@ -1,24 +1,16 @@
-"""The hosted wire: one WebSocket between the app and the bot.
+"""The wire between the app and the hosted bot (docs/wire-v1.md).
 
-Binary frames are audio, PCM16 mono: 16 kHz up from the app's microphone,
-24 kHz down from the synthesizer. Text frames are JSON lines: the same event
-lines the app already parses (`events.py`), plus two more shapes that let a
-hosted bot use the app's doors, since the bot has no `tbase` and no deep links
-where it runs:
-
-    down  {"request":"run","id":"r1","argv":["tbase","targets","--json"]}
-    up    {"reply":"r1","code":0,"out":"[...]"}
-
-The app answers a `run` request by doing what `run.sh`'s child would have done
-locally (`tbase` subcommands, `open <scheme>://...`), and the bot awaits the
-reply. Nothing else changes: the manager's doors are the same calls, routed
-through here when TB_HOSTED is set (see tools._run).
+Audio rides the WebRTC peer. Text messages are JSON: the event lines the app
+parses (`events.py`), and wire v1 frames, by which the bot asks the Mac for
+one of the tools it offers (`call`, `result`, `cancel`) and the Mac says what
+it offers (`hello`) and what the panel did (`event`). An app from before one
+door (hf-6) still answers the older `{"request":"run","argv":[...]}` for the
+tools it does not offer (tools._run); that goes once Prod offers them all.
 """
 
 import asyncio
 import contextvars
 import json
-import os
 import time
 import uuid
 from enum import Enum
@@ -33,7 +25,6 @@ from pipecat.frames.frames import (
 )
 from pipecat.serializers.base_serializer import FrameSerializer
 
-HOSTED = bool(os.getenv("TB_HOSTED"))
 IN_RATE = 16000
 
 class Wire:
