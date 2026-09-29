@@ -26,6 +26,35 @@ final class ManagerModeTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(ManagerEvent.parse(Data(#"{"event":"quiet"}"#.utf8))).event, .quiet)
     }
 
+    /// A barge-in is an event, as of 29 Sep. It was not: the turn was cut, the
+    /// voice stopped, and nothing said so -- so neither the log nor the panel
+    /// could tell a line that was cut off from one that finished.
+    func testAnInterruptionParsesAndCarriesTheLineItCut() throws {
+        let line = #"{"event":"interrupted","t":1790.5,"id":"9f2a1c04","chars":63,"voice":"manager","took":1.4}"#
+        let e = try XCTUnwrap(ManagerEvent.parse(Data(line.utf8)))
+        XCTAssertEqual(e.event, .interrupted)
+        XCTAssertEqual(e.took, 1.4)
+        XCTAssertEqual(e.voice, "manager")
+    }
+
+    /// A stop now names the line it stopped and how long it ran. The duration
+    /// is fractional, and `secs` is an Int: decoding one into the other fails
+    /// the WHOLE event, so the panel would have received no `quiet` at all and
+    /// left every cut line half lit. Written after doing exactly that.
+    func testAStopWithADurationStillParses() throws {
+        let line = #"{"event":"quiet","t":1790.9,"id":"9f2a1c04","chars":63,"voice":"manager","took":12.3}"#
+        let e = try XCTUnwrap(ManagerEvent.parse(Data(line.utf8)))
+        XCTAssertEqual(e.event, .quiet)
+        XCTAssertEqual(e.took, 12.3)
+        XCTAssertNil(e.secs, "the session's own clock is a different field")
+    }
+
+    /// And the whole-second one the session's life uses is untouched.
+    func testIdleStillCarriesWholeSeconds() throws {
+        let e = try XCTUnwrap(ManagerEvent.parse(Data(#"{"event":"idle","secs":1200}"#.utf8)))
+        XCTAssertEqual(e.secs, 1200)
+    }
+
     func testHearingAndErrorParse() throws {
         XCTAssertEqual(try XCTUnwrap(ManagerEvent.parse(Data(#"{"event":"hearing"}"#.utf8))).event, .hearing)
         let e = try XCTUnwrap(ManagerEvent.parse(Data(#"{"event":"error","reason":"tbase missing"}"#.utf8)))
