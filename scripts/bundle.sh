@@ -128,11 +128,23 @@ TB_PUBLIC_ED_KEY="${TB_PUBLIC_ED_KEY:-C/+0I+AP9TrlyA3hLSLgXdJT1kDekOXqGGnwB9bClC
 APP_DIR="$BUILD_DIR/$APP_NAME.app"
 
 swift build --configuration "$CONFIG" "${ARCH_ARGS[@]}" --product TranquilityApp
+# `tbase` ships INSIDE the app (29 Sep). The manager executes it for every
+# question it asks about the fleet, and until today the app found it only at a
+# path in hq.json or a hardcoded path inside a source checkout -- a file
+# somebody had to build by hand, which no deploy ever did.
+#
+# Measured 28 Sep: the binary the app was executing had been built on the 21st,
+# seven days and five shipped fixes earlier, and was still answering
+# `status --json` with 200 rows while the fixed source answered with 15. Every
+# one of those fixes passed CI, merged, installed, and never ran. On a Mac
+# without a checkout of this repository there was no `tbase` at all.
+swift build --configuration "$CONFIG" "${ARCH_ARGS[@]}" --product tbase
 
 rm -rf "$APP_DIR"
 mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
 mkdir -p "$BUILD_DIR"
 cp "$PRODUCTS_DIR/TranquilityApp" "$APP_DIR/Contents/MacOS/TranquilityApp"
+cp "$PRODUCTS_DIR/tbase" "$APP_DIR/Contents/Resources/tbase"
 
 # Debug symbols beside the bundle, for crash reports with names in them
 # (6 Sep). dsymutil reads the DWARF SwiftPM left in the object files; a
@@ -430,6 +442,12 @@ if [ -z "$IDENTITY" ]; then
   echo "   Privacy pane keeps showing them as granted. If that happens, run"
   echo "   scripts/reset-permissions.sh and grant again."
   echo "   Retry the identity with: scripts/make-signing-identity.sh"
+# `tbase` is a nested executable and signs like one: nested first, outer last,
+# with the SAME identity the app gets. Signed ad-hoc it would take the whole
+# bundle's designated requirement down to a cdhash that changes every build,
+# which is the TCC failure described at length above.
+  codesign --force --sign - --identifier "$BUNDLE_ID.tbase" \
+    --options runtime --timestamp=none "$APP_DIR/Contents/Resources/tbase"
   sparkle_sign "$APP_DIR" - --timestamp=none
   webrtc_sign "$APP_DIR" - --timestamp=none
   codesign --force --sign - --identifier "$BUNDLE_ID" \
@@ -441,6 +459,8 @@ else
   # without it TCC denies instantly, shows no prompt, and never lists the app in the
   # Privacy pane — a completely silent failure.
   # Nested first, outer last, never --deep: see scripts/lib/sparkle.sh.
+  codesign --force --sign "$IDENTITY" --identifier "$BUNDLE_ID.tbase" \
+    --options runtime --timestamp=none "$APP_DIR/Contents/Resources/tbase"
   sparkle_sign "$APP_DIR" "$IDENTITY" --timestamp=none
   webrtc_sign "$APP_DIR" "$IDENTITY" --timestamp=none
   codesign --force --sign "$IDENTITY" --identifier "$BUNDLE_ID" \
