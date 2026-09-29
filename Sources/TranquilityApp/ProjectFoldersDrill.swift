@@ -66,6 +66,47 @@ extension StatusHUD {
         let hideAndWait = !firstPaint.contains("[Kopi]") && store.current.folder(id: "kopi") != nil
         let menusSurviveIndent = Dictionary(uniqueKeysWithValues: gridRowsForTesting)["m1"] != nil
 
+        // The guide runs unbroken: every rule between two rows of one folder
+        // is a folder rule, and there is one per gap.
+        let rules = waitingRows.arrangedSubviews.filter { view in
+            view.subviews.count == 2 && view.frame.height <= 1.5 && !(view is FolderMemberView)
+        }.count
+        let guideUnbroken = rules == 3   // Mirai: header|m1|m2, TB: header|t1
+
+        // Collapse and reopen: the panel comes back to the height it had, so
+        // no row is pushed out of sight.
+        let openHeight = intendedHeight ?? 0
+        toggleFolder("mirai")
+        let shutHeight = intendedHeight ?? 0
+        toggleFolder("mirai")
+        let reopenRefits = panel?.isVisible != true
+            || (shutHeight < openHeight && abs((intendedHeight ?? 0) - openHeight) < 0.5)
+
+        // A folder dropped on the lower half of another folder's ROWS lands
+        // below it, not only on its 28pt header.
+        var folderDropsOnRows = false
+        if let header = header(for: "mirai"),
+           let member = gridLines.first(where: { $0.line.row?.id == "t1" })?.view,
+           let window = header.window {
+            let low = member.convert(NSPoint(x: member.bounds.midX, y: member.bounds.minY + 3), to: nil)
+            let start = header.convert(NSPoint(x: header.bounds.midX, y: header.bounds.midY), to: nil)
+            if let down = NSEvent.mouseEvent(with: .leftMouseDragged, location: start, modifierFlags: [],
+                                             timestamp: 0, windowNumber: window.windowNumber, context: nil,
+                                             eventNumber: 0, clickCount: 1, pressure: 1),
+               let over = NSEvent.mouseEvent(with: .leftMouseDragged, location: low, modifierFlags: [],
+                                             timestamp: 0, windowNumber: window.windowNumber, context: nil,
+                                             eventNumber: 0, clickCount: 1, pressure: 1) {
+                dragged(.folder("mirai"), view: header, phase: .began, event: down)
+                dragged(.folder("mirai"), view: header, phase: .moved, event: over)
+                let aimed = gridDrag?.target == .reorder(folder: "tb", after: true)
+                    && gridDrag?.bar?.isHidden == false
+                dragged(.folder("mirai"), view: header, phase: .ended, event: over)
+                folderDropsOnRows = aimed
+                    && store.current.folders.map(\.id).firstIndex(of: "mirai")
+                        == (store.current.folders.map(\.id).firstIndex(of: "tb") ?? -9) + 1
+            }
+        }
+
         // Collapse: one header, the lamp, the count; its row gone from view.
         toggleFolder("tb")
         let tb = header(for: "tb")
@@ -188,6 +229,9 @@ extension StatusHUD {
             ("dropDidNotOpenACard", dropDidNotOpenACard),
             ("undoInTheTopBand", undoInTheTopBand),
             ("wholeRowIsTheTarget", wholeRowIsTheTarget),
+            ("guideUnbroken", guideUnbroken),
+            ("reopenRefits", reopenRefits),
+            ("folderDropsOnRows", folderDropsOnRows),
             ("ghostDoesNotSnap", ghostDoesNotSnap),
             ("lastOutClosesIt", lastOutClosesIt),
             ("renameTakesAndReturnsKeys", renameTakesAndReturnsKeys),

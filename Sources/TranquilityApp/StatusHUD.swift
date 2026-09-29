@@ -3386,6 +3386,18 @@ final class StatusHUD: NSObject {
                     .size(withAttributes: [.font: GridRowView.auxFont]).width)
             }.max() ?? 0)
         let lines = ProjectLayout.lines(shown, book: book, origin: SessionLineage.lastKnownOrigin)
+        // Inside a folder the rule between two of its rows starts at the
+        // guide line and carries the guide's own pixel, so the guide runs
+        // unbroken from header to last row. A full-width rule there cut the
+        // guide at every row and crossed it (29 Sep, "these lines are a
+        // little jank").
+        func staysInFolder(after index: Int) -> Bool {
+            guard index + 1 < lines.count, case let .row(_, next?) = lines[index + 1] else { return false }
+            switch lines[index] {
+            case let .header(folder, _, _, _): return folder.id == next
+            case let .row(_, folder): return folder == next
+            }
+        }
         for (index, line) in lines.enumerated() {
             let item: SessionRow
             switch line {
@@ -3393,7 +3405,9 @@ final class StatusHUD: NSObject {
                 let header = folderHeader(folder, lamp: lamp, lit: lit, members: members)
                 waitingRows.addArrangedSubview(header)
                 gridLines.append((header, line))
-                waitingRows.addArrangedSubview(hairline(StateLegend.Palette.hairlineSoft))
+                waitingRows.addArrangedSubview(staysInFolder(after: index)
+                    ? FolderMemberView.rule(width: Self.gridWidth)
+                    : hairline(StateLegend.Palette.hairlineSoft))
                 continue
             case let .row(row, _):
                 item = row
@@ -3444,7 +3458,9 @@ final class StatusHUD: NSObject {
                 gridLines.append((row, line))
             }
             if index < lines.count - 1 {
-                waitingRows.addArrangedSubview(hairline(StateLegend.Palette.hairlineSoft))
+                waitingRows.addArrangedSubview(staysInFolder(after: index)
+                    ? FolderMemberView.rule(width: Self.gridWidth)
+                    : hairline(StateLegend.Palette.hairlineSoft))
             }
         }
         // The proactive half (ruled 05 Aug addendum): the "+" placard kicks off

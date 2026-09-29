@@ -227,7 +227,7 @@ final class FolderMemberView: NSView {
         NSLayoutConstraint.activate([
             widthAnchor.constraint(equalToConstant: width),
             heightAnchor.constraint(equalToConstant: GridRowView.height),
-            guide.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
+            guide.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Self.guideX),
             guide.widthAnchor.constraint(equalToConstant: 1),
             guide.topAnchor.constraint(equalTo: topAnchor),
             guide.bottomAnchor.constraint(equalTo: bottomAnchor),
@@ -239,4 +239,37 @@ final class FolderMemberView: NSView {
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("not used") }
+
+    /// The x of the guide line, shared by the rows and the rules between them.
+    static let guideX: CGFloat = 4
+
+    /// The rule between two rows of one folder: it starts at the guide and
+    /// lights the guide's pixel, so the guide never breaks at a row boundary.
+    static func rule(width: CGFloat) -> NSView {
+        let rule = NSView()
+        rule.translatesAutoresizingMaskIntoConstraints = false
+        let line = NSView()
+        line.wantsLayer = true
+        line.layer?.backgroundColor = StateLegend.Palette.hairlineSoft.cgColor
+        let guide = NSView()
+        guide.wantsLayer = true
+        guide.layer?.backgroundColor = StateLegend.Palette.hairline.cgColor
+        for view in [line, guide] {
+            view.translatesAutoresizingMaskIntoConstraints = false
+            rule.addSubview(view)
+        }
+        NSLayoutConstraint.activate([
+            rule.widthAnchor.constraint(equalToConstant: width),
+            rule.heightAnchor.constraint(equalToConstant: 1),
+            guide.leadingAnchor.constraint(equalTo: rule.leadingAnchor, constant: guideX),
+            guide.widthAnchor.constraint(equalToConstant: 1),
+            guide.topAnchor.constraint(equalTo: rule.topAnchor),
+            guide.bottomAnchor.constraint(equalTo: rule.bottomAnchor),
+            line.leadingAnchor.constraint(equalTo: guide.trailingAnchor),
+            line.trailingAnchor.constraint(equalTo: rule.trailingAnchor),
+            line.topAnchor.constraint(equalTo: rule.topAnchor),
+            line.bottomAnchor.constraint(equalTo: rule.bottomAnchor),
+        ])
+        return rule
+    }
 }

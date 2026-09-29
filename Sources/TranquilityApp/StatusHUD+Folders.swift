@@ -36,6 +36,8 @@ struct GridDrag {
     /// outline (reported 29 Sep, "the drag folder on top kind of snaps
     /// around ... the outlines flash in and out").
     var lastPoint: NSPoint = .zero
+    /// The line that says where a dragged folder will land.
+    var bar: NSView?
 }
 
 extension StatusHUD {
@@ -70,7 +72,7 @@ extension StatusHUD {
         let collapsed = !(projects.current.folder(id: folderId)?.collapsed ?? false)
         projects.update { $0.setCollapsed(folderId, collapsed) }
         Track.record("folder_toggled", ["collapsed": .token(collapsed ? "yes" : "no")])
-        rebuildSessionRows()
+        refitGrid()
     }
 
     private func folderMenu(_ folder: ProjectBook.Folder) -> NSMenu {
@@ -105,7 +107,7 @@ extension StatusHUD {
             projects.update { $0.delete(id) }
             noteDrop("Deleted \(folder.name.uppercased())", before: before)
             Track.record("folder_deleted", [:])
-            rebuildSessionRows()
+            refitGrid()
         }
     }
 
@@ -124,7 +126,7 @@ extension StatusHUD {
             undoDrop = nil
             clearReceipt()
             Track.record("folder_undo", [:])
-            rebuildSessionRows()
+            refitGrid()
         }
     }
 
@@ -140,6 +142,18 @@ extension StatusHUD {
         showReceipt(.folderChange(text))
     }
 
+    /// Repaint the rows and fit the panel to them. A folder change alters
+    /// the grid's height, and repainting the rows alone left the panel at its
+    /// old size: reopening a folder pushed the bottom rows out of sight
+    /// (29 Sep, "you lose the bottom rows, because it repaints on collapse
+    /// but not uncollapse").
+    func refitGrid() {
+        rebuildSessionRows()
+        guard !rowsHeld, let panel, panel.isVisible else { return }
+        resizeToFit(panel)
+        position(panel)
+    }
+
     // MARK: - A hold nobody is holding
 
     /// A held grid whose gesture ended without telling us: the button is up
@@ -153,6 +167,7 @@ extension StatusHUD {
 
     func releaseHeldGrid(because reason: String) {
         gridDrag?.ghost.removeFromSuperview()
+        gridDrag?.bar?.removeFromSuperview()
         gridDrag = nil
         for header in gridLines.compactMap({ $0.view as? FolderHeaderView })
         where header.editorForTesting != nil {
@@ -250,10 +265,25 @@ extension StatusHUD {
         }
         switch drag.source {
         case let .folder(moving):
-            guard case let .header(folder, _, _, _)? = under?.line, folder.id != moving,
-                  let view = under?.view else { return (nil, nil) }
-            let local = view.convert(windowPoint, from: nil)
-            return (.reorder(folder: folder.id, after: local.y < view.bounds.midY), nil)
+            // The whole folder is the target, header and rows alike: its top
+            // half puts the dragged folder above it, its bottom half below.
+            // It was the 28pt header only (29 Sep, "I wanna drag folders above
+            // and below other folders easily"). Below every folder, on the
+            // loose rows, it goes last.
+            let owner: String?
+            switch under?.line {
+            case let .header(folder, _, _, _)?: owner = folder.id
+            case let .row(_, folder?)?: owner = folder
+            default: owner = nil
+            }
+            if let owner, owner != moving, let block = folderBlock(owner) {
+                return (.reorder(folder: owner, after: windowPoint.y < block.midY), nil)
+            }
+            if owner == nil, under?.line.row != nil,
+               let last = gridLines.compactMap({ $0.line.folder?.id }).last(where: { $0 != moving }) {
+                return (.reorder(folder: last, after: true), nil)
+            }
+            return (nil, nil)
 
         case let .row(id):
             let current = book.folder(of: id, origin: origin)?.id
@@ -284,7 +314,37 @@ extension StatusHUD {
         }
     }
 
+    /// The folder's header and rows as one rectangle, in window coordinates.
+    func folderBlock(_ folderId: String) -> NSRect? {
+        let views = gridLines.filter { entry in
+            switch entry.line {
+            case let .header(folder, _, _, _): return folder.id == folderId
+            case let .row(_, folder): return folder == folderId
+            }
+        }.map { $0.view.convert($0.view.bounds, to: nil) }
+        guard let first = views.first else { return nil }
+        return views.dropFirst().reduce(first) { $0.union($1) }
+    }
+
+    private func showInsertionBar(folder: String, after: Bool) {
+        guard let content = panel?.contentView, let block = folderBlock(folder) else { return }
+        let bar = gridDrag?.bar ?? {
+            let bar = NSView()
+            bar.wantsLayer = true
+            bar.layer?.backgroundColor = StateLegend.Palette.ready.cgColor
+            bar.layer?.cornerRadius = 1
+            content.addSubview(bar, positioned: .below, relativeTo: gridDrag?.ghost)
+            gridDrag?.bar = bar
+            return bar
+        }()
+        let edge = content.convert(NSRect(x: block.minX, y: after ? block.minY : block.maxY,
+                                          width: block.width, height: 0), from: nil)
+        bar.frame = NSRect(x: edge.minX, y: edge.minY - 1, width: edge.width, height: 2)
+        bar.isHidden = false
+    }
+
     private func paintDropTarget(_ drag: GridDrag) {
+        drag.bar?.isHidden = true
         for entry in gridLines {
             (entry.view as? FolderHeaderView)?.setDropTarget(false)
             (entry.view as? FolderHeaderView)?.setInsertion(nil)
@@ -294,7 +354,7 @@ extension StatusHUD {
         case let .join(folder)?:
             header(for: folder)?.setDropTarget(true)
         case let .reorder(folder, after)?:
-            header(for: folder)?.setInsertion(after ? .minY : .maxY)
+            showInsertionBar(folder: folder, after: after)
         case let .makeFolder(with)?:
             if let row = gridLines.first(where: { $0.line.row?.id == with })?.view as? GridRowView {
                 row.layer?.borderWidth = 1.5
@@ -310,6 +370,7 @@ extension StatusHUD {
         guard let drag = gridDrag else { return }
         gridDrag = nil
         drag.ghost.removeFromSuperview()
+        drag.bar?.removeFromSuperview()
         rowsHeld = false
         switch (drag.source, drag.target) {
         case let (.row(id), target?):
@@ -319,9 +380,9 @@ extension StatusHUD {
             projects.update { $0.move(id, to: target, after: after) }
             noteDrop("Moved \(projects.current.folder(id: id)?.name.uppercased() ?? "folder")",
                      before: before)
-            rebuildSessionRows()
+            refitGrid()
         default:
-            rebuildSessionRows()
+            refitGrid()
         }
     }
 
@@ -351,7 +412,7 @@ extension StatusHUD {
         case .reorder:
             break
         }
-        rebuildSessionRows()
+        refitGrid()
     }
 
     // MARK: - Naming
@@ -387,7 +448,7 @@ extension StatusHUD {
                 }
                 self?.namingFolders.remove(folderId)
                 Permissions.log("folder: named \(folderId) \(proposed == nil ? "by fallback" : "by model")")
-                self?.rebuildSessionRows()
+                self?.refitGrid()
             }
         }
     }
@@ -409,6 +470,6 @@ extension StatusHUD {
         }
         releaseKeyboard()
         rowsHeld = false
-        rebuildSessionRows()
+        refitGrid()
     }
 }
