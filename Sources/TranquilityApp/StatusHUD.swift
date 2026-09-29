@@ -786,7 +786,7 @@ final class StatusHUD: NSObject {
         // the orb above it says the mode. Titling it HANDS-FREE printed the
         // same two words twice, one line apart.
         face = Face(title: "", body: text,
-                    placardOverride: "\(StateLegend.Glyph.speaking) \(StateLegend.managerOnTitle)")
+                    placardOverride: "\(StateLegend.Glyph.speaking) \(StateLegend.managerOnTitle.uppercased())")
         render()
         return true
     }
@@ -2799,7 +2799,7 @@ final class StatusHUD: NSObject {
             // the stack's left inset is 14, so 30 puts the "P" at x 44 with an
             // 8pt gap). The placardClearsChevron drill holds this geometry.
             stateLabel.attributedStringValue = Widgets.letterspaced(
-                StateLegend.pastAgentsTitle, size: 10, tracking: 3.2,
+                StateLegend.pastAgentsTitle.uppercased(), size: 10, tracking: 3.2,
                 color: StateLegend.Lens.chrome.color, headIndent: 30)
             // One row, like the grid's: chevron, placard, gear. The gear stays
             // — settings is reachable from here as it is from everywhere — and
@@ -3050,7 +3050,7 @@ final class StatusHUD: NSObject {
         guard !face.title.isEmpty else { titleLabel.stringValue = ""; return }
         let truncating = NSMutableParagraphStyle()
         truncating.lineBreakMode = .byTruncatingTail
-        let font = ChromeType.mono(ofSize: 13, weight: .semibold)
+        let font = StateLegend.Face.message(14, .semibold)
         let attributes: [NSAttributedString.Key: Any] = [
             .font: font,
             .foregroundColor: StateLegend.Palette.ink,
