@@ -61,6 +61,17 @@ final class HubWindowTests: XCTestCase {
         XCTAssertEqual(ins, 1)
     }
 
+    /// A report an agent opens never moves an open window (ruled 29 Sep).
+    func testAnOfferedReportOpensAClosedWindowAndLeavesAnOpenOneAlone() {
+        let h = hub()
+        XCTAssertFalse(h.offer(URL(string: "https://elsewhere.test/x")!), "not the hub: the caller's")
+        XCTAssertTrue(h.offer(URL(string: "https://hq.example.test/d/first")!))
+        XCTAssertEqual(h.lastShown?.path, "/d/first")
+        h.window?.orderFront(nil)
+        XCTAssertTrue(h.offer(URL(string: "https://hq.example.test/d/second")!))
+        XCTAssertNotEqual(h.lastShown?.path, "/d/second", "an open window stays on its page")
+    }
+
     func testTheHubAndItsOwnSubdomainsAreTheHub() {
         let h = hub()
         XCTAssertTrue(h.isHub(URL(string: "https://hq.example.test/d/x")!))

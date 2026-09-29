@@ -2225,6 +2225,7 @@ extension StatusHUD {
         readIntensityDrill()
         launchCardDrill()
         launchQuestionDrill()
+        handsFreeFaultDrill()
         terminateDrill()
         pastAgentsDrill()
         placardClearsControlsDrill()

@@ -717,7 +717,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 HubMirror.revealFirstReport = { url in
                     DispatchQueue.main.async {
                         Permissions.log("hub: revealing the first report")
-                        if !HubWindow.shared.show(url), BrowserFocus.reveal(url, app: HubApp.baseURL) == .notFound {
+                        if !HubWindow.shared.offer(url), BrowserFocus.reveal(url, app: HubApp.baseURL) == .notFound {
                             NSWorkspace.shared.open(url)
                         }
                     }
