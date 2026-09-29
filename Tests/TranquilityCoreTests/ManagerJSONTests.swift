@@ -57,11 +57,37 @@ final class ManagerJSONTests: XCTestCase {
 
     func testStatusListsWaitingSessionsWithGoal() throws {
         _ = try seed()
-        let status = try ManagerJSON.status(store: store)
+        let status = try ManagerJSON.status(store: store, live: ["sess-1"])
         XCTAssertEqual(status.waiting.count, 1)
         XCTAssertEqual(status.waiting.first?.goal, "ship the outreach CRM")
         XCTAssertEqual(status.unannounced, 1)
         XCTAssertFalse(status.waiting.first?.heard ?? true)
+    }
+
+    /// The 28 Sep fault, in one assertion: the store keeps a waiting row long
+    /// after its session has gone, and this door used to ship every one of
+    /// them. 186 of 200 rows were history, the answer came to 29,160 bytes,
+    /// and the data channel refuses anything over 16,384 -- so the manager
+    /// received nothing and said nobody was waiting while the grid showed a
+    /// column of green.
+    func testAWaitingRowWhoseSessionIsGoneIsNotShipped() throws {
+        _ = try seed()
+        let status = try ManagerJSON.status(store: store, live: [])
+        XCTAssertTrue(status.waiting.isEmpty,
+                      "a row nobody can speak to is history, not a queue")
+        XCTAssertEqual(status.unannounced, 0,
+                       "and it must not be counted as something owed to the user")
+    }
+
+    /// The count and the rows have to agree. `unannounced` was read off the
+    /// unfiltered list once and would have gone on reporting 179 things owed
+    /// against a queue of 14.
+    func testTheUnannouncedCountCountsOnlyWhatIsShipped() throws {
+        _ = try seed()
+        let live = try ManagerJSON.status(store: store, live: ["sess-1"])
+        let dead = try ManagerJSON.status(store: store, live: ["someone-else"])
+        XCTAssertEqual(live.unannounced, live.waiting.filter { !$0.heard }.count)
+        XCTAssertEqual(dead.unannounced, 0)
     }
 
     func testTargetsJoinGoalAndWaitingOntoLiveSessions() throws {

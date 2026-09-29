@@ -128,8 +128,31 @@ public enum ManagerJSON {
         return 2                                        // merely alive
     }
 
-    public static func status(store: QueueStore) throws -> Status {
-        let open = try store.waitingSessions()
+    /// The waiting rows the manager can actually act on: the ones whose session
+    /// is still alive.
+    ///
+    /// `live` is not optional and not defaulted, because the day it defaulted
+    /// to "everything" is the day this shipped 200 rows. The store keeps a
+    /// waiting row long after its session has gone -- 186 of those 200 on
+    /// 28 Sep, against 21 live sessions and 14 that were really waiting. At
+    /// 29,160 bytes the answer was over the data channel's 16 KB ceiling, so
+    /// the app refused to send it at all:
+    ///
+    ///     {'wire': 'result', 'ok': False, 'error': {'code': 'too_large',
+    ///      'message': 'waiting result is over 16384 bytes and cannot be cut'}}
+    ///
+    /// and the manager, receiving nothing, told Robert nobody was waiting while
+    /// the grid in front of him showed a column of green. The fleet was never
+    /// large; the history was.
+    ///
+    /// Filtering here rather than in the manager is the point: the bot cannot
+    /// filter a payload that never arrives. `Manager._live_waiting` has done
+    /// this same intersection client-side since it was written, for the same
+    /// stated reason -- "the store keeps rows for sessions long gone; those are
+    /// not 'waiting on you' in any sense worth saying aloud". It was right, and
+    /// it was on the wrong side of the wire.
+    public static func status(store: QueueStore, live: Set<String>) throws -> Status {
+        let open = try store.waitingSessions().filter { live.contains($0.sessionId) }
         let rows = open.map { w -> WaitingRow in
             let brief = try? store.storedBrief(sessionId: w.sessionId, eventRowid: w.latestId)
             return WaitingRow(

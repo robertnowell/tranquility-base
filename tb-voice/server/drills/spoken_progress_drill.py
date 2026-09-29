@@ -41,11 +41,16 @@ async def main() -> int:
     # The parent's push_frame is what ours calls after emitting.
     T.ElevenLabsTTSService.push_frame = passthrough
 
-    # Three words of a sentence, as the service reports them.
-    for spoken_so_far in ("It", "It is", "It is done."):
-        await T.SpokenTTSService.push_frame(svc, AggregatedTextProgressFrame(
+    # Three words of a sentence, as the service reports them -- each stamped
+    # with when it is MEANT to be heard. ElevenLabs hands the whole alignment
+    # over at once, so all three arrive in the same tick and only these
+    # timestamps say they are half a second apart.
+    for i, spoken_so_far in enumerate(("It", "It is", "It is done.")):
+        f = AggregatedTextProgressFrame(
             segment_id=1, context_id="c", text=LINE, aggregated_by="word",
-            accumulated_text=spoken_so_far, remaining_text=LINE[len(spoken_so_far):]))
+            accumulated_text=spoken_so_far, remaining_text=LINE[len(spoken_so_far):])
+        f.pts = int(i * 0.5 * 1_000_000_000)   # 0.0s, 0.5s, 1.0s, in nanoseconds
+        await T.SpokenTTSService.push_frame(svc, f)
 
     progress = [e for e in seen if e["event"] == "spoke"]
     check("one event per word spoken", len(progress) == 3)
@@ -58,7 +63,26 @@ async def main() -> int:
     # `speaking` event that preceded this; progress is a number.
     check("it carries progress and nothing else",
           all("text" not in e for e in progress))
-    check("the frame still goes on down the pipeline", len(pushed) == 3)
+    # The half that 28 Sep added. Without a time the panel paints on arrival,
+    # and since every event arrives together the line flashes in at once and
+    # then waits for the voice.
+    check("and WHEN each word is meant to be heard, in seconds",
+          [e.get("at") for e in progress] == [0.0, 0.5, 1.0])
+
+    # A frame with no timestamp still reports, because a panel painting on
+    # arrival is worse than a panel painting nothing but not by much, and an
+    # older bot must not go dark.
+    seen.clear()
+    bare = AggregatedTextProgressFrame(
+        segment_id=1, context_id="c", text=LINE, aggregated_by="word",
+        accumulated_text="It", remaining_text=LINE[2:])
+    await T.SpokenTTSService.push_frame(svc, bare)
+    check("a frame with no timestamp still reports its progress",
+          len(seen) == 1 and seen[0]["upTo"] == 2 and seen[0].get("at") is None)
+    # Four: the three timed words above, plus the untimed one. Every progress
+    # frame is reported AND forwarded -- this service listens, it does not
+    # consume.
+    check("every frame still goes on down the pipeline", len(pushed) == 4)
 
     # Anything else passes through untouched and says nothing.
     seen.clear()

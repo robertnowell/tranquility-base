@@ -67,6 +67,14 @@ public struct ManagerEvent: Codable, Equatable, Sendable {
     public var secs: Int?
     /// `spoke`: characters of `text` said so far.
     public var upTo: Int?
+    /// `spoke`: when this word is MEANT to be heard, in seconds on the bot's
+    /// own clock. Not when the event arrived, which is the distinction that
+    /// matters: ElevenLabs returns a whole utterance's alignment with the
+    /// audio, so every word event lands in the same tick and painting them on
+    /// arrival lights the line in one flash and then waits three seconds for
+    /// the voice to catch up (reported 28 Sep). Absent from an older bot, in
+    /// which case the panel paints on arrival as it used to.
+    public var at: Double?
 
     public static func parse(_ line: Data) -> ManagerEvent? {
         try? JSONDecoder().decode(ManagerEvent.self, from: line)

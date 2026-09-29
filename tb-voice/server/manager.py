@@ -116,6 +116,32 @@ def only_the_name(text: str) -> bool:
     return len(words) == 1 and words[0].startswith(NAME_SOUNDS)
 
 
+class DoorRefused(RuntimeError):
+    """A read door answered, and the answer was no."""
+
+
+def _rows(code: int, out: str, what: str, pick) -> list[dict]:
+    """Rows, or an exception. Never an empty list standing in for a failure.
+
+    28 Sep: `tbase status --json` came to 29,160 bytes, the data channel
+    refuses anything over 16,384, and the app said so plainly --
+    `{'ok': False, 'error': {'code': 'too_large', ...}}`. This read that
+    refusal, found no list in it, and returned `[]`. So the manager told
+    Robert "Nobody is waiting on you" while his grid showed a column of
+    green, and nothing anywhere said a door had been refused.
+
+    An empty list is a real answer -- it means the queue is empty -- and it
+    must not also be how a failure arrives. Anything that is not rows raises,
+    `_handle_turn` reports it with a reason, and the manager says something
+    true instead of something confidently wrong."""
+    answer = _json_or_text(code, out)
+    rows = pick(answer.get("data"))
+    if code != 0 or rows is None:
+        detail = (answer.get("text") or str(answer.get("data")))[:120]
+        raise DoorRefused(f"could not read {what}: {detail}")
+    return rows
+
+
 def _why(e: BaseException) -> str:
     """A reason a person can read, which `str(e)` is often not.
 
@@ -817,7 +843,9 @@ class Manager(FrameProcessor):
             # not in doubt, and silence is the manager appearing broken while
             # it is merely unable to think. 28 Sep: four turns in a row died
             # here and the panel showed a bare "error" with nothing after it.
-            if names_the_manager(text):
+            if isinstance(e, DoorRefused):
+                await self._say("I could not read the fleet just now. Try that again.")
+            elif names_the_manager(text):
                 await self._say("Something went wrong judging that. Say it again.")
 
     async def _judge(self, text: str):
@@ -1609,13 +1637,12 @@ class Manager(FrameProcessor):
 
     async def _targets(self) -> list[dict]:
         code, out = await _run(TBASE, "targets", "--json")
-        data = _json_or_text(code, out).get("data")
-        return data if isinstance(data, list) else []
+        return _rows(code, out, "the fleet", lambda d: d if isinstance(d, list) else None)
 
     async def _waiting(self) -> list[dict]:
         code, out = await _run(TBASE, "status", "--json")
-        data = _json_or_text(code, out).get("data") or {}
-        return data.get("waiting", []) if isinstance(data, dict) else []
+        return _rows(code, out, "the waiting list",
+                     lambda d: d.get("waiting") if isinstance(d, dict) else None)
 
     async def _brief(self, session_id: str) -> dict | None:
         code, out = await _run(TBASE, "brief", session_id, "--json")

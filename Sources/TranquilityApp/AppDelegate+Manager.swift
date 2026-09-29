@@ -541,6 +541,48 @@ extension AppDelegate {
         }
     }
 
+    /// Paint the highlight when the word is meant to be HEARD, not when its
+    /// event arrives.
+    ///
+    /// Reported 28 Sep: "the speaking each word highlighting doesn't work, it
+    /// all flashes in at once". It did. ElevenLabs returns a whole utterance's
+    /// alignment together with the audio, so Pipecat emits every progress frame
+    /// in the same tick -- eight events at one timestamp on 27 Sep, while the
+    /// voice carried on for another three seconds. Painting on arrival lights
+    /// the entire line instantly and then waits.
+    ///
+    /// Each frame carries the presentation timestamp of its word (`Frame.pts`),
+    /// which the bot now sends as `at`. The first one to arrive anchors the
+    /// clock -- the bot's timestamps are stream-wide, so only the offsets
+    /// between them mean anything here -- and every later word is painted that
+    /// far after it. Drift against the actual speaker is bounded by the network
+    /// delay of the first event, which is milliseconds.
+    ///
+    /// This is what the local synthesiser always did (`11labs: onWord upTo=2
+    /// t=0.104`), and what moving the speaking to the bot took away.
+    @MainActor
+    func paintSpoken(upTo: Int, at: Double?) {
+        guard let at else {
+            hud.highlight(upTo: upTo)   // an older bot: paint on arrival, as before
+            return
+        }
+        guard let clock = spokenClock else {
+            spokenClock = (firstWordAt: at, anchoredAt: Date())
+            hud.highlight(upTo: upTo)
+            return
+        }
+        let due = clock.anchoredAt.addingTimeInterval(at - clock.firstWordAt)
+        let wait = due.timeIntervalSinceNow
+        // Already due, or near enough that a timer would cost more than it
+        // buys: paint now. The panel repaints at 20Hz anyway.
+        guard wait > 0.02 else { hud.highlight(upTo: upTo); return }
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
+            guard let self, self.managerIsOn else { return }
+            self.hud.highlight(upTo: upTo)
+        }
+    }
+
     /// Every orb line while hands-free is up, with whoever is on stage in front
     /// of it. One funnel, so a new event cannot quietly lose the name again.
     @MainActor
@@ -591,6 +633,10 @@ extension AppDelegate {
             // session, its project, and its doors, and it is already opening
             // that card from the `hear` URL a breath earlier. Painting a
             // doorless one here would take the stage first and lose them.
+            // A new line, so the word clock starts again. Without this the
+            // second utterance schedules against the first one's anchor and
+            // paints its whole line at once.
+            spokenClock = nil
             if e.voice != "agent", let text = e.text, !text.isEmpty {
                 hud.showManagerLine(text)
             }
@@ -615,7 +661,7 @@ extension AppDelegate {
             // The same highlight the card has always used, told from the other
             // end of the connection. The card is showing the line already; this
             // only says how much of it has been heard.
-            if let upTo = e.upTo { hud.highlight(upTo: upTo) }
+            if let upTo = e.upTo { paintSpoken(upTo: upTo, at: e.at) }
         case .said:
             break  // the ledger has it (managerLedger); nothing to paint
         case .rotate:
