@@ -49,8 +49,11 @@ public final class HubPageView: NSView, WKNavigationDelegate, WKUIDelegate {
             webView.topAnchor.constraint(equalTo: topAnchor),
             webView.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
-        titleWatch = webView.observe(\.title, options: [.new]) { [weak self] view, _ in
-            let title = view.title ?? ""
+        // The title comes from the change, not the view: the view is main
+        // actor-isolated and this closure is not (the Intel CI toolchain
+        // refuses the read that the local one allowed).
+        titleWatch = webView.observe(\.title, options: [.new]) { [weak self] _, change in
+            let title = (change.newValue ?? nil) ?? ""
             Task { @MainActor in self?.onTitle?(title) }
         }
     }
