@@ -123,3 +123,23 @@ final class HubWindowLiveTests: XCTestCase {
         }
     }
 }
+
+final class HubDoorLinkTests: XCTestCase {
+    func testTheHubLinkCarriesItsAddress() {
+        let page = "https://hq.example.test/open?session=abc&slug=plan"
+        let link = URL(string: "tranquilitybase://hub?url=" + page.addingPercentEncoding(withAllowedCharacters: .alphanumerics)!)!
+        guard case let .hub(url) = DeepLink.parse(link) else { return XCTFail("not a hub link") }
+        XCTAssertEqual(url?.absoluteString, page)
+        guard case let .hub(none) = DeepLink.parse(URL(string: "tranquilitybase://hub")!) else { return XCTFail() }
+        XCTAssertNil(none)
+    }
+
+    @MainActor
+    func testTheMarkerNamesTheBundleThatWroteIt() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("hq/hub-window")
+        HubWindow.announce(bundle: URL(fileURLWithPath: "/Applications/Tranquility Base.app"), to: file)
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), "/Applications/Tranquility Base.app")
+    }
+}
