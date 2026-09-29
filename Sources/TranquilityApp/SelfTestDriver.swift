@@ -2243,6 +2243,7 @@ extension StatusHUD {
         handsFreePanelDrill()
         droppedInputDrill()
         typingOpensTheLineDrill()
+        interruptedLineIsFullyLitDrill()
 
         endCapture(because: "selftest cleanup")
         showIdle(rows: [])

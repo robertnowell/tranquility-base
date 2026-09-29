@@ -11,7 +11,9 @@ page within about twenty seconds, so this waits for the hub to know it
 (when a device token is available to ask with), then opens the address.
 Ruled 12 Sep 2026: sessions no longer open local files.
 
-Without an app address in ~/.claude/hq.json it opens the file, as before.
+It opens in Tranquility Base's Hub window when the app has one, and in the
+browser otherwise. Without an app address in ~/.claude/hq.json it opens the
+file, as before.
 """
 import json, os, subprocess, sys, time, urllib.request
 
@@ -58,8 +60,25 @@ def main():
             if code in (301, 302, 303, 307, 308):
                 break
             time.sleep(4)
+    # The app's Hub window first, the browser always as the fallback (29 Sep
+    # 2026, hf-o8t.4). Only an app that has the window writes the marker, and
+    # it names the bundle, so a deleted or older app never swallows the page.
+    if in_app(url):
+        print(url)
+        return
     subprocess.run(["open", url])
     print(url)
+
+def in_app(url):
+    try:
+        bundle = open(os.path.expanduser("~/Library/Application Support/hq/hub-window")).read().strip()
+    except Exception:
+        return False
+    if not bundle or not os.path.isdir(bundle):
+        return False
+    from urllib.parse import quote
+    link = "tranquilitybase://hub?url=" + quote(url, safe="")
+    return subprocess.run(["open", "-a", bundle, link]).returncode == 0
 
 if __name__ == "__main__":
     main()
