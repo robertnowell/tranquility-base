@@ -610,6 +610,19 @@ extension AppDelegate {
             spokenClock = nil
             hud.completeHighlight()
             hud.setManagerState(StatusHUD.orbState, line: orbLine(managerLastLine == "speaking" ? "listening" : managerLastLine))
+        case .interrupted:
+            // Cut off: the same ending the line gets when it finishes, because
+            // the reason the words light is that dim means NOT REACHED YET,
+            // and after a barge-in nothing more is coming to reach them.
+            //
+            // It cannot wait for `quiet` to do this. An interruption cancels
+            // the speech, and whether the pipeline then reports it stopped is
+            // not something the card should depend on -- on 29 Sep the line
+            // stayed frozen half-lit and the record had nothing in it to say
+            // why, because a barge-in emitted nothing at all.
+            spokenClock = nil
+            hud.completeHighlight()
+            hud.setManagerState(StatusHUD.orbState, line: orbLine("listening"))
         case .stage:
             managerStageName = e.name ?? e.goal ?? e.project
             hud.setManagerState(StatusHUD.orbState, line: orbLine("on stage"))
