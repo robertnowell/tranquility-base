@@ -30,8 +30,16 @@ extension AppDelegate {
                     send(utteranceId: utteranceId, label: label, sessionId: sessionId) { done.resume(returning: $0) }
                 }
             case .noTarget:
-                lastStatusLine = "nothing to send"
-                Permissions.log("\(provider) send: nothing typed and nothing staged")
+                // Two different failures wore this one sentence. "Nothing typed
+                // and nothing staged" is true when the line is empty, and a lie
+                // when you typed a paragraph to a session the store cannot
+                // resolve -- which is the case that loses words. They are kept
+                // now (UnsentText), and the panel says which of the two it was.
+                let kept = !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                lastStatusLine = kept ? "that agent is gone — your words are kept" : "nothing to send"
+                Permissions.log(kept
+                    ? "\(provider) send: \(text.count) chars had nowhere to go (session not known); kept in unsent-text.log"
+                    : "\(provider) send: nothing typed and nothing staged")
                 hud.render()
                 return outcome
             default:
