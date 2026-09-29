@@ -16,10 +16,20 @@ human/device bearer.
 
 ## Metering
 
-A session is metered in **blocks of 1,800 seconds**. Each block is its own
-operation with its own reservation of `1800 / 60 × voiceMinuteMicros`. The
+A session is metered in **blocks of 900 seconds**. Each block is its own
+operation with its own reservation of `900 / 60 × voiceMinuteMicros`. The
 ledger allows one reservation per operation; a renewal therefore never
 extends a block, it opens the next one.
+
+The reservation is a hold, not a charge: what is owed is settled from the
+seconds the Gateway measured, and the rest is released in the same settle.
+
+Blocks were 1,800 seconds until 29 Sep 2026. At 85,000 micros a minute that
+reserved $2.55 before a word was spoken, which refused a Mac holding $2.21 --
+while the hub's autopay, which exists to prevent exactly that, does not act
+until the balance falls below $2.00. A floor beneath the fare leaves a band in
+which the balance looks healthy, autopay is content, and no session can start.
+900 seconds reserves $1.28, under that floor, so the band closes.
 
 Blocks are **sequential windows**: block n+1's window begins where block n's
 ends, whenever the renewal arrived. A minute is never counted twice, and a

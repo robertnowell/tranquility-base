@@ -1,0 +1,406 @@
+import AppKit
+import TranquilityCore
+
+/// Project folders on the grid: headers, the drag that makes and fills them,
+/// renaming in place, and the name the model proposes. Ruled 29 Sep 2026,
+/// `docs/rulings/ruling-project-folders.md`; the layout rules themselves are
+/// Core's (`ProjectLayout`), where tests can hold them.
+///
+/// The drag is tracked inside the panel from the row's own mouse events, not
+/// through the system drag session: the panel's background already accepts
+/// file drops (`DropSurfaceView`), and a row is not a file. Rows are never
+/// reordered by hand, since the grid computes the order, so a drop means one
+/// of three things only: onto the middle of a loose row (held a moment) makes
+/// a folder, anywhere on a folder joins it, the loose rows leave it.
+
+/// The drag in flight.
+struct GridDrag {
+    enum Source: Equatable { case row(String), folder(String) }
+    enum Target: Equatable {
+        case makeFolder(with: String)
+        case join(folder: String)
+        case leave
+        case reorder(folder: String, after: Bool)
+    }
+    let source: Source
+    let ghost: NSImageView
+    let grab: NSPoint
+    /// What a release would do right now.
+    var target: Target?
+    /// The loose row the pointer is resting on, before the hold makes it a
+    /// folder target.
+    var resting: (id: String, since: Date)?
+}
+
+extension StatusHUD {
+
+    /// How long the pointer rests on a loose row before a drop there makes a
+    /// folder. Short enough to feel immediate, long enough that sweeping past
+    /// a row on the way to somewhere else does not group it (Discord's folder
+    /// gesture has the same guard; Android's launcher uses a radius instead).
+    static let folderHold: TimeInterval = 0.25
+
+    // MARK: - Drawing
+
+    func folderHeader(_ folder: ProjectBook.Folder, lamp: Lamp?, lit: Int,
+                      members: Int) -> FolderHeaderView {
+        let header = FolderHeaderView(folder: folder, lamp: lamp, lit: lit, members: members,
+                                      naming: namingFolders.contains(folder.id),
+                                      width: Self.gridWidth)
+        header.onToggle = { [weak self] in self?.toggleFolder(folder.id) }
+        header.onRenameBegan = { [weak self] in self?.beginFolderRename() }
+        header.onRenameEnded = { [weak self] name in self?.endFolderRename(folder.id, name: name) }
+        header.onDrag = { [weak self, weak header] phase, event in
+            guard let self, let header else { return }
+            self.dragged(.folder(folder.id), view: header, phase: phase, event: event)
+        }
+        header.menu = folderMenu(folder)
+        return header
+    }
+
+    /// "Made MIRAI · UNDO", under the strip, for five seconds after a drop.
+    func undoLine(_ text: String) -> NSView {
+        let line = PlacardRowView(width: Self.gridWidth, target: self, title: text,
+                                  glyph: "↶", action: #selector(undoDropTapped))
+        line.widthAnchor.constraint(equalToConstant: Self.gridWidth).isActive = true
+        line.identifier = NSUserInterfaceItemIdentifier("folder-undo")
+        return line
+    }
+
+    // MARK: - Collapse, menus
+
+    func toggleFolder(_ folderId: String) {
+        let collapsed = !(projects.current.folder(id: folderId)?.collapsed ?? false)
+        projects.update { $0.setCollapsed(folderId, collapsed) }
+        Track.record("folder_toggled", ["collapsed": .token(collapsed ? "yes" : "no")])
+        rebuildSessionRows()
+    }
+
+    private func folderMenu(_ folder: ProjectBook.Folder) -> NSMenu {
+        let menu = NSMenu()
+        let rename = NSMenuItem(title: "Rename", action: #selector(renameFolderPicked(_:)),
+                                keyEquivalent: "")
+        rename.target = self
+        rename.representedObject = folder.id
+        menu.addItem(rename)
+        menu.addItem(.separator())
+        let delete = NSMenuItem(title: "Delete folder \u{201C}\(folder.name)\u{201D}",
+                                action: #selector(deleteFolderPicked(_:)), keyEquivalent: "")
+        delete.target = self
+        delete.representedObject = folder.id
+        menu.addItem(delete)
+        return menu
+    }
+
+    @objc nonisolated func renameFolderPicked(_ sender: NSMenuItem) {
+        let picked = sender.representedObject as? String
+        MainActor.assumeIsolated {
+            guard let id = picked else { return }
+            header(for: id)?.beginRename()
+        }
+    }
+
+    @objc nonisolated func deleteFolderPicked(_ sender: NSMenuItem) {
+        let picked = sender.representedObject as? String
+        MainActor.assumeIsolated {
+            guard let id = picked, let folder = projects.current.folder(id: id) else { return }
+            let before = projects.current
+            projects.update { $0.delete(id) }
+            noteDrop("Deleted \(folder.name.uppercased())", before: before)
+            Track.record("folder_deleted", [:])
+            rebuildSessionRows()
+        }
+    }
+
+    @objc nonisolated func removeFromFolderPicked(_ sender: NSMenuItem) {
+        let picked = sender.representedObject as? String
+        MainActor.assumeIsolated {
+            guard let id = picked else { return }
+            apply(.leave, to: id)
+        }
+    }
+
+    @objc nonisolated func undoDropTapped() {
+        MainActor.assumeIsolated {
+            guard let undo = undoDrop else { return }
+            projects.restore(undo.before)
+            undoDrop = nil
+            Track.record("folder_undo", [:])
+            rebuildSessionRows()
+        }
+    }
+
+    func header(for folderId: String) -> FolderHeaderView? {
+        gridLines.lazy.compactMap { $0.view as? FolderHeaderView }.first { $0.folderId == folderId }
+    }
+
+    private func noteDrop(_ text: String, before: ProjectBook) {
+        undoDrop = (text, before, Date().addingTimeInterval(5))
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5.1) { [weak self] in
+            guard let self, let undo = self.undoDrop, undo.until <= Date() else { return }
+            self.undoDrop = nil
+            self.rebuildSessionRows()
+        }
+    }
+
+    // MARK: - A hold nobody is holding
+
+    /// A held grid whose gesture ended without telling us: the button is up
+    /// with a drag still recorded (the panel hid mid-drag, the mouse-up went
+    /// to another window), or a rename left open for two minutes. Without
+    /// this the grid would stop repainting for good.
+    func heldGridIsStale() -> Bool {
+        if gridDrag != nil { return NSEvent.pressedMouseButtons & 1 == 0 }
+        return Date().timeIntervalSince(rowsHeldSince) > 120
+    }
+
+    func releaseHeldGrid(because reason: String) {
+        gridDrag?.ghost.removeFromSuperview()
+        gridDrag = nil
+        for header in gridLines.compactMap({ $0.view as? FolderHeaderView })
+        where header.editorForTesting != nil {
+            header.finishRename(keep: false)
+        }
+        rowsHeld = false
+        Permissions.log("folders: released a held grid, \(reason)")
+    }
+
+    // MARK: - Drag
+
+    func rowDragged(_ id: String, from view: NSView, phase: GridDragPhase, event: NSEvent) {
+        dragged(.row(id), view: view, phase: phase, event: event)
+    }
+
+    func dragged(_ source: GridDrag.Source, view: NSView, phase: GridDragPhase, event: NSEvent) {
+        switch phase {
+        case .began: beginDrag(source, view: view, event: event)
+        case .moved: moveDrag(to: event.locationInWindow)
+        case .ended: endDrag()
+        }
+    }
+
+    func beginDrag(_ source: GridDrag.Source, view: NSView, event: NSEvent) {
+        guard gridDrag == nil, let content = panel?.contentView else { return }
+        rowsHeld = true
+        let image = NSImage(size: view.bounds.size)
+        if let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
+            view.cacheDisplay(in: view.bounds, to: rep)
+            image.addRepresentation(rep)
+        }
+        let ghost = NSImageView(image: image)
+        ghost.wantsLayer = true
+        ghost.alphaValue = 0.85
+        ghost.layer?.backgroundColor = StateLegend.Palette.surface.cgColor
+        ghost.layer?.cornerRadius = 4
+        ghost.layer?.shadowOpacity = 0.4
+        ghost.layer?.shadowRadius = 8
+        let origin = content.convert(view.bounds.origin, from: view)
+        ghost.frame = NSRect(origin: origin, size: view.bounds.size)
+        content.addSubview(ghost)
+        view.alphaValue = 0.3
+        let grab = content.convert(event.locationInWindow, from: nil)
+        gridDrag = GridDrag(source: source, ghost: ghost,
+                            grab: NSPoint(x: grab.x - origin.x, y: grab.y - origin.y))
+        if case .row = source {
+            Track.record("folder_drag", ["what": .token("row")])
+        } else {
+            Track.record("folder_drag", ["what": .token("folder")])
+        }
+        moveDrag(to: event.locationInWindow)
+    }
+
+    func moveDrag(to windowPoint: NSPoint) {
+        guard var drag = gridDrag, let content = panel?.contentView else { return }
+        let point = content.convert(windowPoint, from: nil)
+        drag.ghost.setFrameOrigin(NSPoint(x: point.x - drag.grab.x, y: point.y - drag.grab.y))
+        let (target, resting) = dropTarget(drag, at: windowPoint)
+        if let resting {
+            if drag.resting?.id != resting { drag.resting = (resting, Date()) }
+        } else {
+            drag.resting = nil
+        }
+        drag.target = target
+        gridDrag = drag
+        paintDropTarget(drag)
+        // The hold: re-ask once it has elapsed, so resting still is enough.
+        if let resting = drag.resting, drag.target == nil {
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.folderHold + 0.02) { [weak self] in
+                guard let self, let now = self.gridDrag, now.resting?.id == resting.id,
+                      now.resting?.since == resting.since else { return }
+                self.moveDrag(to: windowPoint)
+            }
+        }
+    }
+
+    /// What a release at this point would do, and the loose row being rested on.
+    func dropTarget(_ drag: GridDrag, at windowPoint: NSPoint) -> (GridDrag.Target?, String?) {
+        let book = projects.current
+        let origin = SessionLineage.lastKnownOrigin
+        let under = gridLines.first { entry in
+            entry.view.convert(entry.view.bounds, to: nil).contains(windowPoint)
+        }
+        switch drag.source {
+        case let .folder(moving):
+            guard case let .header(folder, _, _, _)? = under?.line, folder.id != moving,
+                  let view = under?.view else { return (nil, nil) }
+            let local = view.convert(windowPoint, from: nil)
+            return (.reorder(folder: folder.id, after: local.y < view.bounds.midY), nil)
+
+        case let .row(id):
+            let current = book.folder(of: id, origin: origin)?.id
+            switch under?.line {
+            case let .header(folder, _, _, _)?:
+                return (folder.id == current ? nil : .join(folder: folder.id), nil)
+            case let .row(_, folder?)?:
+                return (folder == current ? nil : .join(folder: folder), nil)
+            case let .row(row, nil)?:
+                guard row.id != id, let view = under?.view else {
+                    return (current == nil ? nil : .leave, nil)
+                }
+                // The middle half of the row, held, makes a folder; its top
+                // and bottom quarters are just the loose rows.
+                let local = view.convert(windowPoint, from: nil)
+                let middle = abs(local.y - view.bounds.midY) < view.bounds.height / 4
+                if middle {
+                    let held = (gridDrag?.resting?.id == row.id)
+                        ? Date().timeIntervalSince(gridDrag!.resting!.since) >= Self.folderHold : false
+                    if held { return (.makeFolder(with: row.id), row.id) }
+                    return (current == nil ? nil : .leave, row.id)
+                }
+                return (current == nil ? nil : .leave, nil)
+            case nil:
+                // Anywhere else on the grid below the folders is the loose rows.
+                let stack = waitingRows.convert(waitingRows.bounds, to: nil)
+                return (current != nil && stack.contains(windowPoint) ? .leave : nil, nil)
+            }
+        }
+    }
+
+    private func paintDropTarget(_ drag: GridDrag) {
+        for entry in gridLines {
+            (entry.view as? FolderHeaderView)?.setDropTarget(false)
+            (entry.view as? FolderHeaderView)?.setInsertion(nil)
+            if let row = entry.view as? GridRowView { row.layer?.borderWidth = 0 }
+        }
+        switch drag.target {
+        case let .join(folder)?:
+            header(for: folder)?.setDropTarget(true)
+        case let .reorder(folder, after)?:
+            header(for: folder)?.setInsertion(after ? .minY : .maxY)
+        case let .makeFolder(with)?:
+            if let row = gridLines.first(where: { $0.line.row?.id == with })?.view as? GridRowView {
+                row.layer?.borderWidth = 1.5
+                row.layer?.borderColor = StateLegend.Palette.ready.cgColor
+                row.layer?.cornerRadius = 6
+            }
+        case .leave?, nil:
+            break
+        }
+    }
+
+    func endDrag() {
+        guard let drag = gridDrag else { return }
+        gridDrag = nil
+        drag.ghost.removeFromSuperview()
+        rowsHeld = false
+        switch (drag.source, drag.target) {
+        case let (.row(id), target?):
+            apply(target, to: id)
+        case let (.folder(id), .reorder(target, after)?):
+            let before = projects.current
+            projects.update { $0.move(id, to: target, after: after) }
+            noteDrop("Moved \(projects.current.folder(id: id)?.name.uppercased() ?? "folder")",
+                     before: before)
+            rebuildSessionRows()
+        default:
+            rebuildSessionRows()
+        }
+    }
+
+    /// A drop, whether from the pointer, the row menu or a drill.
+    func apply(_ target: GridDrag.Target, to id: String) {
+        let origin = SessionLineage.lastKnownOrigin
+        let before = projects.current
+        switch target {
+        case let .makeFolder(with):
+            let agents = [id, with].map(namingAgent)
+            let name = ProjectNamer.fallback(agents)
+            let folder = projects.update { $0.create(name: name, with: [with, id], origin: origin) }
+            namingFolders.insert(folder)
+            noteDrop("Made a folder", before: before)
+            Track.record("folder_made", [:])
+            nameFolder(folder, agents: agents)
+        case let .join(folder):
+            projects.update { $0.join(id, folder: folder, origin: origin) }
+            noteDrop("Moved to \(projects.current.folder(id: folder)?.name.uppercased() ?? "folder")",
+                     before: before)
+            Track.record("folder_joined", [:])
+        case .leave:
+            let gone = projects.update { $0.leave(id, origin: origin) }
+            noteDrop(gone == nil ? "Moved out" : "Folder \(gone!.name.uppercased()) closed",
+                     before: before)
+            Track.record("folder_left", ["closed": .token(gone == nil ? "no" : "yes")])
+        case .reorder:
+            break
+        }
+        rebuildSessionRows()
+    }
+
+    // MARK: - Naming
+
+    private func namingAgent(_ id: String) -> ProjectNamer.Agent {
+        let title = face.sessionRows.first { $0.id == id }?.name ?? SessionRow.shortId(id)
+        let cwd = SessionDiscovery.discoverIfScanned()?.sessions
+            .first { $0.sessionId == id }?.cwd
+        return .init(title: title, folder: cwd.map { ($0 as NSString).lastPathComponent })
+    }
+
+    /// Ask the model for a name, off the main actor. The fallback is already
+    /// on the header, so a slow, missing or useless answer changes nothing
+    /// but the shimmer.
+    func nameFolder(_ folderId: String, agents: [ProjectNamer.Agent]) {
+        let vocabulary = projects.current.names
+        let store = projects
+        let useModel = nameFoldersWithModel
+        Task.detached(priority: .utility) {
+            var proposed: String?
+            let provider = AnthropicSummaryProvider(timeout: 6)
+            if useModel, provider.isConfigured {
+                let reply = try? await provider.complete(
+                    system: ProjectNamer.system,
+                    user: ProjectNamer.prompt(agents, vocabulary: vocabulary))
+                proposed = reply.flatMap { ProjectNamer.clean($0.text) }
+            }
+            await MainActor.run { [weak self] in
+                // The user may have renamed it, or deleted it, while we waited.
+                if let proposed, store.current.folder(id: folderId) != nil,
+                   self?.namingFolders.contains(folderId) == true {
+                    store.update { $0.rename(folderId, to: proposed) }
+                }
+                self?.namingFolders.remove(folderId)
+                Permissions.log("folder: named \(folderId) \(proposed == nil ? "by fallback" : "by model")")
+                self?.rebuildSessionRows()
+            }
+        }
+    }
+
+    // MARK: - Rename
+
+    func beginFolderRename() {
+        rowsHeld = true
+        guard let panel else { return }
+        panel.acceptsKey = true
+        panel.makeKeyAndOrderFront(nil)
+    }
+
+    func endFolderRename(_ folderId: String, name: String?) {
+        if let name {
+            namingFolders.remove(folderId)
+            projects.update { $0.rename(folderId, to: name) }
+            Track.record("folder_renamed", [:])
+        }
+        releaseKeyboard()
+        rowsHeld = false
+        rebuildSessionRows()
+    }
+}
