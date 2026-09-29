@@ -418,6 +418,28 @@ LOOP_AS_AGENT = ("\n- You are answering AS the agent on stage, in its own voice:
                  "plural ('we found', 'we propose').")
 
 
+def _speech_deadline(text: str) -> float:
+    """How long to hold the mouth for this line before giving up on its stop.
+
+    It was 12 seconds for every line, and the line the manager says most often
+    is 328 characters. Measured from this Mac's ledger, 22-29 Sep: that line
+    reached its stop in 10.5 s and in 18.0 s, and the 222-character version in
+    12.9, 13.7 and 14.4 s. Over the 210 utterances recorded, speech runs at a
+    median 0.061 s per character -- about 16 characters a second.
+
+    So on the longest lines the wait expired while the voice was still going,
+    the lock was handed to whatever was queued, and two voices played at once.
+    The deadline has to be a property of the words, not a constant:
+
+        4 s of setup, then a second per 10 characters -- 60% slower than the
+        measured rate, because a deadline that is too long only delays the
+        crash guard while one that is too short is the bug itself.
+
+    Never shorter than the old 12 s, so no short line loses time it had; capped
+    at 90 s, because past that a stop frame is not late, it is lost."""
+    return min(90.0, max(12.0, 4.0 + len(text) / 10.0))
+
+
 def _now_line() -> str:
     """The time, so 'yesterday' and 'the last ten minutes' can become a window.
     In the Mac's zone (its hello says), else TB_TZ, else UTC, named."""
@@ -616,6 +638,7 @@ class Manager(FrameProcessor):
         self.addressed = 0
         self._bot_stopped = asyncio.Event()
         self._voice = asyncio.Lock()        # one voice at a time, manager or agent
+        self._utterance: dict | None = None  # the line being spoken, so its stop can name it
         self._held: str | None = None       # a turn that ended mid-sentence, waiting for its rest
         self._user_speaking = False         # between on_user_turn_started and the next context frame
         self._held_task: asyncio.Task | None = None
@@ -753,7 +776,15 @@ class Manager(FrameProcessor):
             voice["speaking"] = False
             voice["stopped_at"] = time.monotonic()
             self._bot_stopped.set()
-            await emit(None, "quiet")  # the manager's voice stopped; the orb goes back to rest
+            # The manager's voice stopped; the orb goes back to rest. It says
+            # WHICH line it stopped, because a stop with no name cannot be
+            # paired with its start: on 29 Sep, 57 of 210 utterances had no
+            # `quiet` within twelve seconds and there was no way to tell an
+            # overrun from a lost frame from somebody else's stop.
+            u, self._utterance = self._utterance, None
+            await emit(None, "quiet", **({"id": u["id"], "chars": u["chars"], "voice": u["voice"],
+                                          "secs": round(time.monotonic() - u["at"], 1),
+                                          **({"over": True} if u.get("over") else {})} if u else {}))
         if not isinstance(frame, LLMContextFrame):
             await self.push_frame(frame, direction)
             return
@@ -1567,15 +1598,26 @@ class Manager(FrameProcessor):
                 if self._manager_voice is None:
                     self._manager_voice = self._tts._settings.voice
                 await self._tts.use_voice(voice_id or self._manager_voice)
-            await emit(self, "speaking", voice=voice, session=session, text=text)
+            token = uuid.uuid4().hex[:8]
+            self._utterance = {"id": token, "chars": len(text), "voice": voice, "at": time.monotonic()}
+            await emit(self, "speaking", voice=voice, session=session, text=text,
+                       id=token, chars=len(text))
             self._bot_stopped.clear()
             # The synthesizer notes the line when it speaks it (tts.py), so every
             # path the manager's voice takes lands in the transcript exactly once.
             await self.push_frame(TTSSpeakFrame(text))
+            deadline = _speech_deadline(text)
             try:
-                await asyncio.wait_for(self._bot_stopped.wait(), 12.0)
+                await asyncio.wait_for(self._bot_stopped.wait(), deadline)
             except TimeoutError:
-                pass
+                # The lock is released here whether or not the speech stopped,
+                # so a deadline that is too short IS the two-voices bug. Say so
+                # in the log, and mark the utterance: when its stop finally
+                # arrives, the `quiet` that carries it says `over`.
+                logger.warning(f"voice: {token} did not report stopping in {deadline:.0f}s "
+                               f"({len(text)} chars); releasing the mouth")
+                if (self._utterance or {}).get("id") == token:
+                    self._utterance["over"] = True
 
     async def _app_speaks(self, url: str, text: str, session_id: str | None = None):
         """A session's line: the card opens on the Mac, the voice comes from here.
