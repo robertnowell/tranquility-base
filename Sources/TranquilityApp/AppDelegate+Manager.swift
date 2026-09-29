@@ -405,12 +405,7 @@ extension AppDelegate {
                 Permissions.log("manager audio: \(peer.audioPathDescription)")
             }
             let eventsFile = QueueStore.supportDirectory.appendingPathComponent("manager-events.jsonl")
-            let eventsHandle: FileHandle? = {
-                if !FileManager.default.fileExists(atPath: eventsFile.path) {
-                    FileManager.default.createFile(atPath: eventsFile.path, contents: nil)
-                }
-                let h = try? FileHandle(forWritingTo: eventsFile); h?.seekToEndOfFile(); return h
-            }()
+            let eventsHandle = EventsLog.open(eventsFile)
             defer { try? eventsHandle?.close() }
             for await line in peer.lines() {
                 eventsHandle?.write(line + Data([0x0A]))

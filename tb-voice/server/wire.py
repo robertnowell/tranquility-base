@@ -47,6 +47,10 @@ class Wire:
 
     def __init__(self):
         self.outbox: asyncio.Queue = asyncio.Queue()
+        # The session's own record for the Mac (hf-14): every model call in
+        # full. Drained behind the outbox, a part at a time, so a record never
+        # stands in front of a line the panel is waiting for.
+        self.logbox: asyncio.Queue = asyncio.Queue()
         self.replies: dict[str, asyncio.Future] = {}
         # Wire v1 (hf-3, docs/wire-v1.md): the tools the Mac said it offers in
         # its hello, and the calls waiting on a result. None until a hello
@@ -77,6 +81,13 @@ def current() -> Wire:
         unbound("wire")  # a fresh queue here is a dead socket; see session.unbound
         w = bind()
     return w
+
+
+def logbox() -> asyncio.Queue | None:
+    """This session's model-call record queue, or None outside a session: a
+    record with no session has no Mac to go to, and must never find another's."""
+    w = _current.get()
+    return w.logbox if w is not None else None
 
 
 def outbox() -> asyncio.Queue:
