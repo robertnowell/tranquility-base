@@ -322,9 +322,35 @@ final class GridRowView: NSControl {
 
     // A cell-less NSControl tracks nothing by default; the whole row is the
     // hit target, and the tap lands on mouse-up like any button's would.
-    override func mouseDown(with event: NSEvent) {}
+    /// A drag on the row, reported to the panel (project folders, ruled
+    /// 29 Sep 2026). Nil means the row does not drag.
+    var onDrag: ((GridDragPhase, NSEvent) -> Void)?
+    private var downAt: NSPoint?
+    private var dragging = false
+
+    override func mouseDown(with event: NSEvent) {
+        downAt = event.locationInWindow
+        dragging = false
+    }
+
+    // Four points of travel make it a drag, not a wobbly click. Past that the
+    // mouse-up belongs to the drop and must not also open the agent's card.
+    override func mouseDragged(with event: NSEvent) {
+        guard let onDrag, let downAt else { return }
+        let here = event.locationInWindow
+        if !dragging, hypot(here.x - downAt.x, here.y - downAt.y) >= 4 {
+            dragging = true
+            onDrag(.began, event)
+        }
+        if dragging { onDrag(.moved, event) }
+    }
 
     override func mouseUp(with event: NSEvent) {
+        defer { downAt = nil; dragging = false }
+        if dragging {
+            onDrag?(.ended, event)
+            return
+        }
         let point = convert(event.locationInWindow, from: nil)
         guard bounds.contains(point) else { return }
         // The lamp is its own target when it is live: `lampHitWidth` at full

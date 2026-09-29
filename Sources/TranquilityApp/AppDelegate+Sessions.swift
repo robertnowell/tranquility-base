@@ -1516,14 +1516,19 @@ extension AppDelegate {
         let byID = Dictionary(scanned.map { ($0.sessionId, $0) },
                               uniquingKeysWith: { first, _ in first })
         let now = Date()
+        let book = ProjectStore.shared.current
         return hidden.map { row in
             let session = byID[row.id]
-            let haystack = [row.name, row.id, session?.cwd ?? ""].joined(separator: " ")
+            let folder = book.folder(of: row.id, origin: SessionLineage.lastKnownOrigin)?.name
+            // The folder's name is searchable: typing "mirai" finds every
+            // agent that was filed under Mirai.
+            let haystack = [row.name, row.id, session?.cwd ?? "", folder ?? ""].joined(separator: " ")
             let when = session.map { SessionActivity.lastMovedLabel($0.lastActivityAt, now: now) }
             let hover = [SessionRow.hoverText(for: row), SessionRow.shortId(row.id)]
                 .compactMap { $0 }.joined(separator: "\n")
             return PastAgentsList.Item(row: row, revivable: row.revivable,
-                                       haystack: haystack, aux: when, tooltip: hover)
+                                       haystack: haystack, aux: when, tooltip: hover,
+                                       folder: folder)
         }
     }
 
