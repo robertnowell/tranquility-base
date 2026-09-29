@@ -19,11 +19,19 @@ final class HubWindowTests: XCTestCase {
         XCTAssertTrue(h.isHub(URL(string: "https://hq.tranquilitybase.dev/connect?code=x&device=y")!))
     }
 
-    /// "Open Image in New Window" on an image the page drew itself (29 Sep).
-    func testAnImageThePageDrewOpensHereButADataPageDoesNot() {
-        let h = hub()
-        XCTAssertEqual(h.route(URL(string: "data:image/jpeg;base64,/9j/4AAQ")!, mainFrame: true, clicked: false), .allow)
-        XCTAssertEqual(h.route(URL(string: "data:text/html,<h1>x</h1>")!, mainFrame: true, clicked: false), .cancel)
+    /// "Open Image in New Window" on an image the page carries inline (29 Sep):
+    /// the app decodes it; a data: page is never loaded.
+    func testAnInlineImageIsDecodedHereAndADataPageIsNotLoaded() {
+        let png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+        let image = HubWindow.inlineImage(URL(string: "data:image/png;base64,\(png)")!)
+        XCTAssertEqual(image?.size.width, 1)
+        XCTAssertNil(HubWindow.inlineImage(URL(string: "data:text/html;base64,PGgxPng8L2gxPg==")!))
+        XCTAssertEqual(hub().route(URL(string: "data:text/html,<h1>x</h1>")!, mainFrame: true, clicked: false), .cancel)
+    }
+
+    func testTheLogNeverCarriesASignInTicket() {
+        let d = HubWindow.describe(URL(string: "https://hq.example.test/sign-in?__clerk_ticket=secret")!)
+        XCTAssertEqual(d, "https://hq.example.test/sign-in")
     }
 
     /// One sign-in (29 Sep): the app follows the hub window's session.
