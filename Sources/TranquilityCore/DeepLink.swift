@@ -146,6 +146,11 @@ public enum DeepLink {
         /// own host, and the hand-back happens over HTTPS between the app and
         /// the hub, where no page can reach it. See `HubPairing`.
         case connect
+        /// "Show this hub page in the Hub window" (29 Sep 2026, hf-o8t.4):
+        /// how `hq-open` reaches the app instead of the browser. Any page can
+        /// fire it, so the address is only ever a hub address: HubWindow.show
+        /// refuses anything else, and a refused one opens nothing.
+        case hub(URL?)
         case unknown(String)
     }
 
@@ -170,6 +175,7 @@ public enum DeepLink {
         case "reply":   return .reply(session: value("session"))
         case "show":    return .show
         case "connect": return .connect
+        case "hub":     return .hub(value("url").flatMap(URL.init(string:)))
         case "new":     return .new
         case let other: return .unknown(other)
         }
