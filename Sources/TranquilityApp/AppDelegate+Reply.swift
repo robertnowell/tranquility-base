@@ -36,7 +36,10 @@ extension AppDelegate {
                 // resolve -- which is the case that loses words. They are kept
                 // now (UnsentText), and the panel says which of the two it was.
                 let kept = !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                lastStatusLine = kept ? "that agent is gone — your words are kept" : "nothing to send"
+                // No dash: the house copy rule refuses one in anything a person
+                // reads, and the audit is right to. Two clauses, one full stop.
+                lastStatusLine = kept ? "That agent is gone. Your words are kept."
+                                      : "nothing to send"
                 Permissions.log(kept
                     ? "\(provider) send: \(text.count) chars had nowhere to go (session not known); kept in unsent-text.log"
                     : "\(provider) send: nothing typed and nothing staged")
