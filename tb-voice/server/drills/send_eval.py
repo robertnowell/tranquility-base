@@ -97,7 +97,7 @@ async def old_pick(client, case, cands):
     return ("send", span.text_of(pick, cands), None) if pick else ("wait", None, None)
 
 
-async def loop_act(case, cands):
+async def loop_act(case, cands, dry_run=False):
     m = Manager(JevClient(os.environ.get("JEV_API_KEY", "eval-key-unused")))
     stage = case.get("stage") if "stage" in case else {"sessionId": "cccc3333-0000-4000-8000-000000000003",
                                                        "name": case.get("agent"), "goal": case.get("goal")}
@@ -139,7 +139,7 @@ async def loop_act(case, cands):
     m._take_stage = lambda a: nothing()
     m._earcon = nothing
     span.candidates = cands_now
-    await m._act(case["request"])
+    await m._act(case["request"], dry_run=dry_run)
     return got.get("act", "wait"), got.get("text"), got.get("to")
 
 
@@ -194,6 +194,16 @@ async def main(path, runs=3):
                 if v != "OK":
                     line.append(f"  [{(text or '')[:60]!r} -> {(to or '')[:8]}]")
             print(f"{group:<8}{str(case['i']):<5}{case['request'][:48]:<50} " + " ".join(line), flush=True)
+    # Read-back is a dry run (hf-11): the same choice as a send, said, never sent.
+    dry = {"OK": 0, "WRONG": 0}
+    for case in [c for c in WRITTEN if c["i"] in ("w1", "w5")] + [c for c in real if c["i"] in (46, 60)]:
+        cands = [span.Candidate(n=c["n"], text=c["text"]) for c in case["cands"]]
+        for _ in range(runs):
+            act, text, to = await loop_act(case, cands, dry_run=True)
+            ok = act != "send"
+            dry["OK" if ok else "WRONG"] += 1
+        print(f"dry     {str(case['i']):<5}{case['request'][:48]:<50} {'never sent' if dry['WRONG'] == 0 else 'SENT'}")
+    print(f"dry run: {dry['OK']} read back without sending, {dry['WRONG']} sent")
     ms.sort()
     for k, t in totals.items():
         print(f"{k:<5} OK {t['OK']:>3}  MISSED {t['MISSED']:>3}  WRONG {t['WRONG']:>3}")

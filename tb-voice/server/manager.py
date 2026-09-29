@@ -75,6 +75,8 @@ INTENTS: dict[Intent, str] = {
     Intent.CUSTOM: "Any other question about the agent on stage or its work: files, code, status, details, opinions",
     Intent.SEND_MESSAGE: ("Asks the assistant to send, tell, pass on or relay a message to an agent, "
                           "the notes agent included"),
+    Intent.READ_BACK: ("Asks what the assistant would send, or to read a message back before it goes: "
+                       "a dry run, nothing is sent"),
     Intent.START_AGENT: "Asks to start, spin up, or open a new agent or session",
     Intent.SUMMARIZE_RECENT: "Asks what has been going on recently across ALL agents, or what we did today or yesterday; not about one session",
     Intent.TEACH: "Asks what the manager can do, what this is, who it is, or how it works",
@@ -164,7 +166,7 @@ def names_the_manager(text: str) -> bool:
 
 
 # Intents that take seconds (a tool run, a model call) before anything is heard.
-SLOW_INTENTS = {Intent.SEND_MESSAGE, Intent.SUMMARIZE_RECENT, Intent.CUSTOM, Intent.SPEAK}
+SLOW_INTENTS = {Intent.SEND_MESSAGE, Intent.READ_BACK, Intent.SUMMARIZE_RECENT, Intent.CUSTOM, Intent.SPEAK}
 
 class JevClient:
     def __init__(self, api_key: str):
@@ -253,10 +255,13 @@ class JevClient:
                 "Tranquil, Trank; a turn opening with such a word is addressed. "
                 "A line that repeats what an agent or the assistant just said is the room hearing that "
                 "voice again, not the developer: it is not addressed. Only the assistant can invite the "
-                "next agent, send, tell or pass on a message to an agent, start an agent, say which "
-                "agents are live or waiting, or stop the voice: "
+                "next agent, send, tell or pass on a message to an agent, read back what it would send, "
+                "start an agent, say which agents are live or waiting, or stop the voice: "
                 "a request for one of those is addressed even when it is phrased loosely, misheard, or "
-                "has no name in it."
+                "has no name in it. A question about the developer's own earlier WORDS ('what did I "
+                "say about pricing', 'did I already tell it that') is for the assistant, which keeps "
+                "their record: addressed. A question about events, plans or times ('what time did we "
+                "schedule it for') is not about their words and follows the other rules."
                 + (" With an agent on stage, a question about its work (status, risks, what would happen "
                    "if..., is it going well) is addressed even without the name: the assistant answers it "
                    "from that agent's record." if stage else "")
@@ -432,6 +437,7 @@ LOOP_ACT = (
 
 # How much of a range may be sent in one go (ruled 27 Sep): past this the loop
 # asks the developer to narrow it rather than sending a wall of text.
+READ_BACK_WORDS = 40  # of a dry run, read aloud; the count of the rest is said
 RANGE_LINES = 60
 RANGE_CHARS = 8000
 
@@ -633,6 +639,7 @@ class Manager(FrameProcessor):
             Intent.CUSTOM: self._do_custom, Intent.TEACH: self._do_teach, Intent.SPEAK: self._do_speak,
             Intent.FLEET_STATUS: self._do_fleet_status, Intent.SUMMARIZE_RECENT: self._do_summarize_recent,
             Intent.SEND_MESSAGE: self._do_send_message, Intent.START_AGENT: self._do_start_agent,
+            Intent.READ_BACK: self._do_read_back,
         }
         self._last_intent_at = 0.0
         self.stage: dict | None = None
@@ -1250,7 +1257,13 @@ class Manager(FrameProcessor):
         where and which words, pointing at what was said; the app copies them."""
         await self._act(text)
 
-    async def _act(self, request: str):
+    async def _do_read_back(self, text, frame, direction):
+        """Read-back on request, as a dry run (hf-11, ruled 22 Sep): the same act
+        a send would take, to the same agent with the same words, said aloud
+        instead of sent. Nothing is typed, nothing is recorded as sent."""
+        await self._act(text, dry_run=True)
+
+    async def _act(self, request: str, dry_run: bool = False):
         """Send (or note) by pointing (hf-6 step 2): the loop ends in one act,
         send, ask or wait, and nothing it writes is ever the message. The send
         itself happens here, after the loop, through the app's own Send."""
@@ -1279,6 +1292,9 @@ class Manager(FrameProcessor):
                        + ("\n".join(f"[{c.n}] {c.text}" for c in cands)
                           or "(none since the last send; anything said earlier is reached with `range`)"))
         context.append(f"It is now {_now_line()}.")
+        if dry_run:
+            context.append("This is a dry run: they asked what you WOULD send. Choose exactly as for a "
+                           "real send (send, ask or wait); nothing will be sent, it is read back to them.")
         context.append(f"Request: {request}")
 
         async def send(a):
@@ -1399,6 +1415,17 @@ class Manager(FrameProcessor):
             await self._earcon("listening")
             return
         target, message = act["target"], act["text"]
+        if dry_run:
+            # Said, not sent: the agent and the words, the start of them when
+            # long. The stage does not move and no action is recorded.
+            name = "the notes agent" if act.get("notes") else (target.get("name") or target.get("project") or "the agent")
+            words = message.split()
+            said = " ".join(words[:READ_BACK_WORDS])
+            rest = len(words) - READ_BACK_WORDS
+            await emit(self, "speaking", voice="manager", text=f"would send: {message[:160]}")
+            await self._say(spoken(f"To {name}, I'd send: {said}"
+                                   + (f" ... and {rest} more words." if rest > 0 else "")))
+            return
         if act.get("notes"):
             note(Line(Role.MANAGER, LineKind.ACTION, message, target=target["sessionId"], target_name="Notes"))
             await self._send(target["sessionId"], message, quiet=True)
