@@ -52,12 +52,16 @@ def main():
                     def redirect_request(self, *a, **k): return None
                 opener = urllib.request.build_opener(NoRedirect)
                 r = opener.open(req, timeout=10)
-                code = r.getcode()
+                code, where = r.getcode(), r.headers.get("Location", "")
             except urllib.error.HTTPError as e:
-                code = e.code
+                code, where = e.code, e.headers.get("Location", "") if e.headers else ""
             except Exception:
-                code = 0
-            if code in (301, 302, 303, 307, 308):
+                code, where = 0, ""
+            # Ready means the redirect goes to the page (/d/<id>). A page the
+            # hub does not have yet ALSO redirects, to the agent with
+            # ?missing=<slug>; stopping there opened the agent, not the page
+            # (found 29 Sep 2026).
+            if code in (301, 302, 303, 307, 308) and "/d/" in where:
                 break
             time.sleep(4)
     # The app's Hub window first, the browser always as the fallback (29 Sep
