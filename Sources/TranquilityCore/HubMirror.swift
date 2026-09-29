@@ -519,11 +519,15 @@ public final class HubMirror: @unchecked Sendable {
     /// session then moved its work under another name and deleted the
     /// template, the blank page stayed on the hub for good. Four did.
     ///
-    /// The placeholders are the tell: a head meta or the title or the
-    /// headline whose content is still a comment. No finished page carries
-    /// one; the skill's own checker refuses a page that does.
+    /// The tell is the body, not the head. The headline and the lede are
+    /// the first two things a session writes; a page whose `<h1>` or lede
+    /// is still a placeholder comment has not been started. The head is not
+    /// the tell: the first cut of this rule read the meta tags too, and run
+    /// over the archive it held back four finished pages whose authors had
+    /// filled the body and left a summary or a tag list as a comment. A
+    /// sloppy head is a page; an empty headline is not.
     static let placeholder = try! NSRegularExpression(
-        pattern: "<(?:meta\\s[^>]*content=\"|title>|h1[^>]*>)\\s*<!--", options: [])
+        pattern: "<(?:h1[^>]*>|p class=\"lede\">\\s*<b>)\\s*<!--", options: [])
 
     static func isDraft(_ html: String) -> Bool {
         let head = String(html.prefix(64_000))

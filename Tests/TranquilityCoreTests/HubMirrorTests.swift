@@ -127,6 +127,22 @@ final class HubMirrorTests: XCTestCase {
         XCTAssertEqual(hub.last("api/ingest")?["title"] as? String, "Spec written")
     }
 
+    /// Run over the archive, the first cut of the rule (head metas too) held
+    /// back four finished pages: body written, a summary or tag list left as
+    /// a comment in the head. A sloppy head is still a page.
+    func testAFilledPageWithAPlaceholderLeftInItsHeadIsSent() async {
+        let hub = FakeHub()
+        _ = write("kopi-items-repeater-spec.html", """
+        <html><head><title>Items repeater spec</title>
+        <meta name="description" content="<!-- one sentence -->">
+        <meta name="intranet:tags" content="<!-- 2 to 4 tags from hq-tags -->">
+        </head><body><main><h1>Spec written and committed.</h1>
+        <p class="lede"><b>The items repeater is specified end to end.</b></p></main></body></html>
+        """)
+        let r = await mirror(hub).run(docs: true, turns: false)
+        XCTAssertEqual(r.documents, 1)
+    }
+
     /// A page that only mentions a placeholder, in a code sample about the
     /// template, is a finished page.
     func testAPageThatQuotesAPlaceholderInItsBodyIsSent() async {
