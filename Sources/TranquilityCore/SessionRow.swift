@@ -672,6 +672,14 @@ public struct SessionRow: Equatable, Sendable {
     /// `sessionId.prefix(8)` since before the panel had a grid.
     public static func shortId(_ sessionId: String) -> String { String(sessionId.prefix(8)) }
 
+    /// Whether the row's column holds its session id rather than a reason.
+    /// The id is the session's own prefix; a fixture or remote row may carry
+    /// an id-shaped value under another key, so eight hex digits count too.
+    /// A reason is words ("working", "needs you"), never eight hex digits.
+    public var auxIsId: Bool {
+        aux == Self.shortId(id) || (aux.count == 8 && aux.allSatisfy(\.isHexDigit))
+    }
+
     public static func displayName(liveName: String? = nil, callsign: String?,
                                    fallback: String) -> String {
         if let liveName, !liveName.isEmpty { return liveName }

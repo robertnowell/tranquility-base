@@ -181,6 +181,13 @@ final class GridRowView: NSControl {
         callsign.lineBreakMode = .byTruncatingTail
         callsign.alignment = .right
         callsign.translatesAutoresizingMaskIntoConstraints = false
+        // THE ID SHOWS ON HOVER ONLY (Robert, 30 Sep 2026: "make the id visible
+        // only on hover"). At rest it spent a column on every row and cut four
+        // of sixteen live names short; the name now runs the full row and the
+        // id arrives with the pointer. A reason in the column (a blocked
+        // row's, a working remote's) is state, so it stays at rest.
+        idOnHover = item.auxIsId
+        if idOnHover { callsign.alphaValue = 0 }
 
         // Behind everything: the hover pill. A view rather than the row's own
         // layer, because it has to reach wider than the row's content box —
@@ -213,7 +220,11 @@ final class GridRowView: NSControl {
             NSLayoutConstraint.activate([
                 harnessMark.widthAnchor.constraint(equalToConstant: size.width),
                 harnessMark.heightAnchor.constraint(equalToConstant: size.height),
-                harnessMark.trailingAnchor.constraint(equalTo: callsign.trailingAnchor),
+                // An id that arrives on hover has the mark beside it, not in
+                // its place: the pointer asked for the id.
+                idOnHover
+                    ? harnessMark.trailingAnchor.constraint(equalTo: callsign.leadingAnchor, constant: -6)
+                    : harnessMark.trailingAnchor.constraint(equalTo: callsign.trailingAnchor),
                 harnessMark.centerYAnchor.constraint(equalTo: callsign.centerYAnchor),
             ])
         }
@@ -238,12 +249,24 @@ final class GridRowView: NSControl {
             name.leadingAnchor.constraint(equalTo: leadingAnchor,
                                           constant: Self.lampColumn),
             name.centerYAnchor.constraint(equalTo: centerYAnchor),
-            name.trailingAnchor.constraint(lessThanOrEqualTo: callsign.leadingAnchor,
-                                           constant: -gutter),
             callsign.trailingAnchor.constraint(equalTo: trailingAnchor),
             callsign.centerYAnchor.constraint(equalTo: centerYAnchor),
-            callsign.widthAnchor.constraint(equalToConstant: auxWidth),
         ])
+        // A shown column holds the grid's shared width, so names truncate at
+        // one boundary. A hover-only id takes its own width and, until the
+        // pointer arrives, gives the whole row to the name.
+        if idOnHover {
+            nameBesideId = name.trailingAnchor.constraint(
+                lessThanOrEqualTo: harnessMark.image == nil ? callsign.leadingAnchor : harnessMark.leadingAnchor,
+                constant: -gutter)
+            name.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor).isActive = true
+            callsign.setContentHuggingPriority(.required, for: .horizontal)
+        } else {
+            NSLayoutConstraint.activate([
+                name.trailingAnchor.constraint(lessThanOrEqualTo: callsign.leadingAnchor, constant: -gutter),
+                callsign.widthAnchor.constraint(equalToConstant: auxWidth),
+            ])
+        }
     }
 
     @available(*, unavailable)
@@ -277,6 +300,10 @@ final class GridRowView: NSControl {
     private var callsignLabel: NSTextField!
     /// The harness mark, resting invisible in the id's slot.
     let harnessMark = NSImageView()
+    /// True when the column holds the session id, which rests hidden.
+    private(set) var idOnHover = false
+    /// Active only while hovered: keeps the name clear of the id.
+    private var nameBesideId: NSLayoutConstraint?
     /// The name's ink at rest, so the hover step has something to return to.
     /// Read once at build: a row is rebuilt whenever its state changes, so a
     /// stale value cannot outlive the ink it describes.
@@ -319,6 +346,17 @@ final class GridRowView: NSControl {
         let color = on ? StateLegend.hovered(restingName) : restingName
         nameLabel.textColor = color
         Self.paintName(nameLabel, color: color)
+        if idOnHover {
+            // The name steps back first, then the id fades in where it was.
+            nameBesideId?.isActive = on
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.16
+                context.allowsImplicitAnimation = true
+                callsignLabel.animator().alphaValue = on ? 1 : 0
+                harnessMark.animator().alphaValue = on && harnessMark.image != nil ? HarnessMark.opacity : 0
+            }
+            return
+        }
         // Nothing to trade if this row does not know its harness, and a row
         // that swapped its id for nothing would just look broken.
         guard harnessMark.image != nil else { return }
