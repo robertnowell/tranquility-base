@@ -78,7 +78,7 @@ def in_app(url):
         bundle = open(os.path.expanduser("~/Library/Application Support/hq/hub-window")).read().strip()
     except Exception:
         return False
-    if not bundle or not os.path.isdir(bundle):
+    if not bundle.endswith(".app") or not os.path.isdir(bundle):
         return False
     from urllib.parse import quote
     link = "tranquilitybase://hub?url=" + quote(url, safe="")
