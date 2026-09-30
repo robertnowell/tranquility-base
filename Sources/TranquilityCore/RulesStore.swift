@@ -90,8 +90,32 @@ public enum RulesStore {
         return hasher.finalize().map { String(format: "%02x", $0) }.joined().prefix(16).lowercased()
     }
 
+    /// A staged version every harness can use: finished, and its hooks
+    /// executable through a traversable directory.
+    static func usable(_ version: URL) -> Bool {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: version.appendingPathComponent(".complete").path) else { return false }
+        return Set(HookManifest.expected.map(\.script)).allSatisfy {
+            fm.isExecutableFile(atPath: version.appendingPathComponent("hooks/" + $0).path)
+        }
+    }
+
+    /// Give the owner back read, write and search on a tree (so it can be
+    /// removed), without following links out of it.
+    static func unlock(_ root: URL) {
+        let fm = FileManager.default
+        try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: root.path)
+        guard let walker = fm.enumerator(at: root, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey]) else { return }
+        for case let url as URL in walker {
+            let v = try? url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+            if v?.isSymbolicLink == true { continue }
+            try? fm.setAttributes([.posixPermissions: v?.isDirectory == true ? 0o755 : 0o644], ofItemAtPath: url.path)
+        }
+    }
+
     /// The fingerprint `current` points at, or nil when nothing is staged.
     public static func currentFingerprint(in root: URL = root) -> String? {
+        guard usable(current(in: root)) else { return nil }
         let f = current(in: root).appendingPathComponent(".fingerprint")
         return (try? String(contentsOf: f, encoding: .utf8))?
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -127,8 +151,15 @@ public enum RulesStore {
         let target = versions.appendingPathComponent(fp, isDirectory: true)
         do {
             try fm.createDirectory(at: versions, withIntermediateDirectories: true)
+            // A version whose scripts cannot be run (the 30 Sep permissions
+            // walk left one 0600) is not a version: open it back up to remove
+            // it, and stage it again.
+            if fm.fileExists(atPath: target.path), !usable(target) {
+                unlock(target)
+                try? fm.removeItem(at: target)
+            }
             if !fm.fileExists(atPath: target.appendingPathComponent(".complete").path) {
-                let temp = versions.appendingPathComponent(".staging-\(fp)-\(getpid())", isDirectory: true)
+                let temp = versions.appendingPathComponent(".staging-\(fp)-\(UUID().uuidString)", isDirectory: true)
                 try? fm.removeItem(at: temp)
                 try fm.createDirectory(at: temp, withIntermediateDirectories: true)
                 for part in parts {
@@ -138,8 +169,21 @@ public enum RulesStore {
                 }
                 try fp.write(to: temp.appendingPathComponent(".fingerprint"), atomically: true, encoding: .utf8)
                 try Data().write(to: temp.appendingPathComponent(".complete"))
-                try? fm.removeItem(at: target)       // a half-staged leftover
-                try fm.moveItem(at: temp, to: target)
+                // No "half-staged leftover" removal here: a version only ever
+                // arrives whole, by one rename of a finished copy, so an
+                // existing target is either complete or locked (handled
+                // above). Removing it raced a second instance that had just
+                // finished (30 Sep, found by the concurrency test).
+                do {
+                    try fm.moveItem(at: temp, to: target)
+                } catch {
+                    // Two instances launched together (the delivery's
+                    // self-test run and the app itself did, 30 Sep) stage the
+                    // same fingerprint at once. If the other one finished,
+                    // its copy is identical by construction: use it.
+                    try? fm.removeItem(at: temp)
+                    guard fm.fileExists(atPath: target.appendingPathComponent(".complete").path) else { throw error }
+                }
             }
         } catch {
             return .unavailable("could not stage the rules: \(error.localizedDescription)")
@@ -149,7 +193,7 @@ public enum RulesStore {
         if before != fp {
             // Atomic switch: a new link beside `current`, renamed over it.
             let link = current(in: root)
-            let fresh = root.appendingPathComponent(".current-\(getpid())")
+            let fresh = root.appendingPathComponent(".current-\(UUID().uuidString)")
             try? fm.removeItem(at: fresh)
             do {
                 try fm.createSymbolicLink(atPath: fresh.path, withDestinationPath: "versions/" + fp)
@@ -173,6 +217,12 @@ public enum RulesStore {
     static func prune(versions: URL, keeping current: String, keep: Int) {
         let fm = FileManager.default
         guard let names = try? fm.contentsOfDirectory(atPath: versions.path) else { return }
+        // Staging leftovers from a run that died mid-copy, after an hour.
+        for name in names where name.hasPrefix(".staging-") {
+            let url = versions.appendingPathComponent(name)
+            let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+            if let modified, modified < Date().addingTimeInterval(-3600) { unlock(url); try? fm.removeItem(at: url) }
+        }
         let others = names.filter { $0 != current && !$0.hasPrefix(".") }
             .map { versions.appendingPathComponent($0) }
             .sorted {

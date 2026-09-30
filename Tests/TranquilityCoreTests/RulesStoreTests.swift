@@ -115,6 +115,49 @@ final class RulesStoreTests: XCTestCase {
         }
     }
 
+    // MARK: - 30 Sep: what the first live launch hit
+
+    /// The launch-time hardening chmods everything in the support directory
+    /// 700/600. It followed `rules/current` and locked the version it names,
+    /// and stripped the hooks' execute bit. The rules must survive it.
+    func testTheLaunchHardeningLeavesTheRulesRunnable() throws {
+        let support = tmp.appendingPathComponent("support")
+        _ = RulesStore.stage(from: resources, root: support.appendingPathComponent("rules"))
+        try "private".write(to: support.appendingPathComponent("queue.sqlite"), atomically: true, encoding: .utf8)
+        PrivateStorage.harden(directory: support)
+        let rules = support.appendingPathComponent("rules")
+        XCTAssertTrue(fm.isExecutableFile(atPath: RulesStore.hooksDirectory(in: rules) + "/tbase-hook.sh"))
+        XCTAssertNotNil(RulesStore.currentFingerprint(in: rules), "current still usable")
+        let mode = try fm.attributesOfItem(atPath: support.appendingPathComponent("queue.sqlite").path)[.posixPermissions] as? Int
+        XCTAssertEqual(mode, 0o600, "private data is still hardened")
+    }
+
+    /// The delivery's self-test run and the app launched together and staged
+    /// the same rules at once; the loser used to give up.
+    func testTwoInstancesStagingTogetherBothSucceed() throws {
+        let outcomes = UnsafeMutablePointer<RulesStore.StageOutcome?>.allocate(capacity: 4)
+        defer { outcomes.deallocate() }
+        let r = resources!, rt = root!
+        DispatchQueue.concurrentPerform(iterations: 4) { i in
+            outcomes[i] = RulesStore.stage(from: r, root: rt)
+        }
+        for i in 0..<4 {
+            if case .unavailable(let why)? = outcomes[i] { XCTFail("instance \(i): \(why)") }
+        }
+        XCTAssertNotNil(RulesStore.currentFingerprint(in: root))
+    }
+
+    /// A version left locked (0600, no search bit) is replaced, not trusted.
+    func testALockedVersionIsRestaged() throws {
+        guard case .switched(_, let fp) = RulesStore.stage(from: resources, root: root) else { return XCTFail() }
+        let version = root.appendingPathComponent("versions/" + fp)
+        try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: version.path)
+        XCTAssertNil(RulesStore.currentFingerprint(in: root), "a locked version is not usable")
+        _ = RulesStore.stage(from: resources, root: root)
+        XCTAssertEqual(RulesStore.currentFingerprint(in: root), fp)
+        XCTAssertTrue(fm.isExecutableFile(atPath: RulesStore.hooksDirectory(in: root) + "/tbase-hook.sh"))
+    }
+
     // MARK: - A developer's checkout
 
     func testACheckoutWinsOnlyWhileItContainsTheRunningBuild() throws {
