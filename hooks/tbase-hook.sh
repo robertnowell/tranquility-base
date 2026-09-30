@@ -130,49 +130,51 @@ record = {
 if not record["sessionId"]:
     sys.exit(0)
 
-# A SESSION FORKED BEFORE THE SHAPE EXISTED LEARNS IT AT ITS NEXT PROMPT.
+# A RUNNING SESSION GETS NEW RULES AT ITS NEXT PROMPT, IN ANY HARNESS.
 #
-# Measured 26 Sep 2026: every page written in the old style since the 25 Sep
-# deploy came from a session started days before it (14, 19 and 22 Sep). The
-# SessionStart text never reaches a running session, and the write-time
-# advisory only reported what it could count. So on UserPromptSubmit, if the
-# session's own transcript does not yet carry the shape text, it is handed the
-# same two paragraphs SessionStart gives a new session, resolved from the same
-# file. Once said, the transcript carries it and this stays silent: the grep is
-# the memory, and nothing is repeated. Claude Code only; Codex's turn events do
-# not carry a transcript path and are not UserPromptSubmit.
+# Measured 26 Sep: every old-style page came from a session started before a
+# rule changed; on 30 Sep a MacBook session started 24 Sep was still following
+# August's rules. SessionStart text reaches a session once, so on each prompt
+# this compares the rules version the session was given (recorded per session
+# by visual-output-hook.sh) with the current one, and when they differ hands it
+# the whole current text, from the same hook, once per change.
+#
+# This replaces a transcript grep for one sentence ("Artifacts are not
+# boxes"): a rule change that kept that sentence never arrived, and Codex's
+# events carry no transcript to grep. A per-session record works for both.
+# The hub lookup is skipped here so the refresh fits the hook's 5 s budget.
 if event == "UserPromptSubmit":
-    tp = record.get("transcriptPath") or ""
     try:
-        told = False
-        if tp and os.path.exists(tp):
-            with open(tp, "rb") as fh:
-                # The marker is the NEWEST sentence in the shape text, not the
-                # oldest: a session told the 25 Sep version wrote new beige boxes
-                # on 27 Sep (8592f355, sharing-spec-v1) because the grep found
-                # the old paragraph and stayed quiet. Keying on the latest
-                # ruling means one repeat of the whole text per session per
-                # change, which is the cost of a ruling actually arriving.
-                told = b"Artifacts are not boxes" in fh.read()
-        if not told:
-            here = os.path.dirname(os.path.realpath(os.environ.get("TB_HOOK_PATH") or sys.argv[0] or ""))
-            skill = None
-            for cand in (os.path.join(here, "..", "skills", "share-as-page"),
-                         os.path.expanduser("~/.claude/skills/share-as-page")):
-                if os.path.exists(os.path.join(cand, "references", "shape-context.txt")):
-                    skill = os.path.realpath(cand)
-                    break
-            if skill:
-                with open(os.path.join(skill, "references", "shape-context.txt"), encoding="utf-8") as fh:
-                    shape = fh.read().strip()
-                shape = (shape.replace("{template}", os.path.join(skill, "templates", "brief.html"))
-                              .replace("{brief}", os.path.join(skill, "references", "brief.md"))
-                              .replace("{agent}", record["sessionId"]))
+        import subprocess
+        hook_path = os.environ.get("TB_HOOK_PATH") or sys.argv[0] or ""
+        if os.path.islink(hook_path):
+            hook_path = os.path.realpath(hook_path)
+        vo = os.path.join(os.path.dirname(os.path.abspath(hook_path)), "visual-output-hook.sh")
+        sid = record["sessionId"]
+        if os.path.exists(vo) and all(c in "0123456789abcdef-" for c in sid.lower()) and len(sid) <= 64:
+            env = dict(os.environ, TB_RULES_VERSION_ONLY="1")
+            current = subprocess.run(["/bin/bash", vo], input="", env=env, capture_output=True,
+                                     text=True, timeout=3).stdout.strip()
+            seen_path = os.path.expanduser(
+                "~/Library/Application Support/VoiceDispatch/rules/seen/" + sid)
+            try:
+                with open(seen_path) as fh:
+                    seen = fh.read().strip()
+            except Exception:
+                seen = ""
+            if current and seen != current:
+                env = dict(os.environ, TB_SKIP_HUBLINES="1")
+                env.pop("TB_RULES_VERSION_ONLY", None)
+                out = subprocess.run(["/bin/bash", vo], env=env, capture_output=True, text=True, timeout=4,
+                                     input=json.dumps({"session_id": sid, "hook_event_name": "SessionStart",
+                                                       "source": "refresh"})).stdout
+                ctx = json.loads(out)["hookSpecificOutput"]["additionalContext"]
                 print(json.dumps({"hookSpecificOutput": {
                     "hookEventName": "UserPromptSubmit",
                     "additionalContext": (
-                        "This session started before the house style for pages changed "
-                        "(25 Sep 2026), so it is told here, once.\n\n" + shape)}}))
+                        "The rules for pages have changed since this session was told them "
+                        "(or it started before they were versioned). The current rules follow "
+                        "and replace any earlier version.\n\n" + ctx)}}))
     except Exception:
         pass
 

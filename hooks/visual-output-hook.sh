@@ -49,6 +49,31 @@ if [ "${CLAUDE_CODE_ENTRYPOINT:-cli}" = "sdk-cli" ]; then
   exit 0
 fi
 
+# WHERE THIS HOOK LIVES, kept LOGICAL. The app stages the rules into
+# .../rules/versions/<fingerprint>/ and points .../rules/current at them; the
+# harness runs this hook as .../rules/current/hooks/visual-output-hook.sh. A
+# resolved path would hand agents .../versions/<fingerprint>/... paths that are
+# pruned a few updates later (30 Sep 2026), so the directory is resolved only
+# when this file itself is a symlink (a legacy install), never through
+# `current`.
+SRC="${BASH_SOURCE[0]:-$0}"
+if [ -L "$SRC" ]; then SRC=$(readlink -f "$SRC" 2>/dev/null || echo "$SRC"); fi
+HERE=$(cd "$(dirname "$SRC")" 2>/dev/null && pwd -L)
+
+# THE RULES VERSION: a hash of the two files this text is made from. Sent at
+# the end of the text and recorded per session, so tbase-hook can tell on any
+# later prompt whether a running session holds the current rules, in any
+# harness (30 Sep 2026: a session started 24 Sep never saw a later rule).
+rules_version() {
+  cat "$HERE/visual-output-hook.sh" "$HERE/../skills/share-as-page/references/shape-context.txt" 2>/dev/null \
+    | shasum -a 256 | cut -c1-12
+}
+if [ -n "${TB_RULES_VERSION_ONLY:-}" ]; then
+  rules_version
+  exit 0
+fi
+RULES_VERSION=$(rules_version)
+
 # WHERE, and the reason the where matters.
 #
 # The instruction said to write a page and open it, and never said where. So
@@ -118,9 +143,9 @@ fi
 # a slow one, and this prints nothing. The hook's contract is never block,
 # never fail, always exit 0, and a shared archive is not worth a hung session.
 HUBLINES=""
-HQ_BIN=$(command -v hq 2>/dev/null || true)
-[ -n "$HQ_BIN" ] || HQ_BIN="$HOME/.local/bin/hq"
-if [ -x "$HQ_BIN" ]; then
+[ -n "${TB_SKIP_HUBLINES:-}" ] && HQ_BIN="" || HQ_BIN=$(command -v hq 2>/dev/null || true)
+[ -n "$HQ_BIN" ] || [ -n "${TB_SKIP_HUBLINES:-}" ] || HQ_BIN="$HOME/.local/bin/hq"
+if [ -n "$HQ_BIN" ] && [ -x "$HQ_BIN" ]; then
   HUBLINES=$(HQ_TIMEOUT=2 "$HQ_BIN" ask 2d 3 2>/dev/null | python3 -c '
 import json, sys
 try:
@@ -138,19 +163,19 @@ fi
 
 # The template and its brief sit beside this hook: skills/ next to hooks/, in the
 # bundle and in the repo alike. Named in full, never described (see DIR above).
-HERE=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]:-$0}" 2>/dev/null || echo "${BASH_SOURCE[0]:-$0}")")" 2>/dev/null && pwd)
-SKILLDIR=$(cd "$HERE/../skills/share-as-page" 2>/dev/null && pwd)
+SKILLDIR=$(cd "$HERE/../skills/share-as-page" 2>/dev/null && pwd -L)
 BRIEF_TEMPLATE="${SKILLDIR:-$HOME/.claude/skills/share-as-page}/templates/brief.html"
 BRIEF_DOC="${SKILLDIR:-$HOME/.claude/skills/share-as-page}/references/brief.md"
 [ -f "$BRIEF_TEMPLATE" ] || BRIEF_TEMPLATE="$HOME/.claude/skills/share-as-page/templates/brief.html"
 [ -f "$BRIEF_DOC" ] || BRIEF_DOC="$HOME/.claude/skills/share-as-page/references/brief.md"
 
-python3 - "$DIR" "$WHOSE" "${AGENT:-<your session id>}" "$HUBLINES" "$BRIEF_TEMPLATE" "$BRIEF_DOC" <<'PYCTX' 2>/dev/null || true
+python3 - "$DIR" "$WHOSE" "${AGENT:-<your session id>}" "$HUBLINES" "$BRIEF_TEMPLATE" "$BRIEF_DOC" "$RULES_VERSION" <<'PYCTX' 2>/dev/null || true
 import json, sys
 directory, whose, agent = sys.argv[1], sys.argv[2], sys.argv[3]
 hublines = sys.argv[4] if len(sys.argv) > 4 else ""
 brief_template = sys.argv[5] if len(sys.argv) > 5 else "~/.claude/skills/share-as-page/templates/brief.html"
 brief_doc = sys.argv[6] if len(sys.argv) > 6 else "~/.claude/skills/share-as-page/references/brief.md"
+rules_version = sys.argv[7] if len(sys.argv) > 7 else ""
 # ONE SOURCE FOR THE SHAPE TEXT. tbase-hook.sh says the same thing to a session
 # that started before this text existed (26 Sep: three pages in the old style,
 # all from sessions forked before the 25 Sep deploy). Two copies of a paragraph
@@ -161,25 +186,11 @@ try:
     with open(_ctx, encoding="utf-8") as _f:
         shape_text = _f.read().strip().replace("{template}", brief_template).replace("{brief}", brief_doc).replace("{agent}", agent) + "\n\n"
 except Exception:
-    shape_text = (
-    "THE SHAPE OF THE PAGE. Three levels, far apart. (1) One sentence at headline size "
-    "with a verb, the thing they cannot miss; a lede; then a dark block saying what needs "
-    "them, or that nothing does. (2) One row per claim, a full sentence each, with a "
-    "status dot and one figure: reading only the rows gives the argument. (3) Under each "
-    "claim, open, the artifact: the screenshot of the real UI, the diff hunk, the raw "
-    "rows, the literal prompt. Prose ABOUT the evidence is not evidence. Start from the "
-    "template at " + brief_template + " and read " + brief_doc + " first; replace its :root "
-    "with `hq-theme " + agent + "`. No paragraph over 80 words; a decision that exists only "
-    "in prose is a red flag. The worked example is "
-    "agents/a8e3f054-8583-45f2-8bc0-3dfe55d47a06/uvape-what-is-different-redone.html.\n\n"
-    "SHOW IT, DO NOT DESCRIBE IT. A claim about a UI carries a screenshot of that UI, taken "
-    "this session, before and after when something changed. A claim about data carries the "
-    "rows. A claim about code carries the hunk. A login is not a reason to skip it: for "
-    "Kopi, promotions/scripts/render-authed.ts signs in as a real user and screenshots any "
-    "trykopi.ai path; for a local page, headless Chrome --screenshot. The only honest gap is "
-    "a before that nobody captured at the time, and the page says so where the image would "
-    "sit. Look at every screenshot before you embed it.\n\n"
-    )
+    # No second copy of the shape text lives here any more: it drifted from
+    # shape-context.txt (30 Sep 2026 audit). The file ships beside this hook in
+    # every layout (store, bundle, checkout); if it is missing, say nothing
+    # rather than an old version.
+    shape_text = ""
 # Where the page is read decides what the session is told to do after
 # writing it. With a hub app configured (hq.json app.base_url), the app
 # mirrors the page and announces it, so the session leaves a pointer at the
@@ -265,6 +276,18 @@ if hublines.strip():
         "usually cheaper than repeating it. If it holds no answer, say so rather than "
         "inventing one."
     )
+if rules_version:
+    text += "\n\n(Rules version " + rules_version + ".)"
+    # Recorded per session so tbase-hook re-sends only when this changes.
+    import re as _re
+    if _re.fullmatch(r"[0-9a-f-]{1,64}", agent or ""):
+        try:
+            _seen = _os2.path.expanduser("~/Library/Application Support/VoiceDispatch/rules/seen")
+            _os2.makedirs(_seen, exist_ok=True)
+            with open(_os2.path.join(_seen, agent), "w") as _f:
+                _f.write(rules_version)
+        except Exception:
+            pass
 print(json.dumps({"hookSpecificOutput": {
     "hookEventName": "SessionStart", "additionalContext": text}}))
 PYCTX

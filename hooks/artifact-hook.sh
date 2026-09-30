@@ -830,7 +830,7 @@ def _vocab():
         # repo both keep skills/ next to hooks/), then each harness's own
         # skills directory. Not one harness's path: this hook runs for Codex
         # and OpenCode too (ruled 25 Sep, skills ride with the app).
-        here = os.path.dirname(os.path.realpath(os.environ.get("TB_HOOK_PATH") or ""))
+        _hp = os.environ.get("TB_HOOK_PATH") or ""; here = os.path.dirname(os.path.realpath(_hp) if os.path.islink(_hp) else os.path.abspath(_hp))
         for base in [os.path.join(here, "..", "skills"),
                      "~/.claude/skills", "~/.agents/skills", "~/.config/opencode/skills"]:
             scripts = os.path.join(os.path.expanduser(base), "research-hq", "scripts")
@@ -988,7 +988,7 @@ def _shape_ask(path):
                "Copy the blocks from the current templates/brief.html and read brief.md, Artifacts.")
     if not on_template:
         import os as _os
-        here = _os.path.dirname(_os.path.realpath(_os.environ.get("TB_HOOK_PATH") or ""))
+        _hp = _os.environ.get("TB_HOOK_PATH") or ""; here = _os.path.dirname(_os.path.realpath(_hp) if _os.path.islink(_hp) else _os.path.abspath(_hp))
         skill = None
         for cand in (_os.path.join(here, "..", "skills", "share-as-page"),
                      _os.path.expanduser("~/.claude/skills/share-as-page")):
