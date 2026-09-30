@@ -56,27 +56,6 @@ public final class HubWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, 
     private let base: () -> URL?
     private var titleWatch: NSKeyValueObservation?
 
-    /// The marker `hq-open` reads before sending a page here rather than to
-    /// the browser (hf-o8t.4). It holds this app's bundle path, so a marker
-    /// left by an app since deleted is stale, and an app too old to know
-    /// `tranquilitybase://hub` never wrote one: either way the page goes to
-    /// the browser, which is always the fallback.
-    public static let marker = FileManager.default.homeDirectoryForCurrentUser
-        .appendingPathComponent("Library/Application Support/hq/hub-window")
-
-    /// Written at launch by an app that has the window.
-    ///
-    /// Only an app bundle writes it. A bare debug binary's bundle is its build
-    /// folder, and one run from a worktree on 29 Sep overwrote the marker with
-    /// `.build/debug`, so hq-open aimed at a folder, failed, and fell back to
-    /// the browser for every page until the app launched again.
-    public static func announce(bundle: URL = Bundle.main.bundleURL, to file: URL = marker) {
-        guard bundle.pathExtension == "app" else { return }
-        try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(),
-                                                 withIntermediateDirectories: true)
-        try? Data(bundle.path.utf8).write(to: file, options: .atomic)
-    }
-
     public init(base: @escaping () -> URL? = { HubApp.hub }) {
         self.base = base
     }

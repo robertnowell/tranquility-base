@@ -694,7 +694,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // The mirror: every page and turn into the hub, while the panel
             // runs. Nil until this Mac is connected; nothing else changes.
             HubWindow.shared.log = { Permissions.log($0) }
-            HubWindow.announce()
             // One sign-in: the app follows the hub window's. Out there is out
             // here (the mirror stops and the token is dropped, so Setup reads
             // Sign in); in there, on a Mac not yet connected, connects it.
