@@ -225,7 +225,7 @@ public enum SystemVoiceCatalog {
     /// The clicks the deep link cannot skip, so the app can spell them out rather than
     /// implying the button finishes the job. "System voice" and the voice sheet are
     /// controls inside the pane, not panes, so no URL can reach them.
-    public static let remainingSteps = "System voice → Voice → ↓"
+    public static let remainingSteps = "System voice › Voice › ↓"
 
     /// The free voices as catalogue entries, so the picker can list them beside the
     /// paid ones instead of showing an empty pane.
