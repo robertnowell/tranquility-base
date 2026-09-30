@@ -329,13 +329,41 @@ public final class HubMirror: @unchecked Sendable {
 
     static let sessionDir = try! NSRegularExpression(pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", options: .caseInsensitive)
 
+    static let shortSessionDir = try! NSRegularExpression(pattern: "^[0-9a-f]{8}$", options: .caseInsensitive)
+
+    /// The folders to read, and the session each belongs to.
+    ///
+    /// A full session id is its own session. A short one (the first eight
+    /// characters) is a real folder an agent made by following an older page
+    /// rule; on 30 Sep a MacBook agent had written fourteen reports into
+    /// `agents/f6300e08/` over six days and none reached the hub, because only
+    /// full-id folders were read, while Open Report (HubApp.locate) accepted
+    /// the short path and sent the reader to a hub that had nothing. Such a
+    /// folder is read as the one full-id folder it prefixes. A short name that
+    /// is a link (this Mac's 06 Sep migration made 511 of them, each pointing
+    /// at its full folder) is skipped, or every page would be read twice; so
+    /// is one that matches no full folder, or more than one.
+    static func sessionFolders(_ dirs: [String], root: String) -> [(dir: String, session: String)] {
+        func matches(_ re: NSRegularExpression, _ s: String) -> Bool {
+            re.firstMatch(in: s, range: NSRange(s.startIndex..., in: s)) != nil
+        }
+        let full = dirs.filter { matches(sessionDir, $0) }
+        var out = full.sorted().map { (dir: $0, session: $0) }
+        for dir in dirs.sorted() where matches(shortSessionDir, dir) {
+            let path = root + "/" + dir
+            if (try? FileManager.default.destinationOfSymbolicLink(atPath: path)) != nil { continue }
+            let owners = full.filter { $0.lowercased().hasPrefix(dir.lowercased() + "-") }
+            if owners.count == 1 { out.append((dir: dir, session: owners[0])) }
+        }
+        return out
+    }
+
     func mirrorDocuments(_ report: inout Report) async {
         let fm = FileManager.default
         guard let dirs = try? fm.contentsOfDirectory(atPath: agentsRoot) else { return }
         var candidates: [Candidate] = []
         var marks: [String: State.Mark] = [:]
-        for dir in dirs.sorted() {
-            guard Self.sessionDir.firstMatch(in: dir, range: NSRange(dir.startIndex..., in: dir)) != nil else { continue }
+        for (dir, session) in Self.sessionFolders(dirs, root: agentsRoot) {
             let base = agentsRoot + "/" + dir
             for path in Self.walk(base) where path != base + "/index.html" {
                 guard let attrs = try? fm.attributesOfItem(atPath: path),
@@ -361,7 +389,8 @@ public final class HubMirror: @unchecked Sendable {
                 marks[path] = State.Mark(size: (now[.size] as? Int64) ?? size,
                                          mtimeMs: Int64(((now[.modificationDate] as? Date) ?? mtime).timeIntervalSince1970 * 1000),
                                          hash: hash)
-                candidates.append(Candidate(path: path, session: dir, hash: hash, mtime: mtime))
+                candidates.append(Candidate(path: path, session: session, hash: hash, mtime: mtime,
+                                            slug: dir == session ? nil : Self.slug(path: path, base: base)))
             }
         }
         sync { state.files = marks }
