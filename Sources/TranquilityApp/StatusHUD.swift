@@ -454,7 +454,7 @@ final class StatusHUD: NSObject {
     /// wait already served. That is right, and it left the failure card painting
     /// from idle with no target: no title, and no door, on a card whose whole
     /// message was "check the tab" (18 Aug).
-    private var lastAddressed: (sessionId: String, pid: Int?, label: String)?
+    var lastAddressed: (sessionId: String, pid: Int?, label: String)?
 
     /// True between a greeting card painting and its session binding to it.
     ///
@@ -786,7 +786,7 @@ final class StatusHUD: NSObject {
         // the orb above it says the mode. Titling it HANDS-FREE printed the
         // same two words twice, one line apart.
         face = Face(title: "", body: text,
-                    placardOverride: "\(StateLegend.Glyph.speaking) \(StateLegend.managerOnTitle)")
+                    placardOverride: "\(StateLegend.Glyph.speaking) \(StateLegend.managerOnTitle.uppercased())")
         render()
         return true
     }
@@ -1725,6 +1725,43 @@ final class StatusHUD: NSObject {
         render()
     }
 
+    /// Hands-free could not start, or could not carry on. Same shape as
+    /// `showDeviceFault` and for the same reason: no title, because it is
+    /// about the ACCOUNT or the mode, not about any agent.
+    ///
+    /// Earned 29 Sep. A credit refusal took the ordinary `showResult` path,
+    /// which names the session a failure is about and falls back to
+    /// `lastAddressed` when the panel has gone home. `lastAddressed` was a
+    /// launch drill's fixture, so the card came up titled "adopted" with a GO
+    /// TO AGENT door onto `question-drill`, a session that has never existed.
+    /// The drill's litter is fixed separately; this is the half that would
+    /// still be wrong with a real agent there, because "hands-free could not
+    /// reserve credit" is not that agent's fault and its door goes nowhere
+    /// useful.
+    func showHandsFreeFault(_ message: String) {
+        Failures.notice(message, session: nil)
+        guard transition(to: .result, because: "hands-free could not start") else { return }
+        awaitingGreetingBinding = false
+        currentTarget = nil
+        currentEventId = nil
+        face = Face(body: message)
+        render()
+    }
+
+    /// A drill's fixture must not outlive the drill.
+    ///
+    /// `adoptTarget` records `lastAddressed`, which `showResult` reaches for
+    /// hours later when the panel has gone home and a failure names no
+    /// session. A drill that adopts a fake agent therefore leaves a name and a
+    /// door behind for the next real failure to wear (29 Sep, "adopted").
+    /// Drills run in the shipped panel on every launch, so cleaning up is not
+    /// tidiness, it is the difference between a fixture and a lie.
+    func forgetDrillAdoption() {
+        lastAddressed = nil
+        currentTarget = nil
+        currentEventId = nil
+    }
+
     /// The microphone is open and nothing is arriving from it — the third tier
     /// of the silence gate, and the only one that is a genuine fault.
     ///
@@ -2393,6 +2430,31 @@ final class StatusHUD: NSObject {
     }
     var face = Face()
 
+    // MARK: Project folders (ruled 29 Sep 2026, ruling-project-folders.md)
+
+    /// The folder book the grid draws from. The shared store in the app; a
+    /// drill swaps in a scratch one so it never writes the user's folders.
+    var projects: ProjectStore = .shared
+    /// True while a drag or a rename is live: the five-second beat must not
+    /// tear the rows out from under the pointer or the caret.
+    var rowsHeld = false {
+        didSet { if rowsHeld && !oldValue { rowsHeldSince = Date() } }
+    }
+    var rowsHeldSince = Date.distantPast
+    /// A repaint that arrived while the rows were held, owed on release.
+    var rowsDirty = false
+    /// The drag in flight, if any.
+    var gridDrag: GridDrag?
+    /// Folders whose name the model is still choosing.
+    var namingFolders: Set<String> = []
+    /// Whether a new folder asks the model for its name. Off in a drill.
+    var nameFoldersWithModel = true
+    /// The last drop, while its notice is up: what it said and the book
+    /// before it. The notice is the top band's receipt chip, never a row.
+    var undoDrop: (text: String, before: ProjectBook, until: Date)?
+    /// Every line the grid drew this paint, for hit-testing a drag.
+    var gridLines: [(view: NSView, line: ProjectLayout.Line)] = []
+
     /// The pill/controls row for the current state, where one exists. `hidden`
     /// has no face; the associated labels (listening target, send destination)
     /// come from the stashed face, which is why this lives here and not on
@@ -2473,7 +2535,7 @@ final class StatusHUD: NSObject {
         // Part of the baseline for the same reason the hint's font is: the empty
         // room's 17pt centred sentence is the only face that changes either, so
         // a state that never mentions them must not inherit them.
-        bodyLabel.font = StateLegend.Face.message(12)
+        bodyLabel.font = StateLegend.Face.brief
         bodyLabel.alignment = .natural
         // The ink is a BODY ATTRIBUTE, so it belongs to the baseline: the line
         // above writes a plain string and would otherwise erase the read-along
@@ -2737,7 +2799,7 @@ final class StatusHUD: NSObject {
             // the stack's left inset is 14, so 30 puts the "P" at x 44 with an
             // 8pt gap). The placardClearsChevron drill holds this geometry.
             stateLabel.attributedStringValue = Widgets.letterspaced(
-                StateLegend.pastAgentsTitle, size: 10, tracking: 3.2,
+                StateLegend.pastAgentsTitle.uppercased(), size: 10, tracking: 3.2,
                 color: StateLegend.Lens.chrome.color, headIndent: 30)
             // One row, like the grid's: chevron, placard, gear. The gear stays
             // — settings is reachable from here as it is from everywhere — and
@@ -2988,9 +3050,13 @@ final class StatusHUD: NSObject {
         guard !face.title.isEmpty else { titleLabel.stringValue = ""; return }
         let truncating = NSMutableParagraphStyle()
         truncating.lineBreakMode = .byTruncatingTail
-        let font = ChromeType.mono(ofSize: 13, weight: .semibold)
+        // Set exactly as a grid row names the agent (29 Sep 2026): Geist Sans
+        // Light at the row's size and tracking, so the name reads the same on
+        // the card as in the list.
+        let font = StateLegend.Face.name(GridRowView.nameSize, light: true)
         let attributes: [NSAttributedString.Key: Any] = [
             .font: font,
+            .kern: GridRowView.nameSize * GridRowView.nameTracking,
             .foregroundColor: StateLegend.Palette.ink,
             .paragraphStyle: truncating,
         ]
@@ -3222,8 +3288,21 @@ final class StatusHUD: NSObject {
     /// from. It has no opinion about which rows win, only about how many
     /// slots there are to win.
     static func gridRows(_ rows: [SessionRow],
-                         screen: NSScreen? = NSScreen.main) -> [SessionRow] {
-        SessionRow.gridRows(rows, capacity: gridRowCapacity(screen: screen), floor: gridRowFloor)
+                         screen: NSScreen? = NSScreen.main,
+                         book: ProjectBook = ProjectStore.shared.current) -> [SessionRow] {
+        let capacity = gridRowCapacity(screen: screen)
+        let first = SessionRow.gridRows(rows, capacity: capacity, floor: gridRowFloor)
+        // A folder header is shorter than a row but not free: each one takes
+        // its height out of the row budget, so twenty rows and three folders
+        // still fit the screen twenty rows fitted. The rows that lose their
+        // slot go to Past Agents, by the same set difference as ever.
+        let headers = ProjectLayout.headerCount(first, book: book,
+                                                origin: SessionLineage.lastKnownOrigin)
+        guard headers > 0 else { return first }
+        let cost = Int((CGFloat(headers) * (FolderHeaderView.height + 1)
+                        / (GridRowView.height + 1)).rounded(.up))
+        let room = max(1, capacity - cost)
+        return SessionRow.gridRows(rows, capacity: room, floor: min(gridRowFloor, room))
     }
 
     /// How many row-slots the panel is worth: every LIT session, or your top
@@ -3255,7 +3334,17 @@ final class StatusHUD: NSObject {
         SessionRow.shownCount(rows, capacity: gridRowCapacity(screen: screen), floor: gridRowFloor)
     }
 
-    private func rebuildSessionRows() {
+    func rebuildSessionRows() {
+        if rowsHeld {
+            if heldGridIsStale() {
+                releaseHeldGrid(because: "the gesture that held it is gone")
+            } else {
+                rowsDirty = true
+                return
+            }
+        }
+        rowsDirty = false
+        gridLines = []
         waitingRows.removeAllArrangedSubviews()
         waitingRows.spacing = 0
 
@@ -3287,7 +3376,8 @@ final class StatusHUD: NSObject {
             Permissions.log("grid: manager mode, orb in place of \(face.sessionRows.count) rows")
             return
         }
-        let shown = Self.gridRows(face.sessionRows)
+        let book = projects.current
+        let shown = Self.gridRows(face.sessionRows, book: book)
         // ONE callsign column (ruled 05 Aug): sized to the widest callsign on
         // show, capped at 38% of the grid. Per-row widths made every name
         // truncate at its own x and the right side read as a rag, not a
@@ -3299,9 +3389,46 @@ final class StatusHUD: NSObject {
                 ceil(($0.aux as NSString)
                     .size(withAttributes: [.font: GridRowView.auxFont]).width)
             }.max() ?? 0)
-        for (index, item) in shown.enumerated() {
+        let lines = ProjectLayout.lines(shown, book: book, origin: SessionLineage.lastKnownOrigin)
+        // The order agents are read out in is this one, top to bottom, with a
+        // collapsed folder's rows in their folder's place (GridOrder).
+        let arranged = ProjectLayout.arrange(shown, book: book, origin: SessionLineage.lastKnownOrigin)
+        // Never from a second instance (a drill, a pose): its fixture rows
+        // would overwrite the running app's order on disk.
+        if !CommandLine.arguments.contains("--allow-second-instance") {
+            GridOrder.record(arranged.folders.flatMap(\.rows).map(\.id) + arranged.loose.map(\.id))
+        }
+        // Inside a folder the rule above each of its rows starts at the
+        // indent, so the folder's rows read as their own column; the rule
+        // that closes a folder is full width (29 Sep, "these lines are a
+        // little jank").
+        func staysInFolder(after index: Int) -> Bool {
+            guard index + 1 < lines.count, case let .row(_, next?) = lines[index + 1] else { return false }
+            switch lines[index] {
+            case let .header(folder, _, _, _): return folder.id == next
+            case let .row(_, folder): return folder == next
+            }
+        }
+        for (index, line) in lines.enumerated() {
+            let item: SessionRow
+            switch line {
+            case let .header(folder, lamp, lit, members):
+                let header = folderHeader(folder, lamp: lamp, lit: lit, members: members)
+                waitingRows.addArrangedSubview(header)
+                gridLines.append((header, line))
+                waitingRows.addArrangedSubview(staysInFolder(after: index)
+                    ? FolderMemberView.rule(width: Self.gridWidth)
+                    : hairline(StateLegend.Palette.hairlineSoft))
+                continue
+            case let .row(row, _):
+                item = row
+            }
             let row = GridRowView(item: item, auxWidth: auxWidth, target: self,
                                   action: #selector(sessionRowTapped(_:)))
+            row.onDrag = { [weak self, weak row] phase, event in
+                guard let self, let row else { return }
+                self.rowDragged(item.id, from: row, phase: phase, event: event)
+            }
             // The lamp column is the session's power switch, on every row.
             // Until 18 Aug only `.ready` got a target, so the column was a
             // control on one row in ten and part of the row everywhere else —
@@ -3332,10 +3459,19 @@ final class StatusHUD: NSObject {
             // the right name. No dialog after that, and none here either — the
             // grid would otherwise be the only surface in the app that asks twice.
             row.menu = rowMenu(for: item)
-            waitingRows.addArrangedSubview(row)
-            row.widthAnchor.constraint(equalToConstant: Self.gridWidth).isActive = true
-            if index < shown.count - 1 {
-                waitingRows.addArrangedSubview(hairline(StateLegend.Palette.hairlineSoft))
+            if case let .row(_, folder?) = line {
+                let member = FolderMemberView(row: row, folderId: folder, width: Self.gridWidth)
+                waitingRows.addArrangedSubview(member)
+                gridLines.append((member, line))
+            } else {
+                waitingRows.addArrangedSubview(row)
+                row.widthAnchor.constraint(equalToConstant: Self.gridWidth).isActive = true
+                gridLines.append((row, line))
+            }
+            if index < lines.count - 1 {
+                waitingRows.addArrangedSubview(staysInFolder(after: index)
+                    ? FolderMemberView.rule(width: Self.gridWidth)
+                    : hairline(StateLegend.Palette.hairlineSoft))
             }
         }
         // The proactive half (ruled 05 Aug addendum): the "+" placard kicks off
@@ -3779,7 +3915,7 @@ final class StatusHUD: NSObject {
     /// Give the keyboard back. Called on every door out of the list face, and
     /// safe to call when it was never taken: a panel that cannot become key
     /// cannot be holding it.
-    private func releaseKeyboard() {
+    func releaseKeyboard() {
         guard let panel else { return }
         panel.pasteArmed = false
         guard panel.acceptsKey else { return }
@@ -4084,6 +4220,23 @@ final class StatusHUD: NSObject {
     ///
     /// Everything up to the cursor is shown at full strength and the rest dimmed, so
     /// the eye can follow the voice without the jitter of a per-word box.
+    /// Light the whole line, because nothing more is coming.
+    ///
+    /// Ruled 29 Sep: "text should highlight everything when interrupted by
+    /// user." Dim means NOT REACHED YET, which is true while a voice is running
+    /// and false the moment it stops. Cutting the manager off mid-sentence used
+    /// to leave half a bright line and half a grey one, frozen, for as long as
+    /// the card stayed up -- a promise the card could no longer keep.
+    ///
+    /// Counted in the DISPLAYED text, not the spoken text: this is the end of
+    /// the line by definition, and `displayIndex(forSpoken:)` maps a spoken
+    /// cursor that no longer has a next word to map.
+    func completeHighlight() {
+        guard let body = bodyLabel?.stringValue, !body.isEmpty else { return }
+        face.spokenUpTo = body.count
+        paintInk(displayCursor: body.count)
+    }
+
     func highlight(upTo index: Int) {
         guard let body = bodyLabel?.stringValue, !body.isEmpty else {
             Permissions.log("highlight upTo=\(index) SKIPPED: no body text")
@@ -4137,7 +4290,7 @@ final class StatusHUD: NSObject {
                                 range: spokenRange)
         attributed.addAttribute(Self.spokenMark, value: true, range: spokenRange)
         attributed.addAttribute(
-            .font, value: StateLegend.Face.message(12), range: full)
+            .font, value: StateLegend.Face.brief, range: full)
         bodyLabel.attributedStringValue = attributed
 
         // The cursor just painted, NOT `inkBrightLength`. That property walks
@@ -4403,6 +4556,13 @@ final class StatusHUD: NSObject {
             handoff.representedObject = item.id
             menu.addItem(handoff)
         }
+        if let folder = projects.current.folder(of: item.id, origin: SessionLineage.lastKnownOrigin) {
+            let out = NSMenuItem(title: "Remove from \u{201C}\(folder.name)\u{201D}",
+                                 action: #selector(removeFromFolderPicked(_:)), keyEquivalent: "")
+            out.target = self
+            out.representedObject = item.id
+            menu.addItem(out)
+        }
         menu.addItem(.separator())
         // The item NAMES its target, and that IS the confirmation.
         let end = NSMenuItem(title: "End session \u{201C}\(item.name)\u{201D}",
@@ -4455,7 +4615,9 @@ final class StatusHUD: NSObject {
     /// row menu — asserted against liveness, never assumed from it.
     var gridRowsForTesting: [(id: String, hasMenu: Bool)] {
         waitingRows.arrangedSubviews.compactMap {
-            guard let row = $0 as? GridRowView, let id = row.identifier?.rawValue
+            // A row inside a project folder is wrapped in its indent.
+            guard let row = ($0 as? GridRowView) ?? ($0 as? FolderMemberView)?.row,
+                  let id = row.identifier?.rawValue
             else { return nil }
             return (id, row.menu != nil)
         }

@@ -100,19 +100,50 @@ public enum SessionLineage {
         let fm = FileManager.default
         guard let projectNames = try? fm.contentsOfDirectory(atPath: projects.path) else { return [:] }
         var map: Map = [:]
+        let keys: [URLResourceKey] = [.fileSizeKey, .contentModificationDateKey]
         for project in projectNames {
             let dir = projects.appendingPathComponent(project, isDirectory: true)
-            guard let names = try? fm.contentsOfDirectory(atPath: dir.path) else { continue }
-            for name in names where name.hasSuffix(".jsonl") {
-                let origin = String(name.dropLast(".jsonl".count))
-                guard ArtifactStore.isPlausibleSession(origin),
-                      let next = continuedIn(transcript: dir.appendingPathComponent(name))
+            guard let files = try? fm.contentsOfDirectory(
+                at: dir, includingPropertiesForKeys: keys) else { continue }
+            for file in files where file.pathExtension == "jsonl" {
+                let origin = file.deletingPathExtension().lastPathComponent
+                guard ArtifactStore.isPlausibleSession(origin) else { continue }
+                let values = try? file.resourceValues(forKeys: Set(keys))
+                guard let next = tails.continuedIn(
+                    file, size: values?.fileSize ?? -1,
+                    modified: values?.contentModificationDate ?? .distantPast)
                 else { continue }
                 map[next] = origin
             }
         }
         return map
     }
+
+    /// `continuedIn` per transcript, re-read only when the file moves.
+    ///
+    /// Measured 29 Sep: the scan opened and read the tail of every Claude
+    /// transcript on disk each time `current()` expired, and the grid asks
+    /// every few seconds, so it ran every fifteen seconds for the life of the
+    /// process. The link is the last record of a finished file; a file whose
+    /// size and mtime have not moved cannot have gained or lost one.
+    private final class TailMemo: @unchecked Sendable {
+        private let lock = NSLock()
+        private var entries: [String: (size: Int, modified: Date, next: String?)] = [:]
+
+        func continuedIn(_ url: URL, size: Int, modified: Date) -> String? {
+            let path = url.path
+            lock.lock()
+            if let hit = entries[path], hit.size == size, hit.modified == modified {
+                lock.unlock()
+                return hit.next
+            }
+            lock.unlock()
+            let next = SessionLineage.continuedIn(transcript: url)
+            lock.lock(); entries[path] = (size, modified, next); lock.unlock()
+            return next
+        }
+    }
+    private static let tails = TailMemo()
 
     /// The scan, cached. A hub write and a grid repaint both ask, and the
     /// answer changes once a day if that.
@@ -131,8 +162,22 @@ public enum SessionLineage {
         var map = scan()
         for (child, parent) in CodexLineage.scan() { map[child] = parent }
         cached = (Date(), map)
+        snapshotLock.lock(); snapshot = map; snapshotLock.unlock()
         return map
     }
+
+    /// The map as the last scan left it, without scanning and without waiting
+    /// on one in progress. For the main actor: the grid asks which folder a
+    /// row belongs to on every repaint, and `current()` can hold its lock for
+    /// a whole transcript walk. Empty until the first scan, which the grid's
+    /// own assembly performs off-main every few seconds.
+    public static func lastKnown() -> Map {
+        snapshotLock.lock(); defer { snapshotLock.unlock() }
+        return snapshot
+    }
+    public static func lastKnownOrigin(of id: String) -> String { origin(of: id, in: lastKnown()) }
+    private static let snapshotLock = NSLock()
+    nonisolated(unsafe) private static var snapshot: Map = [:]
 
     /// Where a conversation began. Follows the chain back; a loop, which the
     /// harness should never write, stops at the first repeat rather than

@@ -77,10 +77,12 @@ extension AppDelegate {
 
             switch action {
             case "hub":
-                // A page for the Hub window. No address, or not the hub's:
-                // the window's home, which is never wrong to show.
-                if case let .hub(url) = parsed, let url, HubWindow.shared.show(url) { break }
-                HubWindow.shared.showHub()
+                // A page an agent opened with hq-open: offered, never forced.
+                // With the window open it is left alone (ruled 29 Sep); with
+                // none, it opens on the page. No address, or not the hub's:
+                // the window's home, unless it is already showing something.
+                if case let .hub(url) = parsed, let url, HubWindow.shared.offer(url) { break }
+                if HubWindow.shared.window?.isVisible != true { HubWindow.shared.showHub() }
             case "discuss":
                 discuss(session: session, ref: ref)
             case "hear":
@@ -1514,14 +1516,19 @@ extension AppDelegate {
         let byID = Dictionary(scanned.map { ($0.sessionId, $0) },
                               uniquingKeysWith: { first, _ in first })
         let now = Date()
+        let book = ProjectStore.shared.current
         return hidden.map { row in
             let session = byID[row.id]
-            let haystack = [row.name, row.id, session?.cwd ?? ""].joined(separator: " ")
+            let folder = book.folder(of: row.id, origin: SessionLineage.lastKnownOrigin)?.name
+            // The folder's name is searchable: typing "mirai" finds every
+            // agent that was filed under Mirai.
+            let haystack = [row.name, row.id, session?.cwd ?? "", folder ?? ""].joined(separator: " ")
             let when = session.map { SessionActivity.lastMovedLabel($0.lastActivityAt, now: now) }
             let hover = [SessionRow.hoverText(for: row), SessionRow.shortId(row.id)]
                 .compactMap { $0 }.joined(separator: "\n")
             return PastAgentsList.Item(row: row, revivable: row.revivable,
-                                       haystack: haystack, aux: when, tooltip: hover)
+                                       haystack: haystack, aux: when, tooltip: hover,
+                                       folder: folder)
         }
     }
 

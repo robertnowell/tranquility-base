@@ -25,6 +25,8 @@ public enum ManagerJSON {
         public var goal: String?
         public var topic: String?
         public var waiting: Bool
+        /// The project folder the user filed it in on the grid, if any.
+        public var folder: String? = nil
     }
 
     public struct WaitingRow: Codable, Equatable, Sendable {
@@ -35,6 +37,9 @@ public enum ManagerJSON {
         public var goal: String?
         public var eventId: Int64
         public var heard: Bool
+        /// Where the row sits on the panel, top to bottom from 0; nil when the
+        /// panel does not show it. The hands-free manager orders by this.
+        public var gridIndex: Int? = nil
     }
 
     public struct Status: Codable, Equatable, Sendable {
@@ -69,7 +74,9 @@ public enum ManagerJSON {
 
     public static func targets(
         store: QueueStore, live: [LiveSession],
-        isEnrolled: (String, String?) -> Bool
+        isEnrolled: (String, String?) -> Bool,
+        book: ProjectBook = ProjectStore.shared.current,
+        origin: (String) -> String = SessionLineage.lastKnownOrigin
     ) -> [Target] {
         let open = (try? store.waitingSessions()) ?? []
         let waiting = Set(open.map(\.sessionId))
@@ -78,7 +85,7 @@ public enum ManagerJSON {
         // `SessionRow.quietRowsLast` gets from `lastActivity`.
         let askedAt = Dictionary(open.map { ($0.sessionId, $0.latestId) },
                                  uniquingKeysWith: max)
-        return live.sorted { a, b in
+        let sorted = live.sorted { a, b in
             let (x, y) = (Self.gridBand(a, waiting: waiting), Self.gridBand(b, waiting: waiting))
             if x != y { return x < y }
             if x == 0 {
@@ -86,7 +93,15 @@ public enum ManagerJSON {
                 if i != j { return i > j }
             }
             return (a.cwd ?? "") < (b.cwd ?? "")
-        }.map { s in
+        }
+        // The panel's folder order (ruling-project-folders, rules 1 and 3):
+        // folders first in the user's order, loose sessions last. Within each
+        // group the order above stands.
+        func folderOf(_ id: String) -> ProjectBook.Folder? { book.folder(of: id, origin: origin) }
+        let folderOrder = book.folders.map(\.id)
+        let grouped = folderOrder.flatMap { id in sorted.filter { folderOf($0.sessionId)?.id == id } }
+            + sorted.filter { folderOf($0.sessionId) == nil }
+        return grouped.map { s in
             let stop = try? store.latestStop(for: s.sessionId)
             let brief = stop.flatMap { e in
                 try? store.storedBrief(sessionId: s.sessionId, eventRowid: e.latestId)
@@ -98,7 +113,8 @@ public enum ManagerJSON {
                     ?? GridAssembler.tabDisplayName(live: s, callsign: nil),
                 enrolled: isEnrolled(s.sessionId, s.cwd),
                 goal: brief?.goal, topic: brief?.topic ?? stop?.briefTopic,
-                waiting: waiting.contains(s.sessionId))
+                waiting: waiting.contains(s.sessionId),
+                folder: folderOf(s.sessionId)?.name)
         }
     }
 
@@ -150,15 +166,20 @@ public enum ManagerJSON {
     /// stated reason -- "the store keeps rows for sessions long gone; those are
     /// not 'waiting on you' in any sense worth saying aloud". It was right, and
     /// it was on the wrong side of the wire.
-    public static func status(store: QueueStore, live: Set<String>) throws -> Status {
-        let open = try store.waitingSessions().filter { live.contains($0.sessionId) }
+    public static func status(store: QueueStore, live: Set<String>,
+                              gridOrder: [String] = GridOrder.load()) throws -> Status {
+        // In the panel's order, top to bottom (GridOrder, ruled 29 Sep 2026).
+        let open = GridOrder.rank(try store.waitingSessions().filter { live.contains($0.sessionId) },
+                                  id: \.sessionId, order: gridOrder)
+        let position = Dictionary(gridOrder.enumerated().map { ($1, $0) },
+                                  uniquingKeysWith: { first, _ in first })
         let rows = open.map { w -> WaitingRow in
             let brief = try? store.storedBrief(sessionId: w.sessionId, eventRowid: w.latestId)
             return WaitingRow(
                 sessionId: w.sessionId, project: w.projectLabel,
                 name: GridAssembler.tabDisplayName(for: w, live: nil),
                 topic: w.briefTopic ?? brief?.topic, goal: brief?.goal,
-                eventId: w.latestId, heard: w.heard)
+                eventId: w.latestId, heard: w.heard, gridIndex: position[w.sessionId])
         }
         return Status(waiting: rows, unannounced: open.filter { !$0.heard }.count)
     }

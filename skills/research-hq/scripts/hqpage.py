@@ -2,6 +2,16 @@
 """Start a page on the template, in the right place, with the right tokens.
 
     hq-page new <slug> --session=<full session id> [--brand=NAME] [--title="..."]
+    hq-page publish <slug> --session=<full session id>
+
+A NEW PAGE STARTS AS A DRAFT (29 Sep 2026). `new` writes the scaffold to
+<hub>/_drafts/<slug>.html, and `publish` moves the finished page to
+<hub>/<slug>.html and opens it. The mirror and every door skip names that
+start with `_`, so nothing can publish, announce or open a page before the
+agent has filled it. Before this, `new` wrote the empty template straight to
+the page's own address; one agent scaffolded, then waited on a deploy, and
+the app announced the empty template to Robert in the Hub window ("still
+getting empty reports, THIS MUST NEVER HAPPEN").
 
 Measured 27 Sep 2026, two hours after the artifact blocks shipped: four hub
 pages arrived, none on the template, all from sessions started weeks before.
@@ -49,9 +59,33 @@ def agents_root():
 
 
 def usage(code=2):
-    print("usage: hq-page new <slug> --session=<full session id> [--brand=NAME] [--title=\"...\"]",
-          file=sys.stderr)
+    print("usage: hq-page new <slug> --session=<full session id> [--brand=NAME] [--title=\"...\"]\n"
+          "       hq-page publish <slug> --session=<full session id>", file=sys.stderr)
     return code
+
+
+def publish(session, slug):
+    """Move a filled draft to its address and open it.
+
+    It refuses a draft that still carries the scaffold's own markers: an
+    attribute left as FILL means the page was never filled, and publishing it
+    is the one failure this command exists to prevent.
+    """
+    hub = agents_root() / session
+    draft, out = hub / "_drafts" / f"{slug}.html", hub / f"{slug}.html"
+    if not draft.exists():
+        print(f"hq-page: no draft at {draft}; start one with `hq-page new {slug} --session={session}`.",
+              file=sys.stderr)
+        return 1
+    left = re.findall(r'="FILL[^"]*"|base64,FILL', draft.read_text(encoding="utf-8"))
+    if left:
+        print(f"hq-page: {draft} is not filled yet ({len(left)} placeholder(s) left, e.g. {left[0]}). "
+              "Fill it, then publish.", file=sys.stderr)
+        return 1
+    draft.replace(out)
+    print(out)
+    subprocess.run([sys.executable, str(HERE / "hq-open"), str(out)])
+    return 0
 
 
 def main(argv):
@@ -64,7 +98,7 @@ def main(argv):
         elif a.startswith("--"):
             print(f"hq-page: use {a}=VALUE", file=sys.stderr)
             return 2
-    if len(args) != 2 or args[0] != "new":
+    if len(args) != 2 or args[0] not in ("new", "publish"):
         return usage()
     slug = args[1]
     if not re.fullmatch(r"[a-z0-9][a-z0-9-]{1,60}", slug):
@@ -77,14 +111,20 @@ def main(argv):
               "SessionStart context and in your scratchpad path; never another agent's.",
               file=sys.stderr)
         return 2
+    if args[0] == "publish":
+        return publish(session, slug)
     if not TEMPLATE.exists():
         print(f"hq-page: template missing at {TEMPLATE}", file=sys.stderr)
         return 1
 
-    out_dir = agents_root() / session
+    live = agents_root() / session / f"{slug}.html"
+    if live.exists():
+        print(f"hq-page: {live} exists; pick another slug or edit that file.", file=sys.stderr)
+        return 1
+    out_dir = agents_root() / session / "_drafts"
     out = out_dir / f"{slug}.html"
     if out.exists():
-        print(f"hq-page: {out} exists; pick another slug or edit that file.", file=sys.stderr)
+        print(f"hq-page: a draft is already at {out}; fill it, or pick another slug.", file=sys.stderr)
         return 1
 
     # Tokens from hq-theme. With --brand this BINDS the session to the brand,
@@ -108,13 +148,13 @@ def main(argv):
     start = page.index("/* TOKENS.")
     end = page.index("/* HOUSE CONSTANTS")
     page = page[:start] + "/* TOKENS from hq-theme, " + time.strftime("%Y-%m-%d") + " */\n" + tokens + "\n" + page[end:]
-    page = page.replace('<meta name="intranet:session" content="<!-- FULL SESSION ID -->">',
+    page = page.replace('<meta name="intranet:session" content="FILL: FULL SESSION ID">',
                         f'<meta name="intranet:session" content="{session}">')
     today = time.strftime("%-d %b %Y")
     page = page.replace("<!-- KICKER: two items, brand and date. Nothing else. -->",
                         f"{nameplate} · {today}")
     if brand:
-        page = page.replace('<meta name="intranet:brand" content="<!-- BRAND -->">',
+        page = page.replace('<meta name="intranet:brand" content="FILL: BRAND">',
                             f'<meta name="intranet:brand" content="{brand}">')
     title = opts.get("title")
     if title:
@@ -128,8 +168,9 @@ def main(argv):
     fallback = " (no theme on record for that brand: house tokens, say so in one line)" if "NO THEME ON RECORD" in header else ""
     print(f"{out}")
     print(f"tokens: {header.strip('/* ').strip(' */')}{fallback}")
-    print(f"Now fill it: one sentence at headline size, the dark needs-you block, one row per claim "
-          f"with its artifact under it. The rules are in {BRIEF}.")
+    print(f"This is a DRAFT: nothing publishes or opens it. Fill it here: one sentence at headline "
+          f"size, the dark needs-you block, one row per claim with its artifact under it (rules: {BRIEF}). "
+          f"When it is finished, run: hq-page publish {slug} --session={session}")
     return 0
 
 

@@ -159,12 +159,46 @@ public enum SessionActivity: Equatable, Sendable {
     public static func evidence(
         transcriptPath: String, boundary: TurnBoundary? = nil, now: Date = Date()
     ) -> Evidence? {
-        guard let tail = tail(of: transcriptPath) else { return nil }
-        let modified = (try? FileManager.default.attributesOfItem(atPath: transcriptPath))?[.modificationDate] as? Date
+        let attributes = try? FileManager.default.attributesOfItem(atPath: transcriptPath)
+        let modified = attributes?[.modificationDate] as? Date
+        let size = (attributes?[.size] as? NSNumber)?.intValue
+        guard let tail = tails.tail(of: transcriptPath, size: size, modified: modified)
+        else { return nil }
         let verdict = self.verdict(tail: tail, modified: modified, boundary: boundary, now: now)
         return Evidence(activity: verdict.activity, observedAt: verdict.observedAt,
                         modifiedAt: modified)
     }
+
+    /// `tail(of:)` for `evidence`, re-read only when the file moves.
+    ///
+    /// The grid asks for evidence on every row of every repaint (measured
+    /// 29 Sep: a 64KB read per row every five seconds at idle). The verdict
+    /// still runs every call, because it depends on `now`; only the read is
+    /// skipped, and only while size and mtime both stand still.
+    private final class TailMemo: @unchecked Sendable {
+        private let lock = NSLock()
+        private var entries: [String: (size: Int, modified: Date, lines: [String])] = [:]
+        /// Rows, not the archive: the grid shows tens. Past this the memo
+        /// starts over rather than growing with every session ever shown.
+        static let limit = 256
+
+        func tail(of path: String, size: Int?, modified: Date?) -> [String]? {
+            guard let size, let modified else { return SessionActivity.tail(of: path) }
+            lock.lock()
+            if let hit = entries[path], hit.size == size, hit.modified == modified {
+                lock.unlock()
+                return hit.lines
+            }
+            lock.unlock()
+            guard let lines = SessionActivity.tail(of: path) else { return nil }
+            lock.lock()
+            if entries.count >= Self.limit { entries.removeAll() }
+            entries[path] = (size, modified, lines)
+            lock.unlock()
+            return lines
+        }
+    }
+    private static let tails = TailMemo()
 
     /// The decision itself, taking lines rather than a path so every rule
     /// below is testable without a filesystem.

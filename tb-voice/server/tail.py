@@ -44,7 +44,27 @@ const ev=document.getElementById('ev'),lg=document.getElementById('lg'),s=docume
 function ts(t){const d=new Date(t*1000);return d.toTimeString().slice(0,8)+'.'+String(d.getMilliseconds()).padStart(3,'0').slice(0,1)}
 const es=new EventSource('/stream');
 es.onopen=()=>s.textContent='live';es.onerror=()=>s.textContent='reconnecting…';
-es.addEventListener('event',m=>{const e=JSON.parse(m.data);const d=document.createElement('div');d.className='e '+e.event;
+es.addEventListener('event',m=>{const e=JSON.parse(m.data);
+ // One row for a whole line being spoken, not one per word.
+ //
+ // ElevenLabs hands over a whole utterance's alignment with the audio, so
+ // every `spoke` arrives in the same tick: sixty-four rows at 12:32:54.3 for
+ // one sentence, three times asked about and three times explained instead of
+ // fixed. Progress is a bar, not a log. The run collapses into the row it
+ // started, which advances in place and shows how far through the line the
+ // voice has got.
+ if(e.event==='spoke'){const last=ev.lastElementChild;
+  if(last&&last.classList.contains('spoke')){const bar=last.querySelector('.prog');
+   const n=(+last.dataset.n||1)+1;last.dataset.n=n;
+   if(bar&&e.upTo!==undefined){bar.textContent=e.upTo+' chars, '+n+' words'
+    +(e.at!==undefined&&e.at!==null?' · '+e.at.toFixed(1)+'s':'');}
+   ev.parentElement.scrollTop=ev.parentElement.scrollHeight;return;}
+  const d=document.createElement('div');d.className='e spoke';d.dataset.n=1;
+  d.innerHTML='<span class="t">'+ts(e.t)+'</span><span class="k">spoke</span>'
+   +'<span class="prog t">'+(e.upTo!==undefined?e.upTo+' chars, 1 word':'')+'</span>';
+  ev.append(d);while(ev.children.length>300)ev.firstChild.remove();
+  ev.parentElement.scrollTop=ev.parentElement.scrollHeight;return;}
+ const d=document.createElement('div');d.className='e '+e.event;
  if(e.event==='jev'){const a=e.answers||{};const ad=a.addressed?a.addressed.noul:null;const it=a.intent||{};const top=Object.entries(it.probabilities||{}).sort((x,y)=>y[1]-x[1]).slice(0,3).map(([k,v])=>k+' '+v.toFixed(2)).join(' · ');
   d.innerHTML='<span class="t">'+ts(e.t)+'</span><span class="k">jev</span><span><span class="sum">'+(e.ms||'?')+'ms · addressed '+(ad!==null?ad.toFixed(2):'?')+(e.rule?' → '+e.rule:'')+' · '+top+' <span class="t">(click for the call)</span></span><pre>'+JSON.stringify({state:e.state,answers:e.answers},null,1).replace(/</g,'&lt;')+'</pre></span>';
   d.querySelector('.sum').onclick=()=>d.classList.toggle('open');ev.append(d);while(ev.children.length>300)ev.firstChild.remove();ev.parentElement.scrollTop=ev.parentElement.scrollHeight;return;}

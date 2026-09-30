@@ -116,6 +116,9 @@ extension StatusHUD {
             // posable, so nobody could have caught it without opening the app.
             showSetupSettings()
 
+        case "folders", "folders-collapsed", "folders-drag", "folders-undo":
+            poseFolders(name)
+
         case "grid":
             showIdle(rows: [
                 .init(id: "s1", name: "Validate hero image binding",

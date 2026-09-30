@@ -694,7 +694,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // The mirror: every page and turn into the hub, while the panel
             // runs. Nil until this Mac is connected; nothing else changes.
             HubWindow.shared.log = { Permissions.log($0) }
-            HubWindow.announce()
             // One sign-in: the app follows the hub window's. Out there is out
             // here (the mirror stops and the token is dropped, so Setup reads
             // Sign in); in there, on a Mac not yet connected, connects it.
@@ -717,7 +716,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 HubMirror.revealFirstReport = { url in
                     DispatchQueue.main.async {
                         Permissions.log("hub: revealing the first report")
-                        if !HubWindow.shared.show(url), BrowserFocus.reveal(url, app: HubApp.baseURL) == .notFound {
+                        if !HubWindow.shared.offer(url), BrowserFocus.reveal(url, app: HubApp.baseURL) == .notFound {
                             NSWorkspace.shared.open(url)
                         }
                     }
@@ -842,6 +841,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 HandsFreeMarker.settle(live: self.managerIsOn)
             }
         }
+        inFlightTimer?.tolerance = 0.1    // 10%, Apple's floor for a repeating timer
         // One intake beat: drain the spool, prepare the next brief, repaint
         // the grid, sound the arrival. On the five-second timer, and ALSO the
         // moment a remote turn lands in the spool (`intakeBeat`): a remote
@@ -1002,6 +1002,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         intakeBeat = beat
         intakeTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { _ in beat() }
+        intakeTimer?.tolerance = 0.5      // 10%, Apple's floor for a repeating timer
 
         // Lifted ABOVE the hotkey on purpose (ruled 18 Aug). A screenshot
         // tool has no business installing a global event tap: `--pose-shot`
@@ -1024,6 +1025,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             } else {
                 Permissions.log("pose: unknown name '\(name)'")
             }
+            return
+        }
+
+        // One-shot: the project-folders drill on a real panel, printed, exit.
+        // Safe beside the running app (`--allow-second-instance`): no hotkey
+        // tap is installed yet, the store is a scratch one, no model is asked.
+        if CommandLine.arguments.contains("--selftest-folders") {
+            intakeTimer?.invalidate(); intakeTimer = nil
+            hud.projectFoldersDrill()
+            NSApp.terminate(nil)
             return
         }
 

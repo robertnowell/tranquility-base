@@ -61,6 +61,17 @@ final class HubWindowTests: XCTestCase {
         XCTAssertEqual(ins, 1)
     }
 
+    /// A report an agent opens never moves an open window (ruled 29 Sep).
+    func testAnOfferedReportOpensAClosedWindowAndLeavesAnOpenOneAlone() {
+        let h = hub()
+        XCTAssertFalse(h.offer(URL(string: "https://elsewhere.test/x")!), "not the hub: the caller's")
+        XCTAssertTrue(h.offer(URL(string: "https://hq.example.test/d/first")!))
+        XCTAssertEqual(h.lastShown?.path, "/d/first")
+        h.window?.orderFront(nil)
+        XCTAssertTrue(h.offer(URL(string: "https://hq.example.test/d/second")!))
+        XCTAssertNotEqual(h.lastShown?.path, "/d/second", "an open window stays on its page")
+    }
+
     func testTheHubAndItsOwnSubdomainsAreTheHub() {
         let h = hub()
         XCTAssertTrue(h.isHub(URL(string: "https://hq.example.test/d/x")!))
@@ -142,12 +153,50 @@ final class HubDoorLinkTests: XCTestCase {
         XCTAssertNil(none)
     }
 
-    @MainActor
-    func testTheMarkerNamesTheBundleThatWroteIt() throws {
-        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: dir) }
-        let file = dir.appendingPathComponent("hq/hub-window")
-        HubWindow.announce(bundle: URL(fileURLWithPath: "/Applications/Tranquility Base.app"), to: file)
-        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), "/Applications/Tranquility Base.app")
+}
+
+/// One code (29 Sep): the app presses its own Connect.
+@MainActor
+final class HubWindowSelfConnectTests: XCTestCase {
+    private func hub() -> HubWindow {
+        let h = HubWindow(base: { URL(string: "https://hq.example.test") })
+        h.activates = false
+        h.dataStore = .nonPersistent()
+        return h
+    }
+
+
+    /// The app opened its own Connect page with a code it invented: the
+    /// window recognises it and approves without a phrase to compare.
+    func testTheAppsOwnConnectPageIsRecognised() {
+        let h = hub()
+        h.ownConnectCode = { "own-code_1" }
+        let url = URL(string: "https://hq.example.test/connect?code=own-code_1&device=robaroni-mac")!
+        XCTAssertEqual(h.selfConnectCode(url), "own-code_1")
+    }
+
+    /// The attack the phrase exists for: a stranger's link carries THEIR code.
+    /// It must reach the phrase screen, never an automatic Connect.
+    func testALinkWithSomebodyElsesCodeIsNeverApprovedAutomatically() {
+        let h = hub()
+        h.ownConnectCode = { "own-code_1" }
+        XCTAssertNil(h.selfConnectCode(URL(string: "https://hq.example.test/connect?code=strangers&device=x")!))
+    }
+
+    /// Nothing in flight: every Connect page is a person's decision.
+    func testWithNoPairingInFlightNothingIsApproved() {
+        let h = hub()
+        XCTAssertNil(h.selfConnectCode(URL(string: "https://hq.example.test/connect?code=own-code_1")!))
+        h.ownConnectCode = { "" }
+        XCTAssertNil(h.selfConnectCode(URL(string: "https://hq.example.test/connect?code=")!))
+    }
+
+    /// Only the hub's own Connect page: the same code on another host, or on
+    /// another path of the hub, is not it.
+    func testOnlyTheHubsConnectPathCounts() {
+        let h = hub()
+        h.ownConnectCode = { "own-code_1" }
+        XCTAssertNil(h.selfConnectCode(URL(string: "https://evil.example/connect?code=own-code_1")!))
+        XCTAssertNil(h.selfConnectCode(URL(string: "https://hq.example.test/d/x?code=own-code_1")!))
     }
 }

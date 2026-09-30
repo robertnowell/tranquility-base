@@ -45,6 +45,23 @@ final class GridRowView: NSControl {
     static let hoverBleed: CGFloat = 8
     static let auxFraction: CGFloat = 0.38
     static let auxFont = ChromeType.mono(ofSize: 11, weight: .regular)
+    static let nameSize: CGFloat = 14
+    /// Tracking for the name, as a fraction of its size.
+    static let nameTracking: CGFloat = 0.04
+
+    /// Draw the name with its tracking. Tracking lives in the string, not the
+    /// font, so colour goes in the string too: the one place the name is
+    /// painted, for the resting ink and the hover alike.
+    static func paintName(_ field: NSTextField, color: NSColor) {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineBreakMode = .byTruncatingTail
+        field.attributedStringValue = NSAttributedString(
+            string: field.stringValue,
+            attributes: [.font: field.font ?? StateLegend.Face.name(nameSize, light: true),
+                         .kern: nameSize * nameTracking,
+                         .foregroundColor: color,
+                         .paragraphStyle: paragraph])
+    }
 
     init(item: SessionRow, auxWidth: CGFloat,
          target: AnyObject, action: Selector) {
@@ -132,7 +149,12 @@ final class GridRowView: NSControl {
         // and it is the SAME answer on every face. A row that is merely
         // alive rests at the same level as one you have already heard,
         // because neither is asking; only their lamps differ.
-        name.font = ChromeType.mono(ofSize: 13, weight: .medium)
+        // Names are words (ruled 29 Sep 2026): an agent's name is read, not
+        // parsed, so it takes the system sans the hub already sets it in. Mono
+        // stays for what is machine: the id beside it, labels, file names.
+        // Geist Sans Light at 14 with the letters 4% apart (option E, Robert,
+        // 29 Sep 2026): at 13 and no tracking the light strokes crowded.
+        name.font = StateLegend.Face.name(Self.nameSize, light: true)
         // FULL INK IS RESERVED FOR ROWS THAT WANT YOU, and after this change
         // that is exactly the green and amber ones you have not heard.
         //
@@ -147,6 +169,7 @@ final class GridRowView: NSControl {
                           ? StateLegend.Palette.ink
                           : StateLegend.Palette.restingInk).withAlphaComponent(ink)
         name.lineBreakMode = .byTruncatingTail
+        Self.paintName(name, color: name.textColor ?? StateLegend.Palette.ink)
         name.translatesAutoresizingMaskIntoConstraints = false
         name.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
@@ -293,7 +316,9 @@ final class GridRowView: NSControl {
     /// the answer is an underline — a shape rather than a tier, which is what
     /// the card title already does at the top of the ramp.
     func setHovered(_ on: Bool) {
-        nameLabel.textColor = on ? StateLegend.hovered(restingName) : restingName
+        let color = on ? StateLegend.hovered(restingName) : restingName
+        nameLabel.textColor = color
+        Self.paintName(nameLabel, color: color)
         // Nothing to trade if this row does not know its harness, and a row
         // that swapped its id for nothing would just look broken.
         guard harnessMark.image != nil else { return }
@@ -322,9 +347,35 @@ final class GridRowView: NSControl {
 
     // A cell-less NSControl tracks nothing by default; the whole row is the
     // hit target, and the tap lands on mouse-up like any button's would.
-    override func mouseDown(with event: NSEvent) {}
+    /// A drag on the row, reported to the panel (project folders, ruled
+    /// 29 Sep 2026). Nil means the row does not drag.
+    var onDrag: ((GridDragPhase, NSEvent) -> Void)?
+    private var downAt: NSPoint?
+    private var dragging = false
+
+    override func mouseDown(with event: NSEvent) {
+        downAt = event.locationInWindow
+        dragging = false
+    }
+
+    // Four points of travel make it a drag, not a wobbly click. Past that the
+    // mouse-up belongs to the drop and must not also open the agent's card.
+    override func mouseDragged(with event: NSEvent) {
+        guard let onDrag, let downAt else { return }
+        let here = event.locationInWindow
+        if !dragging, hypot(here.x - downAt.x, here.y - downAt.y) >= 4 {
+            dragging = true
+            onDrag(.began, event)
+        }
+        if dragging { onDrag(.moved, event) }
+    }
 
     override func mouseUp(with event: NSEvent) {
+        defer { downAt = nil; dragging = false }
+        if dragging {
+            onDrag?(.ended, event)
+            return
+        }
         let point = convert(event.locationInWindow, from: nil)
         guard bounds.contains(point) else { return }
         // The lamp is its own target when it is live: `lampHitWidth` at full

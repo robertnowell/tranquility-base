@@ -326,16 +326,21 @@ if not path:
     # NOWHERE, so their sessions' hubs listed no report at all -- which is the
     # whole point of a hub.
     #
-    # The cwd first, because the session's own directory is the strongest signal
-    # of its own work, then the two trees this house builds pages in. Depth is
+    # The deep-research tree (the agent tree is added below). Depth is
     # capped at the project dir and one level under it: pages live at
     # <project>/index.html or <project>/<name>.html, and an unbounded walk of
     # ~/Projects would stat thousands of node_modules files on every Bash call.
+    #
+    # NOT THE CWD OR ~/Projects ANY MORE (29 Sep 2026). Since 12 Sep a report
+    # lives in the agent's own directory, and a changed file anywhere else is
+    # not evidence of a report: a `git checkout` rewrites a repo's index.html.
+    # Measured over 7 days: 1,762 records, 1,606 in the agent tree, and of the
+    # rest 128 were repos' index.html pages touched by branch switches (49 of
+    # them the app's update-feed landing page). One of those, recorded 30 s
+    # after an agent's real report, became its card's Open File and opened
+    # the update feed in Chrome. The agent tree and deep-research stay.
     roots = []
-    cwd = p.get("cwd") or ""
-    if cwd.startswith("/"):
-        roots += [os.path.join(cwd, "*.html"), os.path.join(cwd, "*", "*.html")]
-    for tree in ("~/Documents/deep-research", "~/Projects", "~/ClaudeWork"):
+    for tree in ("~/Documents/deep-research",):
         base = os.path.expanduser(tree)
         roots += [os.path.join(base, "*", "*.html"), os.path.join(base, "*.html")]
     # THIS SESSION'S OWN HUB, which was missing and is where reports actually
@@ -427,6 +432,16 @@ if not path:
                  if f not in mine and authored(os.path.basename(os.path.dirname(f)))]
         path = max(mine, key=os.path.getmtime) if mine else ""
     else:
+        path = ""
+
+# A DRAFT IS NOT A PAGE. hq-page new writes its scaffold to <hub>/_drafts/,
+# and the mirror has always skipped any name starting with `_` or `.`. This
+# hook did not, so a scaffold written minutes before it was filled could be
+# recorded as the session's newest page and announced, empty (29 Sep 2026).
+# Same rule as the mirror, so what is recorded is what the hub can show.
+if path and "/Documents/agents/" in path:
+    _rel = path.split("/Documents/agents/", 1)[1].split("/")[1:]
+    if any(part.startswith(("_", ".")) for part in _rel):
         path = ""
 
 # The ownership question is the same wherever the path came from.

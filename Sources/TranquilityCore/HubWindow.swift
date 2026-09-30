@@ -37,6 +37,12 @@ public final class HubWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, 
     /// hub's own session (Clerk) and reports only its changes.
     public var onSignedOut: () -> Void = {}
     public var onSignedIn: (_ user: String) -> Void = { _ in }
+    /// The pairing code THIS app invented for the Connect it is waiting on,
+    /// or nil. Set by the app; read when the hub's Connect page loads here.
+    public var ownConnectCode: () -> String? = { nil }
+    /// Codes this window has already pressed Connect for, so a reload or a
+    /// back-navigation never approves twice.
+    private var selfConnected: Set<String> = []
     /// Who the hub last said was signed in: nil until it has said anything,
     /// `.some(nil)` for nobody. Kept across page loads, so a sign-out that
     /// ends on the sign-in page is one change, and a first load that finds
@@ -44,24 +50,11 @@ public final class HubWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, 
     private(set) var hubUser: String??
 
     public private(set) var window: NSWindow?
+    /// The last address this window was asked to show.
+    public private(set) var lastShown: URL?
     public private(set) var webView: WKWebView?
     private let base: () -> URL?
     private var titleWatch: NSKeyValueObservation?
-
-    /// The marker `hq-open` reads before sending a page here rather than to
-    /// the browser (hf-o8t.4). It holds this app's bundle path, so a marker
-    /// left by an app since deleted is stale, and an app too old to know
-    /// `tranquilitybase://hub` never wrote one: either way the page goes to
-    /// the browser, which is always the fallback.
-    public static let marker = FileManager.default.homeDirectoryForCurrentUser
-        .appendingPathComponent("Library/Application Support/hq/hub-window")
-
-    /// Written at launch by an app that has the window.
-    public static func announce(bundle: URL = Bundle.main.bundleURL, to file: URL = marker) {
-        try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(),
-                                                 withIntermediateDirectories: true)
-        try? Data(bundle.path.utf8).write(to: file, options: .atomic)
-    }
 
     public init(base: @escaping () -> URL? = { HubApp.hub }) {
         self.base = base
@@ -77,9 +70,26 @@ public final class HubWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, 
         }
         log("hub window: showing \(Self.describe(url))")
         let web = make()
+        lastShown = url
         web.load(URLRequest(url: url))
         present()
         return true
+    }
+
+    /// A page an agent reported on its own, not one the person asked for.
+    /// Ruled 29 Sep (Robert): with the Hub window open, do nothing, neither
+    /// focus it nor move it off the page being read; the toast and the
+    /// sidebar's live order already say a report arrived. With no window,
+    /// open it on the report. True when handled here (including left alone);
+    /// false for an address that is not the hub, which the caller sends on.
+    @discardableResult
+    public func offer(_ url: URL) -> Bool {
+        guard isHub(url) else { return false }
+        if let window, window.isVisible {
+            log("hub window: open already; a report \(Self.describe(url)) arrived and was left for the sidebar")
+            return true
+        }
+        return show(url)
     }
 
     /// Open the window on the hub's home, or on whatever it last showed.
@@ -160,6 +170,55 @@ public final class HubWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, 
     }
     public func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         log("hub window: loaded \(Self.describe(webView.url))")
+        if let code = selfConnectCode(webView.url) { pressConnect(code, in: webView) }
+    }
+
+    // MARK: - Connecting this Mac, without asking the person to compare
+
+    /// The code to approve without a person comparing phrases, or nil.
+    ///
+    /// The phrase on the hub's Connect page exists for one attack: a stranger
+    /// mails a signed-in person a /connect link carrying THEIR code, and one
+    /// click pairs the stranger's computer (HubPairing's design note, RFC 8628
+    /// section 5.4). The comparison proves the code on the page is the one on
+    /// the Mac in front of you. When this app opened that page in its own
+    /// window with a code it invented a moment ago, it can make the comparison
+    /// itself; asking the person to do it is the second code Robert met on
+    /// 29 Sep ("it's confirming the same app").
+    ///
+    /// So: a Connect page on the hub whose code is the one this app is waiting
+    /// on, and not already pressed. A link anybody sent carries some other
+    /// code and gets the phrase screen, as before. Never a flag in the URL: a
+    /// flag can be copied into a stranger's link; this app's own in-memory
+    /// code cannot.
+    func selfConnectCode(_ url: URL?) -> String? {
+        guard let url, isHub(url), url.path == "/connect",
+              let own = ownConnectCode(), !own.isEmpty,
+              let code = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+                .queryItems?.first(where: { $0.name == "code" })?.value,
+              code == own, !selfConnected.contains(code) else { return nil }
+        return code
+    }
+
+    /// Press the page's own Connect, only if the form on it carries this code.
+    /// The page decides what approving means; the app only stands in for the
+    /// person's click, and checks the form it is clicking one more time.
+    private func pressConnect(_ code: String, in webView: WKWebView) {
+        selfConnected.insert(code)
+        let literal = (try? String(data: JSONSerialization.data(withJSONObject: [code]), encoding: .utf8)) ?? "[]"
+        let js = """
+        (function (c) {
+          var i = document.querySelector('form input[name="code"]');
+          if (!i || i.value !== c) return 'no-form';
+          var b = i.form.querySelector('button[type="submit"]');
+          if (!b) return 'no-button';
+          b.click(); return 'pressed';
+        })(\(literal)[0])
+        """
+        webView.evaluateJavaScript(js) { [weak self] result, error in
+            let said = (result as? String) ?? error?.localizedDescription ?? "nothing"
+            MainActor.assumeIsolated { self?.log("hub window: this Mac's own Connect page, \(said)") }
+        }
     }
     public func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
         log("hub window: could not load \(Self.describe(webView.url)): \(error.localizedDescription)")

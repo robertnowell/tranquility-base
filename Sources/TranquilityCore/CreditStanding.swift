@@ -78,7 +78,7 @@ public enum CreditStanding: Sendable, Equatable {
         case .floored(.outOfCredits, _) where ownKey:
             return "starting credits used · your own keys carry on for summaries, hearing and speaking. Buying credits is coming"
         case .notOnCredits(connectAgain: false):
-            return "sign in to your hub and summaries run on us, ten dollars to start"
+            return "comes with your hub sign-in: summaries on us, ten dollars to start"
         case .notOnCredits(connectAgain: true), .floored(.connectAgain, _):
             return "sign in with your hub account and summaries run on credits"
         case .onCredits:
@@ -123,6 +123,14 @@ public enum CreditStanding: Sendable, Equatable {
         case .floored(.outOfCredits, _): return "out_of_credits"
         case .floored(.connectAgain, _): return "sign_in_needed"
         }
+    }
+
+    /// The balance as money, when the last check knew it; nil when it did not.
+    /// Added 29 Sep so a card can say the number instead of sending somebody
+    /// to go and look at it.
+    public var lastKnownBalance: String? {
+        if case let .good(micros, _) = self { return Self.dollars(micros) }
+        return nil
     }
 
     static func dollars(_ micros: String) -> String {

@@ -180,8 +180,11 @@ extension AppDelegate {
             uniquingKeysWith: { first, _ in first })
 
         let delivering = self.delivering
+        // Asked once per build. Both the local rows and the remote ones read
+        // it, and each call is a registry read, a view query and a sweep.
+        let waiting = (try? coordinator.waiting()) ?? []
         let verdict = GridAssembler.rows(GridAssembler.RowInputs(
-            waiting: (try? coordinator.waiting()) ?? [],
+            waiting: waiting,
             known: known,
             discovered: SessionDiscovery.discoverIfScanned()?.sessions ?? [],
             liveById: liveById,
@@ -195,7 +198,7 @@ extension AppDelegate {
             isInFlight: { delivering.isInFlight($0) },
             closedCallsigns: closedCallsigns,
             recordedTurns: recordedTurns,
-            remote: remoteAgents(waiting: (try? coordinator.waiting()) ?? []),
+            remote: remoteAgents(waiting: waiting),
             // nil is "could not read the registry"; [] is "nobody is home".
             livenessKnown: probe != nil))
 

@@ -246,10 +246,11 @@ extension StatusHUD {
             target: self, action: #selector(breadcrumbClicked)))
 
         titleLabel = DoorLabel(labelWithString: "")
-        // The identity face: mono, matching the grid rows (ruled). renderTitle
+        // The identity face: the system sans, matching the grid rows and the
+        // hub (names are words, ruled 29 Sep 2026). renderTitle
         // sets the string; this is the fallback style. ONE line since the topic
         // died (10 Aug) — the identity was always the only thing on line one.
-        titleLabel.font = ChromeType.mono(ofSize: 13, weight: .semibold)
+        titleLabel.font = StateLegend.Face.name(GridRowView.nameSize, light: true)
         titleLabel.textColor = StateLegend.Lens.content.color
         titleLabel.lineBreakMode = .byTruncatingTail
         titleLabel.maximumNumberOfLines = 1
@@ -261,7 +262,7 @@ extension StatusHUD {
         // A press on the words selects AND arms: the selection takes the
         // event, so the surface never sees this one.
         bodyLabel.onPress = { [weak self] in self?.armPaste(via: "words") }
-        bodyLabel.font = StateLegend.Face.message(12)
+        bodyLabel.font = StateLegend.Face.brief
         bodyLabel.textColor = StateLegend.Lens.content.color
         bodyLabel.maximumNumberOfLines = 0
         // Selectable so a line can be quoted out of a card by hand; see
@@ -458,11 +459,11 @@ extension StatusHUD {
         // and it is hidden with the label, so a face with no capture has no
         // orphan line across it.
         stripLabel = NSTextField(labelWithString: "")
-        // Chrome: the strip is the machine reporting on itself — the mic, the
-        // transcription, the send. The readback rides it too, and mono is right
-        // for that as well: those words are about to be TYPED into a terminal,
-        // and this is the last look at them.
-        stripLabel.font = StateLegend.Face.chrome(11)
+        // Your words, in the face words are set in (ruled 29 Sep 2026: what you
+        // said is speech, not code). It was mono on the argument that the words
+        // are about to be typed into a terminal; the hub quotes the same words
+        // in the sans, and one reply should not read two ways.
+        stripLabel.font = StateLegend.Face.message(12)
         stripLabel.textColor = StateLegend.Palette.hint
         stripLabel.maximumNumberOfLines = 2
         stripLabel.lineBreakMode = .byTruncatingHead

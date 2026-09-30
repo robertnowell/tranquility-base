@@ -557,6 +557,19 @@ enum StateLegend {
         static func message(_ size: CGFloat, _ weight: NSFont.Weight = .regular) -> NSFont {
             .systemFont(ofSize: size, weight: weight)
         }
+        /// An agent's NAME: the grid row and the card's title. Geist Sans,
+        /// shipped in the bundle beside Geist Mono so a name and a label are
+        /// one family (Robert chose "geist light", 29 Sep 2026, from eight
+        /// rendered options). Light for rows, Regular for the title. The
+        /// system sans at the same weight when the bundle has no fonts (a
+        /// `swift run` from a checkout).
+        static func name(_ size: CGFloat, light: Bool) -> NSFont {
+            ChromeType.sans(ofSize: size, light: light)
+        }
+        /// The card's brief: Geist Sans Light at 13, so the card is one family
+        /// and the brief no longer outweighs the title (option C, Robert,
+        /// 29 Sep 2026).
+        static var brief: NSFont { ChromeType.sans(ofSize: 13, light: true) }
     }
 
     /// The placard face: the state's own label, one step up in weight from the
@@ -730,15 +743,15 @@ enum StateLegend {
     static let repositoryURL = URL(string: "https://github.com/robertnowell/tranquility-base")!
     /// The quiet placard row above the hint. "AGENT", not "SESSION" (ui-pass-7,
     /// ruling 1): every user-facing noun on the panel says agent.
-    static let newAgentTitle = "NEW AGENT"
+    static let newAgentTitle = "New agent"
     /// The other half of the same row: not starting an agent, but bringing one
     /// back. Ruled 12 Aug.
-    static let pastAgentsTitle = "PAST AGENTS"
+    static let pastAgentsTitle = "Past agents"
     /// Manager mode's placard (19 Sep): the hands-free manager on the grid.
-    static let managerOnTitle = "HANDS-FREE"
-    static let managerOffTitle = "STOP HANDS-FREE"
+    static let managerOnTitle = "Hands-free"
+    static let managerOffTitle = "Stop hands-free"
     /// No manager on this Mac: neither hosted nor local is configured.
-    static let managerUnsetTitle = "SET UP HANDS-FREE"
+    static let managerUnsetTitle = "Set up hands-free"
 
     /// The empty room has no sentence of its own any more (ruled 14 Sep
     /// 2026). It used to replace the grid, ten seconds in, with "Control +

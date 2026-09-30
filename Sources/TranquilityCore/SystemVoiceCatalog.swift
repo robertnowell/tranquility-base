@@ -123,6 +123,10 @@ public enum SystemVoiceCatalog {
     /// collapsed by name taking the LARGEST — the premium build is the one worth
     /// naming, and it is the number a person comparing voices wants.
     static func catalogueEntries(language: String) -> [(name: String, megabytes: Double)] {
+        memo.value("entries|\(language)") { readCatalogueEntries(language: language) }
+    }
+
+    private static func readCatalogueEntries(language: String) -> [(name: String, megabytes: Double)] {
         func assets(_ catalogue: String) -> [[String: Any]] {
             let dir = "/System/Library/AssetsV2/com_apple_MobileAsset_\(catalogue)"
             let url = URL(fileURLWithPath: dir)
@@ -346,6 +350,10 @@ public enum SystemVoiceCatalog {
     }
 
     public static func asCatalogueVoices(language: String = "en") -> [Voice] {
+        memo.value("voices|\(language)") { readCatalogueVoices(language: language) }
+    }
+
+    private static func readCatalogueVoices(language: String) -> [Voice] {
         // Quality OR deliberate choice. A voice you went and downloaded belongs in
         // the list even if macOS rates it compact — you asked for it. The OS's own
         // novelty voices never qualify on either count: they are compact AND nobody
@@ -386,6 +394,59 @@ public enum SystemVoiceCatalog {
             let size = sizeMB(named: v.name).map { String(format: "%.0f MB", $0) } ?? ""
             return Voice(id: v.identifier, name: v.name, category: size)
         }
+    }
+
+    /// The catalogue, read once per change to what is installed.
+    ///
+    /// Measured 29 Sep: the announcer resolved voices every five-second beat,
+    /// and each resolution re-parsed four system manifests once PER VOICE shown
+    /// (`sizeMB` for every row), walked every voice asset's Info.plist, and
+    /// asked AVSpeech for its voices three times. None of it changes unless a
+    /// voice is installed or removed, and either one rewrites a catalogue
+    /// folder or its manifest, which moves their mtimes: that is the key.
+    /// The minute cap covers a voice arriving by a path this does not stat.
+    private final class Memo: @unchecked Sendable {
+        private let lock = NSLock()
+        private var entries: [String: (signature: String, at: Date, value: Any)] = [:]
+        static let maxAge: TimeInterval = 60
+
+        func value<T>(_ key: String, _ load: () -> T) -> T {
+            let signature = SystemVoiceCatalog.installedSignature()
+            lock.lock()
+            if let hit = entries[key], hit.signature == signature,
+               Date().timeIntervalSince(hit.at) < Self.maxAge, let value = hit.value as? T {
+                lock.unlock()
+                return value
+            }
+            lock.unlock()
+            let value = load()
+            lock.lock(); entries[key] = (signature, Date(), value); lock.unlock()
+            return value
+        }
+    }
+    private static let memo = Memo()
+
+    /// Every voice catalogue folder and manifest under AssetsV2, with its
+    /// mtime. A handful of stats, against the plist parsing it stands in for.
+    static func installedSignature() -> String {
+        let root = URL(fileURLWithPath: "/System/Library/AssetsV2")
+        let fm = FileManager.default
+        guard let catalogues = try? fm.contentsOfDirectory(
+            at: root, includingPropertiesForKeys: [.contentModificationDateKey]) else { return "" }
+        func stamp(_ url: URL) -> String {
+            let at = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?
+                .contentModificationDate?.timeIntervalSince1970 ?? 0
+            return "\(url.lastPathComponent)@\(at)"
+        }
+        return catalogues
+            .filter { let n = $0.lastPathComponent
+                      return n.contains("Voice") || n.contains("TTSAX") || n.contains("MacinTalk") }
+            .sorted { $0.path < $1.path }
+            .map { dir in
+                let manifest = dir.appendingPathComponent("\(dir.lastPathComponent).xml")
+                return stamp(dir) + "," + stamp(manifest)
+            }
+            .joined(separator: ";")
     }
 
     /// Whether an id belongs to a macOS voice rather than an ElevenLabs one.

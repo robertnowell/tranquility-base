@@ -179,6 +179,11 @@ extension StatusHUD {
         // Refused is not the same as swallowed: an idle panel still gets the
         // amber strip, which belongs to nobody in particular.
         let saidItAnyway = notice != nil
+        // The fixture leaves the panel with nothing adopted: see
+        // `forgetDrillAdoption`. Asserted, not assumed -- the whole failure
+        // was a cleanup nobody had noticed was missing.
+        forgetDrillAdoption()
+        let leftNothingBehind = lastAddressed == nil
         SelfTest.report("launchQuestion", [
             ("spinnerBeforeTheQuestion", spinnerFirst),
             ("spinnerDownAfterIt", spinnerDown),
@@ -188,6 +193,33 @@ extension StatusHUD {
             ("stillAdoptsItsAgent", stillAdoptsItsAgent),
             ("refusedWhenNoCardIsWaiting", refusedWithNoCard),
             ("stillSaysItOnTheStrip", saidItAnyway),
+            ("leavesNoFixtureAdopted", leftNothingBehind),
+        ])
+    }
+
+    /// A hands-free fault is about the account, so it wears nobody's name.
+    ///
+    /// 29 Sep, from a screenshot: "Hands-free could not reserve credit for a
+    /// session" came up titled `adopted`, with a GO TO AGENT door onto a
+    /// session id that has never existed. Two faults in one card -- the drill
+    /// above stops leaving the fixture, and this proves the card would be
+    /// right even if something real were on stage.
+    func handsFreeFaultDrill() {
+        showIdle(rows: [])
+        _ = showGreeting(line: "Starting.", label: "Landing page")
+        _ = bindGreeting(sessionId: "a-real-agent", pid: nil, label: "Landing page", cwd: nil)
+        let named = face.title == "Landing page" && currentTarget != nil
+        showHandsFreeFault("Hands-free reserves its first thirty minutes up front.")
+        let noTitle = face.title.isEmpty
+        let noDoor = currentTarget == nil
+        let saidIt = face.body.contains("thirty minutes")
+        showIdle(rows: [])
+        forgetDrillAdoption()
+        SelfTest.report("handsFreeFault", [
+            ("anAgentCardIsNamed", named),
+            ("theFaultCardIsNot", noTitle),
+            ("andOffersNoDoorToAnAgent", noDoor),
+            ("whileStillSayingWhatHappened", saidIt),
         ])
     }
 
@@ -2142,7 +2174,7 @@ extension StatusHUD {
             // is bold. The panel broke this quietly for the grid's whole
             // life and nobody noticed until it was asked to carry meaning.
             ("nothingIsBold", built.allSatisfy {
-                $0.nameLabel.font == ChromeType.mono(ofSize: 13, weight: .medium) }),
+                $0.nameLabel.font == StateLegend.Face.name(GridRowView.nameSize, light: true) }),
             ("unreadIsBrightest", unreadL > openedL && unreadL > idleL),
             // Idle and opened rest at ONE level — "the idle sessions should
             // not be brighter than read active sessions" (16 Aug). Equality
@@ -3132,7 +3164,7 @@ extension StatusHUD {
         let bodyIsTheSentence = bodyLabel.stringValue == "Inviting promotions copy to speak."
         // The placard names the voice; the title slot is for a session and the
         // manager is not one, so it must be EMPTY here (and hidden with it).
-        let titled = stateLabel.stringValue.contains(StateLegend.managerOnTitle)
+        let titled = stateLabel.stringValue.contains(StateLegend.managerOnTitle.uppercased())
             && titleLabel.isHidden
 
         // Eight characters is "Inviting"; the card counts in the same
@@ -3252,6 +3284,42 @@ extension StatusHUD {
             // half the characters on a European keyboard.
             ("shiftedLetterTypes", types(key("A", 0, .shift))),
             ("optionedCharacterTypes", types(key("ø", 37, .option))),
+        ])
+    }
+}
+
+
+extension StatusHUD {
+
+    /// The highlight finishes when the voice stops (29 Sep 2026).
+    ///
+    /// "interrupt doesn't make the whole thing read on the highlight, text
+    /// should highlight everything when interrupted by user."
+    ///
+    /// Dim means NOT REACHED YET. True while a voice is running, false the
+    /// moment it stops: nothing more is coming, so a line left half dim is a
+    /// promise the card cannot keep. Cutting the manager off mid-sentence left
+    /// exactly that, frozen, for as long as the card stayed up.
+    func interruptedLineIsFullyLitDrill() {
+        let line = "Inviting promotions copy to speak. It has one question waiting."
+        _ = showManagerLine(line)
+
+        highlight(upTo: 8)              // eight characters in, as if cut off there
+        let partway = face.spokenUpTo
+
+        completeHighlight()
+        let finished = face.spokenUpTo
+
+        // An empty card must not be "completed" into a cursor past its own end.
+        showIdle(rows: [])
+        completeHighlight()
+        let onNothing = face.spokenUpTo
+
+        SelfTest.report("interruptedLineIsFullyLit", [
+            ("theCursorStartsPartway", partway == 8),
+            ("andEndsAtTheEndOfTheLine", finished == line.count),
+            ("whichIsMoreThanItWas", (finished ?? 0) > (partway ?? 0)),
+            ("anEmptyCardIsLeftAlone", (onNothing ?? 0) == 0),
         ])
     }
 }
