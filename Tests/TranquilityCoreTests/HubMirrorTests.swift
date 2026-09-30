@@ -178,6 +178,48 @@ final class HubMirrorTests: XCTestCase {
         XCTAssertEqual(hub.last("api/ingest")?["session_id"] as? String, oc)
     }
 
+    /// 30 Sep: the end-to-end measure. A page the artifact hook recorded under
+    /// the agents tree, older than the grace period, and not yet received by
+    /// the hub is undelivered; once the mirror sends it, it is not. Drafts and
+    /// pages outside the tree are not counted.
+    func testAPageWrittenAndNotDeliveredIsCountedUntilItIsSent() async throws {
+        let artifacts = tmp.appendingPathComponent("artifacts")
+        try FileManager.default.createDirectory(at: artifacts, withIntermediateDirectories: true)
+        let page = write("stranded.html", "<html><head><title>Stranded</title></head><body>x</body></html>")
+        let draft = write("_drafts/half.html", "<html><title>d</title></html>")
+        let old = Int64((Date().timeIntervalSince1970 - 3600) * 1000)
+        let outside = tmp.appendingPathComponent("elsewhere.html").path
+        try "\(old)\t\(page)\n\(old)\t\(draft)\n\(old)\t\(outside)\n"
+            .write(to: artifacts.appendingPathComponent(session), atomically: true, encoding: .utf8)
+        let hub = FakeHub()
+        let m = HubMirror(transport: hub, agentsRoot: tmp.appendingPathComponent("agents").path,
+                          stateURL: tmp.appendingPathComponent("state.json"), device: "test-mac",
+                          store: nil, artifactRoot: artifacts.path)
+        m.liveSessions = { [:] }
+        XCTAssertEqual(m.undeliveredPages(), [page])
+        let health = await m.postHealth(Data("{\"rules_fingerprint\":\"abc\"}".utf8))
+        XCTAssertEqual(health.undelivered, [page])
+        let sent = hub.last("api/ingest/health")
+        XCTAssertEqual(sent?["device"] as? String, "test-mac")
+        XCTAssertEqual(sent?["rules_fingerprint"] as? String, "abc")
+        XCTAssertEqual((sent?["undelivered"] as? [String: Any])?["count"] as? Int, 1)
+        _ = await m.run(docs: true, turns: false)
+        XCTAssertEqual(m.undeliveredPages(), [], "delivered once the mirror sends it")
+    }
+
+    /// A page written a moment ago is not late yet.
+    func testAPageInsideTheGracePeriodIsNotLate() throws {
+        let artifacts = tmp.appendingPathComponent("artifacts")
+        try FileManager.default.createDirectory(at: artifacts, withIntermediateDirectories: true)
+        let page = write("fresh.html", "<html><title>f</title></html>")
+        let now = Int64(Date().timeIntervalSince1970 * 1000)
+        try "\(now)\t\(page)\n".write(to: artifacts.appendingPathComponent(session), atomically: true, encoding: .utf8)
+        let m = HubMirror(transport: FakeHub(), agentsRoot: tmp.appendingPathComponent("agents").path,
+                          stateURL: tmp.appendingPathComponent("state.json"), device: "test-mac",
+                          store: nil, artifactRoot: artifacts.path)
+        XCTAssertEqual(m.undeliveredPages(), [])
+    }
+
     /// 28 Sep: `hq-page new` writes the template first and the session fills
     /// it a minute later; the sweep is twenty seconds, so the hub got the
     /// blank page, announced it, and a reader opened it. The placeholders
