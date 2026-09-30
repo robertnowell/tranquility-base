@@ -55,6 +55,12 @@ final class GridRowView: NSControl {
     static func paintName(_ field: NSTextField, color: NSColor) {
         let paragraph = NSMutableParagraphStyle()
         paragraph.lineBreakMode = .byTruncatingTail
+        // A fresh paragraph style TIGHTENS the letters before it truncates
+        // (its default is true, unlike the label's). Only a name too long for
+        // its room was squeezed, so a name visibly lost its spacing when the
+        // hover id arrived and took room (Robert, 30 Sep 2026: "letter spacing
+        // changes on hover"). The tracking is the design; truncate instead.
+        paragraph.allowsDefaultTighteningForTruncation = false
         field.attributedStringValue = NSAttributedString(
             string: field.stringValue,
             attributes: [.font: field.font ?? StateLegend.Face.name(nameSize, light: true),
