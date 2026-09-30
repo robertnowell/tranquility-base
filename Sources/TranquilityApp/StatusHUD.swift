@@ -3386,10 +3386,9 @@ final class StatusHUD: NSObject {
                     .size(withAttributes: [.font: GridRowView.auxFont]).width)
             }.max() ?? 0)
         let lines = ProjectLayout.lines(shown, book: book, origin: SessionLineage.lastKnownOrigin)
-        // Inside a folder the rule between two of its rows starts at the
-        // guide line and carries the guide's own pixel, so the guide runs
-        // unbroken from header to last row. A full-width rule there cut the
-        // guide at every row and crossed it (29 Sep, "these lines are a
+        // Inside a folder the rule above each of its rows starts at the
+        // indent, so the folder's rows read as their own column; the rule
+        // that closes a folder is full width (29 Sep, "these lines are a
         // little jank").
         func staysInFolder(after index: Int) -> Bool {
             guard index + 1 < lines.count, case let .row(_, next?) = lines[index + 1] else { return false }
