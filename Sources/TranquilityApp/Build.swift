@@ -262,7 +262,7 @@ extension StatusHUD {
         // A press on the words selects AND arms: the selection takes the
         // event, so the surface never sees this one.
         bodyLabel.onPress = { [weak self] in self?.armPaste(via: "words") }
-        bodyLabel.font = StateLegend.Face.message(12)
+        bodyLabel.font = StateLegend.Face.brief
         bodyLabel.textColor = StateLegend.Lens.content.color
         bodyLabel.maximumNumberOfLines = 0
         // Selectable so a line can be quoted out of a card by hand; see

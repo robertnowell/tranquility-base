@@ -566,6 +566,10 @@ enum StateLegend {
         static func name(_ size: CGFloat, light: Bool) -> NSFont {
             ChromeType.sans(ofSize: size, light: light)
         }
+        /// The card's brief: Geist Sans Light at 13, so the card is one family
+        /// and the brief no longer outweighs the title (option C, Robert,
+        /// 29 Sep 2026).
+        static var brief: NSFont { ChromeType.sans(ofSize: 13, light: true) }
     }
 
     /// The placard face: the state's own label, one step up in weight from the
