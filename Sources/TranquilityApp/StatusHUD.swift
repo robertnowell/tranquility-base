@@ -3050,6 +3050,8 @@ final class StatusHUD: NSObject {
         guard !face.title.isEmpty else { titleLabel.stringValue = ""; return }
         let truncating = NSMutableParagraphStyle()
         truncating.lineBreakMode = .byTruncatingTail
+        // Never squeeze the tracking to fit; see `GridRowView.paintName`.
+        truncating.allowsDefaultTighteningForTruncation = false
         // Set exactly as a grid row names the agent (29 Sep 2026): Geist Sans
         // Light at the row's size and tracking, so the name reads the same on
         // the card as in the list.

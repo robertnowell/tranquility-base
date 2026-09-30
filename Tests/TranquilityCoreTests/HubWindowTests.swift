@@ -255,10 +255,21 @@ final class HubWindowFrameLinkTests: XCTestCase {
         <html><body><iframe id=doc srcdoc="<a id=l href='https://example.com/elsewhere'>out</a>"></iframe></body></html>
         """
         web.loadHTMLString(page, baseURL: URL(string: "https://hq.example.test/d/1"))
-        for _ in 0..<50 { try await Task.sleep(nanoseconds: 100_000_000); if !web.isLoading { break } }
-        try await Task.sleep(nanoseconds: 500_000_000)
+        // Wait on CONDITIONS, not on fixed sleeps: on a loaded CI runner the
+        // frame was not ready after 0.5s, or the click's navigation had not
+        // reached the delegate after 1s, and main went red (30 Sep 2026).
+        func until(_ seconds: Double, _ ready: () async -> Bool) async throws {
+            let deadline = Date().addingTimeInterval(seconds)
+            while Date() < deadline, !(await ready()) {
+                try await Task.sleep(nanoseconds: 50_000_000)
+            }
+        }
+        try await until(10) {
+            (try? await web.evaluateJavaScript(
+                "!!document.getElementById('doc').contentDocument.getElementById('l')") as? Bool) == true
+        }
         _ = try? await web.evaluateJavaScript("document.getElementById('doc').contentDocument.getElementById('l').click(); 1")
-        try await Task.sleep(nanoseconds: 1_000_000_000)
+        try await until(10) { !opened.isEmpty }
         XCTAssertEqual(opened.map(\.absoluteString), ["https://example.com/elsewhere"])
         let frame = try await web.evaluateJavaScript("document.getElementById('doc').contentWindow.location.href") as? String
         XCTAssertEqual(frame, "about:srcdoc", "the document stayed where it was")

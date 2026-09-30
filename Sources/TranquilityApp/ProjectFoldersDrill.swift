@@ -227,7 +227,7 @@ extension StatusHUD {
                                 target: self, action: #selector(backTapped))
         let pastWearsTheChip = chipped.chipForTesting == "MIRAI" && plain.chipForTesting == nil
 
-        SelfTest.report("projectFolders", [
+        let checks: [(String, Bool)] = [
             ("foldersKeepTheUsersOrder", foldersKeepTheUsersOrder),
             ("hideAndWait", hideAndWait),
             ("menusSurviveIndent", menusSurviveIndent),
@@ -247,7 +247,20 @@ extension StatusHUD {
             ("renameTakesAndReturnsKeys", renameTakesAndReturnsKeys),
             ("reviveGoesHome", reviveGoesHome),
             ("pastWearsTheChip", pastWearsTheChip),
-        ])
+        ]
+        // The drag and refit checks post events at window positions and read
+        // back frames the panel has laid out, which a sleeping display never
+        // does: these six failed together at 14:18 and 17:56 on 30 Sep 2026,
+        // both with the display asleep, and passed with it awake on the same
+        // code. They SKIP then, like topBand and collapsed; the rest still count.
+        let needsADisplay: Set = ["dragMadeFolder", "undoInTheTopBand", "wholeRowIsTheTarget",
+                                  "reopenRefits", "folderDropsOnRows", "lastOutClosesIt"]
+        if displayIsAsleep() {
+            SelfTest.report("projectFolders", checks.filter { !needsADisplay.contains($0.0) })
+            SelfTest.skipped("projectFoldersDrag", because: "display asleep, frames do not animate")
+        } else {
+            SelfTest.report("projectFolders", checks)
+        }
         Permissions.log("projectFolders drill: first paint \(firstPaint)")
         showIdle(rows: [])
     }
