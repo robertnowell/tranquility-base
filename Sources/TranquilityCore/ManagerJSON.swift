@@ -92,17 +92,10 @@ public enum ManagerJSON {
             return (a.cwd ?? "") < (b.cwd ?? "")
         }
         // The panel's folder order (ruling-project-folders, rules 1 and 3):
-        // folders first, a folder with an ask rising by its newest ask, the
-        // others in the user's order, loose sessions last. Within each group
-        // the order above stands.
+        // folders first in the user's order, loose sessions last. Within each
+        // group the order above stands.
         func folderOf(_ id: String) -> ProjectBook.Folder? { book.folder(of: id, origin: origin) }
-        func firstAsk(_ folderId: String) -> Int? {
-            sorted.firstIndex { waiting.contains($0.sessionId) && folderOf($0.sessionId)?.id == folderId }
-        }
-        let present = book.folders.filter { f in sorted.contains { folderOf($0.sessionId)?.id == f.id } }
-        let folderOrder = present.compactMap { f in firstAsk(f.id).map { (f.id, $0) } }
-            .sorted { $0.1 < $1.1 }.map(\.0)
-            + present.filter { firstAsk($0.id) == nil }.map(\.id)
+        let folderOrder = book.folders.map(\.id)
         let grouped = folderOrder.flatMap { id in sorted.filter { folderOf($0.sessionId)?.id == id } }
             + sorted.filter { folderOf($0.sessionId) == nil }
         return grouped.map { s in

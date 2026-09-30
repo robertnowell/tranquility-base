@@ -9,8 +9,9 @@ import Foundation
 /// 1. Folders sit above the loose rows.
 /// 2. Inside a folder the lamp order is the grid's own, unchanged:
 ///    `SessionRow.quietRowsLast`, green and amber by recency, then blue.
-/// 3. A folder with an agent asking for you (green or amber) rises above the
-///    rest, newest asker first; the others keep the user's order beneath.
+/// 3. Folders keep the order the user dragged them into. A lamp lighting
+///    never moves a folder (re-ruled 29 Sep 2026: rise-to-top made a folder
+///    dragged above another snap back as soon as the other lit up).
 /// 4. A collapsed folder is one header wearing its most urgent lamp and a
 ///    count of its lit agents.
 /// 5. A folder with nothing on the grid is not drawn, and is not deleted.
@@ -75,21 +76,11 @@ public enum ProjectLayout {
                 loose.append(row)
             }
         }
-        // Rule 3. `shown` is already in the grid's order, so the position of a
-        // folder's first asking row IS its newest ask, ties and undated rows
-        // included, by the same comparator the grid used to get there.
-        let position = Dictionary(shown.enumerated().map { ($1.id, $0) },
-                                  uniquingKeysWith: { first, _ in first })
-        func firstAsk(_ folder: ProjectBook.Folder) -> Int? {
-            byFolder[folder.id]?.filter { $0.lamp.asksForYou }
-                .compactMap { position[$0.id] }.min()
-        }
+        // Rule 3: the user's order, exactly. Only the rows inside a folder
+        // move with their lamps.
         let present = book.folders.filter { !(byFolder[$0.id]?.isEmpty ?? true) }
-        let asking = present.compactMap { f in firstAsk(f).map { (f, $0) } }
-            .sorted { $0.1 < $1.1 }.map(\.0)
-        let resting = present.filter { firstAsk($0) == nil }
         return Arrangement(
-            folders: (asking + resting).map { ($0, SessionRow.quietRowsLast(byFolder[$0.id] ?? [])) },
+            folders: present.map { ($0, SessionRow.quietRowsLast(byFolder[$0.id] ?? [])) },
             loose: SessionRow.quietRowsLast(loose))
     }
 

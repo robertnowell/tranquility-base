@@ -42,8 +42,9 @@ extension StatusHUD {
             row("m1", .ready, 100), row("m2", .working, 300), row("t1", .working, 50),
             row("l1", .ready, 200, "Kopi hero defects"), row("l2", .working, 250, "Kopi calendar fill"),
         ])
-        // The user's order puts TB first. TB is only working and Mirai asks, so
-        // Mirai must rise above it (rule 3).
+        // The user's order puts TB first. TB is only working and Mirai asks,
+        // and TB stays first all the same: folder order is sticky (rule 3,
+        // re-ruled 29 Sep).
         store.update {
             $0.create(name: "TB", with: ["t1"], id: "tb")
             $0.create(name: "Mirai", with: ["m1", "m2"], id: "mirai")
@@ -62,7 +63,7 @@ extension StatusHUD {
             }
         }
         let firstPaint = drawn()
-        let foldersOnTopAskerRises = firstPaint == ["[Mirai]", "  m1", "  m2", "[TB]", "  t1", "l1", "l2"]
+        let foldersKeepTheUsersOrder = firstPaint == ["[TB]", "  t1", "[Mirai]", "  m1", "  m2", "l1", "l2"]
         let hideAndWait = !firstPaint.contains("[Kopi]") && store.current.folder(id: "kopi") != nil
         let menusSurviveIndent = Dictionary(uniqueKeysWithValues: gridRowsForTesting)["m1"] != nil
 
@@ -85,8 +86,8 @@ extension StatusHUD {
         // A folder dropped on the lower half of another folder's ROWS lands
         // below it, not only on its 28pt header.
         var folderDropsOnRows = false
-        if let header = header(for: "mirai"),
-           let member = gridLines.first(where: { $0.line.row?.id == "t1" })?.view,
+        if let header = header(for: "tb"),
+           let member = gridLines.first(where: { $0.line.row?.id == "m2" })?.view,
            let window = header.window {
             let low = member.convert(NSPoint(x: member.bounds.midX, y: member.bounds.minY + 3), to: nil)
             let start = header.convert(NSPoint(x: header.bounds.midX, y: header.bounds.midY), to: nil)
@@ -96,14 +97,14 @@ extension StatusHUD {
                let over = NSEvent.mouseEvent(with: .leftMouseDragged, location: low, modifierFlags: [],
                                              timestamp: 0, windowNumber: window.windowNumber, context: nil,
                                              eventNumber: 0, clickCount: 1, pressure: 1) {
-                dragged(.folder("mirai"), view: header, phase: .began, event: down)
-                dragged(.folder("mirai"), view: header, phase: .moved, event: over)
-                let aimed = gridDrag?.target == .reorder(folder: "tb", after: true)
+                dragged(.folder("tb"), view: header, phase: .began, event: down)
+                dragged(.folder("tb"), view: header, phase: .moved, event: over)
+                let aimed = gridDrag?.target == .reorder(folder: "mirai", after: true)
                     && gridDrag?.bar?.isHidden == false
-                dragged(.folder("mirai"), view: header, phase: .ended, event: over)
+                dragged(.folder("tb"), view: header, phase: .ended, event: over)
+                // And it stays there although TB's agent is not the one asking.
                 folderDropsOnRows = aimed
-                    && store.current.folders.map(\.id).firstIndex(of: "mirai")
-                        == (store.current.folders.map(\.id).firstIndex(of: "tb") ?? -9) + 1
+                    && Array(drawn().compactMap { $0.hasPrefix("[") ? $0 : nil }.prefix(2)) == ["[Mirai]", "[TB]"]
             }
         }
 
@@ -115,9 +116,10 @@ extension StatusHUD {
         toggleFolder("tb")
 
         // A held grid does not repaint under the pointer, and pays the debt on release.
+        let beforeHold = drawn()
         rowsHeld = true
         showIdle(rows: rows.filter { $0.id != "m2" })
-        let heldDidNotRepaint = drawn() == firstPaint && rowsDirty
+        let heldDidNotRepaint = drawn() == beforeHold && rowsDirty
         rowsHeld = false
         rebuildSessionRows()
         let releaseRepaints = !drawn().contains("  m2") && !rowsDirty
@@ -191,7 +193,7 @@ extension StatusHUD {
             apply(.leave, to: "l2")
             _ = made
         }
-        let lastOutClosesIt = store.current.folders.map(\.name) == ["TB", "Mirai", "Kopi"]
+        let lastOutClosesIt = store.current.folders.map(\.name) == ["Mirai", "TB", "Kopi"]
 
         // Rename: the keyboard is taken, the grid held, and both given back.
         var renameTakesAndReturnsKeys = false
@@ -207,7 +209,9 @@ extension StatusHUD {
 
         // A revived agent lands back in its waiting folder.
         showIdle(rows: SessionRow.quietRowsLast(rows + [row("k1", .ready, 400)]))
-        let reviveGoesHome = Array(drawn().prefix(2)) == ["[Kopi]", "  k1"]
+        let painted = drawn()
+        let reviveGoesHome = painted.firstIndex(of: "[Kopi]").map {
+            $0 + 1 < painted.count && painted[$0 + 1] == "  k1" } ?? false
 
         // Past Agents stays flat and wears the chip.
         let chipped = PastRowView(item: .init(row: row("p1", .unlit, 1), revivable: true,
@@ -218,7 +222,7 @@ extension StatusHUD {
         let pastWearsTheChip = chipped.chipForTesting == "MIRAI" && plain.chipForTesting == nil
 
         SelfTest.report("projectFolders", [
-            ("foldersOnTopAskerRises", foldersOnTopAskerRises),
+            ("foldersKeepTheUsersOrder", foldersKeepTheUsersOrder),
             ("hideAndWait", hideAndWait),
             ("menusSurviveIndent", menusSurviveIndent),
             ("collapsedShowsLampAndCount", collapsedShowsLampAndCount),
