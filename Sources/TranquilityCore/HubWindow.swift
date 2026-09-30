@@ -63,6 +63,11 @@ public final class HubWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, 
     public private(set) var webView: WKWebView?
     private let base: () -> URL?
     private var titleWatch: NSKeyValueObservation?
+    /// ⌘F's bar, and the constraint that collapses it to nothing when closed.
+    public private(set) var findBar: HubFindBar?
+    private var findHeight: NSLayoutConstraint?
+    /// The document being printed, held until its page has loaded.
+    private var printing: PrintLoader?
 
     public init(base: @escaping () -> URL? = { HubApp.hub }) {
         self.base = base
@@ -145,7 +150,7 @@ public final class HubWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, 
         w.title = "Hub"
         w.isReleasedWhenClosed = false
         w.delegate = self
-        w.contentView = web
+        w.contentView = frame(around: web)
         w.setFrameAutosaveName("HubWindow")
         if !w.setFrameUsingName("HubWindow") { w.center() }
         titleWatch = web.observe(\.title, options: [.new]) { [weak w] _, change in
@@ -155,6 +160,87 @@ public final class HubWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, 
         window = w
         webView = web
         return web
+    }
+
+    // MARK: - Find and print
+
+    /// The page, with ⌘F's bar above it, collapsed until asked for.
+    private func frame(around web: WKWebView) -> NSView {
+        let container = NSView()
+        let bar = HubFindBar(web: web)
+        bar.onClose = { [weak self] in self?.closeFind() }
+        web.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(bar)
+        container.addSubview(web)
+        let height = bar.heightAnchor.constraint(equalToConstant: 0)
+        NSLayoutConstraint.activate([
+            bar.topAnchor.constraint(equalTo: container.topAnchor),
+            bar.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            bar.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            height,
+            web.topAnchor.constraint(equalTo: bar.bottomAnchor),
+            web.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            web.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            web.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+        ])
+        bar.isHidden = true
+        findBar = bar
+        findHeight = height
+        return container
+    }
+
+    /// ⌘F. The app's hidden main menu sends it to the key window, whose
+    /// delegate this is, so it reaches here only when the Hub window is key.
+    @objc public func hubFind(_ sender: Any?) {
+        guard let bar = findBar else { return }
+        bar.isHidden = false
+        findHeight?.constant = 38
+        window?.makeFirstResponder(bar.field)
+    }
+
+    @objc public func hubFindNext(_ sender: Any?) { Task { await findBar?.find(backwards: false) } }
+    @objc public func hubFindPrevious(_ sender: Any?) { Task { await findBar?.find(backwards: true) } }
+
+    func closeFind() {
+        findBar?.isHidden = true
+        findHeight?.constant = 0
+        if let web = webView { window?.makeFirstResponder(web) }
+    }
+
+    /// ⌘P. On a document, the document alone: the raw page loaded with the
+    /// window's own sign-in, without the hub's bar and sidebar around it.
+    /// Anywhere else, the page as it is.
+    @objc public func hubPrint(_ sender: Any?) {
+        guard let web = webView, let window else { return }
+        guard let current = web.url, let raw = Self.rawAddress(for: current) else {
+            Self.runPrint(web, over: window)
+            return
+        }
+        let config = WKWebViewConfiguration()
+        config.websiteDataStore = dataStore
+        let sheet = WKWebView(frame: web.bounds, configuration: config)
+        printing = PrintLoader(sheet) { [weak self, weak window] loaded in
+            if let window { Self.runPrint(loaded, over: window) }
+            self?.printing = nil
+        }
+        sheet.load(URLRequest(url: raw))
+    }
+
+    /// `/d/<id>` → `/d/<id>/raw`, the document's own bytes; nil for any
+    /// other page.
+    static func rawAddress(for url: URL) -> URL? {
+        let parts = url.pathComponents
+        guard parts.count == 3, parts[1] == "d", parts[2].count >= 32 else { return nil }
+        return url.appendingPathComponent("raw")
+    }
+
+    /// The frame line is Apple DTS's workaround for a macOS 26 crash in
+    /// WebKit printing (forum 811901): its printing view otherwise has a
+    /// zero frame. Run modally, as that thread says.
+    static func runPrint(_ web: WKWebView, over window: NSWindow) {
+        let op = web.printOperation(with: NSPrintInfo.shared)
+        op.view?.frame = web.bounds
+        op.runModal(for: window, delegate: nil, didRun: nil, contextInfo: nil)
     }
 
     // MARK: - Navigation
@@ -394,4 +480,20 @@ private final class AuthMessages: NSObject, WKScriptMessageHandler {
         let user = body["user"] as? String
         MainActor.assumeIsolated { window?.hubSaid(user: user) }
     }
+}
+
+
+/// Loads one page off screen and hands it over once it has finished.
+@MainActor
+final class PrintLoader: NSObject, WKNavigationDelegate {
+    let web: WKWebView
+    let done: (WKWebView) -> Void
+    init(_ web: WKWebView, done: @escaping (WKWebView) -> Void) {
+        self.web = web
+        self.done = done
+        super.init()
+        web.navigationDelegate = self
+    }
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { done(webView) }
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) { done(webView) }
 }
