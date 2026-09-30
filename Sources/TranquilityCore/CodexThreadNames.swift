@@ -110,8 +110,10 @@ public enum CodexThreadNames {
                     trace?("codex names: the database opened and holds no names; "
                            + "dropping the \(names.count) we had")
                 }
+                // Written only when the answer changed: an unchanged read
+                // used to rewrite the file on every expiry, every beat.
+                if fresh != names { CodexThreadNames.saveToDisk(fresh) }
                 names = fresh
-                CodexThreadNames.saveToDisk(fresh)
                 return fresh
             case .unreadable(let why):
                 trace?("codex names: \(why) — keeping the \(names.count) name(s) already known")

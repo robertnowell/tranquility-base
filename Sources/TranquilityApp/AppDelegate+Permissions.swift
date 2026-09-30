@@ -95,5 +95,8 @@ extension AppDelegate {
                 self?.refresh()
             }
         }
+        // Apple's floor for a repeating timer is 10% tolerance: it lets the
+        // system coalesce this with other wakeups. The tick already jitters more.
+        permissionTimer?.tolerance = 0.15
     }
 }

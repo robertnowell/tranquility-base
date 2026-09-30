@@ -842,6 +842,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 HandsFreeMarker.settle(live: self.managerIsOn)
             }
         }
+        inFlightTimer?.tolerance = 0.1    // 10%, Apple's floor for a repeating timer
         // One intake beat: drain the spool, prepare the next brief, repaint
         // the grid, sound the arrival. On the five-second timer, and ALSO the
         // moment a remote turn lands in the spool (`intakeBeat`): a remote
@@ -1002,6 +1003,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         intakeBeat = beat
         intakeTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { _ in beat() }
+        intakeTimer?.tolerance = 0.5      // 10%, Apple's floor for a repeating timer
 
         // Lifted ABOVE the hotkey on purpose (ruled 18 Aug). A screenshot
         // tool has no business installing a global event tap: `--pose-shot`
