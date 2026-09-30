@@ -129,6 +129,40 @@ final class HubMirrorTests: XCTestCase {
         XCTAssertTrue(second.note.hasPrefix("ok"))
     }
 
+    /// 30 Sep: a MacBook agent wrote fourteen reports into a REAL folder named
+    /// with its session's first eight characters, and none reached the hub.
+    /// Such a folder is read as its full session; a short name that is a link
+    /// to the full folder is not read twice; one matching nothing is left.
+    func testAShortFolderIsReadAsItsFullSessionAndALinkIsNotReadTwice() async throws {
+        let fm = FileManager.default
+        let agents = tmp.appendingPathComponent("agents")
+        let short = String(session.prefix(8))
+        try fm.createDirectory(at: agents.appendingPathComponent("\(short)/deep"), withIntermediateDirectories: true)
+        try "<html><head><title>Stranded</title></head><body>a</body></html>"
+            .write(to: agents.appendingPathComponent("\(short)/deep/stranded.html"), atomically: true, encoding: .utf8)
+        // Another agent whose short name is a link to its full folder, as the
+        // 06 Sep migration made them: its one page must go once, not twice.
+        let other = "7c0ffee0-1111-4222-8333-944455556666"
+        try fm.createDirectory(at: agents.appendingPathComponent(other), withIntermediateDirectories: true)
+        try "<html><head><title>Linked</title></head><body>b</body></html>"
+            .write(to: agents.appendingPathComponent("\(other)/linked.html"), atomically: true, encoding: .utf8)
+        try fm.createSymbolicLink(atPath: agents.appendingPathComponent("7c0ffee0").path, withDestinationPath: other)
+        // A short folder with no full folder: nobody to file it under.
+        try fm.createDirectory(at: agents.appendingPathComponent("deadbeef"), withIntermediateDirectories: true)
+        try "<html><title>Orphan</title></html>".write(to: agents.appendingPathComponent("deadbeef/o.html"), atomically: true, encoding: .utf8)
+
+        let hub = FakeHub()
+        let report = await mirror(hub).run(docs: true, turns: false)
+        XCTAssertEqual(report.documents, 2, report.note)
+        XCTAssertEqual(hub.count("api/ingest"), 2)
+        let sent = hub.lock.withLock { hub.calls.filter { $0.path == "api/ingest" }.map(\.json) }
+        let stranded = sent.first { ($0["title"] as? String) == "Stranded" }
+        XCTAssertEqual(stranded?["session_id"] as? String, session, "filed under the full session")
+        XCTAssertEqual(stranded?["slug"] as? String, "deep-stranded", "slug from the short folder")
+        XCTAssertEqual(sent.filter { ($0["title"] as? String) == "Linked" }.count, 1)
+        XCTAssertNil(sent.first { ($0["title"] as? String) == "Orphan" })
+    }
+
     /// 28 Sep: `hq-page new` writes the template first and the session fills
     /// it a minute later; the sweep is twenty seconds, so the hub got the
     /// blank page, announced it, and a reader opened it. The placeholders
@@ -379,6 +413,23 @@ final class HubMirrorTests: XCTestCase {
     func testAHeadlessRunIsNotAnAgentInTheHub() {
         XCTAssertTrue(HubMirror.isRobot(waiting(session, transcript: transcript(entrypoint: "sdk-cli"))))
         XCTAssertFalse(HubMirror.isRobot(waiting(session, transcript: transcript(entrypoint: "cli"))))
+    }
+
+    /// A session in a directory the OS reaps is a fixture on the grid, and so
+    /// in the hub: the live-TUI drill runs in /private/tmp/tb-live-tui-NNNNN.
+    func testASessionInATemporaryDirectoryIsNotAnAgentInTheHub() {
+        func at(_ cwd: String) -> WaitingSession {
+            WaitingSession(sessionId: session, latestId: 1, createdAtMs: 0, cwd: cwd,
+                           tty: nil, promptId: nil, transcriptPath: transcript(entrypoint: "cli"),
+                           lastAssistantMessage: nil, notificationMatcher: nil, summaryText: nil,
+                           hookEvent: .stop, callsign: "drill")
+        }
+        XCTAssertTrue(HubMirror.isRobot(at("/private/tmp/tb-live-tui-83638")))
+        XCTAssertTrue(HubMirror.isRobot(at("/tmp/tb-fullverify")))
+        XCTAssertTrue(HubMirror.isRobot(at("/private/var/folders/xy/T/probe")))
+        XCTAssertFalse(HubMirror.isRobot(at("/Users/x/Projects/tranquility-base")))
+        XCTAssertTrue(HubMirror.changedNames(sessions: [at("/private/tmp/tb-live-tui-1")], live: [:],
+                                             previous: [:]).isEmpty, "no name either")
     }
 
     /// The asymmetry the grid settled on, kept here: excluding on an ABSENCE

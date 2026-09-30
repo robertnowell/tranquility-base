@@ -349,7 +349,7 @@ extension StatusHUD {
                 spoken: SpokenTextSanitizer().sanitize("Wrote the report. Go?"),
                 sessionId: session, pid: 1, project: "card door", cwd: "/tmp")
             let untouchedIsTheHub = !openPageButton.isHidden
-                && openPageButton.attributedTitle.string.contains(StateLegend.openHubTitle)
+                && openPageButton.attributedTitle.string.contains(StateLegend.openHubTitle.uppercased())
             // This turn rewrites it, through a shell as Codex does, and the
             // reconciler runs at the brief.
             try write("v2", at: now.addingTimeInterval(-30 * 60))
@@ -358,7 +358,7 @@ extension StatusHUD {
             // The label follows the destination (ruled 15 Aug, extended
             // 25 Sep): this page is read at its own address, so Open Page.
             let rewrittenOpens = !openPageButton.isHidden
-                && openPageButton.attributedTitle.string.contains(StateLegend.openPageTitle)
+                && openPageButton.attributedTitle.string.contains(StateLegend.openPageTitle.uppercased())
             let expectedPath = ArtifactStore.canonical(page.path)
             let door = resolver(session)
             let doorIsThePage: Bool = {
@@ -1097,15 +1097,19 @@ extension StatusHUD {
             return field.font
         }
         // Ruled 29 Sep 2026, "names are words": the machine's own words
-        // (placard, hint, doors) stay mono; a NAME and YOUR words are read, so
+        // (placard, hint, quiet actions) stay mono; a NAME and YOUR words are
+        // read, so
         // the title and the reply strip join the body in the sans the hub
         // sets them in. Both halves are asserted, so neither can drift back.
         let chromeWidgets: [(String, NSFont?)] = [
             ("state", drawnFont(stateLabel)),
             ("hint", drawnFont(hintLabel)),
-            ("door", drawnFont(goButton)), ("quiet", drawnFont(dontSendButton)),
+            ("quiet", drawnFont(dontSendButton)),
         ]
+        // The doors left the mono on 30 Sep 2026 (option G: Geist capitals),
+        // so they are asserted as sans here and as capitals in `controls`.
         let wordWidgets: [(String, NSFont?)] = [
+            ("door", drawnFont(goButton)),
             ("title", drawnFont(titleLabel)), ("strip", drawnFont(stripLabel)),
             ("body", drawnFont(bodyLabel)),
         ]
@@ -1520,11 +1524,15 @@ extension StatusHUD {
         // returns a different fontName per weight — so comparing names asserted
         // that the two roles look identical, which is the opposite of the rule.
         // Failed its first deploy saying exactly that.
-        let oneLexicon = doorFace?.familyName == wordFace?.familyName
-            && doorFace?.pointSize == wordFace?.pointSize
-            && doorFace?.pointSize == StateLegend.BottomLine.size
-            // Title case, not capitals: the placard beside it says "Speaking".
-            && goButton.attributedTitle.string != goButton.attributedTitle.string.uppercased()
+        // Re-ruled 30 Sep 2026 (option G, "set the buttons in geist and make
+        // them all caps"): the DOORS are Geist capitals at their own size and
+        // the quiet word stays in the mono lexicon, so a door and a word no
+        // longer share a face; what is asserted is each keeping its own.
+        let oneLexicon = doorFace?.familyName == ChromeType.sans(ofSize: 11, light: false).familyName
+            && doorFace?.pointSize == StateLegend.BottomLine.doorSize
+            && wordFace?.pointSize == StateLegend.BottomLine.size
+            && doorFace?.familyName != wordFace?.familyName
+            && goButton.attributedTitle.string == goButton.attributedTitle.string.uppercased()
         // Air under the last line of the card. Measured to the WORD rather than
         // to the row: the row's frame includes the 6pt top inset that provides
         // the air, so a frame-to-frame gap would report the stack's 6 and miss
@@ -2122,11 +2130,11 @@ extension StatusHUD {
         doorForSession = { _ in .hub }
         render()
         let hubOpensADoor = !openPageButton.isHidden
-            && openPageButton.attributedTitle.string.contains(StateLegend.openHubTitle)
+            && openPageButton.attributedTitle.string.contains(StateLegend.openHubTitle.uppercased())
         doorForSession = { _ in .report("/tmp/tb-drill-report.html", .hub(URL(string: "https://hub.example.test/open?session=drill&slug=tb-drill-report")!)) }
         render()
         let reportNamesItself = !openPageButton.isHidden
-            && openPageButton.attributedTitle.string.contains(StateLegend.openReportTitle)
+            && openPageButton.attributedTitle.string.contains(StateLegend.openReportTitle.uppercased())
         // A page the hub cannot hold is read at its own address, and the
         // door says Page; one that declares none is a file, and the door
         // says so (ruled 25 Sep, after Open Report opened a website's
@@ -2134,11 +2142,11 @@ extension StatusHUD {
         doorForSession = { _ in .report("/tmp/tb-drill-site.html", .live(URL(string: "https://tranquilitybase.dev/")!)) }
         render()
         let liveSaysPage = !openPageButton.isHidden
-            && openPageButton.attributedTitle.string.contains(StateLegend.openPageTitle)
+            && openPageButton.attributedTitle.string.contains(StateLegend.openPageTitle.uppercased())
         doorForSession = { _ in .report("/tmp/tb-drill-plain.html", .file("/tmp/tb-drill-plain.html")) }
         render()
         let fileSaysFile = !openPageButton.isHidden
-            && openPageButton.attributedTitle.string.contains(StateLegend.openFileTitle)
+            && openPageButton.attributedTitle.string.contains(StateLegend.openFileTitle.uppercased())
         doorForSession = priorResolver
         SelfTest.report("openHub", [
             ("liveSaysPage", liveSaysPage),

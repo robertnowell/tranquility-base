@@ -52,9 +52,17 @@ class DeliveryTests(unittest.TestCase):
         self.make_receipt = False
         self.main_sha = B
         self.not_ancestor = None
+        self.notices = []
+        self.recoveries = []
 
     def run_command(self, args, **kwargs):
         output = ""
+        if args[0] == "bash":
+            self.notices.append(kwargs.get("input", ""))
+            return subprocess.CompletedProcess(args, 0, "")
+        if args[:3] in (["gh", "run", "rerun"], ["gh", "pr", "update-branch"]):
+            self.recoveries.append(args[:4])
+            return subprocess.CompletedProcess(args, 0, "")
         if args[0] == "gh":
             if self.network_failure:
                 raise subprocess.TimeoutExpired(args, 45)
@@ -169,6 +177,64 @@ class DeliveryTests(unittest.TestCase):
         self.assertTrue(self.delivery.observe(1, "owner")["queue_attention"])
         self.observed["headRefOid"] = B
         self.assertFalse(self.delivery.observe(1, "owner")["queue_attention"])
+
+    def failing(self, url="https://github.com/o/r/actions/runs/77/job/1"):
+        self.observed.update(labels=[{"name": "merge-queue"}], statusCheckRollup=[
+            {"name": "Source audit", "status": "COMPLETED", "conclusion": "FAILURE", "detailsUrl": url}])
+
+    def test_a_failed_check_is_rerun_once_then_parked_loudly(self):
+        # 30 Sep 2026: PR 728 sat queued behind a red check with no one told.
+        self.failing()
+        item = self.delivery.observe(1, "author")
+        self.assertEqual(self.recoveries, [["gh", "run", "rerun", "77"]])
+        self.assertFalse(item["queue_attention"])
+        self.assertIn("re-running", item["queue_action"])
+        self.assertEqual(self.notices, [])
+        item = self.delivery.observe(1, "author")
+        self.assertEqual(len(self.recoveries), 1, "one automatic recovery per head")
+        self.assertTrue(item["queue_attention"])
+        self.assertIn("parked", item["queue_action"])
+        self.assertEqual(len(self.notices), 1)
+        self.assertIn("PR 1 is parked", self.notices[0])
+        self.delivery.observe(1, "author")
+        self.assertEqual(len(self.notices), 1, "told once per head, not every tick")
+        self.assertEqual(self.delivery.supervise()["phase"], "attention")
+
+    def test_a_failed_check_behind_main_is_brought_onto_main_first(self):
+        self.failing()
+        self.observed["mergeStateStatus"] = "BEHIND"
+        item = self.delivery.observe(1, "author")
+        self.assertEqual(self.recoveries, [["gh", "pr", "update-branch", "1"]])
+        self.assertIn("updated onto main", item["queue_action"])
+        self.observed["headRefOid"] = B
+        self.observed["mergeStateStatus"] = "CLEAN"
+        self.delivery.observe(1, "author")
+        self.assertEqual(self.recoveries[-1], ["gh", "run", "rerun", "77"], "a new head gets its own recovery")
+
+    def test_a_pass_that_needed_the_rerun_is_reported_as_a_flake(self):
+        self.failing()
+        self.delivery.observe(1, "author")
+        self.observed["statusCheckRollup"][0].update(conclusion="SUCCESS")
+        item = self.delivery.observe(1, "author")
+        self.assertEqual(item["flaky_heads"], [A])
+        self.assertFalse(item["queue_attention"])
+        self.assertEqual(len(self.notices), 1)
+        self.assertIn("flaky", self.notices[0])
+        self.delivery.observe(1, "author")
+        self.assertEqual(len(self.notices), 1)
+
+    def test_a_queue_that_does_not_move_for_an_hour_is_said_out_loud(self):
+        now = [1000]; self.delivery.now = lambda: now[0]
+        self.delivery.update(1, queue_first_requested_at=1000)
+        self.observed.update(labels=[{"name": "merge-queue"}], statusCheckRollup=[
+            {"name": "Source audit", "status": "IN_PROGRESS", "conclusion": ""}])
+        self.assertFalse(self.delivery.observe(1, "author")["queue_attention"])
+        now[0] = 1000 + 3600
+        item = self.delivery.observe(1, "author")
+        self.assertTrue(item["queue_attention"])
+        self.assertIn("60 minutes", item["queue_action"])
+        self.delivery.observe(1, "author")
+        self.assertEqual(len(self.notices), 1)
 
     def test_failed_refresh_retains_evidence_but_marks_it_unavailable(self):
         self.observed["labels"] = [{"name": "merge-queue"}]

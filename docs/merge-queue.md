@@ -66,7 +66,7 @@ admission-request timestamps, `queue_state` and `queue_observed_at`:
 | `conflict` | Resolve and review the product-code conflict. The bot removes admission on conflict. |
 | `awaiting_readmission` | A previously admitted conflict is no longer reported but admission is absent. Verify the resolution and fresh validation, then re-admit explicitly. |
 | `admission_removed` | Admission was seen/requested and is now absent. Inspect why; do not automatically re-add it. |
-| `queued` | Admission is observed; this alone proves neither bot acceptance nor passing CI. Inspect required checks. |
+| `queued` | Admission is observed; this alone proves neither bot acceptance nor passing CI. The supervisor tends it: a failed `Source audit` gets ONE automatic recovery per head (brought onto main when behind, otherwise the failed job re-run), then `queue_attention` and a Slack post to the owner. A pass that needed the re-run is recorded in `flaky_heads` and posted as a flake. Queued an hour without merging also raises attention. |
 | `not_admitted` | No current admission was observed. |
 | `native_auto_merge` | GitHub auto-merge is armed outside the supervised queue; its owner uses an explicit handoff. |
 | `competing` | Both mechanisms are armed; inspect and hand off under one owner. |
@@ -112,3 +112,15 @@ suspend product access if necessary. Recheck any candidate already merging:
 removing a label is not an atomic cancellation of an in-flight merge. Preserve
 all required checks, durable delivery requests and the guarded worker. Never
 restore an older unguarded installer as queue rollback.
+
+## Why a failed check is tended, not left to the bot (30 Sep 2026)
+
+Kodiak with `update.always = false` updates only PRs that meet merge
+requirements, so a PR whose required check failed is never updated or retried by
+it. Before this, the supervisor recorded `source_audit_passed: false` and kept
+reporting "the bot owns updates and required CI": PR 728 sat red and silent until
+someone asked. The rule now is Shopify's (tolerate a repeat, because flakes do
+not repeat and real failures do) at the scale of one queue: one recovery, then a
+person. GitHub's native merge queue would test the merged result and eject on
+failure, but it is not offered for this personal-account repository; research
+record in the delivering agent's `2026-09-30-pipeline-stuck-prs` report.

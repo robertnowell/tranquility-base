@@ -6,6 +6,7 @@ import fcntl
 from datetime import datetime
 import importlib.util
 import json
+import re
 import os
 from pathlib import Path
 import plistlib
@@ -150,6 +151,8 @@ class Delivery:
                     except (KeyError, TypeError, ValueError):
                         pass  # A missing start time uses first observation, never zero.
             attention = queue_state in ("competing", "handoff_blocked", "awaiting_readmission", "admission_removed") or (ready_since is not None and self.now() - ready_since >= 300)
+            tended = self.tend(pr, previous, observed, checks, passed) if queue_state == "queued" else {}
+            attention = attention or tended.pop("attention", False)
             action = {
                 "handoff_blocked": previous.get("queue_admission_error") or "Admission needs its owner",
                 "held": "Explicit queue hold; only its owner can release it",
@@ -163,7 +166,8 @@ class Delivery:
                 "queued": "Supervised admission observed; the bot owns updates and required CI",
                 "closed": "Closed without merging",
             }[queue_state]
-            return self.update(pr, status="closed" if closed else "queued" if queue_state == "queued" else "awaiting_merge",
+            action = tended.pop("action", None) or action
+            return self.update(pr, **tended, status="closed" if closed else "queued" if queue_state == "queued" else "awaiting_merge",
                                head_sha=observed["headRefOid"], url=observed["url"], last_error=None,
                                merge_mode=mode, merge_state=observed.get("mergeStateStatus"),
                                source_audit_passed=passed, queue_ready_since=ready_since,
@@ -187,6 +191,76 @@ class Delivery:
         target = state_module.full_sha(self.command("git", "rev-parse", "origin/main"))
         return self.update(pr, status="deployment_pending", target_sha=target,
                            last_error=None)
+
+    # A queued PR whose required check failed used to sit in silence: Kodiak
+    # (update.always = false) only updates a PR that could merge, and nothing
+    # here looked at the check (30 Sep 2026: PR 728 sat red until Robert asked
+    # "why the fuck do we keep getting things stuck"). Shopify's queue tolerates
+    # repeat failures because a flake does not repeat and a real failure does;
+    # this is that rule sized for one queue. Each head gets ONE automatic
+    # recovery: brought onto main if it is behind (a fresh run on the result
+    # that would land), otherwise its failed job re-run. A second failure on
+    # the same head is its owner's, and they are told. A pass that needed the
+    # re-run is recorded and reported as a flake, never quietly absorbed:
+    # Google traced one newly flaky test in six to a real bug.
+    CHECK_RETRIES = 1
+    QUEUED_TOO_LONG = 3600
+
+    def tend(self, pr, previous, observed, checks, passed):
+        head = observed["headRefOid"]
+        owner = previous.get("queue_owner") or previous.get("request_owner") or "unowned"
+        retries = dict(previous.get("check_retries") or {})
+        fields = {}
+        if passed and retries.get(head):
+            flaky = list(previous.get("flaky_heads") or [])
+            if head not in flaky:
+                fields["flaky_heads"] = flaky + [head]
+                self.notify(f"PR {pr} passed Source audit only on its automatic re-run ({head[:8]}): "
+                            f"a check on this head is flaky and needs an owner. {observed['url']}")
+        failed = [c for c in checks if c.get("status") == "COMPLETED" and c.get("conclusion") != "SUCCESS"]
+        if failed:
+            url = next((c["detailsUrl"] for c in failed if c.get("detailsUrl")), observed["url"])
+            if observed.get("mergeStateStatus") == "BEHIND" and previous.get("check_update_for") != head:
+                fields["check_update_for"] = head
+                try:
+                    self.command("gh", "pr", "update-branch", str(pr), "--repo", REPOSITORY)
+                    fields["action"] = f"Source audit failed on {head[:8]}, which is behind main; updated onto main, so CI runs again"
+                    return fields
+                except (OSError, subprocess.SubprocessError):
+                    pass  # Fall through to a re-run of the same head.
+            run = re.search(r"/actions/runs/(\d+)", url or "")
+            if retries.get(head, 0) < self.CHECK_RETRIES and run:
+                try:
+                    self.command("gh", "run", "rerun", run.group(1), "--failed", "--repo", REPOSITORY)
+                    retries[head] = retries.get(head, 0) + 1
+                    fields.update(check_retries=retries,
+                                  action=f"Source audit failed on {head[:8]}; re-running the failed job once")
+                    return fields
+                except (OSError, subprocess.SubprocessError):
+                    pass  # A re-run that cannot be requested is the owner's too.
+            fields.update(attention=True,
+                          action=f"Source audit failed on {head[:8]} after its automatic recovery; parked for {owner}: {url}")
+            if previous.get("check_failure_notified") != head:
+                fields["check_failure_notified"] = head
+                self.notify(f"PR {pr} is parked: Source audit failed on {head[:8]} after an automatic "
+                            f"re-run. Owner: {owner}. {url}")
+            return fields
+        started = previous.get("queue_first_requested_at")
+        if started and self.now() - started >= self.QUEUED_TOO_LONG:
+            minutes = int((self.now() - started) // 60)
+            fields.update(attention=True, action=f"Queued {minutes} minutes without merging; inspect it")
+            if not previous.get("queue_slow_notified"):
+                fields["queue_slow_notified"] = True
+                self.notify(f"PR {pr} has been queued {minutes} minutes without merging. Owner: {owner}. {observed['url']}")
+        return fields
+
+    def notify(self, text):
+        """Say it where a person will see it: the deploy channel relaunch.sh already uses."""
+        try:
+            self.run(["bash", "-c", '. "$0/scripts/lib/slack.sh" && tb_slack_post C0BR963MBJ9', str(self.root)],
+                     input=f":warning: {text}\n", text=True, capture_output=True, timeout=30)
+        except (OSError, subprocess.SubprocessError):
+            pass  # Never let an alert that cannot be sent change what the queue does.
 
     def admit(self, pr, owner, expected_head, handoff_auto_merge=False, resume=False):
         """Authorize one reviewed candidate; durably hand off native auto-merge when requested."""
