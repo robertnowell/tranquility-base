@@ -72,6 +72,38 @@ final class RulesConsistencyTests: XCTestCase {
         XCTAssertEqual(hits.map { ($0 as NSString).lastPathComponent }, ["deep-research"])
     }
 
+    /// 30 Sep: hq-open found its Hub window by walking up to the .app around
+    /// itself. Run from the rules store there is none, so every page opened
+    /// in the browser. From the store it must reach the app the running app
+    /// recorded.
+    func testHqOpenInTheStoreFindsTheRecordedApp() throws {
+        let fm = FileManager.default
+        let root = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("vd-store-\(UUID().uuidString)/rules")
+        defer { try? fm.removeItem(at: root.deletingLastPathComponent()) }
+        let scripts = root.appendingPathComponent("versions/abc/skills/research-hq/scripts")
+        try fm.createDirectory(at: scripts, withIntermediateDirectories: true)
+        try fm.copyItem(at: repo.appendingPathComponent("skills/research-hq/scripts/hq-open"),
+                        to: scripts.appendingPathComponent("hq-open"))
+        func ownApp() throws -> String {
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
+            p.arguments = ["-c", """
+                import importlib.machinery, importlib.util, sys
+                loader = importlib.machinery.SourceFileLoader("hqopen", sys.argv[1])
+                m = importlib.util.module_from_spec(importlib.util.spec_from_loader("hqopen", loader)); loader.exec_module(m)
+                print(m.own_app())
+                """, scripts.appendingPathComponent("hq-open").path]
+            let out = Pipe(); p.standardOutput = out; p.standardError = FileHandle.nullDevice
+            try p.run(); p.waitUntilExit()
+            return String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        XCTAssertEqual(try ownApp(), "None", "nothing recorded: the browser")
+        RulesStore.recordApp(bundleID: "com.example.tb.dev",
+                             bundlePath: "/private/var/folders/x/AppTranslocation/y/TB.app", root: root)
+        XCTAssertEqual(try ownApp(), "('id', 'com.example.tb.dev')", "a translocated path is never recorded")
+    }
+
     // MARK: - The hooks, driven as a harness drives them
 
     private func run(_ script: String, stdin: String, env: [String: String]) throws -> String {

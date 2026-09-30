@@ -37,6 +37,7 @@ enum RulesReconcile {
                 Permissions.log("rules (\(trigger)): not staged: \(reason)")
             }
         }
+        RulesStore.recordApp(bundleID: Bundle.main.bundleIdentifier, bundlePath: Bundle.main.bundlePath)
         let desired = RulesStore.desired()
         if let desired, desired.fromCheckout {
             Permissions.log("rules (\(trigger)): reading the developer checkout \(desired.hooks), "
