@@ -2535,7 +2535,7 @@ final class StatusHUD: NSObject {
         // Part of the baseline for the same reason the hint's font is: the empty
         // room's 17pt centred sentence is the only face that changes either, so
         // a state that never mentions them must not inherit them.
-        bodyLabel.font = StateLegend.Face.message(12)
+        bodyLabel.font = StateLegend.Face.brief
         bodyLabel.alignment = .natural
         // The ink is a BODY ATTRIBUTE, so it belongs to the baseline: the line
         // above writes a plain string and would otherwise erase the read-along
@@ -3050,9 +3050,13 @@ final class StatusHUD: NSObject {
         guard !face.title.isEmpty else { titleLabel.stringValue = ""; return }
         let truncating = NSMutableParagraphStyle()
         truncating.lineBreakMode = .byTruncatingTail
-        let font = StateLegend.Face.name(14, light: false)
+        // Set exactly as a grid row names the agent (29 Sep 2026): Geist Sans
+        // Light at the row's size and tracking, so the name reads the same on
+        // the card as in the list.
+        let font = StateLegend.Face.name(GridRowView.nameSize, light: true)
         let attributes: [NSAttributedString.Key: Any] = [
             .font: font,
+            .kern: GridRowView.nameSize * GridRowView.nameTracking,
             .foregroundColor: StateLegend.Palette.ink,
             .paragraphStyle: truncating,
         ]
@@ -4286,7 +4290,7 @@ final class StatusHUD: NSObject {
                                 range: spokenRange)
         attributed.addAttribute(Self.spokenMark, value: true, range: spokenRange)
         attributed.addAttribute(
-            .font, value: StateLegend.Face.message(12), range: full)
+            .font, value: StateLegend.Face.brief, range: full)
         bodyLabel.attributedStringValue = attributed
 
         // The cursor just painted, NOT `inkBrightLength`. That property walks
