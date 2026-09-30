@@ -17,7 +17,11 @@ final class FolderHeaderView: NSView, NSTextFieldDelegate {
     static let indent: CGFloat = 14
 
     let folderId: String
-    private let chevron = NSTextField(labelWithString: "")
+    /// Drawn, not typed: a "›" or "⌄" glyph sits on the text baseline, so it
+    /// rode low beside the capitals (29 Sep, "alignment weird with the
+    /// chevrons, not centered in text"). A stroked path centred on the
+    /// capitals' own middle sits where the eye expects it.
+    private let chevron = ChevronView()
     private let nameLabel = NSTextField(labelWithString: "")
     private let countLabel = NSTextField(labelWithString: "")
     private let lamp = NSView()
@@ -41,8 +45,7 @@ final class FolderHeaderView: NSView, NSTextFieldDelegate {
         wantsLayer = true
         layer?.cornerRadius = 4
 
-        chevron.attributedStringValue = Widgets.letterspaced(
-            folder.collapsed ? "›" : "⌄", size: 11, tracking: 0, color: StateLegend.Palette.hint)
+        chevron.pointsDown = !folder.collapsed
         chevron.translatesAutoresizingMaskIntoConstraints = false
 
         let title = naming ? "NAMING…" : folder.name.uppercased()
@@ -72,7 +75,11 @@ final class FolderHeaderView: NSView, NSTextFieldDelegate {
             widthAnchor.constraint(equalToConstant: width),
             heightAnchor.constraint(equalToConstant: Self.height),
             chevron.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 1),
-            chevron.centerYAnchor.constraint(equalTo: centerYAnchor),
+            chevron.widthAnchor.constraint(equalToConstant: ChevronView.size),
+            chevron.heightAnchor.constraint(equalToConstant: ChevronView.size),
+            // The middle of the capitals: half a cap height above the baseline.
+            chevron.centerYAnchor.constraint(equalTo: nameLabel.firstBaselineAnchor,
+                                             constant: -StateLegend.Face.chrome(10).capHeight / 2),
             nameLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: GridRowView.lampColumn),
             nameLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
             nameLabel.trailingAnchor.constraint(lessThanOrEqualTo: lamp.leadingAnchor, constant: -10),
@@ -256,5 +263,34 @@ final class FolderMemberView: NSView {
             line.bottomAnchor.constraint(equalTo: rule.bottomAnchor),
         ])
         return rule
+    }
+}
+
+/// The folder's disclosure mark: a small open chevron, pointing down when the
+/// folder is open and right when it is closed, stroked in the strip's hint ink.
+final class ChevronView: NSView {
+    static let size: CGFloat = 9
+    var pointsDown = true { didSet { needsDisplay = true } }
+
+    override var isFlipped: Bool { true }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let path = NSBezierPath()
+        let s = Self.size, arm: CGFloat = 2.5
+        let mid = NSPoint(x: s / 2, y: s / 2)
+        if pointsDown {
+            path.move(to: NSPoint(x: mid.x - arm * 1.3, y: mid.y - arm * 0.65))
+            path.line(to: NSPoint(x: mid.x, y: mid.y + arm * 0.65))
+            path.line(to: NSPoint(x: mid.x + arm * 1.3, y: mid.y - arm * 0.65))
+        } else {
+            path.move(to: NSPoint(x: mid.x - arm * 0.65, y: mid.y - arm * 1.3))
+            path.line(to: NSPoint(x: mid.x + arm * 0.65, y: mid.y))
+            path.line(to: NSPoint(x: mid.x - arm * 0.65, y: mid.y + arm * 1.3))
+        }
+        path.lineWidth = 1.2
+        path.lineCapStyle = .round
+        path.lineJoinStyle = .round
+        StateLegend.Palette.hint.setStroke()
+        path.stroke()
     }
 }
