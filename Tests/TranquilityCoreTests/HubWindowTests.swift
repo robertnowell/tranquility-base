@@ -103,7 +103,22 @@ final class HubWindowTests: XCTestCase {
         let discuss = URL(string: "tranquilitybase://discuss?session=abc")!
         XCTAssertEqual(h.route(discuss, mainFrame: true, clicked: false), .cancel)
         XCTAssertEqual(opened.last, discuss, "Discuss reaches the app")
-        XCTAssertEqual(h.route(out, mainFrame: false, clicked: false), .allow, "a document's own frames are the web app's")
+        XCTAssertEqual(h.route(out, mainFrame: false, clicked: false), .allow, "a frame's own loads (an embed) stay")
+    }
+
+    /// hf-o8t.11: a link clicked inside a document navigated the document's
+    /// frame to an outside site, inside the Hub window.
+    func testALinkClickedInADocumentLeavesForTheBrowser() {
+        let h = hub()
+        var opened: [URL] = []
+        h.openExternally = { opened.append($0) }
+        let out = URL(string: "https://example.com/elsewhere")!
+        XCTAssertEqual(h.route(out, mainFrame: false, clicked: true), .cancel)
+        XCTAssertEqual(opened, [out])
+        XCTAssertEqual(h.route(URL(string: "https://hq.example.test/open?session=a&slug=b")!,
+                               mainFrame: false, clicked: true), .allow, "a hub link stays in place")
+        XCTAssertEqual(h.route(URL(string: "about:srcdoc")!, mainFrame: false, clicked: false), .allow)
+        XCTAssertEqual(opened.count, 1)
     }
 }
 
@@ -198,5 +213,31 @@ final class HubWindowSelfConnectTests: XCTestCase {
         h.ownConnectCode = { "own-code_1" }
         XCTAssertNil(h.selfConnectCode(URL(string: "https://evil.example/connect?code=own-code_1")!))
         XCTAssertNil(h.selfConnectCode(URL(string: "https://hq.example.test/d/x?code=own-code_1")!))
+    }
+}
+
+/// The same rule in a real WebKit view: a link clicked inside a frame, the
+/// way a document sits inside the hub's page.
+@MainActor
+final class HubWindowFrameLinkTests: XCTestCase {
+    func testAClickInsideAFrameOpensTheBrowserAndLeavesTheFrame() async throws {
+        let h = HubWindow(base: { URL(string: "https://hq.example.test") })
+        h.activates = false
+        h.dataStore = .nonPersistent()
+        var opened: [URL] = []
+        h.openExternally = { opened.append($0) }
+        XCTAssertTrue(h.show(URL(string: "https://hq.example.test/")!))
+        let web = try XCTUnwrap(h.webView)
+        let page = """
+        <html><body><iframe id=doc srcdoc="<a id=l href='https://example.com/elsewhere'>out</a>"></iframe></body></html>
+        """
+        web.loadHTMLString(page, baseURL: URL(string: "https://hq.example.test/d/1"))
+        for _ in 0..<50 { try await Task.sleep(nanoseconds: 100_000_000); if !web.isLoading { break } }
+        try await Task.sleep(nanoseconds: 500_000_000)
+        _ = try? await web.evaluateJavaScript("document.getElementById('doc').contentDocument.getElementById('l').click(); 1")
+        try await Task.sleep(nanoseconds: 1_000_000_000)
+        XCTAssertEqual(opened.map(\.absoluteString), ["https://example.com/elsewhere"])
+        let frame = try await web.evaluateJavaScript("document.getElementById('doc').contentWindow.location.href") as? String
+        XCTAssertEqual(frame, "about:srcdoc", "the document stayed where it was")
     }
 }

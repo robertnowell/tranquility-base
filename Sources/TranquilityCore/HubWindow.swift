@@ -238,7 +238,20 @@ public final class HubWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, 
     /// page (the document itself) are the web app's business.
     func route(_ url: URL?, mainFrame: Bool, clicked: Bool) -> WKNavigationActionPolicy {
         guard let url, let scheme = url.scheme?.lowercased() else { return .cancel }
-        if !mainFrame { return .allow }
+        if !mainFrame {
+            // A document is a frame inside the hub's page, so a link clicked in
+            // it navigates that frame, not the window. Left to .allow, an
+            // outside site opened INSIDE the Hub window (29 Sep, hf-o8t.11).
+            // A click off the hub goes to the browser; everything else a frame
+            // loads (the document itself, about:, an embedded video) is the
+            // page's own content and stays.
+            if clicked, !isHub(url), scheme == "https" || scheme == "http" || scheme == "mailto" {
+                openExternally(url)
+                log("hub window: a link in a document went to the browser: \(Self.describe(url))")
+                return .cancel
+            }
+            return .allow
+        }
         if isHub(url) || scheme == "about" { return .allow }
         if clicked || scheme == "tranquilitybase" || scheme == "mailto" { openExternally(url) }
         return .cancel
