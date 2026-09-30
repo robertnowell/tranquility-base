@@ -104,6 +104,39 @@ final class RulesConsistencyTests: XCTestCase {
         XCTAssertEqual(try ownApp(), "('id', 'com.example.tb.dev')", "a translocated path is never recorded")
     }
 
+    /// 30 Sep: a MacBook report carried the brief's markup and none of its
+    /// stylesheet, outside the agents folder. Ruled a context problem, not a
+    /// gate: the page hook tells the agent what is wrong and how to redo it,
+    /// never rewrites the page, and logs the case for the hourly report. (The
+    /// hook ignores temp folders by design, so this runs in a scratch folder
+    /// under the real home and removes it.)
+    func testThePageHookTellsTheAgentAndLogsButNeverRewrites() throws {
+        let fm = FileManager.default
+        let home = fm.homeDirectoryForCurrentUser.appendingPathComponent(".tb-style-drill-\(UUID().uuidString)")
+        defer { try? fm.removeItem(at: home) }
+        let sid = "11111111-2222-4333-8444-555566667777"
+        let outside = home.appendingPathComponent("ClaudeWork/replay-eval/judge_body.html")
+        try fm.createDirectory(at: outside.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let words = Array(repeating: "word", count: 150).joined(separator: " ")
+        let original = """
+            <!doctype html><html><head><meta charset="utf-8"><title>T</title></head><body><main>
+            <h1>Three reviewers, one verifier.</h1><p class="lede"><b>Claim.</b> More.</p>
+            <div class="you"><p>Two decisions.</p></div>
+            <details open><summary><span class="c">Reviewers differ.</span></summary><div class="d"><p>\(words)</p></div></details>
+            </main></body></html>
+            """
+        try original.write(to: outside, atomically: true, encoding: .utf8)
+        let payload = "{\"session_id\":\"\(sid)\",\"hook_event_name\":\"PostToolUse\",\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"\(outside.path)\"}}"
+        let said = try run("artifact-hook.sh", stdin: payload, env: ["HOME": home.path])
+        XCTAssertTrue(said.contains("THIS PAGE WILL NOT WORK"), said)
+        XCTAssertTrue(said.contains("not its stylesheet") && said.contains("outside your agent folder"), said)
+        XCTAssertTrue(said.contains("hq-page new"))
+        XCTAssertFalse(try String(contentsOf: outside, encoding: .utf8).contains(".you{"), "the page is never rewritten")
+        let log = try String(contentsOf: home.appendingPathComponent(
+            "Library/Application Support/VoiceDispatch/rules/page-problems.log"), encoding: .utf8)
+        XCTAssertTrue(log.contains("no-house-style,outside-agent-folder") && log.contains(outside.path))
+    }
+
     // MARK: - The hooks, driven as a harness drives them
 
     private func run(_ script: String, stdin: String, env: [String: String]) throws -> String {

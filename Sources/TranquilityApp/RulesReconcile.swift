@@ -174,6 +174,11 @@ enum RulesReconcile {
             "rules_source": desired == nil ? "learned" : (desired!.fromCheckout ? "checkout" : "store"),
             "hooks": hookStates, "skills": skillStates, "approvals": approvals,
             "stale_personal_skills": stale.map { ($0 as NSString).lastPathComponent },
+            "page_problems": {
+                let recent = RulesStore.recentPageProblems()
+                return ["count": recent.count,
+                        "samples": recent.prefix(5).map { "\($0.kinds): \($0.path)" }] as [String: Any]
+            }(),
             "trigger": trigger,
         ]
         let body = (try? JSONSerialization.data(withJSONObject: report)) ?? Data("{}".utf8)
