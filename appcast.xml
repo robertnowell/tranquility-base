@@ -6,6 +6,14 @@
     <description>Updates for Tranquility Base.</description>
     <language>en</language>
     <item>
+      <title>Version 0.3.1462</title>
+      <sparkle:version>1462</sparkle:version>
+      <sparkle:shortVersionString>0.3.1462</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <pubDate>Wed, 30 Sep 2026 23:12:17 +0000</pubDate>
+      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1462-46a4d0cca/TranquilityBase-0.3.1462.dmg" type="application/octet-stream" length="45737298" sparkle:edSignature="A3fADLFMmIb+aN//VMLpJfeiBUIQr1NfIAiPb5Xv7Dn3wZv11gQI6M/37UQt1pTyhIqDqlKRrMO6hr4y81XJCg==" />
+    </item>
+    <item>
       <title>Version 0.3.1461</title>
       <sparkle:version>1461</sparkle:version>
       <sparkle:shortVersionString>0.3.1461</sparkle:shortVersionString>
@@ -77,16 +85,8 @@
       <pubDate>Wed, 30 Sep 2026 20:09:43 +0000</pubDate>
       <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1452-7a3b15db3/TranquilityBase-0.3.1452.dmg" type="application/octet-stream" length="46341396" sparkle:edSignature="639quJYISdiGBkJJJIv5MLnbE/Oh6dFIiumzwa7FQJmeDvKzkHirsam4O4KUXBKV7lnxfWi1RzyORdVlrxfHDw==" />
     </item>
-    <item>
-      <title>Version 0.3.1451</title>
-      <sparkle:version>1451</sparkle:version>
-      <sparkle:shortVersionString>0.3.1451</sparkle:shortVersionString>
-      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <pubDate>Wed, 30 Sep 2026 18:30:50 +0000</pubDate>
-      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1451-07811119a/TranquilityBase-0.3.1451.dmg" type="application/octet-stream" length="45392454" sparkle:edSignature="LjAmex7DInyGo2lvPXgW+mYouZ6FXOy93G0jm+Hd+j1vlH/M1xOi2J4gbbA8GVVo55NGi5JfCPIFq5cLJPRWCA==" />
-    </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: G3TXwJJx+5xAPT1knrP72YTvEa5exwre3Vcra+XwWtIrJ7a2Dr3mztKh5LUqCF4vvi+FGbUtZVITkY+7HVEaAw==
+edSignature: 21ufTSbEySltlu4qNIDt4fbA4xXIfAOBrb2l00wFqToHZ7aFJjxWUYNd6ea8/PekhrLdaKjGII8Z8R+3kIe/CA==
 length: 6457
 -->
