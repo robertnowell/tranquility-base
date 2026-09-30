@@ -2175,6 +2175,14 @@ extension StatusHUD {
             // life and nobody noticed until it was asked to carry meaning.
             ("nothingIsBold", built.allSatisfy {
                 $0.nameLabel.font == StateLegend.Face.name(GridRowView.nameSize, light: true) }),
+            // A name too long for its room truncates; it is never squeezed out
+            // of its tracking (30 Sep: "letter spacing changes on hover").
+            ("namesNeverTighten", built.allSatisfy {
+                let name = $0.nameLabel.attributedStringValue
+                guard name.length > 0 else { return true }
+                let style = name.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
+                return style?.allowsDefaultTighteningForTruncation == false
+            }),
             ("unreadIsBrightest", unreadL > openedL && unreadL > idleL),
             // Idle and opened rest at ONE level — "the idle sessions should
             // not be brighter than read active sessions" (16 Aug). Equality
