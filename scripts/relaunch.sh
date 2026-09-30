@@ -312,11 +312,18 @@ if app_at_path_running "$APP_PATH"; then
   # The bundle names its own commit now, so ask it.
   INSTALLED_VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" \
     "$APP_PATH/Contents/Info.plist" 2>/dev/null || echo "")
-  SHORT_TARGET=$(git rev-parse --short "$TARGET" 2>/dev/null || echo "")
-  if [ -n "$SHORT_TARGET" ] && [ -n "$INSTALLED_VERSION" ] \
-     && [ "${INSTALLED_VERSION#*+}" != "$SHORT_TARGET" ]; then
+  # Compare the FULL commit the bundle records (TBSourceCommit), not the short
+  # one in its version string: `git rev-parse --short` picks its length per
+  # clone, so the prepared build said 9059473 and this checkout said 90594739
+  # for the same commit, and a good deploy was called untrustworthy (29 Sep
+  # 2026, #713).
+  INSTALLED_COMMIT=$(/usr/libexec/PlistBuddy -c "Print :TBSourceCommit" \
+    "$APP_PATH/Contents/Info.plist" 2>/dev/null || echo "")
+  FULL_TARGET=$(git rev-parse "$TARGET" 2>/dev/null || echo "")
+  if [ -n "$FULL_TARGET" ] && [ -n "$INSTALLED_COMMIT" ] \
+     && [ "$INSTALLED_COMMIT" != "$FULL_TARGET" ]; then
     echo "✗ the app that is running is not the build this script made:" >&2
-    echo "    installed bundle says $INSTALLED_VERSION, target is $SHORT_TARGET" >&2
+    echo "    installed bundle says $INSTALLED_COMMIT ($INSTALLED_VERSION), target is $FULL_TARGET" >&2
     echo "  Something else replaced or launched it. Do not trust this deploy." >&2
     exit 1
   fi
