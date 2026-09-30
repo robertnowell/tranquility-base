@@ -45,6 +45,23 @@ final class GridRowView: NSControl {
     static let hoverBleed: CGFloat = 8
     static let auxFraction: CGFloat = 0.38
     static let auxFont = ChromeType.mono(ofSize: 11, weight: .regular)
+    static let nameSize: CGFloat = 14
+    /// Tracking for the name, as a fraction of its size.
+    static let nameTracking: CGFloat = 0.04
+
+    /// Draw the name with its tracking. Tracking lives in the string, not the
+    /// font, so colour goes in the string too: the one place the name is
+    /// painted, for the resting ink and the hover alike.
+    static func paintName(_ field: NSTextField, color: NSColor) {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineBreakMode = .byTruncatingTail
+        field.attributedStringValue = NSAttributedString(
+            string: field.stringValue,
+            attributes: [.font: field.font ?? StateLegend.Face.name(nameSize, light: true),
+                         .kern: nameSize * nameTracking,
+                         .foregroundColor: color,
+                         .paragraphStyle: paragraph])
+    }
 
     init(item: SessionRow, auxWidth: CGFloat,
          target: AnyObject, action: Selector) {
@@ -135,7 +152,9 @@ final class GridRowView: NSControl {
         // Names are words (ruled 29 Sep 2026): an agent's name is read, not
         // parsed, so it takes the system sans the hub already sets it in. Mono
         // stays for what is machine: the id beside it, labels, file names.
-        name.font = StateLegend.Face.name(13, light: true)  // Geist Light, 29 Sep 2026
+        // Geist Sans Light at 14 with the letters 4% apart (option E, Robert,
+        // 29 Sep 2026): at 13 and no tracking the light strokes crowded.
+        name.font = StateLegend.Face.name(Self.nameSize, light: true)
         // FULL INK IS RESERVED FOR ROWS THAT WANT YOU, and after this change
         // that is exactly the green and amber ones you have not heard.
         //
@@ -150,6 +169,7 @@ final class GridRowView: NSControl {
                           ? StateLegend.Palette.ink
                           : StateLegend.Palette.restingInk).withAlphaComponent(ink)
         name.lineBreakMode = .byTruncatingTail
+        Self.paintName(name, color: name.textColor ?? StateLegend.Palette.ink)
         name.translatesAutoresizingMaskIntoConstraints = false
         name.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
@@ -296,7 +316,9 @@ final class GridRowView: NSControl {
     /// the answer is an underline — a shape rather than a tier, which is what
     /// the card title already does at the top of the ramp.
     func setHovered(_ on: Bool) {
-        nameLabel.textColor = on ? StateLegend.hovered(restingName) : restingName
+        let color = on ? StateLegend.hovered(restingName) : restingName
+        nameLabel.textColor = color
+        Self.paintName(nameLabel, color: color)
         // Nothing to trade if this row does not know its harness, and a row
         // that swapped its id for nothing would just look broken.
         guard harnessMark.image != nil else { return }
