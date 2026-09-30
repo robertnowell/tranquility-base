@@ -1096,14 +1096,22 @@ extension StatusHUD {
             }
             return field.font
         }
+        // Ruled 29 Sep 2026, "names are words": the machine's own words
+        // (placard, hint, doors) stay mono; a NAME and YOUR words are read, so
+        // the title and the reply strip join the body in the sans the hub
+        // sets them in. Both halves are asserted, so neither can drift back.
         let chromeWidgets: [(String, NSFont?)] = [
-            ("state", drawnFont(stateLabel)), ("title", drawnFont(titleLabel)),
-            ("hint", drawnFont(hintLabel)), ("strip", drawnFont(stripLabel)),
+            ("state", drawnFont(stateLabel)),
+            ("hint", drawnFont(hintLabel)),
             ("door", drawnFont(goButton)), ("quiet", drawnFont(dontSendButton)),
         ]
+        let wordWidgets: [(String, NSFont?)] = [
+            ("title", drawnFont(titleLabel)), ("strip", drawnFont(stripLabel)),
+            ("body", drawnFont(bodyLabel)),
+        ]
         let strays = chromeWidgets.filter { !isMono($0.1) }.map(\.0)
-        // And the one exception, said out loud: an agent's words are prose.
-        let bodyIsProse = !isMono(drawnFont(bodyLabel))
+            + wordWidgets.filter { isMono($0.1) }.map(\.0)
+        let bodyIsProse = wordWidgets.allSatisfy { !isMono($0.1) }
 
         // The mark census: walk the ACTUAL view tree and find any mark drawn
         // without going through the composer. The chip's ▣ was a plain

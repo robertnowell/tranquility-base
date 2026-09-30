@@ -434,6 +434,16 @@ if not path:
     else:
         path = ""
 
+# A DRAFT IS NOT A PAGE. hq-page new writes its scaffold to <hub>/_drafts/,
+# and the mirror has always skipped any name starting with `_` or `.`. This
+# hook did not, so a scaffold written minutes before it was filled could be
+# recorded as the session's newest page and announced, empty (29 Sep 2026).
+# Same rule as the mirror, so what is recorded is what the hub can show.
+if path and "/Documents/agents/" in path:
+    _rel = path.split("/Documents/agents/", 1)[1].split("/")[1:]
+    if any(part.startswith(("_", ".")) for part in _rel):
+        path = ""
+
 # The ownership question is the same wherever the path came from.
 if path and "/Documents/agents/" in path and not _is_hub(path) and session:
     _dir = _agent_dir_of(path)

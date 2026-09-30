@@ -2174,7 +2174,7 @@ extension StatusHUD {
             // is bold. The panel broke this quietly for the grid's whole
             // life and nobody noticed until it was asked to carry meaning.
             ("nothingIsBold", built.allSatisfy {
-                $0.nameLabel.font == ChromeType.mono(ofSize: 13, weight: .medium) }),
+                $0.nameLabel.font == StateLegend.Face.message(13, .medium) }),
             ("unreadIsBrightest", unreadL > openedL && unreadL > idleL),
             // Idle and opened rest at ONE level — "the idle sessions should
             // not be brighter than read active sessions" (16 Aug). Equality
@@ -3164,7 +3164,7 @@ extension StatusHUD {
         let bodyIsTheSentence = bodyLabel.stringValue == "Inviting promotions copy to speak."
         // The placard names the voice; the title slot is for a session and the
         // manager is not one, so it must be EMPTY here (and hidden with it).
-        let titled = stateLabel.stringValue.contains(StateLegend.managerOnTitle)
+        let titled = stateLabel.stringValue.contains(StateLegend.managerOnTitle.uppercased())
             && titleLabel.isHidden
 
         // Eight characters is "Inviting"; the card counts in the same
