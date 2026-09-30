@@ -82,12 +82,18 @@ skipped and a check cannot. `--stash` moves what it finds aside, keeping a
 dated copy; `--restore` puts it back, which matters because the stash holds
 real provider keys.
 
-1. Sign in from signed out: PKCE in the browser, back to the app, token in the
-   Keychain. Quit and relaunch; it is still signed in.
+1. Sign in from signed out. Since #683 this happens in the app's own Hub
+   window rather than an external browser, and #684 made it symmetric: signing
+   out there signs the app out too. Exercise both directions. Quit and
+   relaunch; it is still signed in.
 2. Confirm the welcome credit arrived and is visible, and that no card was
    asked for to get it.
 3. Use all five paid products on managed credit, with **no provider key
-   present anywhere on the machine** — a summary, a spoken reply, live
+   present anywhere on the machine**. Note since 29 Sep: hands-free has no
+   own-key path at all -- `.local` was deleted (#675), so `Availability` is
+   `managed` or `unset` and hands-free is a credits-only product. The other
+   four still read the person's own key when there is one, which is why their
+   absence is what this step checks. — a summary, a spoken reply, live
    listening, a recovered recording, and a hands-free session. Each should
    work without a single vendor credential in the bundle, the Keychain, or the
    environment. That absence is the claim; verify it rather than assume it.
