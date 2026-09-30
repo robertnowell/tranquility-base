@@ -53,33 +53,27 @@ final class ProjectFoldersTests: XCTestCase {
         XCTAssertEqual(lines.compactMap(\.row?.id), ["read", "unread"])
     }
 
-    // MARK: - Rule 3: a folder with an ask rises
+    // MARK: - Rule 3: folder order is the user's, and sticky
 
-    func testAFolderWithAGreenLampRisesAboveTheUsersOrder() {
-        let quiet = book([("First", ["q"]), ("Second", ["s"])])
-        let bothWorking = SessionRow.quietRowsLast([row("q", .working, at: 5), row("s", .working, at: 9)])
-        XCTAssertEqual(ProjectLayout.lines(bothWorking, book: quiet).compactMap(\.folder?.name),
-                       ["First", "Second"], "no ask: the user's order")
-
+    func testALitLampNeverMovesAFolder() {
+        let order = book([("First", ["q"]), ("Second", ["s"])])
         let secondAsks = SessionRow.quietRowsLast([row("q", .working, at: 5), row("s", .ready, at: 9)])
-        XCTAssertEqual(ProjectLayout.lines(secondAsks, book: quiet).compactMap(\.folder?.name),
+        XCTAssertEqual(ProjectLayout.lines(secondAsks, book: order).compactMap(\.folder?.name),
+                       ["First", "Second"])
+        let amber = SessionRow.quietRowsLast([row("q", .running), row("s", .fault, at: 9)])
+        XCTAssertEqual(ProjectLayout.lines(amber, book: order).compactMap(\.folder?.name),
+                       ["First", "Second"])
+    }
+
+    func testADraggedFolderStaysWhereItWasPut() {
+        var b = book([("First", ["q"]), ("Second", ["s"])])
+        b.move("second", to: "first", after: false)
+        let firstAsks = SessionRow.quietRowsLast([row("q", .ready, at: 9), row("s", .working, at: 5)])
+        XCTAssertEqual(ProjectLayout.lines(firstAsks, book: b).compactMap(\.folder?.name),
                        ["Second", "First"])
     }
 
-    func testAmberAsksTooAndNewestAskerLeads() {
-        let quiet = book([("A", ["a"]), ("B", ["b"]), ("C", ["c"])])
-        let shown = SessionRow.quietRowsLast([row("a", .ready, at: 10), row("b", .fault, at: 30),
-                                              row("c", .working, at: 99)])
-        XCTAssertEqual(ProjectLayout.lines(shown, book: quiet).compactMap(\.folder?.name), ["B", "A", "C"])
-    }
-
-    func testAnsweredFolderFallsBackToItsPlace() {
-        let quiet = book([("First", ["q"]), ("Second", ["s"])])
-        let answered = SessionRow.quietRowsLast([row("q", .working, at: 5), row("s", .working, at: 9)])
-        XCTAssertEqual(ProjectLayout.lines(answered, book: quiet).compactMap(\.folder?.name), ["First", "Second"])
-    }
-
-    func testDraggingAHeaderSetsTheOrderBeneathTheAskers() {
+    func testDraggingAHeaderSetsTheOrder() {
         var b = book([("First", ["q"]), ("Second", ["s"]), ("Third", ["t"])])
         b.move("third", to: "first", after: false)
         XCTAssertEqual(b.folders.map(\.name), ["Third", "First", "Second"])

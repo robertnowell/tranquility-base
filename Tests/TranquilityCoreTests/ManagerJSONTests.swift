@@ -104,8 +104,8 @@ final class ManagerJSONTests: XCTestCase {
     }
 
     /// `tbase targets` lists in the panel's folder order and names the folder
-    /// (ruling-project-folders, rules 1 and 3).
-    func testTargetsListFoldersFirstAndTheAskingFolderRises() throws {
+    /// (ruling-project-folders, rules 1 and 3): the user's order, sticky.
+    func testTargetsListFoldersFirstInTheUsersOrder() throws {
         _ = try seed(session: "asks")
         let live = ["loose", "quiet", "asks"].map {
             LiveSession(pid: 1, sessionId: $0, cwd: "/tmp/\($0)", status: "busy")
@@ -115,8 +115,8 @@ final class ManagerJSONTests: XCTestCase {
         book.create(name: "Asking", with: ["asks"], id: "a")
         let targets = ManagerJSON.targets(store: store, live: live, isEnrolled: { _, _ in true },
                                           book: book, origin: { $0 })
-        XCTAssertEqual(targets.map(\.sessionId), ["asks", "quiet", "loose"])
-        XCTAssertEqual(targets.map(\.folder), ["Asking", "Quiet", nil])
+        XCTAssertEqual(targets.map(\.sessionId), ["quiet", "asks", "loose"])
+        XCTAssertEqual(targets.map(\.folder), ["Quiet", "Asking", nil])
     }
 
     func testEncodingIsStableAndSorted() throws {
