@@ -1570,7 +1570,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     if let url = URL(string: SystemVoiceCatalog.settingsURL) {
                         NSWorkspace.shared.open(url)
                     }
-                    self.lastStatusLine = "Settings → \(SystemVoiceCatalog.remainingSteps)"
+                    self.lastStatusLine = "Settings › \(SystemVoiceCatalog.remainingSteps)"
                     return
                 }
                 let sample = SpokenTextSanitizer().sanitize(self.previewText())

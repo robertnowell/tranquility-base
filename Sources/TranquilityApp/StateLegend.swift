@@ -21,17 +21,20 @@ enum StateLegend {
         /// Quiet/ambient states: ready, preparing, working, the waiting count, and
         /// the menu-bar placeholder before the SF Symbol loads.
         static let quiet = "◌"
-        static let speaking = "◀"
+        /// ONE pointer family (Robert, 30 Sep 2026: "unify throughout app
+        /// arrow vs carat"): the caret. ‹ goes back, › goes on. The filled
+        /// triangle and the long arrow were three shapes for two directions.
+        static let speaking = "‹"
         /// The breadcrumb, on a face that is NOT the speaking card. Same mark,
         /// because it is the same promise — this pill is the door back to the
         /// grid — and the panel has exactly one mark for that promise.
-        static let home = "◀"
+        static let home = "‹"
         /// Menu status lines and the dictation-receipt pill (ui-pass-7,
         /// ruling 5). The reply-send Sent face stays dead.
         static let sent = "▶"
         static let needsYou = "⚠"
         /// Direction of travel: pending sends and dictation destinations.
-        static let routing = "→"
+        static let routing = "›"
         /// The live dot: the listening pill, the busy menu-bar text fallback, and
         /// the onboarding permission dot.
         static let dot = "●"
@@ -162,7 +165,11 @@ enum StateLegend {
         /// actions are keyboard, so the one navigation the panel owns is a door,
         /// not a verb. On the dark ground a saturated accent inverts that
         /// hierarchy outright; this one recedes under the text.
-        static let accent = hex(0x6E7F8C)
+        ///
+        /// Raised 30 Sep 2026 from #6E7F8C (3.41:1) to 5.35:1: the doors had
+        /// receded past legible ("they seem hard to read"), and small text wants
+        /// 4.5:1. Same hue, so the doors keep their own colour.
+        static let accent = hex(0x8FA2B1)
 
         // MARK: The light console, kept for the swap
         //
@@ -334,7 +341,7 @@ enum StateLegend {
          ("ready", Palette.ready, 3.0),
          ("working", Palette.working, 3.0),
          ("fault", Palette.fault, 3.0),
-         ("accent", Palette.accent, 3.0),
+         ("accent", Palette.accent, 4.5),
          // A hover value is read for as long as the pointer sits on it, which
          // is longer than a resting placard is read; it owes the text floor
          // even where its resting value did not.
@@ -354,7 +361,7 @@ enum StateLegend {
          // What actually matters is asserted in `hoverDrill` instead: a hover
          // is always strictly MORE legible than its rest. COMPUTED, not minted,
          // so a change to the step function that dims a control fails here.
-         ("hovered(accent)", hovered(Palette.accent), 3.0),
+         ("hovered(accent)", hovered(Palette.accent), 4.5),
          ("hovered(secondary)", hovered(Palette.secondary), 4.5),
          ("hovered(ink)", hovered(Palette.ink), 7.0)]
     }
@@ -610,9 +617,20 @@ enum StateLegend {
         /// The colour is a parameter with the resting value as its default, so
         /// the hover step (`StateLegend.hovered`) rebuilds a door's title
         /// through this same function instead of a second copy of its type.
+        ///
+        /// Geist Sans Regular in capitals, letters 8% apart (Robert, 30 Sep
+        /// 2026, option G: "set the buttons in geist and make them all caps").
+        /// Mono title case at 10pt read as a label, and in a 3.41:1 ink it was
+        /// hard to read at all; capitals in the sans read as a button. Tracked
+        /// inside the 5 to 12% capitals want. Controls, a word and not a door,
+        /// stays in the mono lexicon below, so the row still says which is which.
+        static let doorSize: CGFloat = 11
         static func door(_ text: String,
                          color: NSColor = Palette.accent) -> NSAttributedString {
-            label(text, weight: .medium, color: color)
+            ChromeType.line(
+                text.uppercased(),
+                font: ChromeType.sans(ofSize: doorSize, light: false),
+                color: color, tracking: doorSize * 0.08)
         }
         /// A word that explains rather than acts: Controls, the wordmark.
         static func quiet(_ text: String, color: NSColor = Palette.hint) -> NSAttributedString {

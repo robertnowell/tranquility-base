@@ -138,7 +138,7 @@ extension StatusHUD {
                 let name = target.count > 20
                     ? target.prefix(19).trimmingCharacters(in: .whitespaces) + "…"
                     : target
-                return "→ \(name.uppercased()) · SENDING"
+                return "\(StateLegend.Glyph.routing) \(name.uppercased()) · SENDING"
             case .folderChange(let what): return "✓ \(what.uppercased()) · UNDO"
             case .sent: return "✓ SENT"
             case .queued: return "✓ QUEUED · SENDS AFTER THIS TURN"

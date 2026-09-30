@@ -778,7 +778,7 @@ struct Permissions {
             // does not pretend to know which. Both are answered the same way:
             // press Grant, which prompts if it can and opens Settings if it
             // cannot.
-            default: return "not granted. Click Grant, then Privacy & Security → Automation"
+            default: return "not granted. Click Grant, then Privacy & Security › Automation"
             }
         }
     }

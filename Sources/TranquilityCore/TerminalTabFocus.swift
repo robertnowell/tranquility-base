@@ -77,7 +77,7 @@ public enum TerminalTabFocus {
         guard message.contains("-1743") || message.contains("Not authorized to send Apple events")
         else { return message }
         return "Tranquility Base isn't allowed to control Terminal, so it can't open the "
-            + "agent's window. Grant it under Privacy & Security → Automation, then try again."
+            + "agent's window. Grant it under Privacy & Security › Automation, then try again."
     }
 
     /// Only a name shaped the way `launchTmux` actually makes one (`tb-`

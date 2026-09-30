@@ -118,7 +118,7 @@ final class AgentGridRow: NSView {
             // Ready is the plain state, and a mark that says "fine" on three
             // tiles out of four is noise. The arrow stays: it is not a status,
             // it is the door a tap opens, and the dimmed tile already says why.
-            let mark: String = ready ? "" : " →"
+            let mark: String = ready ? "" : " \(StateLegend.Glyph.forward)"
             let ink: NSColor = ready
                 ? (picked ? StateLegend.Palette.ready : StateLegend.Palette.ink)
                 : StateLegend.Palette.fault
