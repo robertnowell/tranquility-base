@@ -67,12 +67,13 @@ extension StatusHUD {
         let hideAndWait = !firstPaint.contains("[Kopi]") && store.current.folder(id: "kopi") != nil
         let menusSurviveIndent = Dictionary(uniqueKeysWithValues: gridRowsForTesting)["m1"] != nil
 
-        // The guide runs unbroken: every rule between two rows of one folder
-        // is a folder rule, and there is one per gap.
-        let rules = waitingRows.arrangedSubviews.filter { view in
-            view.subviews.count == 2 && view.frame.height <= 1.5 && !(view is FolderMemberView)
+        // Rules inside a folder start at the indent, one above each of its
+        // rows; nothing else draws inside a folder.
+        let rules = waitingRows.arrangedSubviews.filter {
+            $0.identifier?.rawValue == "folder-rule"
+                && $0.subviews.first?.frame.minX == FolderHeaderView.indent
         }.count
-        let guideUnbroken = rules == 3   // Mirai: header|m1|m2, TB: header|t1
+        let folderRulesIndented = rules == 3   // Mirai: header|m1|m2, TB: header|t1
 
         // Collapse and reopen: the panel comes back to the height it had, so
         // no row is pushed out of sight.
@@ -233,7 +234,7 @@ extension StatusHUD {
             ("dropDidNotOpenACard", dropDidNotOpenACard),
             ("undoInTheTopBand", undoInTheTopBand),
             ("wholeRowIsTheTarget", wholeRowIsTheTarget),
-            ("guideUnbroken", guideUnbroken),
+            ("folderRulesIndented", folderRulesIndented),
             ("reopenRefits", reopenRefits),
             ("folderDropsOnRows", folderDropsOnRows),
             ("ghostDoesNotSnap", ghostDoesNotSnap),
