@@ -218,8 +218,8 @@ enum GridDragPhase { case began, moved, ended }
 /// guide line down the left; where it met the rules between rows it made box
 /// corners and left stubs, and it read as a bracket drawn around the folder
 /// rather than as grouping (29 Sep, "these lines are a little jank", then
-/// "lines still a bit weird"). The indent, and rules that start at it, carry
-/// the grouping on their own, as a sidebar's nested items do.
+/// "lines still a bit weird"). The indent carries the grouping on its own, as
+/// a sidebar's nested items do; since 30 Sep no rule runs between its rows.
 final class FolderMemberView: NSView {
     let row: GridRowView
     let folderId: String
@@ -241,29 +241,6 @@ final class FolderMemberView: NSView {
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("not used") }
-
-    /// The rule above a folder's row: it starts where the row's lamp starts,
-    /// so the folder's rows sit in their own column. The rule that closes a
-    /// folder is the grid's ordinary full-width one.
-    static func rule(width: CGFloat) -> NSView {
-        let rule = NSView()
-        rule.identifier = NSUserInterfaceItemIdentifier("folder-rule")
-        rule.translatesAutoresizingMaskIntoConstraints = false
-        let line = NSView()
-        line.wantsLayer = true
-        line.layer?.backgroundColor = StateLegend.Palette.hairlineSoft.cgColor
-        line.translatesAutoresizingMaskIntoConstraints = false
-        rule.addSubview(line)
-        NSLayoutConstraint.activate([
-            rule.widthAnchor.constraint(equalToConstant: width),
-            rule.heightAnchor.constraint(equalToConstant: 1),
-            line.leadingAnchor.constraint(equalTo: rule.leadingAnchor, constant: FolderHeaderView.indent),
-            line.trailingAnchor.constraint(equalTo: rule.trailingAnchor),
-            line.topAnchor.constraint(equalTo: rule.topAnchor),
-            line.bottomAnchor.constraint(equalTo: rule.bottomAnchor),
-        ])
-        return rule
-    }
 }
 
 /// The folder's disclosure mark: a small open chevron, pointing down when the

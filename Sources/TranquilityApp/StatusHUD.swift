@@ -3385,7 +3385,9 @@ final class StatusHUD: NSObject {
         // right-aligned into it, names truncating against it.
         let auxWidth = min(
             Self.gridWidth * GridRowView.auxFraction,
-            shown.map {
+            // A row's id shows only on hover and takes its own width, so only
+            // the reasons shown at rest size the shared column.
+            shown.filter { !$0.auxIsId }.map {
                 ceil(($0.aux as NSString)
                     .size(withAttributes: [.font: GridRowView.auxFont]).width)
             }.max() ?? 0)
@@ -3398,16 +3400,22 @@ final class StatusHUD: NSObject {
         if !CommandLine.arguments.contains("--allow-second-instance") {
             GridOrder.record(arranged.folders.flatMap(\.rows).map(\.id) + arranged.loose.map(\.id))
         }
-        // Inside a folder the rule above each of its rows starts at the
-        // indent, so the folder's rows read as their own column; the rule
-        // that closes a folder is full width (29 Sep, "these lines are a
-        // little jank").
-        func staysInFolder(after index: Int) -> Bool {
-            guard index + 1 < lines.count, case let .row(_, next?) = lines[index + 1] else { return false }
-            switch lines[index] {
-            case let .header(folder, _, _, _): return folder.id == next
-            case let .row(_, folder): return folder == next
+        // NO RULES BETWEEN ROWS (Robert, 30 Sep 2026: "just remove the lines,
+        // keep the grouping the same"). A rule under every row gave each row
+        // the same boundary, so the one boundary that means something, where
+        // a folder starts or ends, read no louder than the rest. The 40pt row
+        // already separates rows; a rule is spent only where the group changes.
+        func group(of line: ProjectLayout.Line) -> String? {
+            switch line {
+            case let .header(folder, _, _, _): return folder.id
+            case let .row(_, folder): return folder
             }
+        }
+        func changesGroup(after index: Int) -> Bool {
+            guard index + 1 < lines.count else { return false }
+            // A folder header always opens a group, even after a collapsed one.
+            if case .header = lines[index + 1] { return true }
+            return group(of: lines[index]) != group(of: lines[index + 1])
         }
         for (index, line) in lines.enumerated() {
             let item: SessionRow
@@ -3416,9 +3424,9 @@ final class StatusHUD: NSObject {
                 let header = folderHeader(folder, lamp: lamp, lit: lit, members: members)
                 waitingRows.addArrangedSubview(header)
                 gridLines.append((header, line))
-                waitingRows.addArrangedSubview(staysInFolder(after: index)
-                    ? FolderMemberView.rule(width: Self.gridWidth)
-                    : hairline(StateLegend.Palette.hairlineSoft))
+                if changesGroup(after: index) {
+                    waitingRows.addArrangedSubview(hairline(StateLegend.Palette.hairlineSoft))
+                }
                 continue
             case let .row(row, _):
                 item = row
@@ -3468,10 +3476,8 @@ final class StatusHUD: NSObject {
                 row.widthAnchor.constraint(equalToConstant: Self.gridWidth).isActive = true
                 gridLines.append((row, line))
             }
-            if index < lines.count - 1 {
-                waitingRows.addArrangedSubview(staysInFolder(after: index)
-                    ? FolderMemberView.rule(width: Self.gridWidth)
-                    : hairline(StateLegend.Palette.hairlineSoft))
+            if changesGroup(after: index) {
+                waitingRows.addArrangedSubview(hairline(StateLegend.Palette.hairlineSoft))
             }
         }
         // The proactive half (ruled 05 Aug addendum): the "+" placard kicks off
