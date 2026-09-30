@@ -250,7 +250,7 @@ extension StatusHUD {
         // hub (names are words, ruled 29 Sep 2026). renderTitle
         // sets the string; this is the fallback style. ONE line since the topic
         // died (10 Aug) — the identity was always the only thing on line one.
-        titleLabel.font = StateLegend.Face.message(14, .medium)
+        titleLabel.font = StateLegend.Face.name(14, light: false)
         titleLabel.textColor = StateLegend.Lens.content.color
         titleLabel.lineBreakMode = .byTruncatingTail
         titleLabel.maximumNumberOfLines = 1
