@@ -150,7 +150,7 @@ extension AppDelegate {
                 announceNext(only: session)
                 if !micGranted {
                     // Said once, on arrival, rather than discovered at the press.
-                    hud.note("The microphone isn't granted: Settings ▸ Privacy ▸ "
+                    hud.note("The microphone isn't granted: Settings › Privacy › "
                              + "Microphone before you can reply.")
                 }
             case "home":

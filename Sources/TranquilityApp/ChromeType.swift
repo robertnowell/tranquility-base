@@ -357,7 +357,7 @@ enum ChromeType {
     /// `StateLegend.Glyph`; this is the same set as characters, because a drill
     /// that checks a hand-copied subset proves nothing about the one you added
     /// yesterday.
-    static let vocabulary: [Character] = ["◌", "◀", "▶", "⚠", "→", "●", "‹", "›", "✓", "✗"]
+    static let vocabulary: [Character] = ["◌", "▶", "⚠", "●", "‹", "›", "✓", "✗"]
 
     /// How far off centre each mark would sit, after correction. The drill
     /// asserts this is ~zero; the log prints it so a regression names itself.

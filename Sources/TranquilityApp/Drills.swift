@@ -1473,7 +1473,7 @@ extension StatusHUD {
             button.performClick(nil)
         }
         let setupArrowRemains = greyed.subviews.compactMap { $0 as? NSButton }.first?
-            .attributedTitle.string.hasSuffix(" →") == true
+            .attributedTitle.string.hasSuffix(" \(StateLegend.Glyph.forward)") == true
 
         // **Is it actually ON SCREEN?**
         //
