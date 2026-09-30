@@ -1,4 +1,5 @@
 import AppKit
+import TranquilityCore
 
 /// The reason Command-V does nothing in this app.
 ///
@@ -46,6 +47,24 @@ enum EditMenu {
             edit.addItem(item)
         }
 
+        // Find and print for the Hub window (hf-o8t.5). Sent to nil like the
+        // rest: the key window's delegate is HubWindow, so these act only
+        // when the Hub window is in front, and do nothing anywhere else.
+        edit.addItem(.separator())
+        let finds: [(String, Selector, String, NSEvent.ModifierFlags)] = [
+            ("Find\u{2026}", #selector(HubWindow.hubFind(_:)), "f", .command),
+            ("Find Next", #selector(HubWindow.hubFindNext(_:)), "g", .command),
+            ("Find Previous", #selector(HubWindow.hubFindPrevious(_:)), "g", [.command, .shift]),
+        ]
+        for (title, action, key, modifiers) in finds {
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
+            item.keyEquivalentModifierMask = modifiers
+            edit.addItem(item)
+        }
+        let file = NSMenu(title: "File")
+        file.addItem(NSMenuItem(title: "Print\u{2026}", action: #selector(HubWindow.hubPrint(_:)),
+                                keyEquivalent: "p"))
+
         // Command-W and Command-Q, for the same reason. The onboarding window
         // is `.titled` and closable, so it has a close box; a window you can
         // only leave with the mouse is the same class of omission as a field
@@ -61,7 +80,7 @@ enum EditMenu {
                                keyEquivalent: "q"))
 
         let main = NSMenu()
-        for submenu in [app, edit, window] {
+        for submenu in [app, file, edit, window] {
             let holder = NSMenuItem(title: submenu.title, action: nil, keyEquivalent: "")
             holder.submenu = submenu
             main.addItem(holder)
