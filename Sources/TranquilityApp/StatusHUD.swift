@@ -3050,9 +3050,13 @@ final class StatusHUD: NSObject {
         guard !face.title.isEmpty else { titleLabel.stringValue = ""; return }
         let truncating = NSMutableParagraphStyle()
         truncating.lineBreakMode = .byTruncatingTail
-        let font = StateLegend.Face.name(14, light: false)
+        // Set exactly as a grid row names the agent (29 Sep 2026): Geist Sans
+        // Light at the row's size and tracking, so the name reads the same on
+        // the card as in the list.
+        let font = StateLegend.Face.name(GridRowView.nameSize, light: true)
         let attributes: [NSAttributedString.Key: Any] = [
             .font: font,
+            .kern: GridRowView.nameSize * GridRowView.nameTracking,
             .foregroundColor: StateLegend.Palette.ink,
             .paragraphStyle: truncating,
         ]
