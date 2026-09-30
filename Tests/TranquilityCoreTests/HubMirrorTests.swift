@@ -163,6 +163,21 @@ final class HubMirrorTests: XCTestCase {
         XCTAssertNil(sent.first { ($0["title"] as? String) == "Orphan" })
     }
 
+    /// 30 Sep: an OpenCode agent's folder is named by the app's 64-hex hash
+    /// of its `ses_` id, and only UUID folders were read, so its pages could
+    /// never reach the hub.
+    func testAnOpenCodeAgentsFolderIsRead() async throws {
+        let oc = AgentSession.id("ses_abc123", provider: "opencode")
+        let dir = tmp.appendingPathComponent("agents/\(oc)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try "<html><head><title>From OpenCode</title></head><body>x</body></html>"
+            .write(to: dir.appendingPathComponent("report.html"), atomically: true, encoding: .utf8)
+        let hub = FakeHub()
+        let report = await mirror(hub).run(docs: true, turns: false)
+        XCTAssertEqual(report.documents, 1, report.note)
+        XCTAssertEqual(hub.last("api/ingest")?["session_id"] as? String, oc)
+    }
+
     /// 28 Sep: `hq-page new` writes the template first and the session fills
     /// it a minute later; the sweep is twenty seconds, so the hub got the
     /// blank page, announced it, and a reader opened it. The placeholders

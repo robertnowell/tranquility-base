@@ -331,6 +331,12 @@ public final class HubMirror: @unchecked Sendable {
 
     static let shortSessionDir = try! NSRegularExpression(pattern: "^[0-9a-f]{8}$", options: .caseInsensitive)
 
+    /// An OpenCode agent's folder: its session id is `ses_…`, which the app
+    /// hashes to 64 hex characters (AgentSession.id). Until 30 Sep only UUID
+    /// folders were read, so an OpenCode agent's pages could never reach the
+    /// hub even once it was told where to write them.
+    static let hashedSessionDir = try! NSRegularExpression(pattern: "^[0-9a-f]{64}$", options: .caseInsensitive)
+
     /// The folders to read, and the session each belongs to.
     ///
     /// A full session id is its own session. A short one (the first eight
@@ -347,7 +353,7 @@ public final class HubMirror: @unchecked Sendable {
         func matches(_ re: NSRegularExpression, _ s: String) -> Bool {
             re.firstMatch(in: s, range: NSRange(s.startIndex..., in: s)) != nil
         }
-        let full = dirs.filter { matches(sessionDir, $0) }
+        let full = dirs.filter { matches(sessionDir, $0) || matches(hashedSessionDir, $0) }
         var out = full.sorted().map { (dir: $0, session: $0) }
         for dir in dirs.sorted() where matches(shortSessionDir, dir) {
             let path = root + "/" + dir

@@ -286,11 +286,18 @@ public enum SkillManifest {
     /// Every harness on this Mac, from one source, plus the record of where
     /// the source was so the next launch can find it with no healthy link.
     public static func repairAll(record recordURL: URL = recordedDirectoryURL,
-                                 bundled: String? = bundledDirectory)
+                                 bundled: String? = bundledDirectory,
+                                 desired: String? = nil)
         -> [(target: Target, outcome: RepairOutcome)] {
         let present = detected()
         guard !present.isEmpty else { return [] }
-        guard let source = source(for: present.map(\.skillsDir), record: recordURL, bundled: bundled) else {
+        // The running app's desired directory (RulesStore), when known, is the
+        // source, full stop. Learning it from an existing link is how an old
+        // copy kept winning; that order remains only for a build that could
+        // not stage its rules.
+        let learned = desired.map { directoryHoldsEverySkill($0) ? $0 : nil }
+            ?? source(for: present.map(\.skillsDir), record: recordURL, bundled: bundled)
+        guard let source = learned else {
             return present.map { ($0, .unavailable("cannot locate the skills directory")) }
         }
         let outcomes = present.map { ($0, repair(target: $0, source: source)) }
@@ -340,6 +347,46 @@ public enum SkillManifest {
             catch { return .unavailable("could not link \(at): \(error.localizedDescription)") }
         }
         return linked + retired > 0 ? .repaired(linked: linked, retired: retired) : .healthy
+    }
+
+    // MARK: - OpenCode's rules plugin
+
+    /// OpenCode has no Claude-style hooks, so its sessions never received the
+    /// page rules at all (none of this Mac's twenty OpenCode agent folders
+    /// held a single report on 30 Sep). It auto-loads any plugin in
+    /// `~/.config/opencode/plugins/`; ours runs the same session-start hook
+    /// the other harnesses run and adds its text to the system prompt.
+    public static let openCodePluginName = "tranquility-rules.js"
+
+    public static var openCodePluginsDir: URL {
+        home.appendingPathComponent(".config/opencode/plugins", isDirectory: true)
+    }
+
+    /// Link `~/.config/opencode/plugins/tranquility-rules.js` at `source`.
+    /// Only where OpenCode is installed; a foreign file at the name is moved
+    /// aside, never deleted.
+    public static func repairOpenCodePlugin(source: String?, plugins: URL = openCodePluginsDir,
+                                            present: Bool = openCode.isPresent) -> RepairOutcome {
+        guard present else { return .healthy }
+        guard let source else { return .unavailable("this build carries no OpenCode rules") }
+        let fm = FileManager.default
+        let want = source + "/" + openCodePluginName
+        guard fm.fileExists(atPath: want) else { return .unavailable("no \(openCodePluginName) at \(source)") }
+        do { try fm.createDirectory(at: plugins, withIntermediateDirectories: true) }
+        catch { return .unavailable("could not create \(plugins.path)") }
+        let at = plugins.appendingPathComponent(openCodePluginName).path
+        var retired = 0
+        if let kind = try? fm.attributesOfItem(atPath: at)[.type] as? FileAttributeType {
+            if kind == .typeSymbolicLink, resolvedLink(at) == want { return .healthy }
+            if kind == .typeSymbolicLink { try? fm.removeItem(atPath: at) }
+            else {
+                guard retire(at) else { return .unavailable("could not move aside \(at)") }
+                retired = 1
+            }
+        }
+        do { try fm.createSymbolicLink(atPath: at, withDestinationPath: want) }
+        catch { return .unavailable("could not link \(at): \(error.localizedDescription)") }
+        return .repaired(linked: 1, retired: retired)
     }
 
     // MARK: - Helpers

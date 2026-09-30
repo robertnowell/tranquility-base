@@ -742,6 +742,7 @@ do {
                 switch s.state {
                 case .installed: state = "ok"
                 case .brokenPath(let p): state = "BROKEN — \(p) does not exist"
+                case .notDesired(let p): state = "OLD COPY — \(p)"
                 case .staleMatcher(let found):
                     state = "STALE MATCHER — fires on \(found ?? "everything"), "
                         + "should be \(s.hook.matcher ?? "everything")"
@@ -1212,7 +1213,13 @@ case "reconcile":
     }
     try? hooksDir.write(to: HookManifest.recordedDirectoryURL,
                         atomically: true, encoding: .utf8)
-    let outcomes = HookManifest.repairAll()
+    // The app reads the rules it ships (RulesStore). A developer checkout is
+    // read instead only while it contains the installed app's build; once the
+    // app moves past it, the app's own rules win again (30 Sep: a checkout 96
+    // commits behind kept Codex on old hooks).
+    try? FileManager.default.createDirectory(at: RulesStore.root, withIntermediateDirectories: true)
+    try? cwd.write(to: RulesStore.devSourceURL(), atomically: true, encoding: .utf8)
+    let outcomes = HookManifest.repairAll(desired: hooksDir)
     guard !outcomes.isEmpty else {
         print("no agent directories found (~/.claude, ~/.codex); nothing to wire")
         exit(1)
@@ -1230,6 +1237,8 @@ case "reconcile":
         }
     }
     print("restart your agent sessions to load them")
+    print("the app keeps using this checkout while it contains the installed build; "
+          + "remove \(RulesStore.devSourceURL().path) to use the app's own rules now")
     if failed { exit(1) }
 
     case "install-skills":
@@ -1252,7 +1261,9 @@ case "reconcile":
         exit(1)
     }
     try? skillsDir.write(to: SkillManifest.recordedDirectoryURL, atomically: true, encoding: .utf8)
-    let outcomes = SkillManifest.repairAll()
+    try? FileManager.default.createDirectory(at: RulesStore.root, withIntermediateDirectories: true)
+    try? cwd.write(to: RulesStore.devSourceURL(), atomically: true, encoding: .utf8)
+    let outcomes = SkillManifest.repairAll(desired: skillsDir)
     guard !outcomes.isEmpty else {
         print("no agent directories found (~/.claude, ~/.codex, ~/.config/opencode); nothing to link")
         exit(1)

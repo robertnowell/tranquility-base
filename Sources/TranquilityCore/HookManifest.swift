@@ -247,6 +247,13 @@ public enum HookManifest {
         /// the contract; a matcher that drifts from it is a hook that runs at
         /// the wrong moments and reports itself healthy while doing so.
         case staleMatcher(found: String?)
+        /// Wired, runnable and correctly matched, but at a script OTHER than
+        /// the one the running app ships. 30 Sep 2026: Codex's hooks on the
+        /// main Mac ran from a checkout 96 commits behind the app and every
+        /// check above passed, because "the file exists" was the only test of
+        /// currency. Health is now identity with the desired directory (see
+        /// RulesStore), not existence.
+        case notDesired(String)
         case missing
     }
 
@@ -266,7 +273,8 @@ public enum HookManifest {
     /// "no hooks installed" and "I could not tell" are different answers, and only one
     /// of them should make an app shout at you.
     public static func audit(settings url: URL = settingsURL,
-                             expecting wanted: [Hook] = expected) -> [Status]? {
+                             expecting wanted: [Hook] = expected,
+                             desired: String? = nil) -> [Status]? {
         // ABSENT is not UNREADABLE, and conflating them cost a whole install
         // path. A user whose Claude Code has never written settings.json got
         // `nil` here, which `repair` turned into "settings unreadable" and
@@ -307,16 +315,21 @@ public enum HookManifest {
                     .contains { ($0["command"] as? String)?.contains(hook.marker) == true }
             }
             let found = owner?["matcher"] as? String
-            return found == hook.matcher
-                ? Status(hook: hook, state: .installed)
-                : Status(hook: hook, state: .staleMatcher(found: found))
+            guard found == hook.matcher else {
+                return Status(hook: hook, state: .staleMatcher(found: found))
+            }
+            if let desired, executable != (desired as NSString).appendingPathComponent(hook.script) {
+                return Status(hook: hook, state: .notDesired(executable))
+            }
+            return Status(hook: hook, state: .installed)
         }
     }
 
     /// One line for a menu or a log: nil when everything is wired and reachable.
     public static func problemSummary(settings url: URL = settingsURL,
-                                      expecting wanted: [Hook] = expected) -> String? {
-        guard let statuses = audit(settings: url, expecting: wanted)
+                                      expecting wanted: [Hook] = expected,
+                                      desired: String? = nil) -> String? {
+        guard let statuses = audit(settings: url, expecting: wanted, desired: desired)
         else { return "hooks: settings unreadable" }
         let broken = statuses.filter { if case .brokenPath = $0.state { return true } else { return false } }
         let missing = statuses.filter { $0.state == .missing }
@@ -326,7 +339,10 @@ public enum HookManifest {
         let unquoted = statuses.filter {
             if case .needsQuoting = $0.state { return true } else { return false }
         }
-        if broken.isEmpty, missing.isEmpty, stale.isEmpty, unquoted.isEmpty { return nil }
+        let elsewhere = statuses.filter {
+            if case .notDesired = $0.state { return true } else { return false }
+        }
+        if broken.isEmpty, missing.isEmpty, stale.isEmpty, unquoted.isEmpty, elsewhere.isEmpty { return nil }
         var parts: [String] = []
         if !broken.isEmpty { parts.append("\(broken.count) pointing at a missing file") }
         if !missing.isEmpty { parts.append("\(missing.count) not installed") }
@@ -336,6 +352,7 @@ public enum HookManifest {
         if !unquoted.isEmpty {
             parts.append("\(unquoted.count) the harness cannot run")
         }
+        if !elsewhere.isEmpty { parts.append("\(elsewhere.count) running an old copy") }
         return "hooks: " + parts.joined(separator: ", ")
     }
 
@@ -403,8 +420,9 @@ public enum HookManifest {
     /// death this manifest exists to catch would be REINSTALLED.
     public static func repair(settings url: URL = settingsURL,
                               record recordURL: URL = recordedDirectoryURL,
-                              expecting wanted: [Hook] = expected) -> RepairOutcome {
-        guard let statuses = audit(settings: url, expecting: wanted) else {
+                              expecting wanted: [Hook] = expected,
+                              desired: String? = nil) -> RepairOutcome {
+        guard let statuses = audit(settings: url, expecting: wanted, desired: desired) else {
             return .unavailable("settings unreadable")
         }
         if statuses.allSatisfy({ $0.state == .installed }) { return .healthy }
@@ -437,6 +455,13 @@ public enum HookManifest {
         // Last: our own bundle. See `bundledDirectory` for why it ranks here
         // and not first.
         if let bundled = bundledDirectory { candidates.append(bundled) }
+        // The running app's desired directory, when known, is the ONLY
+        // candidate: learning the directory from an installed entry is how a
+        // stale checkout kept winning (30 Sep). The learned order below is the
+        // fallback for a build that could not stage its rules.
+        if let desired {
+            candidates = [desired]
+        }
         guard let directory = candidates.first(where: directoryHoldsEveryScript) else {
             return .unavailable("cannot locate the hooks directory — "
                 + "run `tbase install-hooks` from the repo once")  // unreachable from a bundled build
@@ -502,7 +527,7 @@ public enum HookManifest {
         try? directory.write(to: recordURL, atomically: true, encoding: .utf8)
 
         // The receipt is a re-audit, not the absence of a throw.
-        guard problemSummary(settings: url, expecting: wanted) == nil else {
+        guard problemSummary(settings: url, expecting: wanted, desired: desired) == nil else {
             return .unavailable("rewrote settings and the audit still fails — "
                 + "backup at settings.json.tbase-backup")
         }
@@ -579,11 +604,12 @@ public enum HookManifest {
     /// told their Codex hooks are broken on a machine that has never run
     /// Codex.
     public static func repairAll(
-        record recordURL: URL = recordedDirectoryURL
+        record recordURL: URL = recordedDirectoryURL,
+        desired: String? = nil
     ) -> [(harness: Harness, outcome: RepairOutcome)] {
         detected().map { harness in
             (harness, repair(settings: harness.settingsURL, record: recordURL,
-                             expecting: harness.expected))
+                             expecting: harness.expected, desired: desired))
         }
     }
 
