@@ -6,6 +6,14 @@
     <description>Updates for Tranquility Base.</description>
     <language>en</language>
     <item>
+      <title>Version 0.3.1444</title>
+      <sparkle:version>1444</sparkle:version>
+      <sparkle:shortVersionString>0.3.1444</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <pubDate>Wed, 30 Sep 2026 04:00:05 +0000</pubDate>
+      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1444-ace66fd3d/TranquilityBase-0.3.1444.dmg" type="application/octet-stream" length="45288648" sparkle:edSignature="dtoGRtHmaz3DRwP1D9JtNpOmy8thTPhUp7waVsz0ShDEH6988Yx8IznwXQqu4yflL6EPLgHwXFWL9dvd/CMEAw==" />
+    </item>
+    <item>
       <title>Version 0.3.1443</title>
       <sparkle:version>1443</sparkle:version>
       <sparkle:shortVersionString>0.3.1443</sparkle:shortVersionString>
@@ -77,16 +85,8 @@
       <pubDate>Wed, 30 Sep 2026 00:27:15 +0000</pubDate>
       <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1431-46d2661dd/TranquilityBase-0.3.1431.dmg" type="application/octet-stream" length="45199744" sparkle:edSignature="FDsV2suuYMGW4TpIPTHwtY8cRkcGBcnjEUyZcXFSbBB+TLS7OaOG3bf75SezbEtg3HdipXLRBRBwUFZ3LFA/BA==" />
     </item>
-    <item>
-      <title>Version 0.3.1429</title>
-      <sparkle:version>1429</sparkle:version>
-      <sparkle:shortVersionString>0.3.1429</sparkle:shortVersionString>
-      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <pubDate>Wed, 30 Sep 2026 00:08:23 +0000</pubDate>
-      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1429-f2c92cde5/TranquilityBase-0.3.1429.dmg" type="application/octet-stream" length="45199868" sparkle:edSignature="2IrM0ASsGNBfRUcTpVVCpyBxIU+t0gd/eUORLPJrl/V8se0OMdvsiAcZ9K/ksw4YNqrfIN5X1r4upxNwBoIrDQ==" />
-    </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: cXEkzSuF+JHEiNnVapKJ0OkkDBSN29bYAR6MkV08WJsgK0iiu0SARkjnR9va7JXManG8OaFLeIdPYNVasc2LCA==
+edSignature: gJhblSXN8cNCrUhdWzQKKISKzBlez4Dz0Vc8VIEaE3HWlyGoOCMxjcRTgAF7sAHgUCtlEcT3yng3IbbT3ihxAQ==
 length: 6457
 -->
