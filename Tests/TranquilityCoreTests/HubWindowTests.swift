@@ -160,6 +160,10 @@ final class HubDoorLinkTests: XCTestCase {
         let file = dir.appendingPathComponent("hq/hub-window")
         HubWindow.announce(bundle: URL(fileURLWithPath: "/Applications/Tranquility Base.app"), to: file)
         XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), "/Applications/Tranquility Base.app")
+        // A bare debug binary's "bundle" is its build folder: it must not
+        // take the marker from the installed app.
+        HubWindow.announce(bundle: URL(fileURLWithPath: "/tmp/wt/.build/debug"), to: file)
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), "/Applications/Tranquility Base.app")
     }
 }
 
