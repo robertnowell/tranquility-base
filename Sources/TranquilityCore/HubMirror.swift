@@ -327,6 +327,61 @@ public final class HubMirror: @unchecked Sendable {
         var slug: String? = nil
     }
 
+    // MARK: - Health: what was written and never delivered
+
+    /// Pages an agent wrote under the agents tree (as recorded by the artifact
+    /// hook) that the hub has not received, `grace` after they were written.
+    ///
+    /// 30 Sep 2026: an agent wrote fourteen reports into a folder this mirror
+    /// did not read, and nothing anywhere noticed for six days, because every
+    /// stage looked healthy on its own. This is the end-to-end measure: what
+    /// was written against what was delivered. Drafts, hubs and anything
+    /// outside the agents tree are not counted (those are not sent as files).
+    public func undeliveredPages(window: TimeInterval = 86_400, grace: TimeInterval = 600,
+                                 now: Date = Date()) -> [String] {
+        guard let artifactRoot else { return [] }
+        let fm = FileManager.default
+        guard let records = try? fm.contentsOfDirectory(atPath: artifactRoot) else { return [] }
+        let newest = Int64((now.timeIntervalSince1970 - grace) * 1000)
+        let oldest = Int64((now.timeIntervalSince1970 - window) * 1000)
+        let prefix = agentsRoot.hasSuffix("/") ? agentsRoot : agentsRoot + "/"
+        var paths = Set<String>()
+        for record in records where !record.hasPrefix(".") {
+            guard let text = try? String(contentsOfFile: artifactRoot + "/" + record, encoding: .utf8) else { continue }
+            for line in text.split(separator: "\n") {
+                let parts = line.split(separator: "\t", maxSplits: 1)
+                guard parts.count == 2, let ms = Int64(parts[0]), ms >= oldest, ms <= newest else { continue }
+                let path = String(parts[1])
+                guard path.hasPrefix(prefix), path.hasSuffix(".html") else { continue }
+                let rel = path.dropFirst(prefix.count).split(separator: "/")
+                guard rel.count >= 2, rel.last != "index.html" || rel.count > 2,
+                      !rel.contains(where: { $0.hasPrefix(".") || $0.hasPrefix("_") }) else { continue }
+                paths.insert(path)
+            }
+        }
+        let sent = sync { state.sent }
+        return paths.sorted().filter { path in
+            guard let html = try? String(contentsOfFile: path, encoding: .utf8) else { return false }
+            if Self.isDraft(html) || Self.isGeneratedIndex(html) { return false }
+            return !sent.contains(Self.sha256(html))
+        }
+    }
+
+    /// Tell the hub how this Mac's agent rules and delivery stand. The hub
+    /// alarms on it (hq-app /api/cron/fleet). A hub that does not know the
+    /// route yet answers 404, which is not a failure worth saying.
+    @discardableResult
+    public func postHealth(_ reportJSON: Data) async -> (status: Int, undelivered: [String]) {
+        let undelivered = undeliveredPages()
+        var body = (try? JSONSerialization.jsonObject(with: reportJSON) as? [String: Any]) ?? [:]
+        body["device"] = device
+        body["undelivered"] = ["count": undelivered.count,
+                               "samples": undelivered.prefix(5).map {
+                                   String($0.dropFirst(agentsRoot.count).drop(while: { $0 == "/" })) }]
+        let status = (try? await transport.post("api/ingest/health", json: body))?.status ?? 0
+        return (status, undelivered)
+    }
+
     static let sessionDir = try! NSRegularExpression(pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", options: .caseInsensitive)
 
     static let shortSessionDir = try! NSRegularExpression(pattern: "^[0-9a-f]{8}$", options: .caseInsensitive)

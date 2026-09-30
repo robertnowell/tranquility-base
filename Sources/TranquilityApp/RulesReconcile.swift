@@ -21,7 +21,7 @@ enum RulesReconcile {
     /// problem does not say it again every hour.
     private static var lastNote: String?
 
-    static func run(trigger: String, note: @escaping (String) -> Void) {
+    static func run(trigger: String, note: @escaping @MainActor (String) -> Void) {
         // 1. Stage the running app's rules into the store.
         var fingerprint: String?
         if let resources = Bundle.main.resourceURL {
@@ -49,18 +49,23 @@ enum RulesReconcile {
         ])
 
         var said: [String] = []
+        // What this run found, per harness, for the hub (step 7).
+        var hookStates: [String: String] = [:]
+        var skillStates: [String: String] = [:]
 
         // 2. Hooks, every harness.
         var repairedHooks: [String] = []
         for (harness, outcome) in HookManifest.repairAll(desired: desired?.hooks) {
             switch outcome {
             case .healthy:
+                hookStates[harness.id] = "healthy"
                 Track.record("hooks_state", ["harness": .token(harness.id), "state": "healthy"])
             case .repaired(let rewired, let added):
                 Permissions.log("rules (\(trigger)): \(harness.id) hooks repaired, \(rewired) rewired, \(added) added")
                 Track.record("hooks_state", ["harness": .token(harness.id), "state": "repaired",
                                              "rewired": .int(rewired), "added": .int(added)])
                 repairedHooks.append(harness.label)
+                hookStates[harness.id] = "repaired"
                 // Codex trusts a hook by its definition: a repointed hook is
                 // skipped until approved once. Say so, rather than let it look
                 // installed and do nothing.
@@ -72,6 +77,7 @@ enum RulesReconcile {
                 Track.record("hooks_state", ["harness": .token(harness.id), "state": "not_repaired",
                                              "reason": .prose(reason)])
                 said.append("\(harness.label) hooks need attention: \(reason)")
+                hookStates[harness.id] = "not_repaired: " + reason
             }
         }
 
@@ -79,17 +85,20 @@ enum RulesReconcile {
         for (target, outcome) in SkillManifest.repairAll(desired: desired?.skills) {
             switch outcome {
             case .healthy:
+                skillStates[target.id] = "healthy"
                 Track.record("skills_state", ["harness": .token(target.id), "state": "healthy"])
             case .repaired(let linked, let retired):
                 Permissions.log("rules (\(trigger)): \(target.id) skills linked, \(linked) linked, "
                     + "\(retired) copies moved aside")
                 Track.record("skills_state", ["harness": .token(target.id), "state": "repaired",
                                               "linked": .int(linked), "retired": .int(retired)])
+                skillStates[target.id] = "repaired"
             case .unavailable(let reason):
                 Permissions.log("rules (\(trigger)): \(target.id) skills NOT linked: \(reason)")
                 Track.record("skills_state", ["harness": .token(target.id), "state": "not_repaired",
                                               "reason": .prose(reason)])
                 said.append("\(target.label) skills need attention: \(reason)")
+                skillStates[target.id] = "not_repaired: " + reason
             }
         }
 
@@ -144,5 +153,45 @@ enum RulesReconcile {
             note(line)
         }
         lastNote = line.isEmpty ? nil : line
+
+        // 7. Tell the hub, so a Mac on old rules or with reports that never
+        //    arrived is seen within the hour, not after six days (30 Sep).
+        guard let mirror = HubMirror.shared else { return }
+        var approvals: [String: String] = [:]
+        for harness in HookManifest.detected() where harness.approvalConfigURL != nil {
+            switch HookManifest.approval(for: harness) {
+            case .granted: approvals[harness.id] = "granted"
+            case .pending: approvals[harness.id] = "pending"
+            case .unknown: approvals[harness.id] = "unknown"
+            case .notRequired: break
+            }
+        }
+        let report: [String: Any] = [
+            "edition": Bundle.main.bundleIdentifier ?? "unknown",
+            "app_commit": RulesStore.appCommit ?? "",
+            "rules_fingerprint": desired?.fingerprint ?? fingerprint ?? "",
+            "rules_source": desired == nil ? "learned" : (desired!.fromCheckout ? "checkout" : "store"),
+            "hooks": hookStates, "skills": skillStates, "approvals": approvals,
+            "stale_personal_skills": stale.map { ($0 as NSString).lastPathComponent },
+            "trigger": trigger,
+        ]
+        let body = (try? JSONSerialization.data(withJSONObject: report)) ?? Data("{}".utf8)
+        Task {
+            let (status, undelivered) = await mirror.postHealth(body)
+            do {
+                Permissions.log("rules (\(trigger)): health sent, HTTP \(status), "
+                    + "\(undelivered.count) page(s) written and not delivered")
+                if !undelivered.isEmpty {
+                    let line = "\(undelivered.count) report(s) your agents wrote have not reached the hub, "
+                        + "for example " + (undelivered.first.map { ($0 as NSString).lastPathComponent } ?? "") + "."
+                    if line != lastUndeliveredNote { note(line) }
+                    lastUndeliveredNote = line
+                } else {
+                    lastUndeliveredNote = nil
+                }
+            }
+        }
     }
+
+    private static var lastUndeliveredNote: String?
 }
