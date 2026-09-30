@@ -2535,7 +2535,7 @@ final class StatusHUD: NSObject {
         // Part of the baseline for the same reason the hint's font is: the empty
         // room's 17pt centred sentence is the only face that changes either, so
         // a state that never mentions them must not inherit them.
-        bodyLabel.font = StateLegend.Face.message(12)
+        bodyLabel.font = StateLegend.Face.brief
         bodyLabel.alignment = .natural
         // The ink is a BODY ATTRIBUTE, so it belongs to the baseline: the line
         // above writes a plain string and would otherwise erase the read-along
@@ -4290,7 +4290,7 @@ final class StatusHUD: NSObject {
                                 range: spokenRange)
         attributed.addAttribute(Self.spokenMark, value: true, range: spokenRange)
         attributed.addAttribute(
-            .font, value: StateLegend.Face.message(12), range: full)
+            .font, value: StateLegend.Face.brief, range: full)
         bodyLabel.attributedStringValue = attributed
 
         // The cursor just painted, NOT `inkBrightLength`. That property walks
