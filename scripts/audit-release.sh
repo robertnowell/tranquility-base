@@ -237,6 +237,7 @@ pass "no credential-shaped files in the app bundle"
 for resource in \
   AppIcon.icns dispatched.wav listening.wav needs-you.wav returned.wav \
   Fonts/GeistMono-Light.ttf Fonts/GeistMono-SemiBold.ttf Fonts/OFL-GeistMono.txt \
+  Fonts/Geist-Light.ttf Fonts/Geist-Regular.ttf Fonts/OFL-Geist.txt \
   hooks/artifact-hook.sh hooks/tbase-hook.sh hooks/visual-output-hook.sh; do
   [ -f "$APP/Contents/Resources/$resource" ] \
     || fail "required resource missing: $resource"

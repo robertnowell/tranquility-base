@@ -557,6 +557,15 @@ enum StateLegend {
         static func message(_ size: CGFloat, _ weight: NSFont.Weight = .regular) -> NSFont {
             .systemFont(ofSize: size, weight: weight)
         }
+        /// An agent's NAME: the grid row and the card's title. Geist Sans,
+        /// shipped in the bundle beside Geist Mono so a name and a label are
+        /// one family (Robert chose "geist light", 29 Sep 2026, from eight
+        /// rendered options). Light for rows, Regular for the title. The
+        /// system sans at the same weight when the bundle has no fonts (a
+        /// `swift run` from a checkout).
+        static func name(_ size: CGFloat, light: Bool) -> NSFont {
+            ChromeType.sans(ofSize: size, light: light)
+        }
     }
 
     /// The placard face: the state's own label, one step up in weight from the

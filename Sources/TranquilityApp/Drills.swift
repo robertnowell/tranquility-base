@@ -2174,7 +2174,7 @@ extension StatusHUD {
             // is bold. The panel broke this quietly for the grid's whole
             // life and nobody noticed until it was asked to carry meaning.
             ("nothingIsBold", built.allSatisfy {
-                $0.nameLabel.font == StateLegend.Face.message(13, .regular) }),
+                $0.nameLabel.font == StateLegend.Face.name(13, light: true) }),
             ("unreadIsBrightest", unreadL > openedL && unreadL > idleL),
             // Idle and opened rest at ONE level — "the idle sessions should
             // not be brighter than read active sessions" (16 Aug). Equality

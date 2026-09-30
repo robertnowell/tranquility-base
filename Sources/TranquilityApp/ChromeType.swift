@@ -93,6 +93,17 @@ enum ChromeType {
         return "Berkeley Mono"
     }()
 
+    /// Geist Sans for names, from the same bundle folder as the mono. The
+    /// system sans at the matching weight when it is not there.
+    static func sans(ofSize size: CGFloat, light: Bool) -> NSFont {
+        _ = preferredFamily  // registers the bundled faces once
+        if ProcessInfo.processInfo.environment["TB_MONO"] != "system",
+           let font = NSFont(name: light ? "Geist-Light" : "Geist-Regular", size: size) {
+            return font
+        }
+        return .systemFont(ofSize: size, weight: light ? .light : .regular)
+    }
+
     /// Register the faces that ship in Contents/Resources/Fonts with CoreText,
     /// process-scoped. True when at least one registered. Idempotent in effect:
     /// a second registration of the same file fails harmlessly and the face is
