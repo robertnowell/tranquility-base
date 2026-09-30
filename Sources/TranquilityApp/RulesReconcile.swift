@@ -120,6 +120,21 @@ enum RulesReconcile {
                                           "reason": .prose(reason)])
         }
 
+        // 6. A person's own skills that still state a retired rule: named,
+        //    never rewritten (30 Sep: a personal deep-research skill told
+        //    agents to file reports under the short id).
+        let stale = RulesStore.skillsStatingRetiredRules(
+            in: SkillManifest.detected().map(\.skillsDir),
+            ours: Set(SkillManifest.expected.map(\.name)))
+        if !stale.isEmpty {
+            Permissions.log("rules (\(trigger)): skills stating a retired rule: " + stale.joined(separator: ", "))
+            Track.record("rules_state", ["trigger": .token(trigger), "stale_personal_skills": .int(stale.count)])
+            said.append("\(stale.count) of your own skill(s) still state an old page rule: "
+                + stale.map { ($0 as NSString).lastPathComponent }.joined(separator: ", ")
+                + ". The app does not change them; update or remove them.")
+        }
+        RulesStore.pruneSeen()
+
         if !repairedHooks.isEmpty {
             said.insert("Agent hooks updated for " + repairedHooks.joined(separator: " and ")
                 + ". New sessions pick them up; running ones on their next message.", at: 0)

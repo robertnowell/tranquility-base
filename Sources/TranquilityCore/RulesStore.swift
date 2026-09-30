@@ -183,6 +183,57 @@ public enum RulesStore {
         for stale in others.dropFirst(max(0, keep - 1)) { try? fm.removeItem(at: stale) }
     }
 
+    // MARK: - Rules that were retired
+
+    /// Phrases from rules that were retired, which no text an agent reads may
+    /// carry. One list, read by the consistency test (for what ships) and by
+    /// the reconcile (for skills a person installed themselves), so the two
+    /// cannot disagree about what "stale" means.
+    public static let retiredPhrases = [
+        "first 8 characters", "first eight characters of your session",
+        "first dash-separated piece", "agents/SHORT", "data-tb-agent=\"SHORT\"",
+    ]
+
+    /// Skills in these folders that are NOT ours and still state a retired
+    /// rule. Reported, never rewritten: a person's own skill is theirs.
+    public static func skillsStatingRetiredRules(in dirs: [URL], ours: Set<String>) -> [String] {
+        let fm = FileManager.default
+        var hits: [String] = []
+        for dir in dirs {
+            guard let names = try? fm.contentsOfDirectory(atPath: dir.path) else { continue }
+            for name in names.sorted() where !ours.contains(name) && !name.hasPrefix(".") {
+                let skill = dir.appendingPathComponent(name).appendingPathComponent("SKILL.md")
+                guard let text = try? String(contentsOf: skill, encoding: .utf8) else { continue }
+                if retiredPhrases.contains(where: { text.range(of: $0, options: .caseInsensitive) != nil }) {
+                    hits.append(dir.appendingPathComponent(name).path)
+                }
+            }
+        }
+        return hits
+    }
+
+    // MARK: - Per-session records
+
+    /// Where visual-output-hook.sh records which rules version each session
+    /// was given, so tbase-hook can refresh a running session when it changes.
+    public static func seenDirectory(in root: URL = root) -> URL {
+        root.appendingPathComponent("seen", isDirectory: true)
+    }
+
+    /// Drop records for sessions untouched for `days`. Tiny files, but one per
+    /// session forever is still forever.
+    public static func pruneSeen(in root: URL = root, olderThan days: Double = 30) {
+        let fm = FileManager.default
+        let dir = seenDirectory(in: root)
+        guard let names = try? fm.contentsOfDirectory(atPath: dir.path) else { return }
+        let cutoff = Date().addingTimeInterval(-days * 86_400)
+        for name in names {
+            let url = dir.appendingPathComponent(name)
+            let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+            if let modified, modified < cutoff { try? fm.removeItem(at: url) }
+        }
+    }
+
     // MARK: - A developer's checkout
 
     /// Where `tbase install-hooks` / `install-skills` record a checkout that

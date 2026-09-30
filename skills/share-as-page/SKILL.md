@@ -157,25 +157,12 @@ Copy the template to `<project>/index.html`, then:
   <meta name="intranet:status" content="<draft|final|shipped>">
   <meta name="intranet:visibility" content="<local|hosted>">
   ```
-- **Close the page with the agent footer — mandatory on every HQ page**, same footing as the
-  intranet metadata. A page without it is orphaned: found in a browser tab weeks later with no
-  way back to the agent that made it, or to the rest of that agent's work. You already have
-  everything it needs — your full session id is in your own scratchpad and transcript paths,
-  `SHORT` is its first 8 characters, and the hub address is computable from `SHORT` alone.
-  Write it yourself as the last element inside `<body>`; do not wait to be given it:
-  ```html
-  <footer data-tb-agent="SHORT" style="margin-top:64px;padding-top:20px;
-    border-top:1px solid #ddd8cc;font:13px/1.5 ui-monospace,Menlo,monospace;color:#8f8a7c;
-    display:flex;flex-wrap:wrap;gap:10px;align-items:center">
-    <div style="flex:1;min-width:220px">Created by <b>WHAT THIS SESSION DID</b> &middot; session SHORT &middot; D MON YYYY</div>
-    <a href="file:///Users/USER/Documents/agents/SHORT/index.html" style="text-decoration:none;color:#5d5a51;border:1px solid #ddd8cc;padding:7px 13px;border-radius:7px;font-weight:640">Open hub</a>
-    <a href="tranquilitybase://discuss?session=FULL_SESSION_ID&amp;ref=ABSOLUTE_PAGE_PATH" style="text-decoration:none;background:#1f4f8f;color:#fbfaf8;padding:8px 14px;border-radius:7px;font-weight:640">Discuss with agent</a>
-  </footer>
-  ```
-  The `data-tb-agent` attribute is what makes this safe to write yourself: the stamping hook
-  replaces its own block and never touches a footer somebody else wrote, so writing it means
-  one footer whether or not the hook ever sees the write. Omitting the attribute is what
-  produces two.
+- **Do not write the agent footer yourself.** Every page written under your agent directory gets
+  it stamped by the app's hook after the write (session id, Open hub, Discuss with agent), with
+  the owner read from the directory, which is your FULL session id. A hand-written footer is
+  what produces two, and the old hand-written one pointed at a short 8-character folder that
+  nothing uploads (30 Sep 2026: fourteen reports stranded that way). A page kept outside the
+  agents tree gets no footer; link it from a page inside the tree instead.
 - Set the `:root` tokens to the resolved brand values.
 - Replace the `<title>`, nameplate (`<!-- BRAND NAME -->`, optional `<!-- LOGO -->`), the
   `<!-- KICKER -->` (section label, e.g. "Research Brief"), `<!-- TITLE -->`, `<!-- DEK -->`
