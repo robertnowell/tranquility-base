@@ -37,6 +37,14 @@ public final class HubWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, 
     /// hub's own session (Clerk) and reports only its changes.
     public var onSignedOut: () -> Void = {}
     public var onSignedIn: (_ user: String) -> Void = { _ in }
+    /// A one-time sign-in address for this window, from the app, when the
+    /// Mac is connected; nil when it is not (30 Sep, Robert: one account, so
+    /// a connected Mac never shows the hub's sign-in page). Given the hub
+    /// path the window should land on. See HubWebSession.
+    public var silentSignIn: (_ next: String) async -> URL? = { _ in nil }
+    /// When the window last asked, so a ticket that fails is not retried in a
+    /// loop: once a minute at most.
+    private var lastSilentAttempt: Date?
     /// The pairing code THIS app invented for the Connect it is waiting on,
     /// or nil. Set by the app; read when the hub's Connect page loads here.
     public var ownConnectCode: () -> String? = { nil }
@@ -345,11 +353,28 @@ public final class HubWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, 
         case let (.some(.some(_)), nil):
             log("hub window: signed out in the hub; signing the app out")
             onSignedOut()
+        case (_, nil):
+            // Nobody signed in, and nobody just signed out: a window whose web
+            // store is empty on a Mac that may well be connected. Sign it in
+            // as the Mac's account rather than show a sign-in page.
+            signInSilently()
         case let (_, .some(id)) where before != .some(.some(id)):
             log("hub window: signed in to the hub")
             onSignedIn(id)
         default:
             break
+        }
+    }
+
+    private func signInSilently() {
+        if let last = lastSilentAttempt, Date().timeIntervalSince(last) < 60 { return }
+        lastSilentAttempt = Date()
+        let next = HubWebSession.landing(from: webView?.url)
+        Task { @MainActor [weak self] in
+            guard let self, let url = await self.silentSignIn(next) else { return }
+            guard self.isHub(url) else { self.log("hub window: a sign-in address off the hub was refused"); return }
+            self.log("hub window: nobody signed in here; signing in as this Mac's account")
+            self.webView?.load(URLRequest(url: url))
         }
     }
 
