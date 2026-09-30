@@ -26,7 +26,12 @@ export TB_HOOK_PATH="${BASH_SOURCE[0]:-$0}"
 
 set -u
 
-SUPPORT_DIR="$HOME/Library/Application Support/VoiceDispatch"
+# The same override the app's own code honours (QueueStore.supportDirectory).
+# Without it, a drill that runs a real session against a scratch store still
+# had that session's hook write to the REAL one: the live-TUI drill put 2,255
+# events from 239 fixture sessions into the user's queue by 30 Sep, and the
+# hub mirror carried 236 of them into the hub as agents.
+SUPPORT_DIR="${VOICE_DISPATCH_SUPPORT_DIR:-$HOME/Library/Application Support/VoiceDispatch}"
 SPOOL="$SUPPORT_DIR/spool.jsonl"
 
 # Guard against the summarizer announcing its own output. The summarizer sets this

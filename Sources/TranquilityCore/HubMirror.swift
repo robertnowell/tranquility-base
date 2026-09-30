@@ -787,8 +787,18 @@ public final class HubMirror: @unchecked Sendable {
     /// Fails open, exactly as the grid's does: no session row, no transcript,
     /// or an entrypoint Claude Code invents later, and the turn is yours. A
     /// stray robot row costs one glance; a hidden conversation costs the work.
+    ///
+    /// And a session that ran in a directory the OS reaps is a fixture, by the
+    /// grid's own rule (`SessionDiscovery`, 26 Aug: "a session that ran in a
+    /// directory the OS reaps is a fixture, not an agent"). The grid applied it
+    /// and the mirror did not, so every preflight's live-TUI drill arrived in
+    /// the hub as an agent: 236 rows named tb-live-tui-NNNNN by 30 Sep, none of
+    /// them on the grid. Reported by Robert, 30 Sep: "why are these
+    /// tb-live-tui agents in the hub? they should not be, they are not in the
+    /// grid for correct reason."
     static func isRobot(_ session: WaitingSession?) -> Bool {
-        SessionDiscovery.isHeadless(transcriptPath: session?.transcriptPath)
+        if let cwd = session?.cwd, SessionDiscovery.isTemporary(cwd) { return true }
+        return SessionDiscovery.isHeadless(transcriptPath: session?.transcriptPath)
     }
 
     /// How many turns of a session's transcript the mirror reads.
