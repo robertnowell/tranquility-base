@@ -51,6 +51,29 @@ final class HubWindowTests: XCTestCase {
         XCTAssertEqual(outs, 1)
     }
 
+    /// One account (30 Sep): a window that finds nobody signed in asks the
+    /// app for a ticket, but never right after a sign-out, and not in a loop.
+    func testNobodySignedInAsksForATicketButASignOutDoesNot() async {
+        let h = hub()
+        var asked = 0
+        h.silentSignIn = { _ in asked += 1; return nil }
+        h.hubSaid(user: nil)            // opened with an empty web store
+        await Task.yield(); await Task.yield()
+        XCTAssertEqual(asked, 1)
+        h.hubSaid(user: "user_1")       // signed in
+        h.hubSaid(user: nil)            // then signed out: stays out
+        await Task.yield(); await Task.yield()
+        XCTAssertEqual(asked, 1)
+
+        let fresh = hub()
+        var tries = 0
+        fresh.silentSignIn = { _ in tries += 1; return nil }
+        fresh.hubSaid(user: nil)
+        fresh.hubSaid(user: "x"); fresh.hubSaid(user: nil); fresh.hubSaid(user: nil)
+        await Task.yield(); await Task.yield()
+        XCTAssertEqual(tries, 1, "a failed ticket is not retried within the minute")
+    }
+
     func testAWindowThatOpensSignedInIsASignInNotASignOut() {
         let h = hub()
         var outs = 0, ins = 0

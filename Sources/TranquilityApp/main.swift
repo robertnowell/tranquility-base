@@ -701,12 +701,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 HubMirror.shared?.stop()
                 HubMirror.shared = nil
                 try? Secrets.write(.hubToken, value: "")
+                HubAccount.remember(nil)
                 Permissions.log("hub: signed out in the Hub window; this Mac is signed out too")
             }
-            HubWindow.shared.onSignedIn = { _ in
-                guard (Secrets.read(.hubToken) ?? "").isEmpty else { return }
-                Permissions.log("hub: signed in in the Hub window; connecting this Mac")
-                HubConnect.shared.begin()
+            // One account, never two (30 Sep, Robert: "there shouldn't be a
+            // potential mismatch... they are the same thing"). A connected Mac
+            // signs its window in by itself; a window signed in as someone
+            // else takes the Mac with it; out there is out here, above.
+            HubWindow.shared.silentSignIn = { next in
+                await HubAccount.ticket(next: next)?.url
+            }
+            HubWindow.shared.onSignedIn = { id in
+                let connected = !(Secrets.read(.hubToken) ?? "").isEmpty
+                guard connected else {
+                    Permissions.log("hub: signed in in the Hub window; connecting this Mac")
+                    HubAccount.remember(id)
+                    HubConnect.shared.begin()
+                    return
+                }
+                Task { @MainActor in
+                    // Which account the Mac is on: remembered, or asked once of
+                    // the hub (a Mac connected before this knew nothing).
+                    var account = HubAccount.remembered
+                    if account == nil { account = await HubAccount.ticket(next: "/")?.user }
+                    guard let account, account != id else { return }
+                    Permissions.log("hub: the Hub window signed in as another account; this Mac follows it")
+                    HubMirror.shared?.stop()
+                    HubMirror.shared = nil
+                    try? Secrets.write(.hubToken, value: "")
+                    HubAccount.remember(id)
+                    HubConnect.shared.begin()
+                }
             }
             if let mirror = HubMirror.fromMachine(store: store) {
                 HubMirror.shared = mirror
