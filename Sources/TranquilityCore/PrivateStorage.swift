@@ -38,8 +38,22 @@ public enum PrivateStorage {
             at: directory, includingPropertiesForKeys: [.isDirectoryKey])
         else { return }
         for case let url as URL in walker {
-            let isDirectory = (try? url.resourceValues(forKeys: [.isDirectoryKey]))?
-                .isDirectory ?? false
+            let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+            // The agent rules (RulesStore) are scripts and skills every
+            // harness must be able to enter and run, not private data. On 30
+            // Sep this walk chmodded them 600: the hooks lost their execute
+            // bit and the version directory lost its search bit. Skip them.
+            if url.lastPathComponent == "rules", values?.isDirectory == true,
+               url.deletingLastPathComponent().resolvingSymlinksInPath().path
+                    == directory.resolvingSymlinksInPath().path {
+                walker.skipDescendants()
+                continue
+            }
+            // Never through a link: setAttributes follows symlinks, so a 0600
+            // meant for a link was applied to the DIRECTORY it names (it is
+            // how `rules/current` locked the rules it points at).
+            if values?.isSymbolicLink == true { continue }
+            let isDirectory = values?.isDirectory ?? false
             try? FileManager.default.setAttributes(
                 [.posixPermissions: isDirectory ? 0o700 : 0o600], ofItemAtPath: url.path)
         }
