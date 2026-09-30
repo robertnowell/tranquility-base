@@ -158,6 +158,22 @@ final class RulesStoreTests: XCTestCase {
         XCTAssertTrue(fm.isExecutableFile(atPath: RulesStore.hooksDirectory(in: root) + "/tbase-hook.sh"))
     }
 
+    func testRecentPageProblemsCountEachPageOnceWithinTheDay() throws {
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        let now = Date()
+        let ms = { (ago: TimeInterval) in Int64((now.timeIntervalSince1970 - ago) * 1000) }
+        let log = """
+            \(ms(200_000))\ts1\tno-house-style\t/old.html
+            \(ms(3600))\ts1\tno-house-style,outside-agent-folder\t/a.html
+            \(ms(60))\ts1\tno-house-style,outside-agent-folder\t/a.html
+            \(ms(30))\ts2\toutside-agent-folder\t/b.html
+
+            """
+        try log.write(to: root.appendingPathComponent("page-problems.log"), atomically: true, encoding: .utf8)
+        let recent = RulesStore.recentPageProblems(root: root, now: now)
+        XCTAssertEqual(recent.map(\.path), ["/b.html", "/a.html"], "newest first, each page once, the old one out")
+    }
+
     // MARK: - A developer's checkout
 
     func testACheckoutWinsOnlyWhileItContainsTheRunningBuild() throws {

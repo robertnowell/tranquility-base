@@ -1008,6 +1008,57 @@ def _shape_ask(path):
             + tpl
             + " The target and the worked example are in share-as-page/references/brief.md.")
 
+# ---------------------------------------------------------------------------
+# A REPORT THAT WILL NOT WORK, said the moment it is written (30 Sep 2026).
+#
+# A MacBook session wrote a report with the brief's markup and none of its
+# stylesheet, into its project folder (~/ClaudeWork/replay-eval), and opened
+# it as a local file: bare Times New Roman, never in the hub. Robert ruled
+# the fix is context, not a gate ("that's a context issue not a gate issue"):
+# nothing rewrites the page. The agent is told exactly what is wrong and the
+# one command that does it right, while it still has the page open, and the
+# case is logged so each Mac's hourly report counts it and a machine whose
+# agents keep doing it shows up in the fleet check.
+import os as _os_p
+def _page_problems(path):
+    try:
+        with open(path, "r", encoding="utf-8", errors="ignore") as fh:
+            page = fh.read(400000)
+    except Exception:
+        return []
+    if not ('class="you"' in page and 'class="lede"' in page):
+        return []          # not a brief-shaped report: not ours to judge here
+    kinds = []
+    styles = re.findall(r"<style\b[^>]*>.*?</style>", page, flags=re.S | re.I)
+    if not any((".you{" in st or ".you {" in st or "--heading:" in st) for st in styles):
+        kinds.append("no-house-style")
+    if not path.startswith(_os_p.path.expanduser("~/Documents/agents/")):
+        kinds.append("outside-agent-folder")
+    return kinds
+
+PAGE_PROBLEMS = _page_problems(path)
+PAGE_ASK = ""
+if PAGE_PROBLEMS:
+    why = []
+    if "no-house-style" in PAGE_PROBLEMS:
+        why.append("it has the brief's structure but not its stylesheet, so it renders as bare HTML")
+    if "outside-agent-folder" in PAGE_PROBLEMS:
+        why.append("it is outside your agent folder, so the hub never sees it and opening it shows a local file")
+    PAGE_ASK = ("\n\nTHIS PAGE WILL NOT WORK: {p}: {w}. Redo it now: run "
+                "`hq-page new <slug> --session={o}`, which writes the whole template in your "
+                "folder, fill that file, then `hq-page publish <slug> --session={o}`. Do not "
+                "rewrite the template's head by hand."
+                ).format(p=path, w="; and ".join(why), o=owner)
+    # One line per case for the hourly report (RulesReconcile -> the hub).
+    try:
+        import time as _t
+        log_dir = _os_p.path.expanduser("~/Library/Application Support/VoiceDispatch/rules")
+        _os_p.makedirs(log_dir, exist_ok=True)
+        with open(_os_p.path.join(log_dir, "page-problems.log"), "a") as fh:
+            fh.write("%d\t%s\t%s\t%s\n" % (int(_t.time() * 1000), owner, ",".join(PAGE_PROBLEMS), path))
+    except Exception:
+        pass
+
 SHAPE_ASK = _shape_ask(path)
 
 # A misfile is louder than anything else this hook says, because it is the one
@@ -1101,12 +1152,12 @@ if stamp == "1":
             "The agent footer was stamped into {path} automatically: session "
             "id, Open hub, and Discuss with agent. Do not add another one, and "
             "do not hand-roll a footer of your own on HQ pages."
-        ).format(path=path) + MISFILE_ASK + TAG_ASK + SHAPE_ASK,
+        ).format(path=path) + MISFILE_ASK + PAGE_ASK + TAG_ASK + SHAPE_ASK,
     }}))
 else:
     print(json.dumps({"hookSpecificOutput": {
         "hookEventName": "PostToolUse",
-        "additionalContext": context + MISFILE_ASK + TAG_ASK + SHAPE_ASK,
+        "additionalContext": context + MISFILE_ASK + PAGE_ASK + TAG_ASK + SHAPE_ASK,
     }}))
 PY
 

@@ -279,6 +279,27 @@ public enum RulesStore {
         return hits
     }
 
+    // MARK: - Pages that will not work
+
+    /// Report pages the page hook found broken in the last `window` (no house
+    /// stylesheet, or outside the agent folder), newest first, as
+    /// (session, kinds, path). The hook logs one line per case; the hourly
+    /// report counts them so a Mac whose agents keep doing it is seen.
+    public static func recentPageProblems(root: URL = root, window: TimeInterval = 86_400,
+                                          now: Date = Date()) -> [(session: String, kinds: String, path: String)] {
+        guard let text = try? String(contentsOf: root.appendingPathComponent("page-problems.log"), encoding: .utf8)
+        else { return [] }
+        let oldest = Int64((now.timeIntervalSince1970 - window) * 1000)
+        var seen = Set<String>()
+        var out: [(String, String, String)] = []
+        for line in text.split(separator: "\n").reversed() {
+            let parts = line.split(separator: "\t", maxSplits: 3).map(String.init)
+            guard parts.count == 4, let ms = Int64(parts[0]), ms >= oldest, seen.insert(parts[3]).inserted else { continue }
+            out.append((parts[1], parts[2], parts[3]))
+        }
+        return out
+    }
+
     // MARK: - Per-session records
 
     /// Where visual-output-hook.sh records which rules version each session
