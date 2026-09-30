@@ -3050,7 +3050,7 @@ final class StatusHUD: NSObject {
         guard !face.title.isEmpty else { titleLabel.stringValue = ""; return }
         let truncating = NSMutableParagraphStyle()
         truncating.lineBreakMode = .byTruncatingTail
-        let font = StateLegend.Face.message(14, .semibold)
+        let font = StateLegend.Face.message(14, .medium)
         let attributes: [NSAttributedString.Key: Any] = [
             .font: font,
             .foregroundColor: StateLegend.Palette.ink,
