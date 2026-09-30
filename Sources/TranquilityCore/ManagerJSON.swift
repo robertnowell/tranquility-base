@@ -37,6 +37,9 @@ public enum ManagerJSON {
         public var goal: String?
         public var eventId: Int64
         public var heard: Bool
+        /// Where the row sits on the panel, top to bottom from 0; nil when the
+        /// panel does not show it. The hands-free manager orders by this.
+        public var gridIndex: Int? = nil
     }
 
     public struct Status: Codable, Equatable, Sendable {
@@ -163,15 +166,20 @@ public enum ManagerJSON {
     /// stated reason -- "the store keeps rows for sessions long gone; those are
     /// not 'waiting on you' in any sense worth saying aloud". It was right, and
     /// it was on the wrong side of the wire.
-    public static func status(store: QueueStore, live: Set<String>) throws -> Status {
-        let open = try store.waitingSessions().filter { live.contains($0.sessionId) }
+    public static func status(store: QueueStore, live: Set<String>,
+                              gridOrder: [String] = GridOrder.load()) throws -> Status {
+        // In the panel's order, top to bottom (GridOrder, ruled 29 Sep 2026).
+        let open = GridOrder.rank(try store.waitingSessions().filter { live.contains($0.sessionId) },
+                                  id: \.sessionId, order: gridOrder)
+        let position = Dictionary(gridOrder.enumerated().map { ($1, $0) },
+                                  uniquingKeysWith: { first, _ in first })
         let rows = open.map { w -> WaitingRow in
             let brief = try? store.storedBrief(sessionId: w.sessionId, eventRowid: w.latestId)
             return WaitingRow(
                 sessionId: w.sessionId, project: w.projectLabel,
                 name: GridAssembler.tabDisplayName(for: w, live: nil),
                 topic: w.briefTopic ?? brief?.topic, goal: brief?.goal,
-                eventId: w.latestId, heard: w.heard)
+                eventId: w.latestId, heard: w.heard, gridIndex: position[w.sessionId])
         }
         return Status(waiting: rows, unannounced: open.filter { !$0.heard }.count)
     }

@@ -704,6 +704,26 @@ final class CoordinatorTests: XCTestCase {
                         "a delivery past its ceiling has stopped meaning anything")
     }
 
+    /// ⌃⌥ speaks in the grid's order, top to bottom, unread first (ruled
+    /// 29 Sep 2026): with folders, newest-first skipped around the panel.
+    // Fixture sessions the fake agents list as live: old (top), new (middle), human (bottom).
+    func testNextSpeaksTheTopmostUnreadRowOfTheGrid() async throws {
+        let coordinator = try makeCoordinator()
+        try append(session: "old", at: 1_000)
+        try append(session: "human", at: 2_000)
+        try append(session: "new", at: 3_000)
+        XCTAssertEqual(try coordinator.nextToAnnounce(gridOrder: [])?.sessionId, "new",
+                       "no panel: newest first, as before")
+        XCTAssertEqual(try coordinator.nextToAnnounce(gridOrder: ["old", "new", "human"])?.sessionId,
+                       "old", "a panel: the row nearest the top")
+        let top = try XCTUnwrap(coordinator.nextToAnnounce(gridOrder: ["old", "new", "human"]))
+        try coordinator.dismiss(sessionId: top.sessionId, through: top.latestId)
+        XCTAssertEqual(try coordinator.nextToAnnounce(gridOrder: ["old", "new", "human"])?.sessionId,
+                       "new", "then the next one down")
+        XCTAssertEqual(try coordinator.nextToAnnounce(gridOrder: ["new"])?.sessionId, "new",
+                       "a row the panel does not show waits behind the ones it does")
+    }
+
     /// Dismissal is scoped to the item that existed when you dismissed it. A boolean
     /// would silence the session for ever; a watermark lets the next turn revive it.
     func testDismissingASessionDoesNotSilenceItForever() async throws {

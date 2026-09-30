@@ -1790,14 +1790,23 @@ class Manager(FrameProcessor):
         Order is `announceNext`'s: unheard first, then the newest of the rest.
         I removed the `heard` term this morning on the grid's authority --
         "hearing a row must not move it" (#439) -- which is a rule about where
-        a row is DRAWN, not about what is read aloud next. Restored."""
+        a row is DRAWN, not about what is read aloud next. Restored.
+
+        And within each, the grid's order top to bottom (ruled 29 Sep, "the
+        order of the agents speaking should be informed by the actual grid
+        order top to bottom, unread first"): `tbase status` carries each row's
+        `gridIndex`, and a row the panel does not show comes after, newest
+        first."""
         current = (self.stage or {}).get("sessionId")
         live = {t["sessionId"] for t in await self._targets()}
         waiting = [w for w in await self._waiting()
                    if w["sessionId"] != current and w["sessionId"] in live]
         if not waiting:
             return None
-        waiting.sort(key=lambda w: (w.get("heard", True), -(w.get("eventId") or 0)))
+        waiting.sort(key=lambda w: (
+            w.get("heard", True),
+            w["gridIndex"] if isinstance(w.get("gridIndex"), int) else 1 << 30,
+            -(w.get("eventId") or 0)))
         first = waiting[0]
         rows = {t["sessionId"]: t for t in await self._targets()}
         return {**rows.get(first["sessionId"], {}), **first}
