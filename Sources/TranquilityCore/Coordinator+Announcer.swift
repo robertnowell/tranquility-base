@@ -85,13 +85,18 @@ extension Coordinator {
     /// The default is an empty overlay — "nothing in flight" — so a caller that
     /// has no delivery state to offer gets exactly the old behaviour.
     public func nextToAnnounce(
-        excluding inFlight: DeliveryInFlight = DeliveryInFlight()
+        excluding inFlight: DeliveryInFlight = DeliveryInFlight(),
+        gridOrder: [String] = GridOrder.inMemory()
     ) throws -> WaitingSession? {
         // `!heard` is the WHOLE difference between the announce queue and the
         // waiting list: one list, one bit, filtered here at the only site that
         // cares. A heard session stays in waiting() — still lit, still owed —
         // it just isn't read out twice.
-        try waiting().first {
+        //
+        // In the grid's order, top to bottom (ruled 29 Sep 2026, GridOrder):
+        // the unheard row nearest the top speaks first. A process with no
+        // panel has no order, and keeps newest-first.
+        try GridOrder.rank(waiting(), id: \.sessionId, order: gridOrder).first {
             !$0.heard && !inFlight.supersedesWaiting($0.sessionId, latestId: $0.latestId)
         }
     }
@@ -117,9 +122,11 @@ extension Coordinator {
     /// genuinely the only thing there is to play.
     public func nextToReplay(
         after: String? = nil,
-        excluding inFlight: DeliveryInFlight = DeliveryInFlight()
+        excluding inFlight: DeliveryInFlight = DeliveryInFlight(),
+        gridOrder: [String] = GridOrder.inMemory()
     ) throws -> WaitingSession? {
-        let stack = try waiting().filter {
+        // The walk over opened rows goes down the grid too.
+        let stack = try GridOrder.rank(waiting(), id: \.sessionId, order: gridOrder).filter {
             !inFlight.supersedesWaiting($0.sessionId, latestId: $0.latestId)
         }
         guard let after, let mark = stack.firstIndex(where: { $0.sessionId == after })

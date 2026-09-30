@@ -3386,6 +3386,14 @@ final class StatusHUD: NSObject {
                     .size(withAttributes: [.font: GridRowView.auxFont]).width)
             }.max() ?? 0)
         let lines = ProjectLayout.lines(shown, book: book, origin: SessionLineage.lastKnownOrigin)
+        // The order agents are read out in is this one, top to bottom, with a
+        // collapsed folder's rows in their folder's place (GridOrder).
+        let arranged = ProjectLayout.arrange(shown, book: book, origin: SessionLineage.lastKnownOrigin)
+        // Never from a second instance (a drill, a pose): its fixture rows
+        // would overwrite the running app's order on disk.
+        if !CommandLine.arguments.contains("--allow-second-instance") {
+            GridOrder.record(arranged.folders.flatMap(\.rows).map(\.id) + arranged.loose.map(\.id))
+        }
         // Inside a folder the rule above each of its rows starts at the
         // indent, so the folder's rows read as their own column; the rule
         // that closes a folder is full width (29 Sep, "these lines are a

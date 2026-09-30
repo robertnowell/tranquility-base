@@ -119,6 +119,18 @@ final class ManagerJSONTests: XCTestCase {
         XCTAssertEqual(targets.map(\.folder), ["Quiet", "Asking", nil])
     }
 
+    /// `tbase status` lists waiting rows in the panel's order and says where
+    /// each sits, for the hands-free manager (GridOrder, ruled 29 Sep 2026).
+    func testStatusCarriesTheGridOrder() throws {
+        _ = try seed(session: "a")
+        _ = try seed(session: "b")
+        let status = try ManagerJSON.status(store: store, live: ["a", "b"], gridOrder: ["b", "a"])
+        XCTAssertEqual(status.waiting.map(\.sessionId), ["b", "a"])
+        XCTAssertEqual(status.waiting.map(\.gridIndex), [0, 1])
+        let none = try ManagerJSON.status(store: store, live: ["a", "b"], gridOrder: [])
+        XCTAssertEqual(none.waiting.map(\.gridIndex), [nil, nil])
+    }
+
     func testEncodingIsStableAndSorted() throws {
         let rung = ManagerJSON.Rung(kind: "goal", spoken: "ship it")
         XCTAssertEqual(ManagerJSON.encode(rung), #"{"kind":"goal","spoken":"ship it"}"#)
