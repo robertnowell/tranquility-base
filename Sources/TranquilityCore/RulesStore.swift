@@ -233,6 +233,23 @@ public enum RulesStore {
         for stale in others.dropFirst(max(0, keep - 1)) { try? fm.removeItem(at: stale) }
     }
 
+    // MARK: - Which app staged the rules
+
+    /// Record the running app, so a script in the store can reach ITS Hub
+    /// window (hq-open used to find the .app around itself, which a script
+    /// in the store does not have: every page opened in the browser, 30 Sep).
+    /// A translocated path is never recorded; the bundle id always is.
+    public static func recordApp(bundleID: String?, bundlePath: String?, root: URL = root) {
+        guard let bundleID, !bundleID.isEmpty else { return }
+        var app: [String: String] = ["bundle_id": bundleID]
+        if let bundlePath, bundlePath.hasSuffix(".app"), !bundlePath.contains("/AppTranslocation/") {
+            app["path"] = bundlePath
+        }
+        guard let data = try? JSONSerialization.data(withJSONObject: app, options: [.sortedKeys]) else { return }
+        try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try? data.write(to: root.appendingPathComponent("app.json"), options: .atomic)
+    }
+
     // MARK: - Rules that were retired
 
     /// Phrases from rules that were retired, which no text an agent reads may

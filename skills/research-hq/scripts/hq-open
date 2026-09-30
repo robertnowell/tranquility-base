@@ -73,30 +73,46 @@ def main():
     print(url)
 
 def own_app():
-    """The app this script ships inside, or None.
+    """The app whose Hub window to open: ("path", <bundle>), ("id", <bundle id>) or None.
 
-    hq-open is installed as a link into Tranquility Base's bundle
-    (<app>/Contents/Resources/skills/...), so the app beside it is the one
-    whose Hub window it can open: the script and the window come from the
-    same build. Run from a source checkout there is no app around it, and the
-    browser is used. Nothing is written or read from anywhere else, so there
-    is no marker to go stale (a shared marker file did, 29 Sep: a debug build
-    in another worktree overwrote it and pages fell back to the browser).
+    First the .app this script sits inside, when it is run from a bundle.
+    Since 30 Sep 2026 the app stages its rules into a store outside the bundle
+    (.../VoiceDispatch/rules/versions/<fingerprint>/...), so there is usually
+    no .app around this file; the running app records which app it is in the
+    store's app.json, and that is used instead. Without either (a source
+    checkout), the browser is used. Before this, the store copy found no app
+    and every page opened in the browser (Robert, 30 Sep).
     """
     here = os.path.realpath(__file__)
-    while here and here != "/":
-        if here.endswith(".app") and os.path.isdir(os.path.join(here, "Contents")):
-            return here
-        here = os.path.dirname(here)
+    walk = here
+    while walk and walk != "/":
+        if walk.endswith(".app") and os.path.isdir(os.path.join(walk, "Contents")):
+            return ("path", walk)
+        walk = os.path.dirname(walk)
+    marker = "/rules/versions/"
+    if marker in here:
+        store = here[:here.index(marker)] + "/rules"
+        try:
+            with open(os.path.join(store, "app.json")) as fh:
+                app = json.load(fh)
+        except Exception:
+            app = {}
+        path = app.get("path") or ""
+        if path.endswith(".app") and os.path.isdir(os.path.join(path, "Contents")):
+            return ("path", path)
+        if app.get("bundle_id"):
+            return ("id", app["bundle_id"])
     return None
 
 def in_app(url):
-    bundle = own_app()
-    if not bundle:
+    app = own_app()
+    if not app:
         return False
     from urllib.parse import quote
     link = "tranquilitybase://hub?url=" + quote(url, safe="")
-    return subprocess.run(["open", "-a", bundle, link]).returncode == 0
+    kind, value = app
+    args = ["open", "-a", value, link] if kind == "path" else ["open", "-b", value, link]
+    return subprocess.run(args).returncode == 0
 
 if __name__ == "__main__":
     main()
