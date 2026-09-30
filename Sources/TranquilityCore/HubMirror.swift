@@ -64,6 +64,8 @@ public final class HubMirror: @unchecked Sendable {
         var sent: Set<String> = []
         var turnCursor: Int64 = 0
         var names: [String: String] = [:]
+        /// sha256 of the folder book last accepted by the hub.
+        var foldersHash: String?
         /// sha256 of an image -> its public address, so a screenshot pasted
         /// into four pages uploads once.
         var assets: [String: String] = [:]
@@ -158,6 +160,11 @@ public final class HubMirror: @unchecked Sendable {
     public var ledgerDirectory: URL?
     /// Live sessions, for the harness's own name. Injectable; the default asks
     /// the CLI, which caches for six seconds.
+    /// The folder book to mirror. Nil sends none: only the machine's own
+    /// mirror (`fromMachine`) reads the user's folders, so no test run ever
+    /// sends a real book to a fake hub or a fake book to a real one.
+    public var folderBook: (@Sendable () -> ProjectBook)?
+
     public var liveSessions: @Sendable () -> [String: LiveSession] = {
         Dictionary((ClaudeAgentsCLI().sessions() ?? []).map { ($0.sessionId, $0) },
                    uniquingKeysWith: { a, _ in a })
@@ -214,6 +221,7 @@ public final class HubMirror: @unchecked Sendable {
             artifactRoot: support.path)
         mirror.hubBase = base
         mirror.ledgerDirectory = support.appendingPathComponent("ledger", isDirectory: true)
+        mirror.folderBook = { ProjectStore.shared.current }
         return mirror
     }
 
@@ -293,6 +301,7 @@ public final class HubMirror: @unchecked Sendable {
         if turns, store != nil { await mirrorTurns(&report) }
         if turns { await mirrorNotes(&report) }
         if names, store != nil { await mirrorNames(&report) }
+        if let folderBook { await mirrorFolders(&report, book: folderBook()) }
         report.note = report.failed == 0
             ? "ok: \(report.documents) documents, \(report.turns) turns, \(report.notes) notes"
             : "failed: \(report.failed) request(s); last: \(report.note)"
@@ -1085,6 +1094,31 @@ public final class HubMirror: @unchecked Sendable {
 
     static func pruned(_ recent: [String: RecentMark], before ms: Int64) -> [String: RecentMark] {
         recent.filter { $0.value.ms >= ms }
+    }
+
+    // MARK: - Folders
+
+    /// The panel's project folders, so the hub's sidebar groups agents the
+    /// way the grid does (ruled 29 Sep 2026, ruling-project-folders.md). The
+    /// whole book whenever it changed; the hub replaces what it had. A hub
+    /// too old to know the route (404) is skipped, not counted as a failure:
+    /// the Mac can ship before the hub does.
+    func mirrorFolders(_ report: inout Report, book: ProjectBook) async {
+        let payload = Self.folderPayload(book)
+        guard let bytes = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]) else { return }
+        let hash = Self.sha256(bytes)
+        guard sync({ state.foldersHash }) != hash else { return }
+        do {
+            let (status, _) = try await transport.post("api/ingest/folders", json: ["book": payload, "device": device])
+            if status == 404 { return }
+            guard status == 200 else { report.failed += 1; report.note = "folders: HTTP \(status)"; return }
+            sync { state.foldersHash = hash }
+        } catch { report.failed += 1; report.note = "folders: \(error.localizedDescription)" }
+    }
+
+    static func folderPayload(_ book: ProjectBook) -> [String: Any] {
+        ["folders": book.folders.map { ["id": $0.id, "name": $0.name, "collapsed": $0.collapsed] as [String: Any] },
+         "members": book.members]
     }
 
     // MARK: - Names
