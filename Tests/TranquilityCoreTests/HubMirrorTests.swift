@@ -67,6 +67,40 @@ final class HubMirrorTests: XCTestCase {
         return m
     }
 
+    /// The panel's folders reach the hub whole, once per change, and a hub
+    /// that does not know the route yet is not a failed run.
+    func testFoldersAreSentOncePerChange() async {
+        let hub = FakeHub()
+        let m = mirror(hub)
+        var book = ProjectBook()
+        book.create(name: "Mirai", with: ["489b4804-8d64-4a91-a63c-5e493141c772"], id: "f1")
+        var report = HubMirror.Report()
+        await m.mirrorFolders(&report, book: book)
+        await m.mirrorFolders(&report, book: book)
+        XCTAssertEqual(hub.count("api/ingest/folders"), 1, "unchanged: not sent again")
+        let sent = hub.last("api/ingest/folders")?["book"] as? [String: Any]
+        XCTAssertEqual((sent?["folders"] as? [[String: Any]])?.first?["name"] as? String, "Mirai")
+        XCTAssertEqual((sent?["members"] as? [String: String])?["489b4804-8d64-4a91-a63c-5e493141c772"], "f1")
+        book.rename("f1", to: "Mirai BFCM")
+        await m.mirrorFolders(&report, book: book)
+        XCTAssertEqual(hub.count("api/ingest/folders"), 2, "a rename is a change")
+        XCTAssertEqual(report.failed, 0)
+    }
+
+    func testAHubWithoutTheFoldersRouteIsNotAFailure() async {
+        final class Old: HubMirror.Transport, @unchecked Sendable {
+            func post(_ path: String, json: [String: Any]) async throws -> (status: Int, body: Data) {
+                (404, Data())
+            }
+        }
+        let m = HubMirror(transport: Old(), agentsRoot: tmp.appendingPathComponent("agents").path,
+                          stateURL: tmp.appendingPathComponent("state.json"), device: "test-mac",
+                          store: nil, artifactRoot: nil)
+        var report = HubMirror.Report()
+        await m.mirrorFolders(&report, book: ProjectBook(folders: [.init(id: "f", name: "F")]))
+        XCTAssertEqual(report.failed, 0)
+    }
+
     private func write(_ name: String, _ html: String) -> String {
         let url = tmp.appendingPathComponent("agents/\(session)/\(name)")
         try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
