@@ -6,6 +6,14 @@
     <description>Updates for Tranquility Base.</description>
     <language>en</language>
     <item>
+      <title>Version 0.3.1457</title>
+      <sparkle:version>1457</sparkle:version>
+      <sparkle:shortVersionString>0.3.1457</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <pubDate>Wed, 30 Sep 2026 21:34:12 +0000</pubDate>
+      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1457-ba42c87e0/TranquilityBase-0.3.1457.dmg" type="application/octet-stream" length="45522563" sparkle:edSignature="R2EsI0+Te3mLW70y2d04gRvd+Gj5/lzog457oxrVX+XodHjSissgmGCg15KbaRVREf/0tqCRtTW9482zFlDnCA==" />
+    </item>
+    <item>
       <title>Version 0.3.1456</title>
       <sparkle:version>1456</sparkle:version>
       <sparkle:shortVersionString>0.3.1456</sparkle:shortVersionString>
@@ -77,16 +85,8 @@
       <pubDate>Wed, 30 Sep 2026 14:25:38 +0000</pubDate>
       <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1446-a35b4c740/TranquilityBase-0.3.1446.dmg" type="application/octet-stream" length="45327512" sparkle:edSignature="ff5tP4XRcTojIw1KqKs300RECiEBpDzyyQQelhunMvcICpqX+eaZJd1jfWatO5XgfvKg2S2BrNYA/03h4S9kBw==" />
     </item>
-    <item>
-      <title>Version 0.3.1445</title>
-      <sparkle:version>1445</sparkle:version>
-      <sparkle:shortVersionString>0.3.1445</sparkle:shortVersionString>
-      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <pubDate>Wed, 30 Sep 2026 04:16:19 +0000</pubDate>
-      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1445-aa9fde7c8/TranquilityBase-0.3.1445.dmg" type="application/octet-stream" length="45327532" sparkle:edSignature="CpnDGuL4EbCR6I80KQOzNBIYOvbYUqrQiso8SdZooJsdtQc0QwoEHg8fpE5OkAsMsjuWjnrV/EESQ2Mqj5THBw==" />
-    </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: INQh9DUMyTFIbP+1YP4RDjyFpJJAuqnB9wGEGQBFoO/dPf5PfcPc+a05TeQpsnLhydoYgyueZVbXbF03EssyDg==
+edSignature: bp/4AnxNlGyJNdmR1gtYbYOtyIqFbWYxA5pYVn0DcZFON0v9WRNl+6DGIkAs44zTaF4pIJhXTaf9FjYxW93LCA==
 length: 6457
 -->
