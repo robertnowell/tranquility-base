@@ -6,6 +6,14 @@
     <description>Updates for Tranquility Base.</description>
     <language>en</language>
     <item>
+      <title>Version 0.3.1439</title>
+      <sparkle:version>1439</sparkle:version>
+      <sparkle:shortVersionString>0.3.1439</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <pubDate>Wed, 30 Sep 2026 02:38:57 +0000</pubDate>
+      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1439-bbb629f5e/TranquilityBase-0.3.1439.dmg" type="application/octet-stream" length="45272036" sparkle:edSignature="N8eh22QBOLm49qrpZeaB6GhzHGdNoiH0V0N0rw5HVmUW2GLcrmDnpjx24iwXZyqlwAuNiX14ywdzuofuhG7NBw==" />
+    </item>
+    <item>
       <title>Version 0.3.1438</title>
       <sparkle:version>1438</sparkle:version>
       <sparkle:shortVersionString>0.3.1438</sparkle:shortVersionString>
@@ -77,16 +85,8 @@
       <pubDate>Tue, 29 Sep 2026 23:09:39 +0000</pubDate>
       <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1426-4d44e3cc2/TranquilityBase-0.3.1426.dmg" type="application/octet-stream" length="45134586" sparkle:edSignature="R1NRcTvMKmeZZ7WoILzrFS5io+p7HD4I80lXXqdAguCc4hDZpxv65huz94TRXrwEZ2pbGkJg4ONyRv+CMy/4Ag==" />
     </item>
-    <item>
-      <title>Version 0.3.1424</title>
-      <sparkle:version>1424</sparkle:version>
-      <sparkle:shortVersionString>0.3.1424</sparkle:shortVersionString>
-      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <pubDate>Tue, 29 Sep 2026 22:51:33 +0000</pubDate>
-      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1424-4bd7dc10f/TranquilityBase-0.3.1424.dmg" type="application/octet-stream" length="44758082" sparkle:edSignature="+sGYBIKbNYNWL3wWtZEVLmU4EOobgbcBpMO0rtrxdUBNj+NbzYcJAqzS1zpaHabeeNJyQ1225HDBOm7urVLcAA==" />
-    </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: vR5K8wyzfEAdmR2i4fxcdI6UL0adeRRYJAy2M14EERBHurpSHpK+R2fTLTw3sqzyprglg7zbB1EX+1SKBAp5CA==
+edSignature: KDyIZGD4Lz1ORlBWyb7ukivwSCOe4nZ8cVukhI8CnCcWdLC6Yop2daUpXmuWcnRnKre7hQ+uNBFTAfrDIRj5Bw==
 length: 6457
 -->
