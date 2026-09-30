@@ -64,6 +64,42 @@ time.sleep(60)
         self.assertIn("interrupted", self.log.read_text())
         self.assertTrue(self.log.with_suffix(".processes.txt").exists())
 
+    def started_command(self, source, timeout=10, quiet=0.5):
+        return [sys.executable, str(TOOL), "--timeout", str(timeout), "--log", str(self.log),
+                "--start-marker", "Test Suite", "--start-quiet", str(quiet),
+                "--", sys.executable, "-u", "-c", source]
+
+    def test_a_stall_before_any_test_is_retried_once(self):
+        # First attempt builds and then goes silent, as swift-test did on
+        # 30 Sep; the second starts its tests and passes.
+        counter = self.root / "attempts"
+        source = f"""import time,pathlib
+p=pathlib.Path({str(counter)!r}); n=int(p.read_text()) if p.exists() else 0; p.write_text(str(n+1))
+print('Build complete!')
+if n == 0: time.sleep(30)
+print("Test Suite 'All tests' passed")
+"""
+        result = subprocess.run(self.started_command(source), capture_output=True, text=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(counter.read_text(), "2")
+        self.assertIn("no test ran", self.log.read_text())
+        self.assertIn("retrying: attempt 2", self.log.read_text())
+        self.assertTrue(self.log.with_suffix(".stall1.processes.txt").exists())
+
+    def test_a_stall_that_keeps_happening_still_fails(self):
+        result = subprocess.run(self.started_command("import time; print('Build complete!'); time.sleep(30)"),
+                                capture_output=True, text=True, timeout=20)
+        self.assertEqual(result.returncode, 124, result.stderr)
+        self.assertEqual(self.log.read_text().count("no test ran"), 2)
+
+    def test_a_stall_after_tests_start_is_not_retried(self):
+        # Once a test has run, silence is the test's, and retrying could hide it.
+        source = "import time; print(\"Test Suite 'All tests' started\"); time.sleep(30)"
+        result = subprocess.run(self.started_command(source, timeout=1.5), capture_output=True, text=True, timeout=20)
+        self.assertEqual(result.returncode, 124, result.stderr)
+        self.assertNotIn("retrying", self.log.read_text())
+        self.assertIn("timed out", self.log.read_text())
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

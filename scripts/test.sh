@@ -101,7 +101,11 @@ fi
 DIAGNOSTICS="$PWD/.build/ci-diagnostics"
 mkdir -p "$DIAGNOSTICS"
 echo "→ swift test --enable-xctest"
-python3 scripts/run-stage.py --timeout 600 --log "$DIAGNOSTICS/xctest.log" -- \
+# A silence of 240s before the first "Test Suite" line is the pre-start stall
+# (30 Sep 2026: swift-test asleep, no XCTest runner), retried once; the build
+# before it prints steadily, and a healthy run starts its tests in seconds.
+python3 scripts/run-stage.py --timeout 600 --log "$DIAGNOSTICS/xctest.log" \
+  --start-marker "Test Suite" --start-quiet 240 -- \
   "${RUNNER[@]}" swift test --enable-xctest --disable-swift-testing && STATUS=0 || STATUS=$?
 [ "$STATUS" -lt 124 ] || exit "$STATUS"
 echo "→ swift test --enable-swift-testing"
