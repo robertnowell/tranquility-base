@@ -252,7 +252,9 @@ public final class HubMirror: @unchecked Sendable {
     /// or a turn that lands between sweeps is picked up by `kick()`.
     public func start(every: TimeInterval = 300, docsEvery: TimeInterval = 20) {
         let t = DispatchSource.makeTimerSource(queue: queue)
-        t.schedule(deadline: .now() + 2, repeating: docsEvery)
+        // A tenth of the interval as leeway (Apple's floor for a repeating timer).
+        t.schedule(deadline: .now() + 2, repeating: docsEvery,
+                   leeway: .milliseconds(Int(docsEvery * 100)))
         var ticks = 0
         t.setEventHandler { [weak self] in
             guard let self else { return }

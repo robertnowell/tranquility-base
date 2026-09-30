@@ -100,7 +100,9 @@ public final class AgentPoller: @unchecked Sendable {
             if provider.changes() != nil { seed(provider) }
         }
         let t = DispatchSource.makeTimerSource(queue: queue)
-        t.schedule(deadline: .now() + 1, repeating: Self.beat)
+        // A tenth of the beat as leeway, Apple's floor for a repeating timer, so
+        // the system can fire it with others instead of waking just for it.
+        t.schedule(deadline: .now() + 1, repeating: Self.beat, leeway: .milliseconds(Int(Self.beat * 100)))
         t.setEventHandler { [weak self] in self?.tick() }
         sync { timer = t }
         t.resume()
