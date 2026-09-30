@@ -85,6 +85,7 @@ echo "live TUI dispatch (socket $SOCKET)"
 echo "→ starting a real Claude Code session"
 "$TMUX" -L "$SOCKET" new-session -d -s "$SESSION" -x 120 -y 40 -c "$DIR" \
   -e "PATH=$HOME/.local/bin:/usr/bin:/bin" \
+  -e "VOICE_DISPATCH_SUPPORT_DIR=$VOICE_DISPATCH_SUPPORT_DIR" \
   /bin/zsh -c "cd '$DIR' && claude --dangerously-skip-permissions" >/dev/null 2>&1
 sleep 14
 # Answer the trust prompt the way SessionLauncher does — by landing on the

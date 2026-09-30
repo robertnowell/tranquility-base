@@ -415,6 +415,23 @@ final class HubMirrorTests: XCTestCase {
         XCTAssertFalse(HubMirror.isRobot(waiting(session, transcript: transcript(entrypoint: "cli"))))
     }
 
+    /// A session in a directory the OS reaps is a fixture on the grid, and so
+    /// in the hub: the live-TUI drill runs in /private/tmp/tb-live-tui-NNNNN.
+    func testASessionInATemporaryDirectoryIsNotAnAgentInTheHub() {
+        func at(_ cwd: String) -> WaitingSession {
+            WaitingSession(sessionId: session, latestId: 1, createdAtMs: 0, cwd: cwd,
+                           tty: nil, promptId: nil, transcriptPath: transcript(entrypoint: "cli"),
+                           lastAssistantMessage: nil, notificationMatcher: nil, summaryText: nil,
+                           hookEvent: .stop, callsign: "drill")
+        }
+        XCTAssertTrue(HubMirror.isRobot(at("/private/tmp/tb-live-tui-83638")))
+        XCTAssertTrue(HubMirror.isRobot(at("/tmp/tb-fullverify")))
+        XCTAssertTrue(HubMirror.isRobot(at("/private/var/folders/xy/T/probe")))
+        XCTAssertFalse(HubMirror.isRobot(at("/Users/x/Projects/tranquility-base")))
+        XCTAssertTrue(HubMirror.changedNames(sessions: [at("/private/tmp/tb-live-tui-1")], live: [:],
+                                             previous: [:]).isEmpty, "no name either")
+    }
+
     /// The asymmetry the grid settled on, kept here: excluding on an ABSENCE
     /// is how real conversations get hidden, so anything unclassifiable is
     /// yours.
