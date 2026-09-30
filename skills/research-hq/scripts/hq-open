@@ -65,20 +65,34 @@ def main():
                 break
             time.sleep(4)
     # The app's Hub window first, the browser always as the fallback (29 Sep
-    # 2026, hf-o8t.4). Only an app that has the window writes the marker, and
-    # it names the bundle, so a deleted or older app never swallows the page.
+    # 2026, hf-o8t.4): the app is the one this script ships inside.
     if in_app(url):
         print(url)
         return
     subprocess.run(["open", url])
     print(url)
 
+def own_app():
+    """The app this script ships inside, or None.
+
+    hq-open is installed as a link into Tranquility Base's bundle
+    (<app>/Contents/Resources/skills/...), so the app beside it is the one
+    whose Hub window it can open: the script and the window come from the
+    same build. Run from a source checkout there is no app around it, and the
+    browser is used. Nothing is written or read from anywhere else, so there
+    is no marker to go stale (a shared marker file did, 29 Sep: a debug build
+    in another worktree overwrote it and pages fell back to the browser).
+    """
+    here = os.path.realpath(__file__)
+    while here and here != "/":
+        if here.endswith(".app") and os.path.isdir(os.path.join(here, "Contents")):
+            return here
+        here = os.path.dirname(here)
+    return None
+
 def in_app(url):
-    try:
-        bundle = open(os.path.expanduser("~/Library/Application Support/hq/hub-window")).read().strip()
-    except Exception:
-        return False
-    if not bundle.endswith(".app") or not os.path.isdir(bundle):
+    bundle = own_app()
+    if not bundle:
         return False
     from urllib.parse import quote
     link = "tranquilitybase://hub?url=" + quote(url, safe="")
