@@ -1,5 +1,6 @@
 import XCTest
 import WebKit
+import PDFKit
 @testable import TranquilityCore
 
 @MainActor
@@ -273,5 +274,80 @@ final class HubWindowFrameLinkTests: XCTestCase {
         XCTAssertEqual(opened.map(\.absoluteString), ["https://example.com/elsewhere"])
         let frame = try await web.evaluateJavaScript("document.getElementById('doc').contentWindow.location.href") as? String
         XCTAssertEqual(frame, "about:srcdoc", "the document stayed where it was")
+    }
+}
+
+/// hf-o8t.5: ⌘F and ⌘P in the Hub window, in a real WebKit view.
+@MainActor
+final class HubWindowFindPrintTests: XCTestCase {
+    private func loaded(_ html: String, at path: String = "/d/1") async throws -> HubWindow {
+        let h = HubWindow(base: { URL(string: "https://hq.example.test") })
+        h.activates = false
+        h.dataStore = .nonPersistent()
+        XCTAssertTrue(h.show(URL(string: "https://hq.example.test/")!))
+        let web = try XCTUnwrap(h.webView)
+        web.loadHTMLString(html, baseURL: URL(string: "https://hq.example.test" + path))
+        for _ in 0..<50 { try await Task.sleep(nanoseconds: 100_000_000); if !web.isLoading { break } }
+        try await Task.sleep(nanoseconds: 500_000_000)
+        return h
+    }
+
+    func testFindSearchesThePageAndTheDocumentFrameAndSaysWhenItMisses() async throws {
+        let h = try await loaded("""
+        <html><body><p>alpha beta</p>
+        <iframe sandbox="allow-scripts" srcdoc="<p>gamma inside the document</p>"></iframe></body></html>
+        """)
+        let bar = try XCTUnwrap(h.findBar)
+        XCTAssertTrue(bar.isHidden)
+        h.hubFind(nil)
+        XCTAssertFalse(bar.isHidden)
+        bar.field.stringValue = "beta"
+        let inPage = await bar.find()
+        XCTAssertTrue(inPage)
+        bar.field.stringValue = "gamma"
+        let inFrame = await bar.find()
+        XCTAssertTrue(inFrame, "the document is a sandboxed frame; find reaches it")
+        bar.field.stringValue = "nowhere-at-all"
+        let miss = await bar.find()
+        XCTAssertFalse(miss)
+        XCTAssertEqual(bar.status.stringValue, "Not found")
+        h.closeFind()
+        XCTAssertTrue(bar.isHidden)
+    }
+
+    func testPrintOnADocumentPrintsTheDocumentAlone() {
+        XCTAssertEqual(HubWindow.rawAddress(for: URL(string: "https://h/d/5b0e2a1c-1111-2222-3333-444455556666")!)?.path,
+                       "/d/5b0e2a1c-1111-2222-3333-444455556666/raw")
+        XCTAssertNil(HubWindow.rawAddress(for: URL(string: "https://h/a/5b0e2a1c-1111-2222-3333-444455556666")!))
+        XCTAssertNil(HubWindow.rawAddress(for: URL(string: "https://h/")!))
+    }
+
+    func testThePrintOperationRendersThePage() async throws {
+        // Off screen, as the ⌘P path prints a document: its raw page loaded
+        // in a web view that is in no window.
+        let h = try await loaded("<p>the hub page</p>", at: "/")
+        let web = WKWebView(frame: NSRect(x: 0, y: 0, width: 800, height: 1000))
+        var done = false
+        let loader = PrintLoader(web) { _ in done = true }
+        web.loadHTMLString("<html><body><h1>Printable report</h1><p>body text</p></body></html>", baseURL: nil)
+        for _ in 0..<50 where !done { try await Task.sleep(nanoseconds: 100_000_000) }
+        XCTAssertTrue(done)
+        _ = loader
+        let out = FileManager.default.temporaryDirectory.appendingPathComponent("hub-print-\(UUID().uuidString).pdf")
+        defer { try? FileManager.default.removeItem(at: out) }
+        let info = NSPrintInfo.shared.copy() as! NSPrintInfo
+        info.jobDisposition = .save
+        info.dictionary()[NSPrintInfo.AttributeKey.jobSavingURL] = out
+        let op = web.printOperation(with: info)
+        op.showsPrintPanel = false
+        op.showsProgressPanel = false
+        op.view?.frame = web.bounds
+        op.runModal(for: try XCTUnwrap(h.window), delegate: nil, didRun: nil, contextInfo: nil)
+        for _ in 0..<50 { try await Task.sleep(nanoseconds: 100_000_000); if FileManager.default.fileExists(atPath: out.path) { break } }
+        try await Task.sleep(nanoseconds: 500_000_000)
+        let size = (try? FileManager.default.attributesOfItem(atPath: out.path)[.size] as? Int) ?? 0
+        XCTAssertGreaterThan(size, 1000, "a printed page, not an empty file")
+        let text = PDFDocument(url: out)?.string ?? ""
+        XCTAssertTrue(text.contains("Printable report"), "the document's words are on the page: \(text.prefix(80))")
     }
 }
