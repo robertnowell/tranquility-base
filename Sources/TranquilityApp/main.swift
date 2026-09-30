@@ -1864,84 +1864,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                             + "\(split.cloud) ElevenLabs + \(split.system) system voices")
         }
 
+        // The rules every agent reads: staged from this app, linked into every
+        // harness, and checked again every hour (RulesReconcile). Until 30 Sep
+        // the skills half ran only when a hook was broken, so a Mac with
+        // healthy hooks kept stale skills for days. Unconditional now.
         if let problem = HookManifest.machineSummary() {
-            // Repair, not just report (Robert, 12 Aug: "nobody ever wants to
-            // run a command — we either keep it up to date or give them one
-            // click"). The repair is bounded to entries carrying our markers,
-            // backs the file up first, and its receipt is a re-audit. When it
-            // cannot repair — no healthy entry and no recorded directory to
-            // learn from — noticing remains the floor, said out loud, because
-            // a hook's own contract (exit 0 whatever happens) means nothing
-            // else ever will.
             Permissions.log("startup: \(problem)")
-            // EVERY harness this machine has. The old call repaired one
-            // hardcoded file and its note said "New Claude Code sessions pick
-            // them up automatically" — accurate, and on a two-harness machine
-            // that sentence was the app quietly reporting what it had not done.
-            var repairedHarnesses: [String] = []
-            for (harness, outcome) in HookManifest.repairAll() {
-                switch outcome {
-                case .healthy:
-                    Permissions.log("startup: \(harness.id) hooks healthy on re-audit")
-                    Track.record("hooks_state", ["harness": .token(harness.id), "state": "healthy"])
-                case .repaired(let rewired, let added):
-                    Permissions.log("startup: \(harness.id) hooks repaired — "
-                        + "\(rewired) rewired, \(added) added")
-                    Track.record("hooks_state", ["harness": .token(harness.id), "state": "repaired",
-                                                 "rewired": .int(rewired), "added": .int(added)])
-                    repairedHarnesses.append(harness.label)
-                case .unavailable(let reason):
-                    Permissions.log("startup: \(harness.id) hooks NOT repaired: \(reason)")
-                    // `.prose`, not `Track.phrase`: phrase kept only the clause
-                    // before the first colon, so "settings.json unreadable:
-                    // permission denied" lost "permission denied". The reason
-                    // is a file or permission error, scrubbed and bounded by
-                    // .prose, never user text.
-                    Track.record("hooks_state", ["harness": .token(harness.id), "state": "not_repaired",
-                                                 "reason": .prose(reason)])
-                    hud.note("\(harness.label) hooks need attention: \(reason)")
-                }
+        }
+        RulesReconcile.run(trigger: "launch", note: { [weak self] in self?.hud.note($0) })
+        Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                RulesReconcile.run(trigger: "hourly", note: { [weak self] in self?.hud.note($0) })
             }
-            // THE SKILLS, the same way. A session relies on share-as-page,
-            // research-hq (hq-open) and the hub skill to write a page the
-            // hub can show and to open it there; until 25 Sep those lived
-            // only in one Mac's ~/.claude/skills, edited by hand, and the
-            // other Mac kept opening reports as file:// through the hq-open
-            // it still had. The app is the courier now (ruled 25 Sep), to
-            // every harness on this Mac, and says per harness what it did.
-            for (target, outcome) in SkillManifest.repairAll() {
-                switch outcome {
-                case .healthy:
-                    Track.record("skills_state", ["harness": .token(target.id), "state": "healthy"])
-                case .repaired(let linked, let retired):
-                    Permissions.log("startup: \(target.id) skills linked — "
-                        + "\(linked) linked, \(retired) copies moved aside")
-                    Track.record("skills_state", ["harness": .token(target.id), "state": "repaired",
-                                                  "linked": .int(linked), "retired": .int(retired)])
-                case .unavailable(let reason):
-                    Permissions.log("startup: \(target.id) skills NOT linked: \(reason)")
-                    Track.record("skills_state", ["harness": .token(target.id), "state": "not_repaired",
-                                                  "reason": .prose(reason)])
-                    hud.note("\(target.label) skills need attention: \(reason)")
-                }
-            }
-            if let source = try? String(contentsOf: SkillManifest.recordedDirectoryURL, encoding: .utf8) {
-                switch SkillManifest.repairShims(source: source.trimmingCharacters(in: .whitespacesAndNewlines)) {
-                case .healthy: break
-                case .repaired(let linked, let retired):
-                    Permissions.log("startup: \(linked) hq command(s) linked on PATH, \(retired) moved aside")
-                case .unavailable(let reason):
-                    Permissions.log("startup: hq commands NOT linked: \(reason)")
-                }
-            }
-            if !repairedHarnesses.isEmpty {
-                hud.note("Hooks were out of date, fixed for "
-                    + repairedHarnesses.joined(separator: " and ")
-                    + ". New sessions pick them up automatically.")
-            }
-        } else {
-            Permissions.log("startup: hooks installed and reachable")
-            Track.record("hooks_state", ["state": "healthy"])
         }
 
         // Fix stale Write() permission rules to Edit() before they matter. A

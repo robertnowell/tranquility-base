@@ -196,6 +196,11 @@ chmod +x "$APP_DIR/Contents/Resources/hooks/"*.sh
 mkdir -p "$APP_DIR/Contents/Resources/skills"
 cp -R skills/. "$APP_DIR/Contents/Resources/skills/"
 find "$APP_DIR/Contents/Resources/skills" -name __pycache__ -type d -prune -exec rm -rf {} +
+# OpenCode's rules plugin (30 Sep 2026): OpenCode has no Claude-style hooks, so
+# its sessions got no page rules. RulesStore stages this beside hooks/ and
+# skills/, and SkillManifest links it into ~/.config/opencode/plugins/.
+mkdir -p "$APP_DIR/Contents/Resources/opencode"
+cp opencode/*.js "$APP_DIR/Contents/Resources/opencode/"
 chmod +x "$APP_DIR/Contents/Resources/skills/bin/"* \
          "$APP_DIR/Contents/Resources/skills/"*/scripts/*.sh \
          "$APP_DIR/Contents/Resources/skills/research-hq/scripts/hq-open"
