@@ -1,297 +1,66 @@
 import AppKit
 import TranquilityCore
 
-/// The grid, collapsed to a single column of lamps at the right edge.
+/// The grid, collapsed to a pill at the right edge: how many agents have
+/// something you have not read, and nothing else.
 ///
-/// Ruled 08–10 Aug (docs/ruling-the-collapsed-strip.md). One sentence: **the grid
-/// has two widths, the user owns which one, and the app never changes it.**
+/// Ruled 1 Oct 2026, from a mockup (option A): "change the collapsed view to
+/// just show the number of unread green lamps ... basically a pill, fully
+/// rounded, and also remove the create button from the collapsed view." It
+/// replaces the column of up to ten lamps (ruled 08 to 18 Aug; its history
+/// is in git log for this file): the column answered "who" and "in
+/// what state", and the collapsed panel's one job turned out to be "is there
+/// anything for me", which is a number.
 ///
-/// It is a second WIDTH, not a second face. `PanelState` does not gain a case and
-/// `render()` does not gain an arm — the idle face decides which of two views is
-/// on screen and hands both the same `SessionRow` data. A session that implements
-/// this as a new state has misread it.
+/// It is still a second WIDTH, not a second face: `PanelState` gains no case,
+/// and the idle face hands this view the same `SessionRow`s it hands the grid.
 ///
 /// ## The layout, top to bottom
 ///
-///     ┌────┐  logo mark          — becomes Expand on hover
-///     │ ◉  │  lamps, ready/working/fault only, idle omitted
-///     │ ○  │  — solid unread, hollow once opened, exactly as the grid draws
-///     │ ◉  │
-///     │    │
-///     │ ── │  the designation plate: a hairline, and TB under it
-///     │ TB │  — always there, whatever the roster; hidden on hover
-///     └────┘  X and + appear here on hover, in the plate's own slots
+///     ╭────╮  a green lamp: solid when something is unread, a ring at zero
+///     │ ●  │  (becomes Expand on hover)
+///     │ 6  │  the count of unread green lamps, dimmed at zero
+///     ╰────╯  (becomes Close on hover)
 ///
-/// ## Why nothing moves
+/// Two slots, two faces each, and the frame never changes: the 08 Aug rule
+/// that nothing on this surface moves on hover survives the redesign. The
+/// mockup drew the hover state taller; holding the height is what keeps the
+/// panel from jumping under the pointer. The + is gone: new agents start
+/// from the expanded panel and the status menu.
 ///
-/// The height is FIXED and the lamps are top-aligned, so a session lighting up
-/// never shifts the ones above it and never resizes the panel. Every control is
-/// a swap into a slot that already exists — the logo's slot becomes Expand, the
-/// plate's slot becomes X and +. A dedicated row for any of them would push
-/// the lamps down, and lamps holding still is the entire property that makes a
-/// 40px column readable at a glance. Any change that reflows this column on
-/// hover has lost the point of the design.
-@MainActor
+/// Working (blue) and fault (red) lamps do not appear here any more. The
+/// expanded grid still shows every one of them.
 final class CollapsedStrip: NSView {
 
     static let width: CGFloat = 40
-    private static let logoSlot: CGFloat = 40
-    private static let lampSlot: CGFloat = 28
-    /// The floor the hover controls land in: X and +, one `logoSlot` each.
-    /// Reserved in the ARITHMETIC and not on screen — the wordmark draws over
-    /// the same space at rest, because the mark and the controls never coexist.
-    private static let controlsFloor: CGFloat = logoSlot * 2
-
-    /// How many lamps the column shows, and the number the height is derived
-    /// FROM rather than checked against.
-    ///
-    /// Ruled 16 Aug, from the screenshots: "the collapsed state shows 8, but
-    /// the size has room for 10 at least." Both halves were true, which is the
-    /// tell that the two constants had drifted apart — the cap was the grid's
-    /// old eight-row floor written down a second time, the height was a round
-    /// 380 chosen next to it, and nothing tied them together, so the column
-    /// carried 36pt of dead band under the last lamp and cut the roster anyway.
-    /// Robert's own panel had eleven active agents and the strip showed eight
-    /// greens, dropping both working blues off the bottom of a column that
-    /// looked half empty.
-    ///
-    /// So the cap is the ruling and the height is its consequence.
-    ///
-    /// RE-RULED twice more. 17 Aug: ten lamps bought the roster and spent the
-    /// mark — eleven letters in the controls' floor landed at 5pt, "too small
-    /// not readable" — so the cap came down to eight to buy a 136pt band for a
-    /// stacked wordmark. 18 Aug retired the stack altogether (see `drawPlate`),
-    /// and the band went with it: a designation needs one slot, not five, so
-    /// the two lamps come back.
-    ///
-    /// Ten, and the frame is untouched at 400 through all three rulings —
-    /// which is the point of deriving it. The column has held still while the
-    /// argument about what belongs in it went round twice.
-    static let lampCapacity = 10
-
-    /// The band the mark gets: the controls' own floor, and nothing more.
-    ///
-    /// It was 136pt — five slots — while the mark was a stacked wordmark that
-    /// needed eleven letters' worth of rhythm to stay legible. A designation
-    /// does not: `TB` at 12pt fits the bottom slot with room around it, so the
-    /// band collapses back onto the floor the X and the + already stand in and
-    /// the three extra slots return to the lamps.
-    ///
-    /// Still a shared floor and still nothing reserved twice: the mark paints
-    /// at rest, the glyphs paint on hover, and the plate's own slot is the X's.
-    private static let markFloor: CGFloat = controlsFloor
-
-    /// Fixed, so the strip never resizes under the user — the logo slot, every
-    /// lamp slot, and the band the mark and the controls share. DERIVED: see
-    /// `lampCapacity`. 400 through every ruling since: eight lamps with a
-    /// stacked mark, ten with a plate — the same column, argued about twice.
-    static let height: CGFloat =
-        logoSlot + CGFloat(lampCapacity) * lampSlot + markFloor
-    /// The mark lives in the controls' slot, at every roster size.
-    ///
-    /// It used to take whatever space the lamps left and vanish past five of
-    /// them — "if there's more than 5 working rows, there's probably not room
-    /// for the Tranquility Base" — which made the identity a function of how
-    /// busy the machine happened to be, and on a full column it was simply
-    /// gone. Ruled 17 Aug: "i would like our vertical tranquility base strip to
-    /// fit in here, so we can always display it, so i guess we make smaller so
-    /// it occupies same height as the two buttons and disappears on hover."
-    ///
-    /// So the mark is sized to a fixed band rather than to the leftovers, and
-    /// it is the same swap every other control on this column already is: one
-    /// slot, two faces, nothing reflowing.
-    ///
-    /// The band is the controls' floor again as of 18 Aug, because the mark it
-    /// holds is no longer a wordmark. The 17 Aug version fitted eleven letters
-    /// to this space and shipped illegible; the answer was not a bigger band
-    /// but a smaller thing to put in it.
-    private var wordmarkRect: NSRect {
-        NSRect(x: 0, y: 0, width: bounds.width, height: Self.markFloor)
-    }
-
-    /// The smallest the mark may render, in points.
-    ///
-    /// A floor, and the drill enforces it, because "is this readable" is not a
-    /// question a layout answers on its own — the 17 Aug version computed 5pt
-    /// from the space it was given, drew it correctly, passed an ink count, and
-    /// was unreadable on the actual screen. 8pt is where the mark sat for the
-    /// whole life of the design before that pass, unremarked; below it the type
-    /// stops being quiet and starts being absent. The plate now renders at 12
-    /// and clears this by half again — the floor stays because it is what
-    /// stops the next edit quietly trading legibility for room.
-    static let markTypeFloor: CGFloat = 8
+    private static let slot: CGFloat = 38
+    /// Fixed: the panel morphs to exactly this, and the corners round to half
+    /// the width, which is what makes it a pill.
+    static let height: CGFloat = slot * 2
 
     var onExpand: (() -> Void)?
     var onDismiss: (() -> Void)?
-    var onNewAgent: (() -> Void)?
-    var onPick: ((String) -> Void)?
 
-    /// Ready, working and fault only. Idle lamps do not appear collapsed —
-    /// there is no reason to show a socket with nothing in it when the whole
-    /// column exists to answer one question.
-    private(set) var lamps: [SessionRow] = []
+    /// Agents with a green lamp you have not opened: the grid's solid greens.
+    private(set) var unreadCount = 0
     private var hovering = false
 
-    /// Which of the floor's two faces the last paint put there.
-    ///
-    /// Recorded BY `draw`, so it is a record of what happened rather than a
-    /// second copy of the condition. A drill that re-asks "is it hovering?"
-    /// proves only that the expression it just wrote agrees with itself.
-    enum FloorFace: Equatable { case mark, controls }
-    private(set) var lastFloorPaint: FloorFace?
+    /// Which face the last paint put on the pill. Recorded BY `draw`, so a
+    /// drill reads what was painted rather than re-asking the condition.
+    enum Face: Equatable { case count, controls }
+    private(set) var lastFace: Face?
 
-    /// The point size the mark last actually rendered at — recorded by the
-    /// draw, so the drill measures the type that was PAINTED rather than the
-    /// constant somebody intended.
-    private(set) var lastMarkTypeSize: CGFloat = 0
+    // MARK: - The arrival glow
 
-    /// The arrival glow: a colour and how much of it is left, 1 → 0.
-    ///
-    /// The lamps are STATE — what is true right now, readable at any moment. The
-    /// glow is an EVENT — this just happened. A user glancing over five minutes
-    /// later should learn the state and nothing about the timing, which is what
-    /// a transient carries and a lamp structurally cannot. It matters more since
-    /// the spoken callsign died: without it, a collapsed strip says nothing at
-    /// all when an agent returns except a lamp quietly changing colour.
+    /// The lamp is STATE; the glow is an EVENT, one breath and gone. Kept from
+    /// the column, behind the lamp, which is now the pill's one fixed point.
     private var glowColor: NSColor?
     private var glowStrength: CGFloat = 0
     private var glowTimer: Timer?
-
-    /// One breath, and it must not be a light show.
-    ///
-    /// `Lamp.working`'s own doc comment is the law here: "solid, never blinking —
-    /// a room full of blinking lamps is the opposite of calm." So: a single
-    /// rise-and-fall, slow enough to read as light rather than as a flash, and
-    /// then gone completely. No loop, no residue, nothing to acknowledge. A glow
-    /// that persists until dismissed is a notification badge, which is the thing
-    /// this product exists to not be.
-    /// `var` so the drill can shorten it. The decay is the property worth
-    /// asserting; waiting 1.6 real seconds to assert it is not, and the first
-    /// version's sleep pushed every later drill past the deploy gate's window —
-    /// a test that makes the build look broken is worse than the bug it guards.
+    /// `var` so the drill can shorten it.
     static var glowSeconds: TimeInterval = 1.6
-
-    /// What the drill reads to prove the glow decays rather than lingering.
     var currentGlowStrength: CGFloat { glowColor == nil ? 0 : glowStrength }
     var glowTimerIsActive: Bool { glowTimer?.isValid == true }
-
-    /// The ink actually PAINTED at the centre of lamp `index`.
-    ///
-    /// Sampled off the rendered view rather than recomputed, because the bug
-    /// this guards was a view that never asked the question at all: a drill
-    /// that re-evaluates `read == .opened` would have passed on the strip that
-    /// shipped, since the expression was right everywhere it existed and
-    /// absent here. A solid lamp answers with its state colour; a hollow one
-    /// has nothing in the middle, so the answer is transparent.
-    func lampCentreInkForTesting(_ index: Int) -> NSColor? {
-        guard index < lamps.count,
-              let rep = bitmapImageRepForCachingDisplay(in: bounds) else { return nil }
-        cacheDisplay(in: bounds, to: rep)
-        let slot = lampRect(index)
-        // PIXELS, not points, and the bitmap counts rows from the top while the
-        // view's geometry does not. The first version passed neither: it read
-        // point coordinates straight into `colorAt`, which on a 2x display
-        // samples a quarter of the way in from the corner — empty ground, so
-        // every lamp came back transparent and "hollow" was true of all of
-        // them. A drill that measures nothing reports the same as a drill that
-        // measures the right thing and finds it correct.
-        let sx = CGFloat(rep.pixelsWide) / bounds.width
-        let sy = CGFloat(rep.pixelsHigh) / bounds.height
-        return rep.colorAt(x: Int(slot.midX * sx),
-                           y: Int((bounds.maxY - slot.midY) * sy))
-    }
-
-    /// Does a FULL column still leave the hover controls their floor?
-    ///
-    /// The property that ties `lampCapacity` to `height`. Raising the cap
-    /// without moving the frame is the drift that put eight lamps in a column
-    /// sized for ten and, run the other way, would push the last lamp through
-    /// the X and the +.
-    var lampsClearTheMarkForTesting: Bool {
-        lampRect(Self.lampCapacity - 1).minY >= Self.markFloor - 0.5
-    }
-
-    /// The controls stand INSIDE the mark's band, so nothing is reserved twice
-    /// — the property that lets both live at the bottom of a fixed frame.
-    var controlsSitInsideTheMarkForTesting: Bool {
-        wordmarkRect.contains(dismissRect.union(newAgentRect))
-    }
-
-    /// The type the mark actually rendered at, against the floor it owes.
-    var markTypeIsLegibleForTesting: Bool {
-        lastMarkTypeSize >= Self.markTypeFloor
-    }
-
-    /// A drill cannot move the mouse, and hover is the whole swap.
-    func setHoveringForTesting(_ on: Bool) {
-        hovering = on
-        needsDisplay = true
-        display()
-    }
-
-    /// Write the rendered column to a PNG, next to the log, on every deploy.
-    ///
-    /// Ruled 17 Aug, and it is a process fix rather than a feature: "really you
-    /// should eval if it's visible before shipping". The 5pt mark passed a
-    /// paint record, an ink count and a geometry check, and was illegible on
-    /// the screen — the properties a drill can state are not the whole of what
-    /// a panel has to be. So the drill leaves a picture, at the panel's real
-    /// pixel scale, and looking at it is one Read away for whoever ships next.
-    ///
-    /// One file, overwritten each launch: this is the current column, not an
-    /// archive. `logs/deploys.log` already says which build drew it.
-    @discardableResult
-    func writeShot() -> URL? {
-        guard let rep = bitmapImageRepForCachingDisplay(in: bounds) else { return nil }
-        cacheDisplay(in: bounds, to: rep)
-        guard let png = rep.representation(using: .png, properties: [:]) else { return nil }
-        let url = QueueStore.supportDirectory.appendingPathComponent("strip-shot.png")
-        do { try png.write(to: url) } catch { return nil }
-        return url
-    }
-
-    /// Ink in the LOGO slot — the drill's proof that the header is painted at
-    /// all, and by something with the mark's mass rather than a stray dot.
-    func headerInkForTesting() -> Int {
-        guard let rep = bitmapImageRepForCachingDisplay(in: bounds) else { return 0 }
-        cacheDisplay(in: bounds, to: rep)
-        let sx = CGFloat(rep.pixelsWide) / bounds.width
-        let sy = CGFloat(rep.pixelsHigh) / bounds.height
-        let top = max(0, Int((bounds.maxY - logoRect.maxY) * sy))
-        let bottom = min(rep.pixelsHigh, Int((bounds.maxY - logoRect.minY) * sy))
-        var ink = 0
-        for y in top..<bottom {
-            for x in 0..<Int(bounds.width * sx)
-            where (rep.colorAt(x: x, y: y)?.alphaComponent ?? 0) > 0.05 {
-                ink += 1
-            }
-        }
-        return ink
-    }
-
-    /// How many pixels of the bottom slot actually carry ink.
-    ///
-    /// Counted rather than sampled at a point: the mark is fifteen small
-    /// glyphs spread over 80pt, so no single pixel is reliably on it, and the
-    /// failure worth catching is the whole run coming out invisible — a size
-    /// clamped to nothing, or an early return. Zero here means the panel is
-    /// unnamed.
-    func floorInkForTesting() -> Int {
-        guard let rep = bitmapImageRepForCachingDisplay(in: bounds) else { return 0 }
-        cacheDisplay(in: bounds, to: rep)
-        let sx = CGFloat(rep.pixelsWide) / bounds.width
-        let sy = CGFloat(rep.pixelsHigh) / bounds.height
-        let top = max(0, Int((bounds.maxY - wordmarkRect.maxY) * sy))
-        let bottom = min(rep.pixelsHigh, Int((bounds.maxY - wordmarkRect.minY) * sy))
-        var ink = 0
-        for y in top..<bottom {
-            for x in 0..<Int(bounds.width * sx)
-            where (rep.colorAt(x: x, y: y)?.alphaComponent ?? 0) > 0.05 {
-                ink += 1
-            }
-        }
-        return ink
-    }
 
     func flash(_ lamp: Lamp) {
         glowTimer?.invalidate()
@@ -306,113 +75,6 @@ final class CollapsedStrip: NSView {
         RunLoop.main.add(timer, forMode: .common)
     }
 
-    func show(rows: [SessionRow]) {
-        lamps = rows.filter { $0.lamp != .running }
-            .prefix(Self.lampCapacity).map { $0 }
-        needsDisplay = true
-    }
-
-    // MARK: - Hover
-
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        trackingAreas.forEach(removeTrackingArea)
-        addTrackingArea(NSTrackingArea(
-            rect: bounds,
-            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
-            owner: self))
-        PointerCursor.track(self)
-    }
-    override func cursorUpdate(with event: NSEvent) { PointerCursor.show() }
-
-    override func mouseEntered(with event: NSEvent) {
-        hovering = true
-        needsDisplay = true
-    }
-
-    override func mouseExited(with event: NSEvent) {
-        hovering = false
-        needsDisplay = true
-    }
-
-    // MARK: - Hit targets
-    //
-    // Drawn rather than built from NSButtons: three controls sharing two slots
-    // with a wordmark, all of which appear and vanish on hover, is more state
-    // than a view hierarchy wants to hold. One `draw` and one `mouseDown` keeps
-    // the swap honest — what is painted IS what is clickable, by construction.
-
-    private var logoRect: NSRect {
-        NSRect(x: 0, y: bounds.maxY - Self.logoSlot, width: bounds.width, height: Self.logoSlot)
-    }
-
-    private func lampRect(_ index: Int) -> NSRect {
-        NSRect(x: 0,
-               y: bounds.maxY - Self.logoSlot - CGFloat(index + 1) * Self.lampSlot,
-               width: bounds.width, height: Self.lampSlot)
-    }
-
-    private var dismissRect: NSRect {
-        NSRect(x: 0, y: 0, width: bounds.width, height: Self.logoSlot)
-    }
-
-    private var newAgentRect: NSRect {
-        NSRect(x: 0, y: Self.logoSlot, width: bounds.width, height: Self.logoSlot)
-    }
-
-    /// Rule 1 of the hover standard: every band of the strip does something —
-    /// expand, dismiss, new agent, or pick a lamp — so the whole strip carries
-    /// the cursor. It is the one surface where the hover swap already announced
-    /// itself, and it still never said "clickable", only "there is more here".
-    override func resetCursorRects() {
-        super.resetCursorRects()
-        addCursorRect(bounds, cursor: .pointingHand)
-    }
-
-    override func mouseDown(with event: NSEvent) {
-        let p = convert(event.locationInWindow, from: nil)
-        if logoRect.contains(p) { onExpand?(); return }
-        if hovering, dismissRect.contains(p) { onDismiss?(); return }
-        if hovering, newAgentRect.contains(p) { onNewAgent?(); return }
-        for (i, row) in lamps.enumerated() where lampRect(i).contains(p) {
-            onPick?(row.id)
-            return
-        }
-    }
-
-    // MARK: - Paint
-
-    override func draw(_ dirtyRect: NSRect) {
-        // NO background fill and no border. The strip lives inside the panel's
-        // own rounded, shadowed background — painting an opaque rectangle over
-        // it squares off the corners, which is what the first version did.
-        // Collapsing morphs the panel; it does not draw a new one.
-        drawGlow()
-        drawHeader()
-        drawLamps()
-
-        // The floor has two faces and never both. No roster condition any more:
-        // the mark is sized to this slot, so a full column cannot crowd it out.
-        if hovering {
-            drawGlyph(StateLegend.Glyph.denied, in: dismissRect, color: StateLegend.Palette.faint)
-            // Which harness a press launches (default launcher, 25 Aug) — the
-            // same single-letter-in-a-circle mark the menu's "New session"
-            // item already shows (`AppDelegate+Menu.swift`'s `rebuildMenu`),
-            // not either company's actual logo: no brand assets exist in
-            // this repo and none should. Read fresh each paint, same as the
-            // menu item re-reads it on every rebuild — this band only paints
-            // while hovering, so the cost is a stat call under a mouseover,
-            // not a hot loop.
-            let symbol = AgentDefaults.defaultHarness == CodexAdapter().id
-                ? "x.circle" : "c.circle"
-            drawSymbol(symbol, in: newAgentRect, color: StateLegend.Palette.faint)
-            lastFloorPaint = .controls
-        } else {
-            drawPlate()
-            lastFloorPaint = .mark
-        }
-    }
-
     @objc private func stepGlow(_ timer: Timer) {
         guard let started = timer.userInfo as? Date else { timer.invalidate(); return }
         let elapsed = Date().timeIntervalSince(started)
@@ -424,27 +86,114 @@ final class CollapsedStrip: NSView {
             needsDisplay = true
             return
         }
-        // Ease in over the first fifth, out over the rest. The slow tail is what
-        // makes it read as calm: an even fade reads as a blink, a fast one as an
-        // alert.
         let p = elapsed / Self.glowSeconds
         glowStrength = p < 0.2 ? CGFloat(p / 0.2) : CGFloat(pow(1 - (p - 0.2) / 0.8, 1.7))
         needsDisplay = true
     }
 
-    /// A soft halo behind the logo mark, in the returning session's colour.
-    ///
-    /// Behind the LOGO rather than the lamp that changed: the logo is the strip's
-    /// one fixed point, so the event always appears in the same place whatever
-    /// the roster is doing. Lighting the lamp itself would move the announcement
-    /// around the column and make the eye hunt for it, which is the opposite of
-    /// glanceable.
+    // MARK: - Rows
+
+    /// The grid's own rule for a solid green: a ready lamp you have not opened.
+    static func unread(in rows: [SessionRow]) -> Int {
+        rows.filter { $0.lamp == .ready && $0.read != .opened }.count
+    }
+
+    func show(rows: [SessionRow]) {
+        unreadCount = Self.unread(in: rows)
+        needsDisplay = true
+    }
+
+    // MARK: - Hover
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(
+            rect: bounds, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self))
+        PointerCursor.track(self)
+    }
+    override func cursorUpdate(with event: NSEvent) { PointerCursor.show() }
+    override func mouseEntered(with event: NSEvent) { hovering = true; needsDisplay = true }
+    override func mouseExited(with event: NSEvent) { hovering = false; needsDisplay = true }
+
+    /// A drill cannot move the mouse, and hover is the whole swap.
+    func setHoveringForTesting(_ on: Bool) {
+        hovering = on
+        needsDisplay = true
+        display()
+    }
+
+    // MARK: - Hit targets
+
+    private var topRect: NSRect {
+        NSRect(x: 0, y: bounds.maxY - Self.slot, width: bounds.width, height: Self.slot)
+    }
+    private var bottomRect: NSRect {
+        NSRect(x: 0, y: 0, width: bounds.width, height: Self.slot)
+    }
+
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        addCursorRect(bounds, cursor: .pointingHand)
+    }
+
+    /// Anywhere on the pill expands it, except Close while hovering.
+    override func mouseDown(with event: NSEvent) {
+        let p = convert(event.locationInWindow, from: nil)
+        if hovering, bottomRect.contains(p) { onDismiss?(); return }
+        onExpand?()
+    }
+
+    // MARK: - Paint
+
+    override func draw(_ dirtyRect: NSRect) {
+        // No background: the pill IS the panel's glass, rounded to half its
+        // width while collapsed (see `Geometry`). Painting here would square it.
+        drawGlow()
+        if hovering {
+            drawGlyph(StateLegend.Glyph.back, in: topRect, color: StateLegend.Palette.secondary)
+            drawGlyph(StateLegend.Glyph.denied, in: bottomRect, color: StateLegend.Palette.secondary)
+            lastFace = .controls
+        } else {
+            drawLamp()
+            drawCount()
+            lastFace = .count
+        }
+    }
+
+    private var lampDot: NSRect {
+        let d: CGFloat = 12
+        return NSRect(x: topRect.midX - d / 2, y: topRect.minY + 8, width: d, height: d)
+    }
+
+    /// Solid green when something is unread, a green ring at zero: the same
+    /// read rule the grid draws, at the size of one lamp.
+    private func drawLamp() {
+        if unreadCount > 0 {
+            Lamp.ready.fill.setFill()
+            NSBezierPath(ovalIn: lampDot).fill()
+        } else {
+            Lamp.ready.fill.setStroke()
+            let ring = NSBezierPath(ovalIn: lampDot.insetBy(dx: 1, dy: 1))
+            ring.lineWidth = 2
+            ring.stroke()
+        }
+    }
+
+    private func drawCount() {
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 17, weight: .semibold),
+            .foregroundColor: unreadCount > 0 ? StateLegend.Palette.ink : StateLegend.Palette.hint,
+        ]
+        let text = (unreadCount > 99 ? "99+" : "\(unreadCount)") as NSString
+        let size = text.size(withAttributes: attrs)
+        text.draw(at: NSPoint(x: bottomRect.midX - size.width / 2, y: bottomRect.maxY - size.height - 4),
+                  withAttributes: attrs)
+    }
+
     private func drawGlow() {
         guard let glowColor, glowStrength > 0.01 else { return }
-        let centre = NSPoint(x: logoRect.midX, y: logoRect.midY)
-        // Three rings, each fainter and wider — a gradient by hand, because a
-        // real one would need a layer and this is drawn thirty times a second
-        // for a second and a half, twice an hour.
+        let centre = NSPoint(x: lampDot.midX, y: lampDot.midY)
         for step in stride(from: 3, through: 1, by: -1) {
             let radius = 9 + CGFloat(step) * 5
             let alpha = 0.16 * glowStrength / CGFloat(step)
@@ -452,128 +201,6 @@ final class CollapsedStrip: NSView {
             NSBezierPath(ovalIn: NSRect(x: centre.x - radius, y: centre.y - radius,
                                         width: radius * 2, height: radius * 2)).fill()
         }
-    }
-
-    /// The logo at rest, the Expand chevron while hovering. One slot, two faces.
-    private func drawHeader() {
-        if hovering {
-            drawGlyph(StateLegend.Glyph.back, in: logoRect, color: StateLegend.Palette.secondary)
-        } else {
-            // The site mark, the same one the menu bar and the app icon wear
-            // (ruled 18 Aug: "I think that should be our mark on the collapsed
-            // state as well").
-            //
-            // What was here was a filled ring — the lamp vocabulary one size
-            // up, which was right when the panel had no mark of its own. It
-            // does now, and the mark is built from that same lamp, so this is
-            // not a change of vocabulary: it is the ring finally saying which
-            // app it belongs to. The strip is the surface where that matters
-            // most, because collapsed is the state the panel spends its day in.
-            //
-            // 17pt of ink in a 40pt slot: the same optical weight the ring had,
-            // and clear of the first lamp below by the slot's own margin.
-            SiteMark.draw(in: logoRect, height: 17,
-                          color: StateLegend.Palette.secondary)
-        }
-    }
-
-    /// The same lamp the grid draws, at another width — INCLUDING the read
-    /// state, which this column simply did not carry.
-    ///
-    /// Solid unread, a ring once opened, in the state's own colour: the rule
-    /// `GridRowView` has followed since 16 Aug, and one this view was never
-    /// told about, so every lit lamp came out solid. Robert saw the two widths
-    /// side by side and the disagreement was the whole report — "the collapse
-    /// state shows only the filled dots, whereas the uncollapsed state shows
-    /// both filled and unfilled". His grid had one solid green and eight
-    /// hollow; his strip had nine identical solid greens, which says every
-    /// agent is waiting on him when only one of them was.
-    ///
-    /// The hollow test is `GridRowView`'s verbatim, deliberately: it is the
-    /// same question about the same row, and the two views disagreeing about
-    /// it is precisely the defect. `asksForYou` keeps advisory blue solid —
-    /// news has no read state — and 1.5pt keeps the ring from reading as a
-    /// smudge at 9px, both for the reasons the grid states at its own call
-    /// site.
-    private func drawLamps() {
-        for (i, row) in lamps.enumerated() {
-            let slot = lampRect(i)
-            let d = Lamp.diameter
-            let dot = NSRect(x: slot.midX - d / 2, y: slot.midY - d / 2, width: d, height: d)
-            if row.read == .opened && row.lamp.asksForYou {
-                row.lamp.fill.setStroke()
-                let path = NSBezierPath(ovalIn: dot.insetBy(dx: 0.75, dy: 0.75))
-                path.lineWidth = 1.5
-                path.stroke()
-                continue
-            }
-            row.lamp.fill.setFill()
-            NSBezierPath(ovalIn: dot).fill()
-            if let ring = row.lamp.ring {
-                ring.setStroke()
-                let path = NSBezierPath(ovalIn: dot.insetBy(dx: 0.5, dy: 0.5))
-                path.lineWidth = 1
-                path.stroke()
-            }
-        }
-    }
-
-    /// The console designation: a hairline, and `TB` under it.
-    ///
-    /// Ruled 18 Aug, off a design audit of the stacked wordmark it replaces.
-    /// Three things were wrong with the stack and only the third was taste.
-    /// It was painted in `faint`, which the palette rules DECORATIVE ONLY and
-    /// "never small text" at 2.18:1 — while the expanded face's signature, the
-    /// same identity one surface over, is set in `hint` at 4.57:1 for exactly
-    /// that reason. It put a second axis on a column where the logo, every
-    /// lamp, the X and the + all centre on x=20: BASE filled only the bottom
-    /// four rows, so for the top seven the only ink on the strip sat left of
-    /// that axis, which is the "off-centre" the report started from. And it
-    /// spent 136 of 400 points — a third of the column, three lamp slots — on
-    /// a name the expanded face already carries in its corner.
-    ///
-    /// A designation answers all three. It is one line on the axis, it is the
-    /// largest and most legible the mark has ever been, and it costs one slot,
-    /// so the roster goes back to ten. It is also what the thing being
-    /// imitated actually does: a console position is labelled GNC, FIDO,
-    /// EECOM, RETRO — an engraved abbreviation, never the product's name set
-    /// vertically down the bezel.
-    ///
-    /// `TB` is a PLACEHOLDER for a real mark, and knowingly so — the icon and
-    /// wordmark work is out for research as this lands. What is ruled here is
-    /// the slot, the ink and the size; what fills it is still open.
-    private func drawPlate() {
-        // The plate's own slot is the X's. Nothing is reserved twice: the
-        // hairline and the letters paint at rest, the glyphs paint on hover.
-        let plate = dismissRect
-
-        // Filled rather than stroked, and half a point down: a 1pt line
-        // centred on the slot edge straddles the pixel boundary and renders as
-        // two half-lit rows on a 2x display. This one lands on the grid.
-        StateLegend.Palette.hairline.setFill()
-        NSBezierPath(rect: NSRect(x: 11, y: plate.maxY - 0.5,
-                                  width: bounds.width - 22, height: 1)).fill()
-
-        let size: CGFloat = 12
-        lastMarkTypeSize = size
-        // Letterspaced, which is how this panel buys subtlety everywhere else
-        // — the 10 Aug signature ruling: "subtlety is bought with letterspacing
-        // and stillness", never by dimming the ink under its floor.
-        let kern: CGFloat = 2.6
-        let attrs: [NSAttributedString.Key: Any] = [
-            .font: ChromeType.mono(ofSize: size, weight: .medium),
-            .foregroundColor: StateLegend.Palette.hint,
-            .kern: kern,
-        ]
-        let text = "TB" as NSString
-        let measured = text.size(withAttributes: attrs)
-        // Kerning trails the LAST glyph too, so the measured width is 2.6pt
-        // wider than the ink. Centring on it would sit the pair left of the
-        // axis by half that — the exact fault this plate replaces.
-        let inkWidth = measured.width - kern
-        text.draw(at: NSPoint(x: plate.midX - inkWidth / 2,
-                              y: plate.midY - measured.height / 2),
-                  withAttributes: attrs)
     }
 
     private func drawGlyph(_ glyph: String, in rect: NSRect, color: NSColor) {
@@ -587,24 +214,44 @@ final class CollapsedStrip: NSView {
                withAttributes: attrs)
     }
 
-    /// `drawGlyph`'s sibling for an SF Symbol: this view paints by hand
-    /// (see the type's own doc comment on why one `draw` holds everything),
-    /// so there is no `NSImageView` for AppKit's own template tinting to
-    /// apply to — the symbol is rendered into an offscreen template image
-    /// and re-inked to `color` with `.sourceAtop`, the same recolor-a-
-    /// template trick `SiteMark` already uses for the menu bar mark.
-    private func drawSymbol(_ systemName: String, in rect: NSRect, color: NSColor) {
-        guard let symbol = NSImage(systemSymbolName: systemName, accessibilityDescription: nil)?
-            .withSymbolConfiguration(.init(pointSize: 13, weight: .medium))
-        else { return }
-        let size = symbol.size
-        let tinted = NSImage(size: size)
-        tinted.lockFocus()
-        symbol.draw(at: .zero, from: .zero, operation: .sourceOver, fraction: 1)
-        color.set()
-        NSRect(origin: .zero, size: size).fill(using: .sourceAtop)
-        tinted.unlockFocus()
-        tinted.draw(at: NSPoint(x: rect.midX - size.width / 2, y: rect.midY - size.height / 2),
-                    from: .zero, operation: .sourceOver, fraction: 1)
+    // MARK: - Evidence
+
+    /// The ink painted at the lamp's centre: green when solid, nothing when it
+    /// is a ring. Sampled off the render, in pixels, top-down.
+    func lampCentreInkForTesting() -> NSColor? {
+        guard let rep = bitmapImageRepForCachingDisplay(in: bounds) else { return nil }
+        cacheDisplay(in: bounds, to: rep)
+        let sx = CGFloat(rep.pixelsWide) / bounds.width
+        let sy = CGFloat(rep.pixelsHigh) / bounds.height
+        return rep.colorAt(x: Int(lampDot.midX * sx), y: Int((bounds.maxY - lampDot.midY) * sy))
+    }
+
+    /// Pixels of ink in the count's slot: zero means no number was drawn.
+    func countInkForTesting() -> Int {
+        guard let rep = bitmapImageRepForCachingDisplay(in: bounds) else { return 0 }
+        cacheDisplay(in: bounds, to: rep)
+        let sx = CGFloat(rep.pixelsWide) / bounds.width
+        let sy = CGFloat(rep.pixelsHigh) / bounds.height
+        let top = max(0, Int((bounds.maxY - bottomRect.maxY) * sy))
+        let bottom = min(rep.pixelsHigh, Int((bounds.maxY - bottomRect.minY) * sy))
+        var ink = 0
+        for y in top..<bottom {
+            for x in 0..<Int(bounds.width * sx) where (rep.colorAt(x: x, y: y)?.alphaComponent ?? 0) > 0.05 {
+                ink += 1
+            }
+        }
+        return ink
+    }
+
+    /// A picture of the pill next to the log, every deploy: the panel's only
+    /// visual evidence, and the answer to "did anybody look at it".
+    @discardableResult
+    func writeShot() -> URL? {
+        guard let rep = bitmapImageRepForCachingDisplay(in: bounds) else { return nil }
+        cacheDisplay(in: bounds, to: rep)
+        guard let png = rep.representation(using: .png, properties: [:]) else { return nil }
+        let url = QueueStore.supportDirectory.appendingPathComponent("strip-shot.png")
+        do { try png.write(to: url) } catch { return nil }
+        return url
     }
 }

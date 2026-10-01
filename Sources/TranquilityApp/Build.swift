@@ -1034,14 +1034,6 @@ extension StatusHUD {
             Track.record("strip_clicked", ["band": "dismiss"])
             self?.dismiss()
         }
-        column.onNewAgent = { [weak self] in
-            Track.record("strip_clicked", ["band": "new_agent"])
-            MainActor.assumeIsolated { self?.onNewSession?() }
-        }
-        column.onPick = { [weak self] id in
-            Track.record("strip_clicked", ["band": "lamp", "agent_id": Track.hash(id)])
-            MainActor.assumeIsolated { self?.onPickWaiting?(id) }
-        }
         panel.contentView = glassView ?? background
         self.expandedRoot = background
 
