@@ -35,7 +35,7 @@ final class FolderHeaderView: NSView, NSTextFieldDelegate {
     var onRenameEnded: ((String?) -> Void)?
     var onDrag: ((GridDragPhase, NSEvent) -> Void)?
 
-    init(folder: ProjectBook.Folder, lamp aggregate: Lamp?, lit: Int, members: Int,
+    init(folder: ProjectBook.Folder, lamp aggregate: Lamp?, hollow: Bool, lit: Int, members: Int,
          naming: Bool, width: CGFloat) {
         folderId = folder.id
         super.init(frame: .zero)
@@ -67,7 +67,15 @@ final class FolderHeaderView: NSView, NSTextFieldDelegate {
         lamp.translatesAutoresizingMaskIntoConstraints = false
         lamp.wantsLayer = true
         lamp.layer?.cornerRadius = Lamp.diameter / 2
-        lamp.layer?.backgroundColor = (aggregate?.fill ?? .clear).cgColor
+        // Solid or hollow exactly as the member rows draw it (GridRowView).
+        lamp.layer?.backgroundColor = (hollow ? .clear : aggregate?.fill ?? .clear).cgColor
+        if let aggregate, hollow {
+            lamp.layer?.borderWidth = 1.5
+            lamp.layer?.borderColor = aggregate.fill.cgColor
+        } else if let ring = aggregate?.ring {
+            lamp.layer?.borderWidth = 1
+            lamp.layer?.borderColor = ring.cgColor
+        }
         lamp.isHidden = !showsState || aggregate == nil
 
         for view in [chevron, nameLabel, countLabel, lamp] { addSubview(view) }
@@ -100,6 +108,7 @@ final class FolderHeaderView: NSView, NSTextFieldDelegate {
 
     var nameForTesting: String { nameLabel.stringValue }
     var lampForTesting: CGColor? { lamp.isHidden ? nil : lamp.layer?.backgroundColor }
+    var lampBorderForTesting: CGColor? { lamp.isHidden ? nil : lamp.layer?.borderColor }
     var countForTesting: String { countLabel.stringValue }
 
     /// Drop feedback: the whole folder is the target.

@@ -55,7 +55,7 @@ extension StatusHUD {
         func drawn() -> [String] {
             gridLines.map { entry in
                 switch entry.line {
-                case let .header(folder, _, _, _): return "[\(folder.name)]"
+                case let .header(folder, _, _, _, _): return "[\(folder.name)]"
                 case let .row(row, folder):
                     let indented = entry.view is FolderMemberView
                     return (folder != nil && indented ? "  " : "") + row.id

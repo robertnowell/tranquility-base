@@ -50,9 +50,10 @@ extension StatusHUD {
 
     // MARK: - Drawing
 
-    func folderHeader(_ folder: ProjectBook.Folder, lamp: Lamp?, lit: Int,
+    func folderHeader(_ folder: ProjectBook.Folder, lamp: Lamp?, hollow: Bool, lit: Int,
                       members: Int) -> FolderHeaderView {
-        let header = FolderHeaderView(folder: folder, lamp: lamp, lit: lit, members: members,
+        let header = FolderHeaderView(folder: folder, lamp: lamp, hollow: hollow, lit: lit,
+                                      members: members,
                                       naming: namingFolders.contains(folder.id),
                                       width: Self.gridWidth)
         header.onToggle = { [weak self] in self?.toggleFolder(folder.id) }
@@ -272,7 +273,7 @@ extension StatusHUD {
             // loose rows, it goes last.
             let owner: String?
             switch under?.line {
-            case let .header(folder, _, _, _)?: owner = folder.id
+            case let .header(folder, _, _, _, _)?: owner = folder.id
             case let .row(_, folder?)?: owner = folder
             default: owner = nil
             }
@@ -288,7 +289,7 @@ extension StatusHUD {
         case let .row(id):
             let current = book.folder(of: id, origin: origin)?.id
             switch under?.line {
-            case let .header(folder, _, _, _)?:
+            case let .header(folder, _, _, _, _)?:
                 return (folder.id == current ? nil : .join(folder: folder.id), nil)
             case let .row(_, folder?)?:
                 return (folder == current ? nil : .join(folder: folder), nil)
@@ -318,7 +319,7 @@ extension StatusHUD {
     func folderBlock(_ folderId: String) -> NSRect? {
         let views = gridLines.filter { entry in
             switch entry.line {
-            case let .header(folder, _, _, _): return folder.id == folderId
+            case let .header(folder, _, _, _, _): return folder.id == folderId
             case let .row(_, folder): return folder == folderId
             }
         }.map { $0.view.convert($0.view.bounds, to: nil) }
