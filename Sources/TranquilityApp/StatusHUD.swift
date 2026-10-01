@@ -126,35 +126,16 @@ final class StatusHUD: NSObject {
         }
     }
 
-    /// Lamps the collapsed column is currently showing — the drill asserts idle
-    /// ones never reach it.
-    var collapsedLampCount: Int { strip?.lamps.count ?? 0 }
+    /// The number the collapsed pill shows: agents with an unread green lamp.
+    var collapsedUnreadCount: Int { strip?.unreadCount ?? 0 }
     var collapsedGlowStrength: CGFloat { strip?.currentGlowStrength ?? 0 }
     var collapsedGlowTimerIsActive: Bool { strip?.glowTimerIsActive ?? false }
-    /// The ink the column actually painted in a lamp's middle — a state colour
-    /// when the lamp is solid, transparent when it is a ring.
-    func collapsedLampCentreInk(_ index: Int) -> NSColor? {
-        strip?.lampCentreInkForTesting(index)
-    }
-    /// A full column still clears the band the mark and the controls share.
-    var collapsedLampsClearTheMark: Bool {
-        strip?.lampsClearTheMarkForTesting ?? false
-    }
-    /// Ink in the strip's logo slot — the header mark, counted on the render.
-    var collapsedHeaderInk: Int { strip?.headerInkForTesting() ?? 0 }
-    /// Which face the strip's bottom band last painted, and how much ink it
-    /// put there — the mark at rest, the controls on hover.
-    var collapsedFloorFace: CollapsedStrip.FloorFace? { strip?.lastFloorPaint }
-    var collapsedFloorInk: Int { strip?.floorInkForTesting() ?? 0 }
-    var collapsedControlsSitInsideTheMark: Bool {
-        strip?.controlsSitInsideTheMarkForTesting ?? false
-    }
-    /// The type the mark actually rendered at, and whether it clears the floor
-    /// a human can read it at.
-    var collapsedMarkTypeSize: CGFloat { strip?.lastMarkTypeSize ?? 0 }
-    var collapsedMarkTypeIsLegible: Bool {
-        strip?.markTypeIsLegibleForTesting ?? false
-    }
+    /// The pill's lamp as painted: green when something is unread, nothing at
+    /// its centre when it is a ring.
+    func collapsedLampCentreInk() -> NSColor? { strip?.lampCentreInkForTesting() }
+    /// Which face the pill last painted, and the ink in its count slot.
+    var collapsedFace: CollapsedStrip.Face? { strip?.lastFace }
+    var collapsedCountInk: Int { strip?.countInkForTesting() ?? 0 }
     func collapsedSetHovering(_ on: Bool) { strip?.setHoveringForTesting(on) }
     /// In a window, visible, and actually in the view tree. NOT
     /// `panel.contentView === strip` any more: the strip is a sibling inside the
@@ -3874,6 +3855,24 @@ final class StatusHUD: NSObject {
     /// system's rounded panels; the instrument edge the 06 Aug ruling wanted,
     /// taken all the way.
     static let panelRadius: CGFloat = 0
+
+    /// Round the glass and the surface it clips to `radius`. The collapsed
+    /// pill (1 Oct 2026) is half its width; every other face is the slab.
+    func setPanelRadius(_ radius: CGFloat) {
+        if #available(macOS 26.0, *), let glass = glassView as? NSGlassEffectView {
+            glass.cornerRadius = radius
+        } else {
+            glassView?.layer?.cornerRadius = radius
+        }
+        surfaceView?.layer?.cornerRadius = radius
+    }
+
+    /// The radius the panel's glass carries now: the drill's proof the
+    /// collapsed panel is a pill and the expanded one is the slab again.
+    var panelRadiusForTesting: CGFloat {
+        if #available(macOS 26.0, *), let glass = glassView as? NSGlassEffectView { return glass.cornerRadius }
+        return glassView?.layer?.cornerRadius ?? -1
+    }
     /// The same view as `surfaceView`, typed: the drill drives the drag
     /// callbacks directly, since a synthetic NSDraggingInfo is not something
     /// a launch drill can conjure.

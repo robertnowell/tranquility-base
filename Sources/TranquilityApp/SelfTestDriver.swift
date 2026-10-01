@@ -1719,8 +1719,9 @@ extension StatusHUD {
         // land before measuring — a drill that reads mid-animation measures
         // nothing, which is how the first version passed on a broken panel.
         settleAnimations()
-        // Idle lamps do not appear collapsed: five rows in, three are live.
-        let idleLampsOmitted = collapsedLampCount == 3
+        // The pill counts unread greens only: five rows in, one is green,
+        // and the working, fault and idle rows do not count.
+        let countsOnlyUnreadGreens = collapsedUnreadCount == 1
         panel?.contentView?.layoutSubtreeIfNeeded()
         panel?.displayIfNeeded()
         // In a WINDOW, not merely un-hidden. The first version asserted
@@ -1760,6 +1761,8 @@ extension StatusHUD {
             + "wantLeft=\(Int(expandedLeftEdge)) intendedH=\(Int(intendedHeight ?? -1))")
         let expandRestoredLeft = abs((panel?.frame.minX ?? 0) - expandedLeftEdge) < 2
         let expandedAgain = !collapsedIsOnScreen
+            // and the slab's square corners come back with the grid
+            && abs(panelRadiusForTesting - Self.panelRadius) < 0.5
         // The glow is a TRANSIENT. A version that persisted until acknowledged
         // would be the notification badge this product exists to avoid, so the
         // drill asserts it decays to nothing on its own clock.
@@ -1887,66 +1890,36 @@ extension StatusHUD {
         settleAnimations()
         panel?.contentView?.layoutSubtreeIfNeeded()
         panel?.displayIfNeeded()
-        let unreadInk = collapsedLampCentreInk(0)?.usingColorSpace(.sRGB)
-        let openedInk = collapsedLampCentreInk(1)?.usingColorSpace(.sRGB)
-        // Solid means painted AND painted the state's own colour: an alpha
-        // test alone would pass on a lamp drawn in the wrong hue.
-        let unreadIsSolidGreen = unreadInk.map {
-            $0.alphaComponent > 0.9
-                && $0.greenComponent > $0.redComponent
+        // The pill (1 Oct 2026): one unread green among fourteen rows is "1",
+        // with a SOLID green lamp, sampled off the render.
+        let unreadCountsOne = collapsedUnreadCount == 1
+        let lampInk = collapsedLampCentreInk()?.usingColorSpace(.sRGB)
+        let lampIsSolidGreen = lampInk.map {
+            $0.alphaComponent > 0.9 && $0.greenComponent > $0.redComponent
                 && $0.greenComponent > $0.blueComponent
         } ?? false
-        // Hollow means nothing in the middle. The ring itself is 1.5pt at the
-        // rim, so the centre pixel is untouched ground.
-        let openedIsHollow = (openedInk?.alphaComponent ?? 1) < 0.1
-        // Fourteen rows in, the column shows its full cap and they still clear
-        // the band the mark and the controls share.
-        let wholeColumnShown = collapsedLampCount == CollapsedStrip.lampCapacity
-        let lampsClearMark = collapsedLampsClearTheMark
-        Permissions.log("collapse drill: lamps=\(collapsedLampCount)"
-            + " unread=\(unreadInk.map { "\($0.alphaComponent)" } ?? "-")"
-            + " opened=\(openedInk.map { "\($0.alphaComponent)" } ?? "-")"
-            + " frame \(panel.map { NSStringFromRect($0.frame) } ?? "-")")
-
-        // The mark keeps its band at every roster size, AND stays readable.
-        //
-        // Two rulings, a day apart, and the second is why the type size is
-        // asserted at all. 17 Aug moved the mark into the controls' 80pt floor
-        // so it would always be there; it was, at 5pt — "too small not
-        // readable". Ink alone could not catch that: 449 pixels of 5pt type is
-        // a perfectly inked mark that nobody can read. So the drill now
-        // measures the POINT SIZE the draw actually chose against the floor
-        // below which the mark stops being quiet and starts being absent.
-        let markAtRest = collapsedFloorFace
-        let inkAtRest = collapsedFloorInk
-        // The top of the column wears the site mark now, not a bare ring
-        // (ruled 18 Aug). Counted as ink rather than asserted as geometry: the
-        // header is one `draw` call away from painting nothing at all, and a
-        // rect that exists is not a mark that shows.
-        let headerInkAtRest = collapsedHeaderInk
+        let countAtRest = collapsedFace
+        let countHasInk = collapsedCountInk > 20
+        // Hover swaps both slots for Expand and Close, and puts them back.
         collapsedSetHovering(true)
-        let faceOnHover = collapsedFloorFace
-        // On hover the slot becomes Expand, so the mark's own ink must drop —
-        // the chevron is a fraction of the mark's mass. This is the property
-        // that catches a header drawing BOTH at once.
-        let headerInkOnHover = collapsedHeaderInk
+        let faceOnHover = collapsedFace
         collapsedSetHovering(false)
-        let markReturns = collapsedFloorFace
-        let markIsAlwaysThere = markAtRest == .mark && markReturns == .mark
-        let markHasInk = inkAtRest > 40
-        let hoverTakesTheFloor = faceOnHover == .controls
-        let controlsInsideTheMark = collapsedControlsSitInsideTheMark
-        let markIsLegible = collapsedMarkTypeIsLegible
-        let headerWearsTheMark = headerInkAtRest > 60
-        let headerYieldsToExpand = headerInkOnHover < headerInkAtRest / 2
-        // A picture of the column, every deploy — the panel's only visual
-        // evidence, and the answer to "did anybody look at it".
+        let countReturns = collapsedFace
+        let hoverTakesThePill = faceOnHover == .controls && countAtRest == .count && countReturns == .count
+        // Nothing unread: the pill stays, with a ring and a dimmed 0.
+        showIdle(rows: [.init(id: "o", name: "opened", aux: "o", lamp: .ready, read: .opened)])
+        settleAnimations()
+        panel?.displayIfNeeded()
+        let zeroCount = collapsedUnreadCount == 0
+        let zeroIsARing = (collapsedLampCentreInk()?.alphaComponent ?? 1) < 0.1
+        let zeroStillShowsANumber = collapsedCountInk > 10
+        // A pill: the panel is exactly the strip's size, rounded to half its width.
+        let isAPill = abs((panel?.frame.width ?? 0) - CollapsedStrip.width) < 1
+            && abs((panel?.frame.height ?? 0) - CollapsedStrip.height) < 1
+            && abs(panelRadiusForTesting - CollapsedStrip.width / 2) < 0.5
         let shot = strip?.writeShot()
-        Permissions.log("collapse drill: floor \(markAtRest.map { "\($0)" } ?? "-")"
-            + " ink=\(inkAtRest) type=\(collapsedMarkTypeSize)pt"
-            + " hover=\(faceOnHover.map { "\($0)" } ?? "-")"
-            + " header=\(headerInkAtRest)/\(headerInkOnHover)"
-            + " lamps=\(collapsedLampCount)"
+        Permissions.log("collapse drill: pill count=\(collapsedUnreadCount) face=\(countAtRest.map { "\($0)" } ?? "-")"
+            + " hover=\(faceOnHover.map { "\($0)" } ?? "-") frame \(panel.map { NSStringFromRect($0.frame) } ?? "-")"
             + " shot=\(shot?.path ?? "-")")
 
         // The mark, at the two sizes nobody looks at until they ship.
@@ -1988,7 +1961,7 @@ extension StatusHUD {
             SelfTest.skipped("collapsed", because: "display asleep, frames do not animate")
         } else {
         SelfTest.report("collapsed", [
-            ("idleLampsOmitted", idleLampsOmitted),
+            ("countsOnlyUnreadGreens", countsOnlyUnreadGreens),
             ("stripShown", stripShown),
             ("collapsedWidthReal", collapsedWidthReal),
             ("entirelyOnScreen", onScreen),
@@ -2004,17 +1977,14 @@ extension StatusHUD {
             ("showIdleWouldRaise", showIdleDoesRaise),
             ("thinAfterTheInvitation", thinAfterInvitation),
             ("thinAfterAQuickArm", thinAfterQuickArm),
-            ("unreadLampIsSolid", unreadIsSolidGreen),
-            ("openedLampIsHollowCollapsedToo", openedIsHollow),
-            ("wholeColumnShown", wholeColumnShown),
-            ("lampsClearTheMark", lampsClearMark),
-            ("markShowsOnAFullColumn", markIsAlwaysThere),
-            ("markIsActuallyInked", markHasInk),
-            ("hoverTakesTheFloor", hoverTakesTheFloor),
-            ("controlsSitInsideTheMark", controlsInsideTheMark),
-            ("markTypeClearsTheLegibilityFloor", markIsLegible),
-            ("headerWearsTheSiteMark", headerWearsTheMark),
-            ("headerYieldsToExpandOnHover", headerYieldsToExpand),
+            ("pillCountsOneUnread", unreadCountsOne),
+            ("pillLampIsSolidGreen", lampIsSolidGreen),
+            ("pillCountIsInked", countHasInk),
+            ("hoverSwapsToExpandAndClose", hoverTakesThePill),
+            ("zeroUnreadReadsZero", zeroCount),
+            ("zeroUnreadLampIsARing", zeroIsARing),
+            ("zeroUnreadStillShowsTheNumber", zeroStillShowsANumber),
+            ("panelIsThePill", isAPill),
         ])
         }
         showIdle(rows: [])
