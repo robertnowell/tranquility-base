@@ -881,8 +881,17 @@ extension StatusHUD {
         panelHover.translatesAutoresizingMaskIntoConstraints = false
         panelHover.onHover = { [weak self] on in
             self?.collapseButton?.surfaceHovered = on
+            self?.pointerOnPanel = on
+            self?.paintDepth()
         }
         background.addSubview(panelHover, positioned: .above, relativeTo: nil)
+        // Selected counts as much as hovered: a panel you are typing into is
+        // the one you are reading.
+        for name in [NSWindow.didBecomeKeyNotification, NSWindow.didResignKeyNotification] {
+            NotificationCenter.default.addObserver(forName: name, object: panel, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.paintDepth() }
+            }
+        }
         NSLayoutConstraint.activate([
             panelHover.topAnchor.constraint(equalTo: background.topAnchor),
             panelHover.leadingAnchor.constraint(equalTo: background.leadingAnchor),

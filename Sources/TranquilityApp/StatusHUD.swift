@@ -3864,6 +3864,29 @@ final class StatusHUD: NSObject {
     /// both moved out of this file, this stayed for the same reason `ackBar`
     /// did.
     var surfaceView: NSView?
+    /// Whether the pointer is anywhere on the panel, for `paintDepth`.
+    var pointerOnPanel = false
+
+    /// GLASS AT REST, KLEIN VOID IN USE (Robert, 1 Oct 2026: "on hover it
+    /// turns to Klein Void ... the little animation to increase the
+    /// opacity"). The panel rests on regular glass, light enough to sit over
+    /// whatever you are doing; the moment the pointer is on it, or it is the
+    /// window you are typing into, the glass fills with Klein Void's ground,
+    /// the near-black blue his terminal palette is built on, so the words
+    /// stand on an opaque field while they are being read. Like a terminal
+    /// that sharpens on focus. With Reduce Motion the change is immediate.
+    func paintDepth() {
+        guard let layer = surfaceView?.layer else { return }
+        let deep = pointerOnPanel || panel?.isKeyWindow == true
+        let target = deep ? StateLegend.Palette.kleinVoid.cgColor : NSColor.clear.cgColor
+        let fade = CABasicAnimation(keyPath: "backgroundColor")
+        fade.fromValue = layer.presentation()?.backgroundColor ?? layer.backgroundColor
+        fade.toValue = target
+        fade.duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : 0.22
+        fade.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        layer.backgroundColor = target
+        layer.add(fade, forKey: "depth")
+    }
     /// The panel's material, hosting the surface (1 Oct 2026): regular
     /// Liquid Glass on macOS 26, the frosted popover material before it.
     var glassView: NSView?
