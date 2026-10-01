@@ -18,6 +18,23 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 REPOSITORY = "robertnowell/tranquility-base"
+
+# Paths that never reach the app bundle (scripts/bundle.sh copies Sources'
+# products, Resources, hooks and skills; scripts ride in the prepared artifact).
+# A merge that touches only these changes nothing the running app does, so it
+# is delivered by the build already running rather than by a rebuild.
+# Measured 29-30 Sep: 7 of 75 Dev rebuilds were tb-voice, docs or tests only,
+# at about three CPU-minutes each. Anything not listed here still deploys.
+UNSHIPPED_DIRS = ("tb-voice/", "docs/", "Tests/", ".github/")
+
+
+def ships_in_app(path):
+    # Unknown means shipped: a path that climbs out of a directory proves nothing.
+    if ".." in path.split("/"):
+        return True
+    if path.startswith(UNSHIPPED_DIRS):
+        return False
+    return not ("/" not in path and path.endswith(".md"))
 spec = importlib.util.spec_from_file_location("deployment_state", ROOT / "scripts/deployment-state.py")
 state_module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(state_module)
@@ -374,6 +391,21 @@ class Delivery:
             else:
                 return self.update(pr, status="running", target_sha=previous["sha"],
                                    receipt=previous, last_error=None)
+            # Not in the running build, but maybe nothing the app ships has
+            # moved since it was built. Judged over EVERY commit from the
+            # running build to the target, not just this merge, so a code
+            # change that landed in between still gets its rebuild.
+            try:
+                self.command("git", "merge-base", "--is-ancestor", previous["sha"], target)
+                changed = self.command("git", "diff", "--name-only", previous["sha"], target).split()
+            except subprocess.CalledProcessError as error:
+                if error.returncode != 1:
+                    raise
+            else:
+                if changed and not any(ships_in_app(path) for path in changed):
+                    return self.update(pr, status="running", target_sha=previous["sha"],
+                                       receipt=previous, last_error=None,
+                                       delivered_without_install=f"{len(changed)} file(s), none shipped in the app")
         if target in blocked_targets:
             return self.update(pr, status="failed", last_error="automatic retry held for this source; inspect the failure and retry explicitly")
         # A current checkout is necessary: relaunch and its shared helpers are
