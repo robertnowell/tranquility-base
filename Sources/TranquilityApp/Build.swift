@@ -219,12 +219,38 @@ extension StatusHUD {
         }
         background.autoresizingMask = [.width, .height]
         background.wantsLayer = true
-        background.layer?.backgroundColor = StateLegend.Palette.surface.cgColor
-        // 12 → 8 (ruled 06 Aug: "do we want this strong of corner rounding? It
-        // seems very default"). 8 is the instrument radius — a milled panel
-        // edge, not a system alert.
-        background.layer?.cornerRadius = 8
+        // REGULAR LIQUID GLASS (Robert, 1 Oct 2026: "let's start with regular
+        // glass"). This reverses 06 Aug's "the blur is dead": the opaque olive
+        // console read as a beige box, and regular glass, unlike Clear, adapts
+        // its own tint and range to keep what is on it legible. The rows are
+        // plain content on ONE glass view (Apple: no glass on glass); Reduce
+        // Transparency, Increase Contrast and the user's Clear/Tinted setting
+        // apply to it for free because it is the system's own material.
+        background.layer?.backgroundColor = NSColor.clear.cgColor
+        background.layer?.cornerRadius = Self.panelRadius
         background.layer?.masksToBounds = true
+        if #available(macOS 26.0, *) {
+            let glass = NSGlassEffectView(frame: panel.contentView!.bounds)
+            glass.style = .regular
+            glass.cornerRadius = Self.panelRadius
+            glass.autoresizingMask = [.width, .height]
+            glass.contentView = background
+            glassView = glass
+        } else {
+            // Before Tahoe: the frosted material the system's own popovers
+            // used, which honours Reduce Transparency the same way.
+            let frost = NSVisualEffectView(frame: panel.contentView!.bounds)
+            frost.material = .popover
+            frost.blendingMode = .behindWindow
+            frost.state = .active
+            frost.wantsLayer = true
+            frost.layer?.cornerRadius = Self.panelRadius
+            frost.layer?.masksToBounds = true
+            frost.autoresizingMask = [.width, .height]
+            background.frame = frost.bounds
+            frost.addSubview(background)
+            glassView = frost
+        }
         // The ack bar lives INSIDE the clipping surface (06 Aug: "it gets cut
         // off at the start of the corner round"). Full width, clipped by the
         // same rounded mask as the console itself, so its ends taper with the
@@ -1016,7 +1042,7 @@ extension StatusHUD {
             Track.record("strip_clicked", ["band": "lamp", "agent_id": Track.hash(id)])
             MainActor.assumeIsolated { self?.onPickWaiting?(id) }
         }
-        panel.contentView = background
+        panel.contentView = glassView ?? background
         self.expandedRoot = background
 
         // Inside the SAME rounded background as the grid. Collapsing morphs one

@@ -83,19 +83,30 @@ enum StateLegend {
         }
 
         // Contrast figures below are WCAG ratios against `surface`, measured.
+        //
+        // RE-RULED 1 Oct 2026: the panel sits on regular Liquid Glass and the
+        // olive and beige are gone (Robert: "i hate the bg color"). The
+        // neutrals are untinted greys, and `surface` is now the dark glass's
+        // reference ground (#232326, the median a dark NSGlassEffectView reads
+        // over ordinary windows) for measurement and for the few places that
+        // still paint opaque. Measured on real captures over a busy light
+        // window: names at `ink` hold about 5:1 on the glass over a busy light window; `ink` stops at L* 91 so a hover still has its 8-point lift, `restingInk` the
+        // floor's side of 3:1. Research record: the delivering agent's
+        // 2026-10-01-panel-liquid-glass report. The per-token figures in the
+        // comments below are the August olive values, kept for history.
 
         /// The console housing. Opaque, panel-wide: an instrument guarantees its
         /// own contrast; blur borrowed the desktop's and couldn't.
-        static let surface = hex(0x2A2C28)
+        static let surface = hex(0x232326)
         /// Text ink — card prose and grid row names. 8.39:1. Deliberately NOT
         /// the brightest available: at 11.15:1 the card read as shouting, and
         /// APCA (which, unlike the WCAG ratio, is polarity-aware) put it at
         /// Lc −86.7 against the light card's Lc 63.4 — 37% more perceptual
         /// contrast, spent only because the budget was there. This value is
         /// Lc −69.0. Also the base every hairline derives from.
-        static let ink = hex(0xC9C8BF)
+        static let ink = hex(0xE6E6E9)
         /// Secondary ink: strip labels, ready-row topics. 6.69:1.
-        static let secondary = hex(0xB4B3A9)
+        static let secondary = hex(0xC7C7CC)
         /// Muted: quiet-row topics, retired sessions. 5.30:1.
         ///
         /// Sits between `secondary` and `hint` deliberately. It was 0x93928A at
@@ -104,7 +115,7 @@ enum StateLegend {
         /// more legible of the pair. Caught by the contrast drill on its first
         /// run, which is the entire argument for having one: every token passed
         /// its individual floor, and the hierarchy was still wrong.
-        static let muted = hex(0xA09F96)
+        static let muted = hex(0xAEAEB2)
         /// The RESTING intensity: any row that is not asking for you — heard,
         /// or with no waiting turn at all. `ink` is reserved for the rows
         /// that are, and that is the whole hierarchy (16 Aug).
@@ -126,23 +137,23 @@ enum StateLegend {
         /// one token was being asked to be both a legible hint and a recessive
         /// decoration, and could not be both. That is why the key line has
         /// always looked mushy.
-        static let hint = hex(0x94938A)
+        static let hint = hex(0xA1A1A6)
         /// Faint — DECORATIVE ONLY, no contrast floor: the gear at rest, rules
         /// and separators. Never small text. 2.18:1 by design.
-        static let faint = hex(0x5E5F58)
+        static let faint = hex(0x5A5A5F)
         /// Hairline — ink at 25%: the strip border and the hint's top rule.
-        static let hairline = hex(0xC9C8BF, alpha: 0.25)
+        static let hairline = hex(0xE6E6E9, alpha: 0.18)
         /// Soft hairline — ink at 12%: the rule between grid rows.
-        static let hairlineSoft = hex(0xC9C8BF, alpha: 0.12)
+        static let hairlineSoft = hex(0xE6E6E9, alpha: 0.09)
         /// Hover row — surface, one step UP. The direction inverts with the
         /// ground: on putty a hover went darker, on housing it goes lighter.
-        static let hover = hex(0x343631)
+        static let hover = hex(0x333338)
 
         /// The quiet lamp's fill — an unlit socket, 1.45:1. Not a compromise:
         /// dark-cockpit doctrine says the panel is dark when all is nominal and
         /// a lit lamp always means deviation. On this ground that falls out of
         /// the arithmetic instead of being imposed on it.
-        static let socket = hex(0x43453F)
+        static let socket = hex(0x424246)
         /// Ready green — the console "go" lamp. 6.35:1, the brightest lamp on
         /// the panel, because it is the rare one that actually wants you.
         /// Accent = state: this replaces controlAccentColor for the ✓ send
