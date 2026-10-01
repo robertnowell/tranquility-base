@@ -728,8 +728,38 @@ public final class HubMirror: @unchecked Sendable {
     /// The extractor's rule, with the app doing the upload instead of a
     /// Google account on the laptop. All-or-nothing per page: a page with a
     /// hole is worse than a heavy one.
-    static let dataURI = try! NSRegularExpression(
-        pattern: "data:(image/(?:jpeg|jpg|png|gif|webp|avif));base64,([A-Za-z0-9+/=\\s]{40,})", options: [])
+    /// Only the head of an inline image is matched by pattern. The payload
+    /// is read by `dataImages`, by hand: the old pattern ended in an
+    /// unbounded `[A-Za-z0-9+/=\\s]{40,}`, and ICU returns no match at all
+    /// once one run is a few hundred kilobytes. Measured 1 Oct 2026 on a
+    /// 15.6 MB gallery of 62 webp screenshots: zero images found, the page
+    /// sent whole, HTTP 413 every 20 s, and its Open Report door landed on
+    /// the agent page because the hub never had the report.
+    static let dataURIHead = try! NSRegularExpression(
+        pattern: "data:(image/(?:jpeg|jpg|png|gif|webp|avif));base64,", options: [])
+
+    /// Every inline image: the whole `data:` text to replace, its type, and
+    /// its base64 with whitespace removed. A payload shorter than 40
+    /// characters is not an image worth moving, as before.
+    static func dataImages(in html: String) -> [(find: String, mime: String, base64: String)] {
+        let utf16 = Array(html.utf16)
+        func isPayload(_ c: UInt16) -> Bool {
+            (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || (c >= 48 && c <= 57)
+                || c == 43 || c == 47 || c == 61 || c == 32 || c == 10 || c == 13 || c == 9
+        }
+        var out: [(String, String, String)] = []
+        let ns = html as NSString
+        for m in dataURIHead.matches(in: html, range: NSRange(location: 0, length: ns.length)) {
+            var end = m.range.location + m.range.length
+            while end < utf16.count, isPayload(utf16[end]) { end += 1 }
+            let start = m.range.location + m.range.length
+            guard end - start >= 40 else { continue }
+            let whole = ns.substring(with: NSRange(location: m.range.location, length: end - m.range.location))
+            let payload = ns.substring(with: NSRange(location: start, length: end - start)).filter { !$0.isWhitespace }
+            out.append((whole, ns.substring(with: m.range(at: 1)), payload))
+        }
+        return out
+    }
     static let relativeRef = try! NSRegularExpression(
         pattern: "<(?:img|source|video)\\b[^>]*?\\s(?:src|poster)=\"((?!https?:|data:|/|#|//)[^\"?#]+?\\.(?:png|jpe?g|gif|webp|avif))\"",
         options: .caseInsensitive)
@@ -739,7 +769,7 @@ public final class HubMirror: @unchecked Sendable {
 
     static func hasImagesToMove(_ html: String) -> Bool {
         let range = NSRange(html.startIndex..., in: html)
-        return dataURI.firstMatch(in: html, range: range) != nil || relativeRef.firstMatch(in: html, range: range) != nil
+        return !dataImages(in: html).isEmpty || relativeRef.firstMatch(in: html, range: range) != nil
     }
 
     /// Returns true when the page on disk was rewritten.
@@ -748,12 +778,9 @@ public final class HubMirror: @unchecked Sendable {
         let range = NSRange(html.startIndex..., in: html)
         struct Move { let find: String; let bytes: Data; let mime: String }
         var moves: [Move] = []
-        for m in Self.dataURI.matches(in: html, range: range) {
-            guard let whole = Range(m.range, in: html), let mr = Range(m.range(at: 1), in: html),
-                  let br = Range(m.range(at: 2), in: html) else { continue }
-            let b64 = String(html[br]).filter { !$0.isWhitespace }
-            guard let bytes = Data(base64Encoded: b64) else { continue }
-            moves.append(Move(find: String(html[whole]), bytes: bytes, mime: String(html[mr])))
+        for image in Self.dataImages(in: html) {
+            guard let bytes = Data(base64Encoded: image.base64) else { continue }
+            moves.append(Move(find: image.find, bytes: bytes, mime: image.mime))
         }
         var seenRefs = Set<String>()
         for m in Self.relativeRef.matches(in: html, range: range) {
