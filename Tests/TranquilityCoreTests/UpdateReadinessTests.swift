@@ -264,4 +264,18 @@ final class UpdateReadinessTests: XCTestCase {
                            "\(contents ?? "nil") should not read as a live session")
         }
     }
+
+    /// A click on Install and Relaunch is the person saying now: a card being
+    /// read or spoken no longer holds it, but captured audio still does.
+    func testAClickInstallsUnderACardButNeverOverAudio() {
+        for panel: PanelState in [.speaking(eventId: nil), .preparing, .result, .receipt, .settings, .pastAgents] {
+            XCTAssertNotNil(UpdateReadiness.block(panel: panel, inFlightUtterances: 0))
+            XCTAssertNil(UpdateReadiness.block(panel: panel, inFlightUtterances: 0, userAsked: true))
+        }
+        for panel: PanelState in [.arming, .listening(eventId: nil), .transcribing(startedAt: Date()), .pendingSend(utteranceId: "u")] {
+            XCTAssertEqual(UpdateReadiness.block(panel: panel, inFlightUtterances: 0, userAsked: true), .panelEngaged)
+        }
+        XCTAssertEqual(UpdateReadiness.block(panel: .speaking(eventId: nil), inFlightUtterances: 1, userAsked: true), .utterancesInFlight)
+        XCTAssertEqual(UpdateReadiness.block(panel: .idle(waiting: 0), inFlightUtterances: 0, handsFree: true, userAsked: true), .handsFreeLive)
+    }
 }

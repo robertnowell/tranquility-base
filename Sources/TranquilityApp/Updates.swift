@@ -44,6 +44,9 @@ final class Updates: NSObject {
     /// scheduled miss on a quiet tick is never mistaken for a check the user
     /// asked for (12 Sep).
     private var pendingCheckVia: String?
+    /// The person pressed Install and Relaunch for this cycle (see
+    /// `UpdateReadiness.block(userAsked:)`).
+    private var userChoseInstall = false
 
     /// Identity configuration, not a compile-time Dev branch. The published
     /// app exercises this exact implementation; local and TEST identities must
@@ -213,7 +216,7 @@ extension Updates: @preconcurrency SPUUpdaterDelegate {
                  forUpdate updateItem: SUAppcastItem, state: SPUUserUpdateState) {
         let name: String
         switch choice {
-        case .install: name = "install"
+        case .install: name = "install"; userChoseInstall = true
         case .skip: name = "skip"
         case .dismiss: name = "dismiss"
         @unknown default: name = "other"
@@ -308,7 +311,7 @@ extension Updates: @preconcurrency SPUUpdaterDelegate {
     private func currentBlock() -> UpdateReadiness.Block? {
         UpdateReadiness.block(
             panel: panelState(), inFlightUtterances: inFlightUtterances(),
-            handsFree: HandsFreeMarker.isLive())
+            handsFree: HandsFreeMarker.isLive(), userAsked: userChoseInstall)
     }
 
     /// Re-ask on a timer until nothing is in motion, then let the install run.
