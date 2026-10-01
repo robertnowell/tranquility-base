@@ -432,7 +432,12 @@ public final class HubMirror: @unchecked Sendable {
                       let mtime = attrs[.modificationDate] as? Date else { continue }
                 let mtimeMs = Int64(mtime.timeIntervalSince1970 * 1000)
                 var hash: String? = nil
-                if let old = sync({ state.files[path] }), old.size == size, old.mtimeMs == mtimeMs {
+                // An unchanged file is trusted from the last pass only once the
+                // hub has it. A page that has not gone through is read again,
+                // so a fix to how pages are prepared (1 Oct: images that were
+                // never moved) reaches it without anyone touching the file.
+                if let old = sync({ state.files[path] }), old.size == size, old.mtimeMs == mtimeMs,
+                   sync({ state.sent.contains(old.hash) }) {
                     hash = old.hash
                 } else {
                     guard var html = try? String(contentsOfFile: path, encoding: .utf8) else { continue }
