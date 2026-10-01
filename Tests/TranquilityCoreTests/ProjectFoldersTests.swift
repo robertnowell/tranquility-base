@@ -23,8 +23,8 @@ final class ProjectFoldersTests: XCTestCase {
     private func shape(_ lines: [ProjectLayout.Line]) -> [String] {
         lines.map { line in
             switch line {
-            case let .header(folder, lamp, lit, _):
-                return "[\(folder.name)\(lamp.map { " \($0.trackName) \(lit)" } ?? "")]"
+            case let .header(folder, lamp, hollow, lit, _):
+                return "[\(folder.name)\(lamp.map { " \(hollow ? "heard-" : "")\($0.trackName) \(lit)" } ?? "")]"
             case let .row(row, folder): return folder == nil ? row.id : "  " + row.id
             }
         }
@@ -95,9 +95,24 @@ final class ProjectFoldersTests: XCTestCase {
         XCTAssertEqual(shape(ProjectLayout.lines([row("w", .working, at: 1)], book: b)), ["[TB working 1]"])
     }
 
+    // 1 Oct 2026: a collapsed folder of heard greens showed a solid green.
+    func testCollapsedFolderIsSolidOnlyWhenAMemberIsSolid() {
+        let b = book([("Apartment", ["a", "b"])], collapsed: ["Apartment"])
+        func ready(_ id: String, _ read: ReadState) -> SessionRow {
+            SessionRow(id: id, name: id, aux: id, lamp: .ready, read: read, hasRecordedTurn: true)
+        }
+        XCTAssertEqual(shape(ProjectLayout.lines([ready("a", .opened), ready("b", .opened)], book: b)),
+                       ["[Apartment heard-ready 2]"])
+        XCTAssertEqual(shape(ProjectLayout.lines([ready("a", .opened), ready("b", .unread)], book: b)),
+                       ["[Apartment ready 2]"])
+        // Blue carries no read state, on the row or the header.
+        let blue = SessionRow(id: "a", name: "a", aux: "a", lamp: .working, read: .opened, hasRecordedTurn: true)
+        XCTAssertEqual(shape(ProjectLayout.lines([blue], book: b)), ["[Apartment working 1]"])
+    }
+
     func testAnOpenHeaderWearsNoLamp() {
         let lines = ProjectLayout.lines([row("g", .ready, at: 1)], book: book([("F", ["g"])]))
-        guard case let .header(_, lamp, _, _) = lines[0] else { return XCTFail("no header") }
+        guard case let .header(_, lamp, _, _, _) = lines[0] else { return XCTFail("no header") }
         XCTAssertNil(lamp)
     }
 

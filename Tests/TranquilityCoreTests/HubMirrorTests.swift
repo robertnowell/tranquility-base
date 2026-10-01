@@ -300,6 +300,35 @@ final class HubMirrorTests: XCTestCase {
         XCTAssertEqual(hub.count("api/ingest/known"), 1)
     }
 
+    /// 1 Oct 2026: a page whose images were never moved went up whole and
+    /// got 413 every pass. An unchanged file was trusted from the last pass,
+    /// so the move was never tried again. A page the hub does not have yet is
+    /// now read afresh, and its images move once they can.
+    func testAPageTheHubHasNotTakenIsPreparedAgainOnTheNextPass() async throws {
+        final class Refusing: HubMirror.Transport, @unchecked Sendable {
+            func post(_ path: String, json: [String: Any]) async throws -> (status: Int, body: Data) {
+                switch path {
+                case "api/ingest/known": return (200, try JSONSerialization.data(withJSONObject: ["known": []]))
+                default: return (413, Data())
+                }
+            }
+        }
+        let inline = "data:image/webp;base64," + Data((0..<300_000).map { UInt8($0 % 251) }).base64EncodedString()
+        let path = write("gallery.html", "<html><title>G</title><body><img src=\"\(inline)\"></body></html>")
+        let state = tmp.appendingPathComponent("state.json")
+        let first = HubMirror(transport: Refusing(), agentsRoot: tmp.appendingPathComponent("agents").path,
+                              stateURL: state, device: "test-mac", store: nil, artifactRoot: nil)
+        first.liveSessions = { [:] }
+        _ = await first.run(docs: true, turns: false)
+        XCTAssertTrue(try String(contentsOfFile: path, encoding: .utf8).contains("data:image"), "nothing moved yet")
+
+        let hub = FakeHub()
+        let r = await mirror(hub).run(docs: true, turns: false)
+        XCTAssertEqual(r.images, 1, "the unchanged page was prepared again")
+        XCTAssertTrue(((hub.last("api/ingest")?["html"] as? String) ?? "").contains("https://media.example.test/media/"))
+        XCTAssertFalse(try String(contentsOfFile: path, encoding: .utf8).contains("data:image"))
+    }
+
     func testImagesLeaveThePageForTheBucketBeforeItIsSent() async throws {
         let hub = FakeHub()
         let png = Data([0x89, 0x50, 0x4E, 0x47] + [UInt8](repeating: 7, count: 64))

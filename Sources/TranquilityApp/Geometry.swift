@@ -35,8 +35,11 @@ extension StatusHUD {
             // dropped the wordmark. The strip is the same size every time.
             morph(panel, to: NSSize(width: CollapsedStrip.width,
                                     height: CollapsedStrip.height))
+            // A pill, not a slab: rounded to half the width (1 Oct 2026).
+            setPanelRadius(CollapsedStrip.width / 2)
             return
         }
+        setPanelRadius(Self.panelRadius)
         NSLayoutConstraint.deactivate(stripEdges)
         NSLayoutConstraint.activate(stackEdges)
         strip?.isHidden = true
