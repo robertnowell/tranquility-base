@@ -54,6 +54,7 @@ class DeliveryTests(unittest.TestCase):
         self.not_ancestor = None
         self.notices = []
         self.recoveries = []
+        self.changed_paths = ["Sources/TranquilityApp/main.swift"]
 
     def run_command(self, args, **kwargs):
         output = ""
@@ -94,6 +95,8 @@ class DeliveryTests(unittest.TestCase):
         elif args[:2] == ["git", "merge-base"]:
             if self.ancestry_failure or tuple(args[-2:]) == self.not_ancestor:
                 raise subprocess.CalledProcessError(1, args)
+        elif args[:3] == ["git", "diff", "--name-only"]:
+            output = "\n".join(self.changed_paths)
         elif args[:2] == ["git", "hash-object"]:
             output = "old" if self.stale_driver else "blob"
         elif args[:2] == ["git", "rev-parse"]:
@@ -471,6 +474,31 @@ class DeliveryTests(unittest.TestCase):
         self.assertEqual(result["status"], "running")
         self.assertEqual(result["target_sha"], B)
         self.assertEqual(self.install_count, 1)
+
+    def test_a_merge_that_ships_nothing_is_delivered_by_the_running_build(self):
+        self.merge()
+        self.record()
+        self.not_ancestor = (A, B)          # the merge is not in the running build
+        self.main_sha = "c" * 40
+        self.changed_paths = ["tb-voice/server/manager.py", "docs/design.md", "README.md"]
+        result = self.delivery.step(1, "owner")
+        self.assertEqual(result["status"], "running")
+        self.assertEqual(result["target_sha"], B)
+        self.assertIn("none shipped", result["delivered_without_install"])
+        self.assertEqual(self.install_count, 0)
+
+    def test_any_shipped_path_since_the_running_build_still_deploys(self):
+        self.merge()
+        self.record()
+        self.not_ancestor = (A, B)
+        self.main_sha = "c" * 40
+        for shipped in ("Sources/TranquilityCore/QueueStore.swift", "skills/x/SKILL.md",
+                        "hooks/tbase-hook.sh", "scripts/relaunch.sh", "Resources/Sounds/a.wav",
+                        "Package.resolved", "tb-voice/../Sources/x.swift"):
+            with self.subTest(shipped=shipped):
+                self.changed_paths = ["docs/a.md", shipped]
+                self.delivery.step(1, "owner")
+        self.assertEqual(self.install_count, 7)
 
     def test_receipt_must_contain_the_requested_merge_and_be_on_main(self):
         self.merge()
