@@ -104,6 +104,76 @@ with open(os.path.join(root, session), "a") as fh:
         fh.write("%d\t%s\n" % (stamp, url))
 PY
 
+# PLAIN OPEN ON ONE OF OUR REPORTS (30 Sep 2026).
+#
+# A MacBook agent that had the current rules opened its report twice with
+# `open file.html`: a local file in a browser, never the hub. The fix is
+# context at the moment of the mistake, not a gate (Robert). And only for OUR
+# reports: an agent opening a Gmail draft or a site's index.html in a browser
+# is doing the right thing and hears nothing (Robert: "we shouldn't admonish
+# them"). A page is ours when it carries one of our fingerprints: it sits in
+# an agent folder, or has an intranet: tag, our footer, or the brief's lede
+# and needs-you block together. The same test is in the page check below.
+OPEN_ASK=$(python3 - "$PAYLOAD" <<'OPENPY' 2>/dev/null || true
+import json, os, re, shlex, sys, time
+try:
+    p = json.loads(sys.argv[1])
+except Exception:
+    sys.exit(0)
+cmd = (p.get("tool_input") or {}).get("command") or ""
+if not isinstance(cmd, str) or "open" not in cmd:
+    sys.exit(0)
+cwd = p.get("cwd") or os.getcwd()
+def is_ours(path, page):
+    if path.startswith(os.path.expanduser("~/Documents/agents/")):
+        return True
+    return bool(re.search(r'<meta\s+name="intranet:', page) or "data-tb-agent=" in page
+                or ('class="you"' in page and 'class="lede"' in page))
+found = []
+for part in re.split(r"&&|\|\||;|\|", cmd):
+    try:
+        words = shlex.split(part)
+    except ValueError:
+        continue
+    if not words or os.path.basename(words[0]) != "open":
+        continue
+    for w in words[1:]:
+        if w.startswith("-"):
+            break          # open -a / -b / -R: an app, not a page in a browser
+        if re.match(r"^[a-z][a-z0-9+.-]*://", w, re.I) and not w.lower().startswith("file://"):
+            continue       # a URL, including a hub address: fine
+        path = w[7:] if w.lower().startswith("file://") else w
+        path = os.path.abspath(os.path.join(cwd, os.path.expanduser(path)))
+        if not re.search(r"\.html?$", path, re.I) or not os.path.isfile(path):
+            continue
+        try:
+            page = open(path, encoding="utf-8", errors="ignore").read(400000)
+        except Exception:
+            continue
+        if is_ours(path, page):
+            found.append(path)
+if not found:
+    sys.exit(0)
+try:
+    log_dir = os.path.expanduser("~/Library/Application Support/VoiceDispatch/rules")
+    os.makedirs(log_dir, exist_ok=True)
+    sid = (p.get("session_id") or "")[:64]
+    with open(os.path.join(log_dir, "page-problems.log"), "a") as fh:
+        for f in found:
+            fh.write("%d\t%s\t%s\t%s\n" % (int(time.time() * 1000), sid, "plain-open", f))
+except Exception:
+    pass
+print(json.dumps({"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": (
+    "OPENED AS A LOCAL FILE: `open` showed " + ", ".join(found) + " in a browser, not the hub. "
+    "A report belongs in your agent folder (~/Documents/agents/<your full session id>/) and is opened "
+    "with `hq-open <path>`, which shows it in the Hub window. Use hq-page new to start one there.")}}))
+OPENPY
+)
+if [ -n "$OPEN_ASK" ]; then
+  printf '%s\n' "$OPEN_ASK"
+  exit 0
+fi
+
 read -r OWNER SESSION MISFILED MODE FILE <<EOF
 $(python3 - "$PAYLOAD" <<'PY' 2>/dev/null || true
 import json, os, re, sys
@@ -1026,13 +1096,22 @@ def _page_problems(path):
             page = fh.read(400000)
     except Exception:
         return []
-    if not ('class="you"' in page and 'class="lede"' in page):
-        return []          # not a brief-shaped report: not ours to judge here
+    in_agents = path.startswith(_os_p.path.expanduser("~/Documents/agents/"))
+    brief = 'class="you"' in page and 'class="lede"' in page
+    # Ours only (Robert, 30 Sep): in an agent folder, or an intranet: tag,
+    # our footer, or the brief's structure. Any other HTML hears nothing.
+    ours = (in_agents or brief or "data-tb-agent=" in page
+            or bool(re.search(r'<meta\s+name="intranet:', page)))
+    if not ours:
+        return []
     kinds = []
-    styles = re.findall(r"<style\b[^>]*>.*?</style>", page, flags=re.S | re.I)
-    if not any((".you{" in st or ".you {" in st or "--heading:" in st) for st in styles):
-        kinds.append("no-house-style")
-    if not path.startswith(_os_p.path.expanduser("~/Documents/agents/")):
+    # Missing style is judged only on the brief's structure: a page on the
+    # editorial template is ours and styled its own way.
+    if brief:
+        styles = re.findall(r"<style\b[^>]*>.*?</style>", page, flags=re.S | re.I)
+        if not any((".you{" in st or ".you {" in st or "--heading:" in st) for st in styles):
+            kinds.append("no-house-style")
+    if not in_agents:
         kinds.append("outside-agent-folder")
     return kinds
 
