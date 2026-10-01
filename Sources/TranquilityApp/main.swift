@@ -1101,6 +1101,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // snapshot cannot draw a system material: the window server
             // composites it. TB_POSE_HOLD keeps the posed panel on screen that
             // many seconds so `screencapture` can photograph the real glass.
+            // TB_POSE_DEEP photographs the in-use depth (Klein Void) without
+            // a pointer on the panel.
+            if ProcessInfo.processInfo.environment["TB_POSE_DEEP"] != nil {
+                hud.pointerOnPanel = true
+                hud.paintDepth()
+            }
             if let hold = ProcessInfo.processInfo.environment["TB_POSE_HOLD"].flatMap(Double.init) {
                 RunLoop.current.run(until: Date().addingTimeInterval(hold))
             }

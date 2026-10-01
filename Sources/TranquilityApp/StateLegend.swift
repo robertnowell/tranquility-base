@@ -98,6 +98,10 @@ enum StateLegend {
         /// The console housing. Opaque, panel-wide: an instrument guarantees its
         /// own contrast; blur borrowed the desktop's and couldn't.
         static let surface = hex(0x232326)
+        /// Klein Void's ground (robertnowell/klein-void, the terminal palette
+        /// built on International Klein Blue #002FA7), at 94% so the glass
+        /// still reads at its edges: the panel's depth while it is in use.
+        static let kleinVoid = hex(0x0B0D14, alpha: 0.94)
         /// Text ink — card prose and grid row names. 8.39:1. Deliberately NOT
         /// the brightest available: at 11.15:1 the card read as shouting, and
         /// APCA (which, unlike the WCAG ratio, is polarity-aware) put it at
