@@ -3864,6 +3864,11 @@ final class StatusHUD: NSObject {
     /// both moved out of this file, this stayed for the same reason `ackBar`
     /// did.
     var surfaceView: NSView?
+    /// The panel's material, hosting the surface (1 Oct 2026): regular
+    /// Liquid Glass on macOS 26, the frosted popover material before it.
+    var glassView: NSView?
+    /// One radius for the glass and the surface it clips.
+    static let panelRadius: CGFloat = 14
     /// The same view as `surfaceView`, typed: the drill drives the drag
     /// callbacks directly, since a synthetic NSDraggingInfo is not something
     /// a launch drill can conjure.

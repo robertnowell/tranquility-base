@@ -1097,6 +1097,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             } else {
                 Permissions.log("pose-shot: nothing rendered for '\(name)'")
             }
+            // The panel sits on Liquid Glass since 1 Oct 2026, and a view's own
+            // snapshot cannot draw a system material: the window server
+            // composites it. TB_POSE_HOLD keeps the posed panel on screen that
+            // many seconds so `screencapture` can photograph the real glass.
+            if let hold = ProcessInfo.processInfo.environment["TB_POSE_HOLD"].flatMap(Double.init) {
+                RunLoop.current.run(until: Date().addingTimeInterval(hold))
+            }
             NSApp.terminate(nil)
             return
         }
