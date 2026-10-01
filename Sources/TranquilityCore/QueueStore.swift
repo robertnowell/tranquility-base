@@ -896,8 +896,51 @@ public final class QueueStore: Sendable {
     /// the lamp is clicked ("I don't care about this one"), or the session
     /// dies and the sweep retires it. Hearing is not on that list: hearing
     /// only flips `heard`, which stops the re-announcement and nothing else.
-    public func waitingSessions(limit: Int = 200) throws -> [WaitingSession] {
+    // MARK: - Reads that only change when the database does
+
+    /// The hottest reads, answered again only when the database has changed.
+    ///
+    /// Measured 30 Sep: the 1.5 s poll, the grid and the hub mirror ran the
+    /// `latest_per_session` view queries about fifty times a minute between
+    /// them, 12 ms each, almost always against a database nobody had written.
+    /// The key is exact, not a timeout, so nothing read here is ever stale:
+    /// `PRAGMA data_version` moves when ANY other connection commits (the
+    /// tbase CLI, another store in this process), and `total_changes()` moves
+    /// on every row this connection writes, which data_version deliberately
+    /// does not report. Both cost microseconds. Liveness, sweeps and anything
+    /// that depends on the clock are outside this and still run every call.
+    private final class ReadMemo: @unchecked Sendable {
+        private let lock = NSLock()
+        private var entries: [String: (token: String, value: any Sendable)] = [:]
+        func get<T>(_ key: String, _ token: String) -> T? {
+            lock.lock(); defer { lock.unlock() }
+            guard let hit = entries[key], hit.token == token else { return nil }
+            return hit.value as? T
+        }
+        func put(_ key: String, _ token: String, _ value: any Sendable) {
+            lock.lock(); entries[key] = (token, value); lock.unlock()
+        }
+    }
+    private let reads = ReadMemo()
+
+    static func changeToken(_ db: Database) throws -> String {
+        let version = try Int64.fetchOne(db, sql: "PRAGMA data_version") ?? 0
+        let written = try Int64.fetchOne(db, sql: "SELECT total_changes()") ?? 0
+        return "\(version)|\(written)"
+    }
+
+    private func memoRead<T: Sendable>(_ key: String, _ fetch: (Database) throws -> T) throws -> T {
         try dbQueue.read { db in
+            let token = try Self.changeToken(db)
+            if let hit: T = reads.get(key, token) { return hit }
+            let value = try fetch(db)
+            reads.put(key, token, value)
+            return value
+        }
+    }
+
+    public func waitingSessions(limit: Int = 200) throws -> [WaitingSession] {
+        try memoRead("waitingSessions|\(limit)") { db in
             try WaitingSession.fetchAll(db, sql: """
                 SELECT l.sessionId, l.latestId, l.createdAtMs, l.cwd, l.tty,
                        l.promptId, l.transcriptPath, l.lastAssistantMessage,
@@ -972,7 +1015,7 @@ public final class QueueStore: Sendable {
     /// the quiet band, which shows even sessions you have dealt with, and by
     /// reply paths that must find a session you dismissed moments ago.
     public func allKnownSessions(limit: Int = 500) throws -> [WaitingSession] {
-        try dbQueue.read { db in
+        try memoRead("allKnownSessions|\(limit)") { db in
             try WaitingSession.fetchAll(db, sql: """
                 SELECT l.sessionId, l.latestId, l.createdAtMs, l.cwd, l.tty,
                        l.promptId, l.transcriptPath, l.lastAssistantMessage,
@@ -1053,7 +1096,7 @@ public final class QueueStore: Sendable {
     /// working session is the prompt you just sent, and not the waiting
     /// list, which a delivered reply removes the session from.
     public func sessionsWithARecordedTurn() throws -> Set<String> {
-        try dbQueue.read { db in
+        try memoRead("sessionsWithARecordedTurn") { db in
             Set(try String.fetchAll(db, sql: """
                 SELECT DISTINCT sessionId FROM events WHERE hookEvent = ?
                 """, arguments: [HookEventKind.stop.rawValue]))
@@ -1066,7 +1109,7 @@ public final class QueueStore: Sendable {
     /// session's current edge. Subagent stops are deliberately excluded: a
     /// sub-agent finishing says nothing about the parent turn.
     public func latestTurnBoundaries() throws -> [String: SessionActivity.TurnBoundary] {
-        try dbQueue.read { db in
+        try memoRead("latestTurnBoundaries") { db in
             let rows = try Row.fetchAll(db, sql: """
                 SELECT sessionId, hookEvent, MAX(createdAtMs) AS atMs
                 FROM events
