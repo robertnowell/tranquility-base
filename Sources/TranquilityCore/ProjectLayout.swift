@@ -13,14 +13,18 @@ import Foundation
 ///    never moves a folder (re-ruled 29 Sep 2026: rise-to-top made a folder
 ///    dragged above another snap back as soon as the other lit up).
 /// 4. A collapsed folder is one header wearing its most urgent lamp and a
-///    count of its lit agents.
+///    count of its lit agents. The lamp is solid only when a member's lamp
+///    is: green or amber that has been heard draws hollow on the header as on
+///    the row (1 Oct 2026, "collapsed should show solid green only when
+///    containing solid green lamp").
 /// 5. A folder with nothing on the grid is not drawn, and is not deleted.
 public enum ProjectLayout {
 
     public enum Line: Equatable, Sendable {
-        /// A folder's header. `lamp` and `lit` describe its members when it is
-        /// collapsed; an open folder's header wears no lamp, its rows do.
-        case header(ProjectBook.Folder, lamp: Lamp?, lit: Int, members: Int)
+        /// A folder's header. `lamp`, `hollow` and `lit` describe its members
+        /// when it is collapsed; an open folder's header wears no lamp, its
+        /// rows do.
+        case header(ProjectBook.Folder, lamp: Lamp?, hollow: Bool, lit: Int, members: Int)
         /// A row, and the folder it is drawn inside (nil when loose).
         case row(SessionRow, folder: String?)
 
@@ -29,7 +33,7 @@ public enum ProjectLayout {
             return nil
         }
         public var folder: ProjectBook.Folder? {
-            if case let .header(folder, _, _, _) = self { return folder }
+            if case let .header(folder, _, _, _, _) = self { return folder }
             return nil
         }
     }
@@ -41,10 +45,16 @@ public enum ProjectLayout {
         for group in groups.folders {
             let lit = group.rows.filter { $0.lamp.isLit }
             if group.folder.collapsed {
-                lines.append(.header(group.folder, lamp: lit.first?.lamp,
+                let lamp = lit.first?.lamp
+                // Hollow when every member wearing this lamp has been heard:
+                // the same test GridRowView applies to each row.
+                let hollow = lamp.map { lamp in
+                    lamp.asksForYou && !lit.contains { $0.lamp == lamp && $0.read != .opened }
+                } ?? false
+                lines.append(.header(group.folder, lamp: lamp, hollow: hollow,
                                      lit: lit.count, members: group.rows.count))
             } else {
-                lines.append(.header(group.folder, lamp: nil, lit: lit.count,
+                lines.append(.header(group.folder, lamp: nil, hollow: false, lit: lit.count,
                                      members: group.rows.count))
                 lines += group.rows.map { .row($0, folder: group.folder.id) }
             }

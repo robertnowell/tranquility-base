@@ -3409,7 +3409,7 @@ final class StatusHUD: NSObject {
         // already separates rows; a rule is spent only where the group changes.
         func group(of line: ProjectLayout.Line) -> String? {
             switch line {
-            case let .header(folder, _, _, _): return folder.id
+            case let .header(folder, _, _, _, _): return folder.id
             case let .row(_, folder): return folder
             }
         }
@@ -3422,8 +3422,9 @@ final class StatusHUD: NSObject {
         for (index, line) in lines.enumerated() {
             let item: SessionRow
             switch line {
-            case let .header(folder, lamp, lit, members):
-                let header = folderHeader(folder, lamp: lamp, lit: lit, members: members)
+            case let .header(folder, lamp, hollow, lit, members):
+                let header = folderHeader(folder, lamp: lamp, hollow: hollow, lit: lit,
+                                          members: members)
                 waitingRows.addArrangedSubview(header)
                 gridLines.append((header, line))
                 if changesGroup(after: index) {
