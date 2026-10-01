@@ -42,10 +42,17 @@ public enum UpdateReadiness {
     ///     Reusing that set is the point: the boot sweep, the retention sweep and
     ///     the updater now agree by construction about what unfinished means.
     ///   - handsFree: whether a hands-free session is up.
+    ///   - userAsked: the person pressed Install and Relaunch. Their click is
+    ///     the answer to "is now a good moment", so only what would LOSE
+    ///     something still holds it: audio being captured or sent, and a
+    ///     hands-free call. A card being read or spoken no longer does
+    ///     (1 Oct 2026: the button sat dead under a waiting card, "clicking
+    ///     the button should work").
     public static func block(
         panel: PanelState,
         inFlightUtterances: Int,
-        handsFree: Bool = false
+        handsFree: Bool = false,
+        userAsked: Bool = false
     ) -> Block? {
         // First, and above the panel, because the panel does not describe it.
         // A hands-free session runs with the panel hidden or idle for minutes
@@ -74,12 +81,14 @@ public enum UpdateReadiness {
         // is the rudest possible moment, and "preparing" is the half-second before
         // it starts.
         case .preparing, .speaking:
+            if userAsked { break }
             return .panelEngaged
 
         // A face the person is reading: a failure, a dictation receipt, the
         // settings pane, the graveyard. Nothing durable is lost by relaunching
         // under them, but the panel would vanish mid-read with no explanation.
         case .result, .receipt, .settings, .pastAgents:
+            if userAsked { break }
             return .panelEngaged
         }
 
