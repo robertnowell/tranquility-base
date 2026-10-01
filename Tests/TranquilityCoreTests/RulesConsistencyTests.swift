@@ -137,6 +137,53 @@ final class RulesConsistencyTests: XCTestCase {
         XCTAssertTrue(log.contains("no-house-style,outside-agent-folder") && log.contains(outside.path))
     }
 
+    /// 30 Sep (Robert): nudge only about OUR reports. Plain open on one of
+    /// them is named and logged; plain open on a Gmail draft, `open -a`, or a
+    /// URL hears nothing; a non-report HTML file written outside the agents
+    /// folder hears nothing; an editorial (non-brief) report of ours outside
+    /// the folder is told only that it is outside.
+    func testOnlyOurOwnPagesGetANudge() throws {
+        let fm = FileManager.default
+        let home = fm.homeDirectoryForCurrentUser.appendingPathComponent(".tb-nudge-drill-\(UUID().uuidString)")
+        defer { try? fm.removeItem(at: home) }
+        let sid = "11111111-2222-4333-8444-555566667777"
+        let work = home.appendingPathComponent("ClaudeWork")
+        try fm.createDirectory(at: work, withIntermediateDirectories: true)
+        let words = Array(repeating: "word", count: 150).joined(separator: " ")
+        let ours = work.appendingPathComponent("report.html")
+        try "<html><head><style>.you{}</style></head><body><p class=\"lede\">x</p><div class=\"you\">y</div><p>\(words)</p></body></html>"
+            .write(to: ours, atomically: true, encoding: .utf8)
+        let gmail = work.appendingPathComponent("newsletter.html")
+        try "<html><body><table><tr><td>Hello from the newsletter \(words)</td></tr></table></body></html>"
+            .write(to: gmail, atomically: true, encoding: .utf8)
+        let editorial = work.appendingPathComponent("essay.html")
+        try "<html><head><meta name=\"intranet:session\" content=\"\(sid)\"></head><body><article><p>\(words)</p></article></body></html>"
+            .write(to: editorial, atomically: true, encoding: .utf8)
+        func bash(_ command: String) throws -> String {
+            let payload = String(data: try JSONSerialization.data(withJSONObject: [
+                "session_id": sid, "hook_event_name": "PostToolUse", "tool_name": "Bash",
+                "tool_input": ["command": command], "cwd": work.path]), encoding: .utf8)!
+            return try run("artifact-hook.sh", stdin: payload, env: ["HOME": home.path])
+        }
+        func write(_ url: URL) throws -> String {
+            let payload = String(data: try JSONSerialization.data(withJSONObject: [
+                "session_id": sid, "hook_event_name": "PostToolUse", "tool_name": "Write",
+                "tool_input": ["file_path": url.path]]), encoding: .utf8)!
+            return try run("artifact-hook.sh", stdin: payload, env: ["HOME": home.path])
+        }
+        XCTAssertTrue(try bash("open report.html").contains("OPENED AS A LOCAL FILE"))
+        XCTAssertFalse(try bash("open newsletter.html").contains("OPENED AS A LOCAL FILE"), "not ours: silent")
+        XCTAssertFalse(try bash("open -a Safari report.html").contains("OPENED AS A LOCAL FILE"), "an app, not plain open")
+        XCTAssertFalse(try bash("open https://hq.tranquilitybase.dev/d/x").contains("OPENED AS A LOCAL FILE"))
+        XCTAssertFalse(try write(gmail).contains("THIS PAGE WILL NOT WORK"), "other HTML is never judged")
+        let essay = try write(editorial)
+        XCTAssertTrue(essay.contains("outside your agent folder") && !essay.contains("not its stylesheet"), essay)
+        let log = try String(contentsOf: home.appendingPathComponent(
+            "Library/Application Support/VoiceDispatch/rules/page-problems.log"), encoding: .utf8)
+        XCTAssertTrue(log.contains("plain-open") && log.contains(ours.path))
+        XCTAssertFalse(log.contains(gmail.path))
+    }
+
     // MARK: - The hooks, driven as a harness drives them
 
     private func run(_ script: String, stdin: String, env: [String: String]) throws -> String {
