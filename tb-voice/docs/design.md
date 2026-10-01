@@ -180,6 +180,10 @@ tool is what keeps them apart. ⌥⌥ hands-free lock stays off during the demo.
 
 ## 8b. The open message: dictation with a destination (ruled 21 Sep)
 
+*Superseded 22 Sep by §12: there is no compose mode. Everything said is kept in
+the ledger, and a send points at a span of it. Kept below as the record of what
+was replaced and why.*
+
 > **Superseded 24 Sep (hf-10).** The open message is removed. On 23 Sep 17:43 it
 > sent a brief mid-sentence: a fragment ("Think a little") was judged *hold*, hold
 > flags the message as read back, and the next fragment ("bit more towards") was
@@ -296,6 +300,44 @@ session with 1, 2, 4 s backoff and gives up on the fourth with a line. A little 
 the cap, at a quiet microphone level report, the app closes the socket itself so the
 rotation lands between sentences. Not carried yet: an open message across a reconnect;
 the bot holds it, and a drop mid-dictation loses the draft.
+
+## 12. The redesign of 22 Sep, as built
+
+Robert's design of 22 Sep (14:56) and the rulings on it that evening, each
+with what was built, where it lives, and how it was checked. The design
+pages: `manager-always-listening-design` and `manager-loop-design` on session
+027fdf82's hub. Tracker: beads epic hf-0.
+
+**Constraints that ruled every step.** Measure before shipping: each change
+below was checked against a frozen eval or a drill before it merged. No
+string-matched conditions on state: words are parsed into types at the
+boundary, and intent comes from the classifier's context, never a word list
+or a deterministic override. A leak between users is the worst failure there
+is: nothing in the cloud bot is process-global (hf-1), and drills never run
+against the production agent (hf-2).
+
+| Ruling | As built | Where |
+|---|---|---|
+| Everything said is kept | Every line, whole and numbered, goes to the Mac as a `said` event; the Mac keeps the ledger (hf-5, hf-20) | `ManagerLedger.swift`, `manager.note` |
+| A send copies your words | The loop decides whether and to whom; the span picker points at your numbered lines; `span.check` refuses anything not copied. `compose_message` deleted. 0 wrong sends on every send eval since 23 Sep | `span.py`, `Manager._act` |
+| No compose mode | "Send a message" with nothing said yet sends nothing and keeps listening | `Manager._act` |
+| Send only when asked | An instruction meant for the agent ("unpublish this") is dictation until you ask to send it (#657, measured 78/78) | classifier rules in `turn_request` |
+| Confirm when unsure | It asks when the agent or the words are unclear; with nobody on stage, a second check confirms the request names the agent (#657) | `JevClient.names_agent` |
+| Read-back is a dry run | "What would you send?" runs the same choice and reads it out, sending nothing (#669); the 30 s silence read-back is gone | `Manager._do_read_back` |
+| The tray rides a hands-free send | Sends go through the app's own Send, tray and all (hf-12; wire `send`) | `ManagerTools.standard`, `sendTyped` |
+| A real agent loop | Several steps over named tools: agents, waiting, brief, transcript, notes, ledger. It reads before it answers, and it only reads | `loop.py`, `Manager._ask_loop` |
+| No word-match overrides | Overrides and word lists removed; the classifier is given the context instead (hf-7, #629) | `vocab.py`, `turn_request` |
+| Logging off the hot path | Model calls queue per session and reach the Mac in parts behind every panel line; the viewer's columns fill from the Mac's stream (#673) | `calls.py`, `Manager._drain_log`, `tail.py` |
+| Keys route to the manager | "Follow": a shortcut acts at once, and the manager is told who is on stage (#670) | `tellManagerStage`, `Manager._follow_mac` |
+| A notes page; the Notes agent acts on a range | The hub's Notes page reads the same record; "send what I said about X" and "have the notes agent…" take a range of it (#656) | `ManagerNotes.swift`, hq-app `/notes` |
+| A voice beam | Open (hf-17) | — |
+
+**Structure that followed (28–29 Sep).** One door to the Mac: the app runs
+only the named tools it offers, never an argv the bot sends (#671, #672; the
+bot's fallback for older apps is hf-0.2). One wire: the local bot is gone, so
+the manager has one code path (#675, §8c). The capabilities line stays a fixed
+sentence, rewritten to what the manager now does: routed through the loop
+instead, one answer in ten was false (#679).
 
 ## 9. Repository layout
 
