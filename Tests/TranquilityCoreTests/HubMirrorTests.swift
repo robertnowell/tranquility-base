@@ -329,6 +329,34 @@ final class HubMirrorTests: XCTestCase {
         XCTAssertFalse(try String(contentsOfFile: path, encoding: .utf8).contains("data:image"))
     }
 
+    /// 1 Oct 2026: a refused page reached only app.log. Now it leaves a note
+    /// for its agent, and the note goes when the page gets through.
+    func testARefusedPageLeavesANoteThatClearsWhenItIsTaken() async throws {
+        final class Refusing: HubMirror.Transport, @unchecked Sendable {
+            func post(_ path: String, json: [String: Any]) async throws -> (status: Int, body: Data) {
+                path == "api/ingest/known"
+                    ? (200, try JSONSerialization.data(withJSONObject: ["known": []]))
+                    : (413, Data("Request Entity Too Large".utf8))
+            }
+        }
+        _ = write("big.html", "<html><title>Big</title><body>\(String(repeating: "x", count: 2_000))</body></html>")
+        let support = tmp.appendingPathComponent("support")
+        func mirror(_ t: HubMirror.Transport) -> HubMirror {
+            let m = HubMirror(transport: t, agentsRoot: tmp.appendingPathComponent("agents").path,
+                              stateURL: tmp.appendingPathComponent("state.json"), device: "test-mac",
+                              store: nil, artifactRoot: support.path)
+            m.liveSessions = { [:] }
+            return m
+        }
+        let note = support.appendingPathComponent("hub-refused/\(session).json")
+        _ = await mirror(Refusing()).run(docs: true, turns: false)
+        let notes = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: note)) as? [String: [String: Any]])
+        XCTAssertEqual(notes["big"]?["told"] as? Bool, false)
+        XCTAssertTrue((notes["big"]?["reason"] as? String ?? "").contains("HTTP 413"))
+        _ = await mirror(FakeHub()).run(docs: true, turns: false)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: note.path), "taken: the note is gone")
+    }
+
     func testImagesLeaveThePageForTheBucketBeforeItIsSent() async throws {
         let hub = FakeHub()
         let png = Data([0x89, 0x50, 0x4E, 0x47] + [UInt8](repeating: 7, count: 64))
