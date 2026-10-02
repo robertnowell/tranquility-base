@@ -234,6 +234,7 @@ extension StatusHUD {
             glass.style = .regular
             glass.cornerRadius = Self.panelRadius
             glass.autoresizingMask = [.width, .height]
+            glass.appearance = NSAppearance(named: .darkAqua)
             glass.contentView = background
             glassView = glass
         } else {
@@ -257,6 +258,7 @@ extension StatusHUD {
         // corner instead of colliding with it.
         surfaceView = background
         dropSurface = background
+        background.appearance = NSAppearance(named: .darkAqua)
 
         // Widgets carry no initial visibility: build() is only reached from
         // render(), which writes every widget's visibility before the panel is
@@ -1060,6 +1062,7 @@ extension StatusHUD {
         ]
         self.strip = column
         self.panel = panel
+        installGlassKeeper()
         // Anything said before there was a label to say it in. Last, so every
         // view the flush repaints through already exists.
         flushDeferredNotes()

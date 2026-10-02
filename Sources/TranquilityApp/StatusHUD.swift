@@ -2969,6 +2969,7 @@ final class StatusHUD: NSObject {
         Permissions.log("HUD.render state=\(state.name) title=\(titleLabel.stringValue)")
         resizeToFit(panel)
         position(panel)
+        keepGlassDark(on: "show")
         panel.orderFrontRegardless()
         Permissions.log("HUD frame=\(panel.frame) visible=\(panel.isVisible) screen=\(NSScreen.main?.visibleFrame.debugDescription ?? "nil")")
 
@@ -3878,6 +3879,9 @@ final class StatusHUD: NSObject {
     /// The panel's material, hosting the surface (1 Oct 2026): regular
     /// Liquid Glass on macOS 26, the frosted popover material before it.
     var glassView: NSView?
+    /// The glass keeper's notification tokens and appearance watch (StatusHUD+Glass).
+    var glassKeeperObservers: [NSObjectProtocol] = []
+    var appearanceWatch: NSKeyValueObservation?
     /// One radius for the glass and the surface it clips. ZERO: a glass slab
     /// with hard corners (Robert, 1 Oct 2026, after seeing it rendered: "i
     /// like the slab, glass slab hard corners"). Deliberately unlike the

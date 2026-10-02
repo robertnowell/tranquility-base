@@ -2487,6 +2487,18 @@ extension StatusHUD {
         // was light putty and did not follow it into the dark (09 Aug).
         checks.append(("panelIsDressedForItsOwnSurface",
                        panel?.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua))
+        // The glass itself, not only its window (2 Oct 2026: the glass drew
+        // light for hours after a wake while the window still said dark).
+        checks.append(("glassIsDark",
+                       glassView?.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua))
+        checks.append(("glassKeeperWatches", !glassKeeperObservers.isEmpty))
+        // Knock the window to light, as the wake did, and the next show
+        // must bring the glass back to dark before anyone sees it.
+        panel?.appearance = NSAppearance(named: .aqua)
+        keepGlassDark(on: "drill")
+        checks.append(("aLightPanelHealsOnShow",
+                       panel?.appearance?.name == .darkAqua
+                       && glassView?.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua))
 
         SelfTest.report("selection", checks)
         showIdle(rows: [])
