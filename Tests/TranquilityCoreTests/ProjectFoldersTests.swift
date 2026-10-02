@@ -81,6 +81,42 @@ final class ProjectFoldersTests: XCTestCase {
         XCTAssertEqual(b.folders.map(\.name), ["First", "Second", "Third"])
     }
 
+    // MARK: - Folders are pins when the grid is full (ruled 2 Oct 2026)
+
+    func testLooseRowsLeaveTheGridBeforeAnyFolderRow() {
+        let b = book([("A", ["a1", "a2"]), ("B", ["b1"])])
+        // Loose rows are the newest, so a recency cut would keep them.
+        let rows = SessionRow.quietRowsLast([row("l1", .ready, at: 99), row("l2", .ready, at: 98),
+                                             row("a1", .ready, at: 10), row("a2", .working, at: 9),
+                                             row("b1", .ready, at: 8)])
+        let kept = ProjectLayout.gridRows(rows, capacity: 3, floor: 1, book: b).map(\.id)
+        XCTAssertEqual(Set(kept), ["a1", "a2", "b1"])
+    }
+
+    func testTheLowestFolderLosesItsWorkingRowsFirst() {
+        let b = book([("Top", ["t1", "t2"]), ("Low", ["g", "w"])])
+        let rows = SessionRow.quietRowsLast([row("t1", .ready, at: 1), row("t2", .working, at: 2),
+                                             row("g", .ready, at: 50), row("w", .working, at: 60)])
+        XCTAssertEqual(Set(ProjectLayout.gridRows(rows, capacity: 3, floor: 1, book: b).map(\.id)),
+                       ["t1", "t2", "g"], "the low folder's blue row goes first")
+        XCTAssertEqual(Set(ProjectLayout.gridRows(rows, capacity: 2, floor: 1, book: b).map(\.id)),
+                       ["t1", "t2"], "then its green one")
+    }
+
+    func testPinningNeverShowsAnIdleRowOverALitOne() {
+        let b = book([("F", ["idle"])])
+        let rows = SessionRow.quietRowsLast([row("lit", .ready, at: 5), row("idle", .running)])
+        XCTAssertEqual(ProjectLayout.gridRows(rows, capacity: 1, floor: 1, book: b).map(\.id), ["lit"],
+                       "the grid is for lit lamps (18 Aug); a folder pins among them")
+    }
+
+    func testWithNoFoldersMembershipIsExactlyAsBefore() {
+        let rows = SessionRow.quietRowsLast([row("a", .ready, at: 3), row("b", .working, at: 2),
+                                             row("c", .running), row("d", .unlit)])
+        XCTAssertEqual(ProjectLayout.gridRows(rows, capacity: 3, floor: 2, book: .empty).map(\.id),
+                       SessionRow.gridRows(rows, capacity: 3, floor: 2).map(\.id))
+    }
+
     // MARK: - Rule 4: collapsed is one lamp and a count
 
     func testCollapsedFolderShowsItsMostUrgentLampAndLitCount() {

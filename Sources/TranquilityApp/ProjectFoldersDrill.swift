@@ -219,6 +219,17 @@ extension StatusHUD {
         let reviveGoesHome = painted.firstIndex(of: "[Kopi]").map {
             $0 + 1 < painted.count && painted[$0 + 1] == "  k1" } ?? false
 
+        // Folders are pins (ruled 2 Oct): with more lit rows than the screen
+        // holds, the folder rows keep their slots and loose rows go to Past
+        // Agents, though the loose rows are newer.
+        let overflow = Self.gridRowCapacity() + 3
+        let crowd = SessionRow.quietRowsLast(
+            (0..<overflow).map { row("loose\($0)", .ready, 1_000 + TimeInterval($0)) }
+            + [row("m1", .ready, 1), row("t1", .working, 2)])
+        let kept = Set(Self.gridRows(crowd, book: store.current).map(\.id))
+        let foldersArePins = kept.contains("m1") && kept.contains("t1")
+            && Array(Self.pastAgents(crowd, book: store.current)).allSatisfy { $0.id.hasPrefix("loose") }
+
         // Past Agents stays flat and wears the chip.
         let chipped = PastRowView(item: .init(row: row("p1", .unlit, 1), revivable: true,
                                               haystack: "p1 Mirai", folder: "Mirai"),
@@ -247,6 +258,7 @@ extension StatusHUD {
             ("renameTakesAndReturnsKeys", renameTakesAndReturnsKeys),
             ("reviveGoesHome", reviveGoesHome),
             ("pastWearsTheChip", pastWearsTheChip),
+            ("foldersArePins", foldersArePins),
         ]
         // The drag and refit checks post events at window positions and read
         // back frames the panel has laid out, which a sleeping display never

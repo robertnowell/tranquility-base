@@ -94,6 +94,38 @@ public enum ProjectLayout {
             loose: SessionRow.quietRowsLast(loose))
     }
 
+    /// Which rows win the grid's slots when there are more than fit, with
+    /// folders as pins (ruled 2 Oct 2026, Robert, on a screenshot of folder
+    /// members in Past Agents while loose agents held rows: "the folder
+    /// mechanism is like pinning ... the free agents should be kicked to the
+    /// second screen first ... then it's the lowest folder gets the working
+    /// agents kicked first").
+    ///
+    /// The tiers are `SessionRow.gridRows`'s, unchanged: lit rows, then the
+    /// merely alive, then the dead, and only as many as `shownCount` allows.
+    /// Within each tier, rows in folders come first, in the folders' order,
+    /// and loose rows last; inside one folder the incoming lamp order stands.
+    /// So the slots are given away from the bottom of the grid upward: loose
+    /// rows first, then the lowest folder's blue rows, then its green ones.
+    public static func gridRows(_ rows: [SessionRow], capacity: Int, floor: Int,
+                                book: ProjectBook,
+                                origin: (String) -> String = { $0 }) -> [SessionRow] {
+        let eligible = rows.filter { !$0.switchedOff }
+        let rank = Dictionary(book.folders.enumerated().map { ($1.id, $0) },
+                              uniquingKeysWith: { first, _ in first })
+        func pinned(_ tier: [SessionRow]) -> [SessionRow] {
+            tier.enumerated().sorted { a, b in
+                let x = book.folder(of: a.element.id, origin: origin).flatMap { rank[$0.id] } ?? Int.max
+                let y = book.folder(of: b.element.id, origin: origin).flatMap { rank[$0.id] } ?? Int.max
+                return x == y ? a.offset < b.offset : x < y
+            }.map(\.element)
+        }
+        let ordered = pinned(eligible.filter { $0.lamp.isLit })
+            + pinned(eligible.filter { $0.lamp == .running })
+            + pinned(eligible.filter { $0.lamp == .unlit })
+        return Array(ordered.prefix(SessionRow.shownCount(rows, capacity: capacity, floor: floor)))
+    }
+
     /// Header count, for the panel's height budget: a header is shorter than
     /// a row but not free.
     public static func headerCount(_ shown: [SessionRow], book: ProjectBook,
