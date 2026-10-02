@@ -144,6 +144,7 @@ if not record["sessionId"]:
 # events carry no transcript to grep. A per-session record works for both.
 # The hub lookup is skipped here so the refresh fits the hook's 5 s budget.
 if event == "UserPromptSubmit":
+    prompt_context = []
     try:
         import subprocess
         hook_path = os.environ.get("TB_HOOK_PATH") or sys.argv[0] or ""
@@ -169,14 +170,49 @@ if event == "UserPromptSubmit":
                                      input=json.dumps({"session_id": sid, "hook_event_name": "SessionStart",
                                                        "source": "refresh"})).stdout
                 ctx = json.loads(out)["hookSpecificOutput"]["additionalContext"]
-                print(json.dumps({"hookSpecificOutput": {
-                    "hookEventName": "UserPromptSubmit",
-                    "additionalContext": (
+                prompt_context.append(
                         "The rules for pages have changed since this session was told them "
                         "(or it started before they were versioned). The current rules follow "
-                        "and replace any earlier version.\n\n" + ctx)}}))
+                        "and replace any earlier version.\n\n" + ctx)
     except Exception:
         pass
+
+    # A PAGE THE HUB REFUSED IS NEWS FOR THE AGENT THAT WROTE IT (1 Oct 2026).
+    # The app's mirror leaves a note per refused page; the agent hears it at
+    # its next prompt, once, with the reason, so it can make the page fit.
+    # Before this a 15.6 MB report was refused for two hours and its agent,
+    # and the person pressing Open Report, learned nothing.
+    try:
+        sid = record["sessionId"]
+        if all(c in "0123456789abcdef-" for c in sid.lower()) and len(sid) <= 64:
+            support = os.environ.get("VOICE_DISPATCH_SUPPORT_DIR") or os.path.expanduser(
+                "~/Library/Application Support/VoiceDispatch")
+            rpath = os.path.join(support, "hub-refused", sid + ".json")
+            if os.path.exists(rpath):
+                with open(rpath) as fh:
+                    notes = json.load(fh)
+                fresh = {k: v for k, v in notes.items() if isinstance(v, dict) and not v.get("told")}
+                if fresh:
+                    lines = ["- %s (%s): %s" % (k, v.get("path", ""), v.get("reason", "refused")) for k, v in fresh.items()]
+                    prompt_context.append(
+                        "A PAGE YOU WROTE DID NOT REACH THE HUB, so the person pressing Open Report "
+                        "sees a 'not on the hub yet' notice instead of your report:\n" + "\n".join(lines) +
+                        "\nMake it fit: inline images are moved out automatically, so what is left is "
+                        "the page's own HTML, scripts, fonts or data. Rewrite the file at the same path "
+                        "and it is sent again on the next pass. Tell the person if you cannot.")
+                    for k in fresh:
+                        notes[k]["told"] = True
+                    tmp = rpath + ".tmp"
+                    with open(tmp, "w") as fh:
+                        json.dump(notes, fh, sort_keys=True)
+                    os.replace(tmp, rpath)
+    except Exception:
+        pass
+
+    if prompt_context:
+        print(json.dumps({"hookSpecificOutput": {
+            "hookEventName": "UserPromptSubmit",
+            "additionalContext": "\n\n".join(prompt_context)}}))
 
 line = json.dumps(record, ensure_ascii=True) + "\n"
 

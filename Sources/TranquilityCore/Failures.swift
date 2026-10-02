@@ -104,6 +104,10 @@ public enum FailureKind: String, Codable, CaseIterable, Sendable {
     case agentRestarted = "agent_restarted"
     case persistFailed = "persist_failed"
     case notice = "notice"
+    /// The hub refused a page this Mac sent it (1 Oct 2026). Before this it
+    /// reached only app.log: a 15.6 MB report was refused 336 times over two
+    /// hours, its agent never knew, and its Open Report showed the agent page.
+    case pageRefused = "page_refused"
 }
 
 public struct Breadcrumb: Codable, Equatable, Sendable {

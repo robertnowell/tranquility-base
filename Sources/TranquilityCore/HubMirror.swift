@@ -494,9 +494,11 @@ public final class HubMirror: @unchecked Sendable {
                 guard (200..<300).contains(status) else {
                     report.failed += 1
                     report.note = "ingest \(slug): HTTP \(status) \(String(decoding: body.prefix(120), as: UTF8.self))"
+                    refused(c, slug: slug, status: status, bytes: html.utf8.count)
                     continue
                 }
                 sync { state.sent.insert(c.hash) }
+                Self.clearRefusal(session: c.session, slug: slug, root: artifactRoot)
                 report.documents += 1
                 // The first page this Mac ever mirrors comes forward by
                 // itself, once. See FirstReport for why once and never again.
@@ -506,6 +508,53 @@ public final class HubMirror: @unchecked Sendable {
                     show(at)
                 }
             } catch { report.failed += 1; report.note = "ingest \(slug): \(error.localizedDescription)" }
+        }
+    }
+
+    // MARK: - Refused pages
+
+    /// Pages the hub refused, already reported, so each is reported once per
+    /// version rather than every 20 s.
+    private var reportedRefusals = Set<String>()
+
+    /// A refused page is reported once, with its reason, and left as a note
+    /// the agent that wrote it is shown at its next prompt (tbase-hook.sh).
+    /// Before 1 Oct 2026 a refusal reached only app.log.
+    func refused(_ c: Candidate, slug: String, status: Int, bytes: Int) {
+        let first: Bool = sync { reportedRefusals.insert(c.hash).inserted }
+        guard first else { return }
+        let size = String(format: "%.1f MB", Double(bytes) / 1_000_000)
+        let why = status == 413
+            ? "too large for the hub (HTTP 413, \(size) after inline images were moved out)"
+            : "the hub answered HTTP \(status) (\(size))"
+        Failures.report(.pageRefused, reason: "page \(slug) not sent: \(why)", session: c.session)
+        Self.writeRefusal(session: c.session, slug: slug, path: c.path, reason: why, root: artifactRoot)
+    }
+
+    /// `<support>/hub-refused/<session>.json`: slug → {path, reason, at, told}.
+    static func refusalFile(session: String, root: String?) -> URL? {
+        guard let root, session.allSatisfy({ $0.isHexDigit || $0 == "-" }), session.count <= 64 else { return nil }
+        return URL(fileURLWithPath: root).appendingPathComponent("hub-refused/\(session).json")
+    }
+
+    static func writeRefusal(session: String, slug: String, path: String, reason: String, root: String?) {
+        guard let file = refusalFile(session: session, root: root) else { return }
+        var all = ((try? JSONSerialization.jsonObject(with: Data(contentsOf: file))) as? [String: Any]) ?? [:]
+        all[slug] = ["path": path, "reason": reason, "at": iso(Date()), "told": false]
+        try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        if let data = try? JSONSerialization.data(withJSONObject: all, options: [.sortedKeys]) {
+            try? data.write(to: file, options: .atomic)
+        }
+    }
+
+    static func clearRefusal(session: String, slug: String, root: String?) {
+        guard let file = refusalFile(session: session, root: root),
+              var all = (try? JSONSerialization.jsonObject(with: Data(contentsOf: file))) as? [String: Any],
+              all[slug] != nil else { return }
+        all[slug] = nil
+        if all.isEmpty { try? FileManager.default.removeItem(at: file); return }
+        if let data = try? JSONSerialization.data(withJSONObject: all, options: [.sortedKeys]) {
+            try? data.write(to: file, options: .atomic)
         }
     }
 
