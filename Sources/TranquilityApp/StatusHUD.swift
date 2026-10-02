@@ -3223,7 +3223,8 @@ final class StatusHUD: NSObject {
     /// because something more urgent arrived appears in the list the moment it
     /// does, with no second rule to keep in agreement.
     static func pastAgents(_ rows: [SessionRow],
-                           screen: NSScreen? = NSScreen.main) -> [SessionRow] {
+                           screen: NSScreen? = NSScreen.main,
+                           book: ProjectBook = ProjectStore.shared.current) -> [SessionRow] {
         // Everything the grid did not draw, named by id rather than counted
         // off the front. It WAS a `dropFirst` of the grid's count, which is
         // only correct while the array is sorted so the grid's rows are its
@@ -3231,7 +3232,7 @@ final class StatusHUD: NSObject {
         // than a length, that stopped being true. It failed loudly the same
         // evening: `gridAndListAreDisjoint` and `nothingIsLost` both went red,
         // which is a session drawn on neither face.
-        let drawn = Set(gridRows(rows, screen: screen).map(\.id))
+        let drawn = Set(gridRows(rows, screen: screen, book: book).map(\.id))
         return rows.filter { !drawn.contains($0.id) }
     }
 
@@ -3274,7 +3275,11 @@ final class StatusHUD: NSObject {
                          screen: NSScreen? = NSScreen.main,
                          book: ProjectBook = ProjectStore.shared.current) -> [SessionRow] {
         let capacity = gridRowCapacity(screen: screen)
-        let first = SessionRow.gridRows(rows, capacity: capacity, floor: gridRowFloor)
+        let origin = SessionLineage.lastKnownOrigin
+        // Folders are pins: their rows win slots before loose rows do
+        // (ProjectLayout.gridRows, ruled 2 Oct 2026).
+        let first = ProjectLayout.gridRows(rows, capacity: capacity, floor: gridRowFloor,
+                                           book: book, origin: origin)
         // A folder header is shorter than a row but not free: each one takes
         // its height out of the row budget, so twenty rows and three folders
         // still fit the screen twenty rows fitted. The rows that lose their
@@ -3285,7 +3290,8 @@ final class StatusHUD: NSObject {
         let cost = Int((CGFloat(headers) * (FolderHeaderView.height + 1)
                         / (GridRowView.height + 1)).rounded(.up))
         let room = max(1, capacity - cost)
-        return SessionRow.gridRows(rows, capacity: room, floor: min(gridRowFloor, room))
+        return ProjectLayout.gridRows(rows, capacity: room, floor: min(gridRowFloor, room),
+                                      book: book, origin: origin)
     }
 
     /// How many row-slots the panel is worth: every LIT session, or your top
