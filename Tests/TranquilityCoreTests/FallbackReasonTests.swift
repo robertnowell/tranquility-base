@@ -10,6 +10,7 @@ final class FallbackReasonTests: XCTestCase {
         XCTAssertEqual(FallbackReason(ManagedSummaryFailure.refused(code: "no_audio", operationId: "x")), .clipLost)
         XCTAssertEqual(FallbackReason(ManagedSummaryFailure.refused(code: "already_bought", operationId: "x")), .clipLost)
         XCTAssertEqual(FallbackReason(ManagedSummaryFailure.outcomeUnknown(operationId: "x")), .unreachable)
+        XCTAssertEqual(FallbackReason(ManagedSummaryFailure.refused(code: "provider_failed", operationId: "x")), .providerRefused)
         XCTAssertEqual(FallbackReason(URLError(.timedOut)), .unreachable)
         XCTAssertEqual(FallbackReason(ManagedSummaryFailure.refused(code: "something_new", operationId: "x")), .other)
     }
