@@ -1359,13 +1359,19 @@ final class StatusHUD: NSObject {
     }
 
     /// Append a line to the current panel without disturbing what it is showing.
-    func note(_ message: String) {
+    /// `detail` is shown on hover, not on the line: the line says what happened,
+    /// the pointer asks why (3 Oct 2026, "just show the reason on hover").
+    func note(_ message: String, detail: String? = nil) {
         guard hintLabel != nil else {
             deferredNotes.append(message)
             return
         }
         hintLabel.stringValue = [message, hintLabel.stringValue]
             .filter { !$0.isEmpty }.joined(separator: "\n")
+        if let detail {
+            hintLabel.toolTip = [detail, hintLabel.toolTip ?? ""]
+                .filter { !$0.isEmpty }.joined(separator: "\n")
+        }
         syncHintVisibility()
         if let panel { resizeToFit(panel); position(panel) }
     }
@@ -2526,6 +2532,7 @@ final class StatusHUD: NSObject {
         // keeps its full-dark body exactly as before.
         if let cursor = face.spokenUpTo { paintInk(displayCursor: cursor) }
         hintLabel.stringValue = ""
+        hintLabel.toolTip = nil
         // **A pid is not the only way to have somewhere to go** (14 Sep). This
         // read `pid == nil` alone, so a remote agent — which has no process on
         // this Mac and never will — got a card with no Go to Agent on it at
@@ -2791,6 +2798,7 @@ final class StatusHUD: NSObject {
             pastBackButton?.isHidden = false
             hintLabel.font = StateLegend.Face.chrome(9.5)
             hintLabel.stringValue = pastList?.summary ?? ""
+            hintLabel.toolTip = nil
             pastList?.isHidden = false
 
         case .settings:
@@ -2961,6 +2969,7 @@ final class StatusHUD: NSObject {
         surfaceView?.layer?.borderColor = armed ? StateLegend.Palette.working.cgColor : nil
         if armed, let pasteNote {
             hintLabel.stringValue = pasteNote
+            hintLabel.toolTip = nil
         }
 
         // And the same rule for the line under it: an empty hint is not a line.

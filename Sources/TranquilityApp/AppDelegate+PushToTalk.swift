@@ -814,12 +814,13 @@ extension AppDelegate {
                         "replayed": .bool(replayId != nil),
                     ])
                     if let degraded = announcement.degraded {
-                        // Heard, but in the plainer voice. Say why, or an outage
-                        // reads as the app just sounding worse for no reason. In
-                        // words: the raw error (an operation id) stays in the log.
+                        // Heard, but in the plainer voice. The line says so; the
+                        // reason is on hover (3 Oct 2026: the reason crowded the
+                        // line and was cut off mid-word). In words: the raw error
+                        // (an operation id) stays in the log.
                         Permissions.log("announce: system voice because \(degraded)")
                         let why = (announcement.degradedReason ?? .other).words
-                        hud.note("Read in the system voice. \(why)")
+                        hud.note("Read in the system voice.", detail: why)
                     }
                     lastStatusLine = "\(StateLegend.Glyph.speaking) \(announcement.brief.topic)"
                     hud.highlight(upTo: announcement.spoken.text.count)

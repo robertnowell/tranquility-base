@@ -52,6 +52,9 @@ public enum FallbackReason: Sendable, Equatable {
     case cutOff
     /// The service did not answer in time, or could not be reached.
     case unreachable
+    /// The voice provider behind the service refused the line. Not the
+    /// person's account: 3 Oct 2026 it was the service's own key out of quota.
+    case providerRefused
     /// Anything else. The log has the detail.
     case other
 
@@ -62,6 +65,7 @@ public enum FallbackReason: Sendable, Equatable {
             case "insufficient_credit": self = .creditsSpent
             case "no_audio", "already_bought": self = .clipLost
             case "service_unavailable", "provider_uncertain": self = .unreachable
+            case "provider_failed": self = .providerRefused
             default: self = .other
             }
         case ManagedSummaryFailure.outcomeUnknown, ManagedSummaryFailure.pending: self = .unreachable
@@ -77,6 +81,7 @@ public enum FallbackReason: Sendable, Equatable {
         case .keyRejected: return "Your ElevenLabs key was refused. Check it in Settings."
         case .cutOff: return "The premium voice cut out before it started."
         case .unreachable: return "The premium voice didn't answer in time."
+        case .providerRefused: return "The premium voice service refused this line. Nothing is wrong with your account."
         case .other: return "The premium voice failed on this line."
         }
     }
