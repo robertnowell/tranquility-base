@@ -304,8 +304,16 @@ final class HubWindowFindPrintTests: XCTestCase {
         bar.field.stringValue = "beta"
         let inPage = await bar.find()
         XCTAssertTrue(inPage)
+        // The sandboxed frame loads after the page, and on a busy CI runner
+        // later than the half-second `loaded` waits (failed PR 753's audit,
+        // 2 Oct 2026). Poll the find itself, up to ten seconds, instead.
         bar.field.stringValue = "gamma"
-        let inFrame = await bar.find()
+        var inFrame = await bar.find()
+        let deadline = Date().addingTimeInterval(10)
+        while !inFrame, Date() < deadline {
+            try await Task.sleep(nanoseconds: 100_000_000)
+            inFrame = await bar.find()
+        }
         XCTAssertTrue(inFrame, "the document is a sandboxed frame; find reaches it")
         bar.field.stringValue = "nowhere-at-all"
         let miss = await bar.find()
