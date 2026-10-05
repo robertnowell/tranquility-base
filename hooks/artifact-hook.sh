@@ -982,6 +982,44 @@ TAG_ASK = _tag_ask(path)
 # (img, pre, table, svg) against how many claims it makes. Nothing here can see
 # whether the verdict is conclusive or the screenshot is the right one; those
 # stay judgment, and the sentence says so by naming only what it measured.
+# THE EVIDENCE RULES (ruled 5 Oct 2026, hf-eit; share-as-page/references/brief.md,
+# Evidence rules). Advisory like the rest: it names the claim, it never blocks.
+# The draw test itself lives in hq-diagram, which refuses; this only checks that
+# a claim typed as needing a diagram has one, and that a claim typed as text does
+# not read like order or change (agents type their own claims, so the type is
+# cross-checked against the sentence).
+_DRAWN = {"flow", "structure", "states", "change"}
+_TYPES = _DRAWN | {"ranking", "screen", "versions", "lookup", "text"}
+_RELATIONAL = re.compile(r"\b(then|after|before|until|leads? to|calls?|sends?|reaches|flows?|routes?|depends|"
+                         r"from \S+ to|dropped|rose|fell|halved|doubled|down to|up to)\b", re.I)
+def _evidence_flags(body):
+    flags = []
+    if re.search(r"<details\b", body, re.I):
+        flags.append("claims are collapsible <details>: since 5 Oct 2026 a claim is a <section class=\"claim\">, never collapsed")
+    named = []
+    for attrs, inner in re.findall(r'<section class="claim[^"]*"([^>]*)>(.*?)</section>', body, flags=re.S):
+        m = re.search(r'<span class="c">(.*?)(?:<em>|</span>)', inner, flags=re.S)
+        claim = re.sub(r"<[^>]+>", " ", m.group(1)).strip() if m else ""
+        short = '"' + ((claim[:50] + "...") if len(claim) > 50 else claim) + '"'
+        t = (re.search(r'data-shows="(\w+)"', attrs) or [None, None])[1]
+        if t not in _TYPES:
+            named.append(short + " has no data-shows type")
+        elif t in _DRAWN and "<svg" not in inner:
+            named.append(short + " shows %s but carries no diagram (hq-diagram)" % t)
+        elif t == "text" and _RELATIONAL.search(claim):
+            named.append(short + " reads like order or change but is typed text")
+        if len(re.findall(r"<pre\b", inner, flags=re.I)) > 2:
+            named.append(short + " carries %d literal blocks; one, two at most" % len(re.findall(r"<pre\b", inner, flags=re.I)))
+    flags += named[:4]
+    imgs = len(re.findall(r"<img\b", body, flags=re.I))
+    linked = len(re.findall(r'<a\b[^>]*href="(?!data:|#)[^"]+"[^>]*>\s*(?:<[^>]+>\s*)*<img\b', body, flags=re.I))
+    if imgs > linked:
+        flags.append("%d of %d images link to nothing: wrap each in a link to the live thing it shows, or caption it 'no live source'" % (imgs - linked, imgs))
+    if re.search(r'class="mark"', body):
+        flags.append("a screenshot is drawn on (.mark): crop to the passage instead")
+    return flags
+
+
 def _shape_ask(path):
     try:
         with open(path, "r", encoding="utf-8", errors="ignore") as fh:
@@ -1021,7 +1059,8 @@ def _shape_ask(path):
     # has a structural signature no editorial page has: the dark needs-you
     # block, the lede, and claim rows as <details>. Absent all three, the page
     # is on something else, and the advisory says so and names the template.
-    on_template = ('class="you"' in body and 'class="lede"' in body and "<details" in body.lower())
+    on_template = ('class="you"' in body and 'class="lede"' in body
+                   and ("<details" in body.lower() or 'class="claim' in body))
     # The 25 Sep boxes. A page on the brief shape but drawing its evidence as
     # class="art" boxes predates the 27 Sep blocks; say so, since the shape
     # check alone passes it.
@@ -1041,6 +1080,7 @@ def _shape_ask(path):
         flags.append("headings should be claims with a verb, not topics")
     if claims and arts < max(1, len(claims) // 2):
         flags.append("fewer artifacts than claims: a screenshot, the rows, or the diff under each")
+    flags += _evidence_flags(body)
     if shots == 0:
         flags.append("no screenshot: if any claim is about a UI, open the browser and shoot it")
     # The headline is the message in three to six words; a sentence up there is

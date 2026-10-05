@@ -46,7 +46,7 @@ public enum SkillManifest {
     /// The commands a skill's prose names, put on PATH beside the skills.
     /// `hq` was a symlink into a repo the other Macs do not have; every shim
     /// resolves its own directory, so a link into any source works.
-    public static let shims: [String] = ["hq", "hq-open", "hq-publish", "hq-theme", "hq-tags", "hq-root", "hq-page"]
+    public static let shims: [String] = ["hq", "hq-open", "hq-publish", "hq-theme", "hq-tags", "hq-root", "hq-page", "hq-diagram"]
 
     // MARK: - Targets
 

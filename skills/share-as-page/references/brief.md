@@ -8,7 +8,7 @@ Ruled 25 Sep 2026 after a deep research pass (agent a8e3f054, `2026-09-25-inform
 
 1. **The message.** Three to six words at seven times body size: "Two chips moved." Then the lede, whose first sentence, in bold, is the one-sentence claim with a verb; two more sentences at most. Then the dark block: what needs them, or "nothing to decide". The scale is measured, not felt: typesafe.ai sets a four-word headline at 140px over 17px body, an eight-to-one jump; a sentence at 54px over 16px was called "relatively indistinguished" (27 Sep).
 2. **The claims.** One row per claim, a full sentence each, with a status dot and one figure. Read only the rows and the argument survives. Five to seven rows; a second, smaller list for what deliberately did not change.
-3. **The artifacts.** Open under their claim, never in a separate section; a row closes only on a page past about eight claims (ruled 28 Sep 2026: hidden content goes unread). The thing itself: the screenshot, the diff hunk, the raw rows, the literal prompt. A one-line caption saying what to look at.
+3. **The artifacts.** Under their claim, never in a separate section, and never collapsed: no accordion, no toggle (ruled 5 Oct 2026; an accordion that starts open hides nothing, and a click on it hides what you were reading). The thing itself: the screenshot, the diff hunk, the raw rows, the literal prompt, or a diagram when the draw test says so. A one-line caption saying what to look at. See Evidence rules below.
 
 Start with `hq-page new <slug> --session=<your full session id>` (add `--brand=NAME` for a brand page). It writes `templates/brief.html` as a draft, `<hub>/_drafts/<slug>.html`, with the session line, the kicker and the `:root` tokens filled in, binds the brand to your session, and refuses to overwrite. Nothing publishes, announces or opens a draft. When the page is finished, `hq-page publish <slug> --session=<id>` moves it to `<hub>/<slug>.html` and opens it; it refuses a draft whose placeholders are still there. Ruled 29 Sep 2026, after an empty scaffold was announced to Robert while its agent waited on a deploy. Ruled 27 Sep 2026 after two hours of watching: sessions copy their own last page because it is the cheapest start; this makes the template cheaper. The worked example is `agents/a8e3f054-8583-45f2-8bc0-3dfe55d47a06/uvape-what-is-different-redone.html`: a real report, five claims, the signed-in app under each.
 
@@ -34,8 +34,9 @@ Ruled 27 Sep 2026 after the beige boxes were called "not doing it": the reader c
 | Any block | Whitespace separates it. A single rule when whitespace is not enough. A filled box only for code, where the boundary means "verbatim". |
 | Quote | A 3px left rule and an indent, one size step down, no quotation marks, no fill. Under fifty words. Who, where and when in the caption. |
 | Code, diff, raw rows, prompts | Dark text on the light neutral panel (`--panel`), hairline, radius 4. Never dark on light: dark-on-light wins for precision reading in every polarity study. Diff rows use Primer's tints, contrast in the text colour. |
-| Screenshot | A hairline, no shadow, no device frame. The passage the claim rests on is marked on the image (`.mark`). A sentence caption below saying what to look at, where, when, and a link to the live page. |
-| Before and after | Two screenshots side by side, captions carrying Before and After. |
+| Screenshot | A hairline, no shadow, no device frame. Never drawn on: to point at a passage, crop to it (`.crop`, `--ar`, `--pos`), so what is shown is what was shot. The image is a link to the live thing it shows. A sentence caption below saying what the crop shows, where, when. |
+| Before and after | Two screenshots side by side, captions carrying Before and After, each linked to its source. |
+| Diagram | Inline SVG from `hq-diagram`, between hairlines, no box. Only when the draw test passes; see Evidence rules. |
 | Table | Hairlines only, title above as the caption, header sentence case at full weight, numbers right-aligned in tabular figures. Stripes only when rows are long. |
 | Caption, not label | Every artifact carries a caption below, in a sentence, at full ink. No label bar above. Uppercase tracked mono is for the kicker, the section labels and the status figure, nothing longer. |
 | Gap | Plain italic text with a faint left rule, where the artifact would sit. |
@@ -76,7 +77,7 @@ Brief (one reader, one decision) · status board (many items, one state each) ·
 
 From the editorial pass (`2026-09-27-editorial-design-patterns`, agent a8e3f054): what newspapers, long-form journalism, postmortems and design-led documentation do that the template did not.
 
-- **Artifacts open by default.** GOV.UK: do not use disclosure for what most readers need; users avoid the control. Nielsen Norman: scrolling beats deciding which heading to click; at most two levels. Close rows only past about eight claims.
+- **Artifacts open, always.** GOV.UK: do not use disclosure for what most readers need; users avoid the control. Nielsen Norman: scrolling beats deciding which heading to click. The eight-claim exception was withdrawn on 5 Oct 2026: claims are sections, not accordions.
 - **Text at 720px, evidence at 1000px.** Distill and Tufte hold text near 60 characters and give figures the page. A screenshot inside the text column is a click away from legible.
 - **Air between claims; a rule only under the section label.** tufte-css and Distill rule only the coarsest boundary. The number and the space carry the rows.
 - **The headline is under ten words and the lede answers it.** Axios: more than ten words means the lead is not found yet. The lede's first sentence answers the headline and carries the number, as Buffett's letters open with the year's gain.
@@ -84,4 +85,31 @@ From the editorial pass (`2026-09-27-editorial-design-patterns`, agent a8e3f054)
 - **The summary is one declared sentence under 160 characters** (GOV.UK's rule, for the same reason: it is what every index shows).
 - **Two weights; tracked capitals only for labels.** Every text token passes 4.5:1 on the house paper and the status dots pass 3:1; a brand paper darker than the house needs the faint token re-measured.
 - **A hub is a list, so it takes the postmortem's facts block and the changelog's day headers:** turns, pull requests, pages and last active under the needs-you block; a day header before the first turn of each day; no hairlines between turns.
+
+## Evidence rules, ruled 5 Oct 2026
+
+From three passes (`2026-10-03-diagrams-for-report-evidence`, `2026-10-03-diagram-calibration`, agent a8e3f054) and two replays: ten claims rebuilt with diagrams (four better, four mixed, two worse, and the draw test below accounts for all ten), then four reports rewritten from their agents' raw turns (the evidence improved, and three of the four originals were caught stating something the turn never showed). Robert ruled: ship it, with every number cited and one piece of literal evidence per claim.
+
+**Claims are sections.** `<section class="claim" data-shows="TYPE">`, TYPE one of flow, structure, states, change, ranking, screen, versions, lookup, text. Never `<details>`.
+
+**The draw test decides the artifact.** Diagrams win where the reader has to relate several things at once (Larkin and Simon: a diagram keeps what one inference needs side by side) and lose everywhere else, so:
+
+1. The evidence is one sentence: write the sentence. A one-line rule drawn as a decision diamond lost to the sentence.
+2. It is numbers, twenty or fewer: a table. Tufte: "Tables usually outperform graphics in reporting on small data sets of 20 numbers or less." Never a hand-drawn chart; the one in the replay read backward.
+3. Nothing branches, merges or loops: a numbered list, or a table if the items do not connect at all. Three parallel sensors drawn as boxes lost to their table.
+4. Otherwise, and only otherwise: draw it.
+
+**Drawing it.** `hq-diagram in.dot --png look.png > out.svg`. Write plain Graphviz dot; the helper adds the house style. Mark the one important node or edge `tone=accent`, a broken part `tone=warn`; label every edge with what it carries or causes. It runs the draw test and prints `draw test passes` or `DO NOT SHIP AS DRAWN: why`, exiting 2. Obey it: redraw (rankdir=TB, shorter labels, split) or use what it names. The limits: one connected graph, a branch, merge or loop, at most 15 boxes, labels at 12px or more in the 700px column (ONS asks 14px for charts; 11.3px read fine in the replay, 9.6px did not), no crossing edges (Purchase 1997: "by far the most important aesthetic"). Look at look.png before embedding it.
+
+**A diagram replaces what it restates.** Its numbers go in its labels, and the table or paragraph it redraws comes out. For an expert reader the same content twice costs time and adds nothing (expertise reversal); every replayed rebuild that stacked a diagram on its table got longer, 35% across ten claims. A table stays only for values the drawing does not carry.
+
+**One piece of literal evidence per claim.** Code, diff, rows, log or prompt: one block, two only when the claim rests on both. The rewrites that quoted everything ran 14% longer than the originals.
+
+**Every number cites its source.** A count or figure in a claim names the row, query or log line it came from, in the caption. Writing from the rows is what caught the overstatements: ten readers that included four test accounts, six pull requests that were seven, a proof tile that was a different file.
+
+**Every image links to the live thing it shows**: the PR, the commit, the file at a commit, the page, the dashboard. Never to the image file. No live address: no link, and the caption says so. Never invent one.
+
+**The page check names breaks**, after every write: a claim typed flow, structure, states or change with no diagram; a claim typed text whose sentence reads like order or change; an image that links nowhere; a claim with more than two literal blocks; any `<details>`. It advises; the helper refuses.
+
+**Measured weekly.** Three to five claims, one comprehension question each, answered from the prose and then with the diagram, plus better, mixed or worse; pooled, and read as a sign test once about twenty are not ties. Not an automated judge: the best model agrees with experts at 0.43 (VisJudge-Bench).
 

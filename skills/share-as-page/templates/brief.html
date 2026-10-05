@@ -48,7 +48,7 @@ body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);font
 /* THE TEXT IS 720px WIDE AND THE EVIDENCE IS 1000px. Ruled 28 Sep 2026 after the editorial pass: Distill and Tufte hold
    text at about 60 characters and give figures the page; a screenshot trapped in the text column is unreadable without a click. */
 main{max-width:1000px;margin:0 auto;padding:56px 20px 96px}
-h1,.lede,.you,h2,summary,.d>p,.tail,.k,.quote{max-width:720px}
+h1,.lede,.you,h2,.head,.d>p,.tail,.k,.quote{max-width:720px}
 .k{font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
 /* THE HEADLINE IS THREE TO SIX WORDS AT SEVEN TIMES BODY SIZE. Measured 27 Sep on
    typesafe.ai: h1 140px Medium in four words, h2 64px, body 17px. A sentence at 54px
@@ -75,24 +75,21 @@ h1{font-size:clamp(56px,11.5vw,112px);line-height:.95;letter-spacing:-.035em;fon
 h2{font-size:13px;font-family:var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--muted);font-weight:500;margin:72px 0 6px;padding-bottom:10px;border-bottom:1px solid var(--line)}
 /* AIR BETWEEN CLAIMS, A RULE ONLY UNDER THE SECTION LABEL. Ruled 28 Sep 2026: a drawn boundary is the strongest grouping cue,
    so it is spent once, on the section; the number and the space carry the rows. */
-details{border-bottom:0;padding:6px 0 18px}
-details.small{padding:0}
-summary{list-style:none;cursor:pointer;display:grid;grid-template-columns:34px 1fr auto;gap:14px;align-items:baseline;padding:20px 0}
-summary::-webkit-details-marker{display:none}
-summary .n{font-family:var(--mono);font-size:13px;color:var(--faint);padding-top:4px}
-summary .c{font-size:24px;line-height:1.18;font-weight:600;color:var(--heading);letter-spacing:-.02em}
-summary .c em{font-style:normal;color:var(--muted);font-weight:400;display:block;font-size:16px;margin-top:6px;letter-spacing:0}
-summary .s{font-family:var(--mono);font-size:12px;color:var(--muted);text-align:right;white-space:nowrap;padding-top:4px;font-variant-numeric:tabular-nums}
-summary .s::after{content:'+';display:inline-block;margin-left:12px;color:var(--faint);font-size:14px;width:10px}
-details[open]>summary .s::after{content:'\2013'}
-details[open] summary .s::after{content:'–'}
-summary .s i{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:7px;vertical-align:0;background:var(--accent)}
-summary .s i.w{background:var(--amber)}summary .s i.o{background:transparent;border:1.5px solid var(--faint);width:7px;height:7px}
-/* An open or hovered row marks its NUMBER in the accent, never the heading text: a light brand accent (U Vape's pink) is unreadable as running text. */
-summary:hover .c{text-decoration:underline;text-decoration-color:var(--accent);text-underline-offset:4px}
-details[open] summary .n{color:var(--accent);font-weight:700}
-.small summary{padding:14px 0}
-.small summary .c{font-size:16px;font-weight:500}
+/* A CLAIM is always open: no toggle, nothing to click. Ruled 5 Oct 2026 (hf-eit): an accordion that starts
+   open hides nothing, and a click on it hides what you were reading. data-shows names what the evidence is. */
+.claim{padding:6px 0 18px}
+.claim.small{padding:0}
+.head{display:grid;grid-template-columns:34px 1fr auto;gap:14px;align-items:baseline;padding:20px 0}
+.head .n{font-family:var(--mono);font-size:13px;color:var(--faint);padding-top:4px}
+.head .c{font-size:24px;line-height:1.18;font-weight:600;color:var(--heading);letter-spacing:-.02em}
+.head .c em{font-style:normal;color:var(--muted);font-weight:400;display:block;font-size:16px;margin-top:6px;letter-spacing:0}
+.head .s{font-family:var(--mono);font-size:12px;color:var(--muted);text-align:right;white-space:nowrap;padding-top:4px;font-variant-numeric:tabular-nums}
+.head .s i{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:7px;vertical-align:0;background:var(--accent)}
+.head .s i.w{background:var(--amber)}.head .s i.o{background:transparent;border:1.5px solid var(--faint);width:7px;height:7px}
+/* The row marks its NUMBER in the accent, never the heading text: a light brand accent (U Vape's pink) is unreadable as running text. */
+.head .n{color:var(--accent);font-weight:700}
+.small .head{padding:14px 0}
+.small .head .c{font-size:16px;font-weight:500}
 
 /* LEVEL 3: the artifacts, OPEN under their claim. Ruled 28 Sep 2026: hidden content goes unread (GOV.UK, Nielsen Norman),
    and the artifact is the evidence the reader is meant to check. Close rows only on a page past about eight claims.
@@ -115,10 +112,16 @@ figcaption .src{color:var(--muted)}
 .quote blockquote{margin:0;padding:2px 0 2px 18px;border-left:3px solid var(--accent);font-size:16px;line-height:1.45;color:var(--ink)}
 .quote blockquote p{margin:0 0 6px}
 .quote blockquote p:last-child{margin:0}
-/* SCREENSHOT: a hairline, no shadow, no frame. The passage is MARKED on the image. */
+/* SCREENSHOT: a hairline, no shadow, no frame. Never drawn on (ruled 5 Oct 2026): to point at part of it, CROP
+   with .crop (--ar the box, --pos where in the image), and say in the caption what the crop shows.
+   The image is wrapped in a link to the live thing it shows: the PR, the page, the dashboard. */
 .shot .frame{position:relative;border:1px solid var(--line);border-radius:4px;overflow:hidden;background:#fff}
 .shot img{display:block;width:100%;height:auto}
-.shot .mark{position:absolute;border:2px solid var(--mark);box-shadow:0 0 0 2px rgba(0,0,0,.35);border-radius:3px;pointer-events:none}
+.shot .crop{aspect-ratio:var(--ar,16/9);overflow:hidden}
+.shot .crop img{width:100%;height:100%;object-fit:cover;object-position:var(--pos,50% 50%)}
+/* DIAGRAM: inline SVG from hq-diagram, which ran the draw test. Hairlines above and below, no box. */
+.fig .art{border-top:1px solid var(--line);border-bottom:1px solid var(--line);padding:16px 0}
+.fig svg{max-width:100%;height:auto;display:block}
 .pair{display:grid;grid-template-columns:1fr 1fr;gap:14px}
 .pair figcaption::before{content:attr(data-side);font-family:var(--mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-right:8px}
 /* TABLE: hairlines only, title above as the caption, header sentence case, numbers right. */
@@ -132,7 +135,7 @@ figcaption .src{color:var(--muted)}
 
 .tail{margin-top:72px;border-top:1px solid var(--line);padding-top:24px}
 .tail p{font-size:14px;color:var(--muted);margin:0 0 8px}
-@media (max-width:640px){.d{padding-left:0}summary{grid-template-columns:28px 1fr}summary .s{grid-column:2;text-align:left;padding-top:0}.pair{grid-template-columns:1fr}}
+@media (max-width:640px){.d{padding-left:0}.head{grid-template-columns:28px 1fr}.head .s{grid-column:2;text-align:left;padding-top:0}.pair{grid-template-columns:1fr}}
 </style></head><body><main>
 
 <div class="k"><!-- KICKER: two items, brand and date. Nothing else. --></div>
@@ -147,21 +150,30 @@ figcaption .src{color:var(--muted)}
 <ol><li class="rec">Option A, and what it costs</li><li>Option B</li></ol> -->
 <small><!-- One line of context: why now, what is already true. --></small></div>
 
-<h2><!-- SECTION LABEL: e.g. "Five things changed · open one to check it" --></h2>
+<h2><!-- SECTION LABEL: e.g. "Five things changed" --></h2>
 
-<!-- ONE ROW PER CLAIM. The claim is a full sentence with a verb. The em is one line of how.
+<!-- ONE ROW PER CLAIM, always open. The claim is a full sentence with a verb. The em is one line of how.
      The status: a filled dot for done or verified, a .w amber dot for partial, an .o hollow dot for not done.
-     The figure: one number with its unit, or a count with its denominator. -->
-<details open><summary><span class="n">1</span><span class="c"><!-- CLAIM --><em><!-- how, in one line --></em></span><span class="s"><i></i><!-- figure --></span></summary><div class="d">
+     The figure: one number with its unit, or a count with its denominator; it names the row or log line it came from.
+     data-shows: flow | structure | states | change | ranking | screen | versions | lookup | text.
+     ONE piece of evidence per claim, two at most when the claim rests on literal code or rows. Pick by the draw test
+     (brief.md, Evidence rules): one sentence is a sentence; 20 numbers or fewer, a table; nothing branches, a list;
+     only a branch, merge or loop gets a diagram, and it replaces the table or paragraph it restates. -->
+<section class="claim" data-shows="screen"><div class="head"><span class="n">1</span><span class="c"><!-- CLAIM --><em><!-- how, in one line --></em></span><span class="s"><i></i><!-- figure --></span></div><div class="d">
 
-  <!-- SCREENSHOT with the passage marked. Percentages are of the image box. -->
-  <figure class="shot"><div class="frame"><img src="data:image/jpeg;base64,FILL" alt=""><div class="mark" style="left:15%;top:72%;width:14%;height:4%"></div></div>
-  <figcaption><!-- What to look at, in a sentence. --> <span class="src"><!-- Where and when: the page, signed in as whom, the date. --></span> <a href="#"><!-- Open the live page --></a></figcaption></figure>
+  <!-- SCREENSHOT, linked to the live thing it shows, never drawn on. To point at part of it, crop:
+       --ar is the box's shape, --pos where in the image to look. No live address: no link, and the caption says so. -->
+  <figure class="shot"><a href="FILL: the live page, PR or dashboard"><div class="frame crop" style="--ar:16/9;--pos:20% 70%"><img src="data:image/jpeg;base64,FILL" alt=""></div></a>
+  <figcaption><!-- What the crop shows, in a sentence. --> <span class="src"><!-- Where and when: the page, signed in as whom, the date. --></span></figcaption></figure>
+
+  <!-- DIAGRAM, only when the draw test passes: `hq-diagram in.dot --png look.png > out.svg`, look at look.png, paste the SVG.
+       It replaces the table or paragraph it restates; put the numbers in its labels. -->
+  <figure class="fig"><div class="art"><!-- the SVG --></div><figcaption><!-- What to see, in a sentence. --> <span class="src"><!-- what it was drawn from --></span></figcaption></figure>
 
   <!-- BEFORE / AFTER -->
   <div class="pair">
-    <figure class="shot"><div class="frame"><img src="data:image/jpeg;base64,FILL" alt=""></div><figcaption data-side="Before"><!-- what it showed, when --></figcaption></figure>
-    <figure class="shot"><div class="frame"><img src="data:image/jpeg;base64,FILL" alt=""></div><figcaption data-side="After"><!-- what it shows, when --></figcaption></figure>
+    <figure class="shot"><a href="FILL"><div class="frame"><img src="data:image/jpeg;base64,FILL" alt=""></div></a><figcaption data-side="Before"><!-- what it showed, when --></figcaption></figure>
+    <figure class="shot"><a href="FILL"><div class="frame"><img src="data:image/jpeg;base64,FILL" alt=""></div></a><figcaption data-side="After"><!-- what it shows, when --></figcaption></figure>
   </div>
 
   <!-- RAW ROWS, A DIFF HUNK, A LITERAL PROMPT. <b> marks the value the claim rests on. Diff lines: <span class="add">+ …</span> <span class="del">- …</span> -->
@@ -177,10 +189,10 @@ figcaption .src{color:var(--muted)}
   <p class="gap"><!-- What is missing, why, and what stands in for it. --></p>
 
   <p><b><!-- Optional one-line reading of the artifact. --></b> <!-- What the reader should notice that the artifact does not say by itself. --></p>
-</div></details>
+</div></section>
 
 <h2><!-- SECOND SECTION LABEL, e.g. "Six things did not · by design". Optional. --></h2>
-<details class="small"><summary><span class="n">·</span><span class="c"><!-- claim --></span><span class="s"><i class="o"></i><!-- figure, or empty --></span></summary><div class="d"><p><!-- one line why --></p></div></details>
+<section class="claim small" data-shows="text"><div class="head"><span class="n">·</span><span class="c"><!-- claim --></span><span class="s"><i class="o"></i><!-- figure, or empty --></span></div><div class="d"><p><!-- one line why --></p></div></section>
 
 <div class="tail"><p><b><!-- What they will notice first. --></b> <!-- One or two sentences. --></p><p><!-- Where this came from: what was read, run and shot, and when. The refs (PRs, sessions, the page this follows) go here, as links. --></p></div>
 
