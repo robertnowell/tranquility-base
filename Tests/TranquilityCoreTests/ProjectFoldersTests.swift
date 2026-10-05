@@ -154,6 +154,16 @@ final class ProjectFoldersTests: XCTestCase {
 
     // MARK: - Rule 5: hide and wait
 
+    // 5 Oct 2026: a folder holding one dead agent sat at the top of the grid,
+    // because the floor's spare slots were filled with dead rows and folders
+    // win slots first.
+    func testAFolderOfOnlyDeadAgentsIsNotOnTheGrid() {
+        let b = book([("Catbot", ["dead"]), ("Kopi", ["k"])])
+        let rows = [row("dead", .unlit, at: 1), row("k", .ready, at: 2)]
+        let shown = ProjectLayout.gridRows(rows, capacity: 8, floor: 8, book: b)
+        XCTAssertEqual(shape(ProjectLayout.lines(shown, book: b)), ["[Kopi]", "  k"])
+    }
+
     func testAFolderWithNothingOnTheGridIsNotDrawnButSurvives() {
         let b = book([("Kopi", ["gone"])])
         XCTAssertEqual(shape(ProjectLayout.lines([row("x", .ready, at: 1)], book: b)), ["x"])

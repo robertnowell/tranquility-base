@@ -703,11 +703,10 @@ public struct SessionRow: Equatable, Sendable {
     /// membership into it collapsed the floor and shipped a regression
     /// earlier the same evening (18 Aug).
     public static func gridRows(_ rows: [SessionRow], capacity: Int, floor: Int) -> [SessionRow] {
-        let eligible = rows.filter { !$0.switchedOff }
-        let lit = eligible.filter { $0.lamp.isLit }
-        let alive = eligible.filter { $0.lamp == .running }
-        let dead = eligible.filter { $0.lamp == .unlit }
-        return Array((lit + alive + dead).prefix(shownCount(rows, capacity: capacity, floor: floor)))
+        // Lit rows only (5 Oct 2026): the floor sizes the panel, it does not
+        // admit idle or dead rows to fill it.
+        let lit = rows.filter { !$0.switchedOff && $0.lamp.isLit }
+        return Array(lit.prefix(shownCount(rows, capacity: capacity, floor: floor)))
     }
 
     /// How many row-slots the panel is worth: every LIT session, or the
