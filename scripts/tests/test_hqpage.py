@@ -48,3 +48,7 @@ class PagePublicationTests(unittest.TestCase):
         exec(source[start:stop], namespace)
         page = '<section class="claim" data-shows="text"><span class="c">Before launch, then after launch.</span><ol><li>Before</li><li>After</li></ol></section>'
         self.assertEqual(namespace['_evidence_flags'](page), [])
+
+
+if __name__ == "__main__":
+    unittest.main()
