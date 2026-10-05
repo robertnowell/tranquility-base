@@ -129,6 +129,7 @@ final class CoordinatorTests: XCTestCase {
 
     private func makeCoordinator(
         speech: SilentSpeech = SilentSpeech(),
+        summaryProvider: any SummaryProvider = FixedSummary(),
         tmuxTransport: RecordingTransport = RecordingTransport(),
         enrolled: Bool = true,
         sessionLive: Bool = true,
@@ -165,7 +166,7 @@ final class CoordinatorTests: XCTestCase {
         if enrolled { try registry.enrol(sessionId: "sess-1") }
         return Coordinator(
             store: store,
-            summarizer: SummarizerChain(providers: [FixedSummary()]),
+            summarizer: SummarizerChain(providers: [summaryProvider]),
             speech: SpeechChain(preferred: speech, fallback: speech),
             gate: gate,
             tmuxTransport: tmuxTransport,
@@ -193,7 +194,7 @@ final class CoordinatorTests: XCTestCase {
         _ = try store.insert(event: QueuedEvent(
             createdAtMs: ms, hookEvent: kind, sessionId: session,
             promptId: UUID().uuidString, cwd: "/tmp/\(session)",
-            lastAssistantMessage: message, tty: tty))
+            lastAssistantMessage: message, earlierThisTurn: "", tty: tty))
     }
 
     private func silence(seconds: Double = 1) -> Data { Data(count: Int(seconds * 16000) * 2) }
@@ -218,6 +219,46 @@ final class CoordinatorTests: XCTestCase {
             promptId: UUID().uuidString, cwd: "/tmp/\(session)",
             transcriptPath: try transcript(session, entrypoint: entrypoint),
             lastAssistantMessage: "a turn finished", tty: "ttys001"))
+    }
+
+    final class CapturingTurnSummary: SummaryProvider, @unchecked Sendable {
+        let name = "capturing-turn"; let isConfigured = true
+        var request: SummaryRequest?
+        func brief(for request: SummaryRequest) async throws -> SessionBrief {
+            self.request = request
+            return SessionBrief(topic: "Fixture", happened: "Done", recap: "Done")
+        }
+    }
+
+    func testSummaryRequestContainsTheWholeCompletedTurnAndNotTheNextOne() async throws {
+        let provider = CapturingTurnSummary()
+        let coordinator = try makeCoordinator(summaryProvider: provider)
+        let earlier = String(repeating: "Important finding. ", count: 1000)
+        let path = tmpDir.appendingPathComponent("complete.jsonl")
+        let rows: [[String: Any]] = [
+            ["type": "user", "entrypoint": "cli", "timestamp": "1970-01-01T00:00:01Z", "message": ["content": "Request"]],
+            ["type": "assistant", "timestamp": "1970-01-01T00:00:02Z", "message": ["content": earlier]],
+            ["type": "user", "isMeta": true, "message": ["content": "Harness notice"]],
+            ["type": "assistant", "timestamp": "1970-01-01T00:00:03Z", "message": ["content": "Done"]],
+            ["type": "user", "timestamp": "1970-01-01T00:00:11Z", "message": ["content": "Next request"]],
+            ["type": "assistant", "timestamp": "1970-01-01T00:00:12Z", "message": ["content": "Next answer"]]]
+        let jsonl = try rows.map { String(data: try JSONSerialization.data(withJSONObject: $0), encoding: .utf8)! }.joined(separator: "\n")
+        try jsonl.write(to: path, atomically: true, encoding: .utf8)
+        _ = try store.insert(event: QueuedEvent(createdAtMs: 10000, hookEvent: .stop, sessionId: "sess-1",
+            transcriptPath: path.path, lastAssistantMessage: "Done"))
+        _ = try await coordinator.announceNext(only: "sess-1")
+        XCTAssertEqual(provider.request?.lastAssistantMessage, "Done")
+        XCTAssertEqual(provider.request?.earlierThisTurn, earlier.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    func testMissingLocalTranscriptDoesNotCallTheSummaryProvider() async throws {
+        let provider = CapturingTurnSummary()
+        let speech = SilentSpeech()
+        let coordinator = try makeCoordinator(speech: speech, summaryProvider: provider)
+        _ = try store.insert(event: QueuedEvent(hookEvent: .stop, sessionId: "sess-1", lastAssistantMessage: "Done"))
+        _ = try await coordinator.announceNext(only: "sess-1")
+        XCTAssertNil(provider.request)
+        XCTAssertTrue(speech.spoken.joined().contains("unavailable"))
     }
 
     // MARK: - A remote agent is live by its provider's word

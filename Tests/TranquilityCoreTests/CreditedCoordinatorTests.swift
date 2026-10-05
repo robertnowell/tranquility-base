@@ -17,7 +17,7 @@ final class CreditedCoordinatorTests: XCTestCase {
     }
     func event(_ id: String = "original-event") -> QueuedEvent {
         QueuedEvent(id: id, createdAtMs: Int64(Date().timeIntervalSince1970 * 1000), hookEvent: .stop,
-                    sessionId: "sess-1", promptId: id, lastAssistantMessage: "The export is ready. All tests passed.")
+                    sessionId: "sess-1", promptId: id, lastAssistantMessage: "The export is ready. All tests passed.", earlierThisTurn: "")
     }
     var source: GatewaySource { .localHook(event(), originId: origin) }
     func insert(_ store: QueueStore, event: QueuedEvent? = nil, source: GatewaySource? = nil) throws -> WaitingSession {
@@ -75,7 +75,7 @@ final class CreditedCoordinatorTests: XCTestCase {
         let other = try store("other")
         try other.insert(event: event("unrelated"))
         let copied = QueuedEvent(id: event().id, createdAtMs: event().createdAtMs + 1, hookEvent: .stop,
-                                sessionId: "current-fork", promptId: "new-presentation", lastAssistantMessage: "The export is ready.")
+                                sessionId: "current-fork", promptId: "new-presentation", lastAssistantMessage: "The export is ready.", earlierThisTurn: "")
         let b = try insert(other, event: copied, source: source)
         XCTAssertNotEqual(a.latestId, b.latestId)
         XCTAssertEqual(try first.summarySource(eventRowid: a.latestId), try other.summarySource(eventRowid: b.latestId))

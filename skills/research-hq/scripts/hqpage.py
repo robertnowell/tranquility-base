@@ -13,18 +13,10 @@ the page's own address; one agent scaffolded, then waited on a deploy, and
 the app announced the empty template to Robert in the Hub window ("still
 getting empty reports, THIS MUST NEVER HAPPEN").
 
-Measured 27 Sep 2026, two hours after the artifact blocks shipped: four hub
-pages arrived, none on the template, all from sessions started weeks before.
-One had been handed the full rules at its prompt and wrote its usual page 68
-seconds later; another had been told sixteen times at the write. A session
-that has written pages copies its own last page, because that is the cheapest
-start it has, and a paragraph of context does not change the cost.
-
-This changes the cost. One command writes templates/brief.html into the
-session's own hub directory with the intranet:session line, the kicker and
-the :root tokens already filled (via hq-theme, so a --brand binds the session
-the same way `hq-theme <session> --brand=NAME` does), and prints the path.
-Everything else stays a placeholder comment. It refuses to overwrite.
+The command supplies the current markup and rules at creation, and checks
+publication before moving the file. Reading a template into a shell variable
+is not evidence that its contents reached the authoring model; the output
+therefore explicitly requires a visible read before writing.
 
 The session id is REQUIRED and taken from the command line, never guessed:
 the shell a session runs in carries no session id, and the SessionStart text

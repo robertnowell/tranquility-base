@@ -401,9 +401,9 @@ extension Coordinator {
                 .flatMap { TranscriptArchive.lastAssistantMessage(in: URL(fileURLWithPath: $0)) } ?? "")
 
         var earlier = event.hookEvent == .stop ? event.earlierThisTurn : nil
-        if event.hookEvent == .stop, earlier == nil, !isRemote(event.sessionId),
-           let path = TurnText.transcript(for: event.sessionId, suppliedPath: event.transcriptPath) {
-            guard let turn = TurnText.completed(in: path, finalMessage: lastMessage,
+        if event.hookEvent == .stop, earlier == nil, !isRemote(event.sessionId) {
+            guard let path = TurnText.transcript(for: event.sessionId, suppliedPath: event.transcriptPath),
+                  let turn = TurnText.completed(in: path, finalMessage: lastMessage,
                 completedAt: Date(timeIntervalSince1970: Double(event.createdAtMs) / 1000)) else {
                 Coordinator.trace?("summary incomplete source: event \(event.latestId) session \(event.sessionId)")
                 let brief = SessionBrief(topic: event.projectLabel,
