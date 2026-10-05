@@ -117,6 +117,9 @@ final class KeyCheckTests: XCTestCase {
         }
         XCTAssertEqual(header(.anthropicAPIKey, "x-api-key"), "probe")
         XCTAssertEqual(header(.anthropicAPIKey, "anthropic-version"), "2023-06-01")
+        XCTAssertEqual(header(.openRouterAPIKey, "Authorization"), "Bearer probe")
+        XCTAssertEqual(KeyCheck.request(for: .openRouterAPIKey, value: "probe", providerBase: configured)?
+            .url?.absoluteString, "https://openrouter.ai/api/v1/key")
         XCTAssertEqual(header(.elevenLabsAPIKey, "xi-api-key"), "probe")
         // Raw, no "Bearer" -- AssemblyAIFileRecovery says so in its own comment.
         XCTAssertEqual(header(.assemblyAIAPIKey, "Authorization"), "probe")

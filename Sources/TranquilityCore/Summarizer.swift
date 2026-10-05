@@ -653,7 +653,15 @@ public struct SummarizerChain: Sendable {
     /// deterministic here. See `GitHubPullRequests`.
 
     public init(providers: [any SummaryProvider]? = nil) {
-        self.providers = providers ?? [AnthropicSummaryProvider(), DeterministicSummarizer()]
+        self.providers = providers ?? Self.ownKeyProviders + [DeterministicSummarizer()]
+    }
+
+    /// The rungs a pasted key pays for, in order. OpenRouter first (ruled
+    /// 5 Oct 2026: the same model as the managed Gateway); Anthropic after
+    /// it, for keys people stored before then. Each is skipped when its key
+    /// is absent, so a Mac with one key behaves exactly as it did.
+    public static var ownKeyProviders: [any SummaryProvider] {
+        [OpenRouterSummaryProvider(), AnthropicSummaryProvider()]
     }
 
     /// Explicit composition. Managed errors may use the free floor, never BYOK.

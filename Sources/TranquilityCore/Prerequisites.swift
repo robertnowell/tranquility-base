@@ -50,8 +50,13 @@ public enum Prerequisites {
         /// lives and what the amber line opens. Ruled 15 Sep; the name is
         /// provisional.
         case credits
-        /// Spoken summaries. The product.
+        /// Spoken summaries on an Anthropic key. No longer listed (5 Oct 2026):
+        /// `openRouterKey` is the summaries row now, and a stored Anthropic key
+        /// satisfies it. Kept so its id still parses wherever one was stored.
         case anthropicKey
+        /// Spoken summaries. The product. An OpenRouter key since 5 Oct 2026,
+        /// ruled so a pasted key runs the same model the managed Gateway does.
+        case openRouterKey
         /// The voice. Falls back to the system voice, audibly.
         case elevenLabsKey
         /// The live transcript while you speak.
@@ -82,6 +87,7 @@ public enum Prerequisites {
             case .hub: return "hub"
             case .credits: return "credits"
             case .anthropicKey: return "anthropicKey"
+            case .openRouterKey: return "openRouterKey"
             case .elevenLabsKey: return "elevenLabsKey"
             case .assemblyAIKey: return "assemblyAIKey"
             case .openAIKey: return "openAIKey"
@@ -95,6 +101,7 @@ public enum Prerequisites {
             case "hub": self = .hub
             case "credits": self = .credits
             case "anthropicKey": self = .anthropicKey
+            case "openRouterKey": self = .openRouterKey
             case "elevenLabsKey": self = .elevenLabsKey
             case "assemblyAIKey": self = .assemblyAIKey
             case "openAIKey": self = .openAIKey
@@ -124,6 +131,7 @@ public enum Prerequisites {
             case .hub: return "Your hub"
             case .credits: return "Credits"
             case .anthropicKey: return "Anthropic"
+            case .openRouterKey: return "OpenRouter"
             case .elevenLabsKey: return "ElevenLabs"
             case .assemblyAIKey: return "AssemblyAI"
             case .openAIKey: return "OpenAI"
@@ -146,7 +154,7 @@ public enum Prerequisites {
             // `chrome` drill requires every mark to be composed. Composing a
             // symbol inside a prose sentence would be the wrong fix: chrome
             // composition is for chrome.
-            case .anthropicKey: return "spoken summaries, about a tenth of a cent each"
+            case .anthropicKey, .openRouterKey: return "spoken summaries, about a tenth of a cent each"
             case .elevenLabsKey: return "the voice; without it, the system one"
             case .assemblyAIKey: return "the live transcript while you speak"
             case .openAIKey: return "the transcript that survives a streaming failure"
@@ -179,7 +187,7 @@ public enum Prerequisites {
             // flow landed and a new machine could finally satisfy it by
             // pressing the button on the row. Before that it was optional for
             // an honest reason: nothing on this screen could make it green.
-            case .tmux, .hooks, .anthropicKey, .hub: return true
+            case .tmux, .hooks, .anthropicKey, .openRouterKey, .hub: return true
             // OpenAI and the providers are optional for the same honest reason
             // ElevenLabs is: without OpenAI a streaming failure costs the
             // transcript rather than the app, and a machine that drives no
@@ -199,6 +207,7 @@ public enum Prerequisites {
             switch self {
             case .tmux, .hooks, .hub, .credits: return nil
             case .anthropicKey: return .anthropicAPIKey
+            case .openRouterKey: return .openRouterAPIKey
             case .elevenLabsKey: return .elevenLabsAPIKey
             case .assemblyAIKey: return .assemblyAIAPIKey
             case .openAIKey: return .openAIAPIKey
@@ -223,7 +232,7 @@ public enum Prerequisites {
             // repairs every harness this machine has.
             case .hooks: return "Wire them"
             case .hub, .credits: return "Sign in"
-            case .anthropicKey, .elevenLabsKey, .assemblyAIKey, .openAIKey,
+            case .anthropicKey, .openRouterKey, .elevenLabsKey, .assemblyAIKey, .openAIKey,
                  .provider: return "Paste key"
             }
         }
@@ -263,7 +272,7 @@ public enum Prerequisites {
     ) -> [Item] {
         [.tmux]
             + harnesses.map { Item.hooks(harness: $0) }
-            + [.hub, .credits, .anthropicKey, .elevenLabsKey, .assemblyAIKey, .openAIKey]
+            + [.hub, .credits, .openRouterKey, .elevenLabsKey, .assemblyAIKey, .openAIKey]
             // A provider gets a row once this machine has an ADDRESS for it,
             // the same way a harness gets a hooks row once it is detected.
             // Listing every provider the app can drive would tell someone
@@ -463,6 +472,18 @@ public enum Prerequisites {
                 return State(item: item, satisfied: true,
                              detail: "not required for credits · optional for direct use")
             }
+            if item == .openRouterKey, !probes.hasSecret(.openRouterAPIKey) {
+                // An Anthropic key stored before 5 Oct still speaks the
+                // summaries, so this Mac is not missing anything it had.
+                if probes.hasSecret(.anthropicAPIKey) {
+                    return State(item: item, satisfied: true,
+                                 detail: "using your Anthropic key · OpenRouter is optional")
+                }
+                if credits.isOnCredits {
+                    return State(item: item, satisfied: true,
+                                 detail: "not required for credits · optional for direct use")
+                }
+            }
             if let secret = item.secret {
                 guard probes.hasSecret(secret) else {
                     return State(item: item, satisfied: false, detail: missingDetail(item))
@@ -512,7 +533,7 @@ public enum Prerequisites {
                              detail: "not connected. Sign in and your agents' pages and turns appear in the hub")
             case .credits:
                 let standing = credits
-                let ownKey = probes.hasSecret(.anthropicAPIKey)
+                let ownKey = probes.hasSecret(.openRouterAPIKey) || probes.hasSecret(.anthropicAPIKey)
                 if standing.isOnCredits {
                     return State(item: item, satisfied: true, detail: standing.detail(ownKey: ownKey))
                 }
@@ -528,7 +549,7 @@ public enum Prerequisites {
     /// reading by someone deciding whether to go and get one.
     private static func missingDetail(_ item: Item) -> String {
         switch item {
-        case .anthropicKey: return "without it, a plain first-sentence readout"
+        case .anthropicKey, .openRouterKey: return "without it, a plain first-sentence readout"
         case .elevenLabsKey: return "without it, the macOS system voice"
         case .assemblyAIKey: return "without it, transcription after you stop"
         case .openAIKey: return "without it, a streaming failure loses the transcript"
@@ -566,7 +587,7 @@ public enum Prerequisites {
         let managedReady = states.contains { $0.item == .credits && $0.satisfied }
         for state in states {
             if case .hooks = state.item { hooks.append(state) }
-            else if state.item == .anthropicKey && managedReady { continue }
+            else if (state.item == .anthropicKey || state.item == .openRouterKey) && managedReady { continue }
             else if state.item.isRequired { others.append(state) }
         }
         guard others.allSatisfy(\.satisfied) else { return false }

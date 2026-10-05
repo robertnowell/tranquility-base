@@ -131,6 +131,12 @@ public enum KeyCheck {
             // Same version the summarizer sends. An omitted version header is
             // itself a 400, which would read as a bad key.
             request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+        case .openRouterAPIKey:
+            // The key's own record: free, read-only, and a bad key is a 401
+            // (checked with a made-up key, 5 Oct 2026).
+            guard let url = URL(string: "https://openrouter.ai/api/v1/key") else { return nil }
+            request = URLRequest(url: url)
+            request.setValue("Bearer " + value, forHTTPHeaderField: "Authorization")
         case .elevenLabsAPIKey:
             // `/v2/voices`, which is the call the app itself makes, and NOT
             // `/v1/user`, which it never makes.
