@@ -120,9 +120,11 @@ public enum ProjectLayout {
                 return x == y ? a.offset < b.offset : x < y
             }.map(\.element)
         }
+        // Lit rows only (5 Oct 2026, Robert: "only green / blue / amber lamps
+        // should be shown in the grid at all"). The floor is the panel's
+        // height, never membership: topping the grid up to it with idle and
+        // dead rows put a folder holding one dead agent at the top.
         let ordered = pinned(eligible.filter { $0.lamp.isLit })
-            + pinned(eligible.filter { $0.lamp == .running })
-            + pinned(eligible.filter { $0.lamp == .unlit })
         return Array(ordered.prefix(SessionRow.shownCount(rows, capacity: capacity, floor: floor)))
     }
 
