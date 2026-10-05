@@ -348,15 +348,14 @@ final class SessionRowTests: XCTestCase {
                        "the switch's whole job is to make a session leave the grid by hand")
     }
 
-    func testGridRowsNeverFillsTheFloorWithIdleOrDeadRows() {
-        // 5 Oct 2026, superseding the 23 Aug rule that let an idle row take a
-        // spare floor slot: "only green / blue / amber lamps should be shown
-        // in the grid at all". The floor sizes the panel; it admits no one.
+    func testGridRowsBumpsADeadRowForAGenuinelyLiveIdleOneWhenSlotsAreTight() {
+        // The 23 Aug reversal this pins: a dead test session must not hold
+        // a floor slot while a genuinely live, idle (.running) session is
+        // bumped to the list instead.
         let dead = row(id: "dead1", lamp: .unlit)
         let idle = row(id: "idle1", lamp: .running)
-        let ready = row(id: "ready1", lamp: .ready)
-        XCTAssertEqual(SessionRow.gridRows([dead, idle, ready], capacity: 8, floor: 8).map(\.id), ["ready1"])
-        XCTAssertEqual(SessionRow.gridRows([dead, idle], capacity: 8, floor: 8).map(\.id), [])
+        let shown = SessionRow.gridRows([dead, idle], capacity: 1, floor: 1)
+        XCTAssertEqual(shown.map(\.id), ["idle1"])
     }
 
     // MARK: - hoverText
