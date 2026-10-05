@@ -13,14 +13,9 @@ final class EarlierThisTurnTests: XCTestCase {
         XCTAssertNil(EarlierThisTurn.earlier(blocks: ["  ", "\n", "final"]), "blank blocks are not messages")
     }
 
-    func testALongTurnKeepsItsOpeningAndItsEndUnderTheCap() {
-        let text = String(repeating: "a", count: 4_000) + String(repeating: "b", count: 4_000)
-        let capped = EarlierThisTurn.capped(text)
-        XCTAssertLessThanOrEqual(capped.count, EarlierThisTurn.cap, "the contract's maxLength holds including the marker")
-        XCTAssertTrue(capped.hasPrefix(String(repeating: "a", count: 1_500)))
-        XCTAssertTrue(capped.hasSuffix(String(repeating: "b", count: 4_000)))
-        XCTAssertTrue(capped.contains("characters omitted"))
-        XCTAssertEqual(EarlierThisTurn.capped("short"), "short")
+    func testALongTurnKeepsEveryCharacterIncludingTheMiddle() {
+        let text = String(repeating: "α", count: 4_000) + "CRITICAL FINDING" + String(repeating: "b", count: 8_000)
+        XCTAssertEqual(EarlierThisTurn.earlier(blocks: [text, "Final link"]), text)
     }
 
     // MARK: - The seams
@@ -83,10 +78,10 @@ final class EarlierThisTurnTests: XCTestCase {
     }
 
     func testTheContractInputCarriesTheField() throws {
-        let r = SummaryRequest(lastAssistantMessage: "final", projectLabel: "P", earlierThisTurn: "before")
+        let r = SummaryRequest(lastAssistantMessage: "final", projectLabel: "P", earlierThisTurn: String(repeating: "middle finding\n", count: 2000))
         let data = try GatewayContract.encode(GatewaySummaryInput(r))
         let obj = try JSONSerialization.jsonObject(with: data) as! [String: Any]
-        XCTAssertEqual(obj["earlierThisTurn"] as? String, "before")
+        XCTAssertEqual(obj["earlierThisTurn"] as? String, r.earlierThisTurn)
         let none = try GatewayContract.encode(GatewaySummaryInput(SummaryRequest(lastAssistantMessage: "final", projectLabel: "P")))
         XCTAssertFalse(String(data: none, encoding: .utf8)!.contains("earlierThisTurn"), "absent, never null: the schema has no nulls")
     }

@@ -90,7 +90,7 @@ From the editorial pass (`2026-09-27-editorial-design-patterns`, agent a8e3f054)
 
 From three passes (`2026-10-03-diagrams-for-report-evidence`, `2026-10-03-diagram-calibration`, agent a8e3f054) and two replays: ten claims rebuilt with diagrams (four better, four mixed, two worse, and the draw test below accounts for all ten), then four reports rewritten from their agents' raw turns (the evidence improved, and three of the four originals were caught stating something the turn never showed). Robert ruled: ship it, with every number cited and one piece of literal evidence per claim.
 
-**Claims are sections.** `<section class="claim" data-shows="TYPE">`, TYPE one of flow, structure, states, change, ranking, screen, versions, lookup, text. Never `<details>`.
+**Claims are sections.** `<section class="claim" data-shows="TYPE">`, TYPE one of flow, structure, states, change, ranking, screen, versions, lookup, text. Never `<details>`, even with `open`. Before authoring, read this brief and the generated draft in a separate tool call whose contents reach your context. Do not suppress helper output or combine scaffolding, writing and publication. `hq-page publish` refuses disclosures before moving or opening the draft.
 
 **The draw test decides the artifact.** Diagrams win where the reader has to relate several things at once (Larkin and Simon: a diagram keeps what one inference needs side by side) and lose everywhere else, so:
 
@@ -109,7 +109,7 @@ From three passes (`2026-10-03-diagrams-for-report-evidence`, `2026-10-03-diagra
 
 **Every image links to the live thing it shows**: the PR, the commit, the file at a commit, the page, the dashboard. Never to the image file. No live address: no link, and the caption says so. Never invent one.
 
-**The page check names breaks**, after every write: a claim typed flow, structure, states or change with no diagram; a claim typed text whose sentence reads like order or change; an image that links nowhere; a claim with more than two literal blocks; any `<details>`. It advises; the helper refuses.
+**The page check names breaks**, after every write: a claim typed flow, structure, states or change with no diagram;  an image that links nowhere; a claim with more than two literal blocks; any `<details>`. It advises; `hq-page publish` refuses disclosure markup. A straight timeline remains a list, even when its prose says before or after.
 
 **Measured weekly.** Three to five claims, one comprehension question each, answered from the prose and then with the diagram, plus better, mixed or worse; pooled, and read as a sign test once about twenty are not ties. Not an automated judge: the best model agrees with experts at 0.43 (VisJudge-Bench).
 

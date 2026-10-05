@@ -2,14 +2,14 @@
 <html lang="en"><head><meta charset="utf-8">
 <!-- brief.html: the house template for a report one person reads to act.
      Three levels, far apart. The message they cannot miss. The claims they can
-     skim. The artifact they open only to check. Read references/brief.md first.
-     Worked example: agents/a8e3f054-8583-45f2-8bc0-3dfe55d47a06/uvape-what-is-different-redone.html
+     skim. The artifact always visible below each claim. Read references/brief.md first.
+     Claims use section, never details, even with open.
 
      v2, 27 Sep 2026: artifacts are no longer boxes. Whitespace first, a single
      rule second, a box only for code. Quotes get a left rule. Code and raw rows
      get a light neutral panel with full-contrast text (never dark on light).
      Screenshots get a hairline, a sentence caption below, and the passage
-     marked on the image. Labels became captions. See references/brief.md,
+     cropped without drawing on the image. Labels became captions. See references/brief.md,
      "Artifacts". -->
 <meta name="intranet:session" content="FILL: FULL SESSION ID">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -92,7 +92,7 @@ h2{font-size:13px;font-family:var(--mono);letter-spacing:.1em;text-transform:upp
 .small .head .c{font-size:16px;font-weight:500}
 
 /* LEVEL 3: the artifacts, OPEN under their claim. Ruled 28 Sep 2026: hidden content goes unread (GOV.UK, Nielsen Norman),
-   and the artifact is the evidence the reader is meant to check. Close rows only on a page past about eight claims.
+   and the artifact is the evidence the reader is meant to check. Every claim stays visible; no accordion exception.
    Whitespace first, a rule second, a box only for code. */
 .d{padding:4px 0 30px 48px;display:grid;gap:26px}
 .d p{margin:0;font-size:15px;color:var(--ink)}
