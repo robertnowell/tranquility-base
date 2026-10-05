@@ -27,6 +27,25 @@ final class TurnTextTests: XCTestCase {
         XCTAssertFalse(turns[0].prose.contains("file listing"))
     }
 
+    /// The harness's own `user` rows are not the person speaking, so they do
+    /// not start a turn: a background task's notification, a skill's text, an
+    /// image's size note. 5 Oct 2026: one turn read as 5 messages of its 36.
+    func testHarnessRowsDoNotSplitATurn() {
+        let jsonl = [
+            #"{"type":"user","origin":{"kind":"human"},"promptSource":"typed","message":{"content":"build the eval"}}"#,
+            #"{"type":"assistant","message":{"content":[{"type":"text","text":"first part"}]}}"#,
+            #"{"type":"user","origin":{"kind":"task-notification"},"promptSource":"system","message":{"content":"<task-notification>done</task-notification>"}}"#,
+            #"{"type":"assistant","message":{"content":[{"type":"text","text":"second part"}]}}"#,
+            #"{"type":"user","isMeta":true,"message":{"content":"[Image: original 900x2200]"}}"#,
+            #"{"type":"assistant","message":{"content":[{"type":"text","text":"final"}]}}"#,
+        ].joined(separator: "\n")
+
+        let turns = TurnText.claudeCode(jsonl: jsonl, limit: 10)
+        XCTAssertEqual(turns.count, 1, "the person spoke once")
+        XCTAssertEqual(turns[0].prompt, "build the eval")
+        XCTAssertEqual(turns[0].blocks, ["first part", "second part", "final"])
+    }
+
     /// Even without `toolUseResult`, a content array carrying a tool_result is
     /// the harness talking.
     func testAToolResultBlockAloneIsEnoughToSkip() {
