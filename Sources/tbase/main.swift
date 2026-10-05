@@ -1561,7 +1561,15 @@ case "reconcile":
             picked = Array(pool.shuffled(using: &rng).prefix(n))
         }
         FileHandle.standardError.write(Data("pool \(pool.count) calls since \(since); replaying \(picked.count), seed \(seed)\n".utf8))
-        let provider = AnthropicSummaryProvider()
+        // The rung a pasted key would use today: OpenRouter when its key is
+        // stored, the Anthropic key otherwise.
+        let openRouter = OpenRouterSummaryProvider()
+        let anthropic = AnthropicSummaryProvider()
+        @Sendable func replay(system: String, user: String) async throws -> AnthropicSummaryProvider.Completion {
+            openRouter.isConfigured
+                ? try await openRouter.complete(system: system, user: user, log: false)
+                : try await anthropic.complete(system: system, user: user, log: false)
+        }
         let encoder = JSONEncoder()
         func dict(_ brief: SessionBrief?) -> Any {
             guard let brief, let data = try? encoder.encode(brief),
@@ -1583,7 +1591,7 @@ case "reconcile":
                 fresh = ["skipped": true]
             } else {
                 do {
-                let completion = try await provider.complete(system: system, user: call.user, log: false)
+                let completion = try await replay(system: system, user: call.user)
                 let brief = try? AnthropicSummaryProvider.parse(completion.text, request: request)
                 fresh = ["text": completion.text, "brief": dict(brief), "elapsedMs": completion.elapsedMs]
                 FileHandle.standardError.write(Data("\(i + 1)/\(picked.count) \(label) \(completion.elapsedMs)ms\n".utf8))
@@ -1605,7 +1613,7 @@ case "reconcile":
         let result: [String: Any] = [
             "seed": seed, "since": since, "poolSize": pool.count,
             "systemPrompt": AnthropicSummaryProvider.systemPrompt(projectLabel: "{project_label}"),
-            "model": provider.model,
+            "model": openRouter.isConfigured ? openRouter.model : anthropic.model,
             "turns": out,
         ]
         let data = try JSONSerialization.data(withJSONObject: result, options: [.prettyPrinted, .sortedKeys])

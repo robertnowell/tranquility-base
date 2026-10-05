@@ -185,7 +185,7 @@ final class FirstRunInstallTests: XCTestCase {
                 hooksProblem: { _ in nil },
                 hasSecret: { _ in true },
                 keyVerdict: { _ in verdict }))
-            let key = states.first { $0.item == .anthropicKey }!
+            let key = states.first { $0.item == .openRouterKey }!
             XCTAssertTrue(key.satisfied, "\(verdict) must not unlight a stored key")
             XCTAssertFalse(key.attention)
         }
