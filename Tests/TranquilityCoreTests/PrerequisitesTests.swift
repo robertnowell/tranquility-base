@@ -49,7 +49,10 @@ final class PrerequisitesTests: XCTestCase {
     func testTmuxHooksAndAnthropicHoldTheGate() {
         let required = Prerequisites.items(harnesses: Self.bothHarnesses).filter(\.isRequired)
         XCTAssertTrue(required.contains(.tmux))
-        XCTAssertTrue(required.contains(.anthropicKey))
+        // The summaries row asks for OpenRouter since 5 Oct 2026.
+        XCTAssertTrue(required.contains(.openRouterKey))
+        XCTAssertFalse(Prerequisites.items(harnesses: Self.bothHarnesses).contains(.anthropicKey),
+                       "the Anthropic row is no longer listed; a stored Anthropic key satisfies the summaries row")
         // Joined them 13 Sep, when the row could finally fix itself.
         XCTAssertTrue(required.contains(.hub))
         XCTAssertFalse(required.contains(.elevenLabsKey))
@@ -108,9 +111,9 @@ final class PrerequisitesTests: XCTestCase {
     }
 
     /// And the one that does not degrade honestly does block.
-    func testAMissingAnthropicKeyBlocks() {
+    func testAMissingSummariesKeyBlocks() {
         let states = Prerequisites.snapshot(probes(secrets: []))
-        XCTAssertFalse(state(states, .anthropicKey).satisfied)
+        XCTAssertFalse(state(states, .openRouterKey).satisfied)
         XCTAssertFalse(Prerequisites.allRequiredSatisfied(states),
                        "without it the readout is the deterministic floor")
     }
@@ -233,15 +236,32 @@ final class PrerequisitesTests: XCTestCase {
 
     func testEachKeyRowMapsToItsOwnKeychainEntry() {
         XCTAssertEqual(Prerequisites.Item.anthropicKey.secret, .anthropicAPIKey)
+        XCTAssertEqual(Prerequisites.Item.openRouterKey.secret, .openRouterAPIKey)
         XCTAssertEqual(Prerequisites.Item.elevenLabsKey.secret, .elevenLabsAPIKey)
         XCTAssertEqual(Prerequisites.Item.assemblyAIKey.secret, .assemblyAIAPIKey)
     }
 
     func testOneKeyPresentDoesNotSatisfyAnother() {
-        let states = Prerequisites.snapshot(probes(secrets: [.anthropicAPIKey]))
-        XCTAssertTrue(state(states, .anthropicKey).satisfied)
+        let states = Prerequisites.snapshot(probes(secrets: [.openRouterAPIKey]))
+        XCTAssertTrue(state(states, .openRouterKey).satisfied)
         XCTAssertFalse(state(states, .elevenLabsKey).satisfied)
         XCTAssertFalse(state(states, .assemblyAIKey).satisfied)
+    }
+
+    /// A Mac that stored an Anthropic key before 5 Oct 2026 still speaks its
+    /// summaries on it, so the summaries row stays green and says why.
+    func testAStoredAnthropicKeyStillSatisfiesSummaries() {
+        let states = Prerequisites.snapshot(probes(secrets: [.anthropicAPIKey]))
+        let row = state(states, .openRouterKey)
+        XCTAssertTrue(row.satisfied)
+        XCTAssertTrue(row.detail.contains("Anthropic"))
+        XCTAssertTrue(Prerequisites.allRequiredSatisfied(states))
+    }
+
+    /// Both ids parse, so an identifier stored under either still resolves.
+    func testBothSummariesRowIdsParse() {
+        XCTAssertEqual(Prerequisites.Item(id: "openRouterKey"), .openRouterKey)
+        XCTAssertEqual(Prerequisites.Item(id: "anthropicKey"), .anthropicKey)
     }
 
     // MARK: - shape

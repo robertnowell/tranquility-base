@@ -25,6 +25,10 @@ public enum Secrets {
 
     public enum Key: String, Sendable, CaseIterable {
         case anthropicAPIKey = "anthropic-api-key"
+        /// Spoken summaries on a pasted key since 5 Oct 2026, on the same
+        /// model the managed Gateway runs. The Anthropic key above still
+        /// works for anyone who stored one; the checklist now asks for this.
+        case openRouterAPIKey = "openrouter-api-key"
         case elevenLabsAPIKey = "elevenlabs-api-key"
         case assemblyAIAPIKey = "assemblyai-api-key"
         case openAIAPIKey = "openai-api-key"
@@ -54,6 +58,7 @@ public enum Secrets {
         public var provider: String {
             switch self {
             case .anthropicAPIKey: return "Anthropic"
+            case .openRouterAPIKey: return "OpenRouter"
             case .elevenLabsAPIKey: return "ElevenLabs"
             case .assemblyAIAPIKey: return "AssemblyAI"
             case .openAIAPIKey: return "OpenAI"
@@ -68,6 +73,7 @@ public enum Secrets {
         public var purpose: String {
             switch self {
             case .anthropicAPIKey: return "spoken summaries, about $0.001 each"
+            case .openRouterAPIKey: return "spoken summaries, about a tenth of a cent each"
             case .elevenLabsAPIKey: return "the voice; without it, the system one"
             case .assemblyAIAPIKey: return "the live transcript while you speak"
             case .openAIAPIKey: return "Whisper, the durable transcript when streaming fails"
@@ -93,6 +99,10 @@ public enum Secrets {
         public var isPasted: Bool {
             switch self {
             case .hubToken, .deviceKey: return false
+            // No longer asked for (5 Oct 2026): the summaries row takes an
+            // OpenRouter key. A key stored before then is still read and
+            // still verified; nothing offers a place to type a new one.
+            case .anthropicAPIKey: return false
             default: return true
             }
         }
@@ -106,6 +116,7 @@ public enum Secrets {
         public var consoleURL: URL? {
             switch self {
             case .anthropicAPIKey: return URL(string: "https://console.anthropic.com/settings/keys")
+            case .openRouterAPIKey: return URL(string: "https://openrouter.ai/settings/keys")
             case .elevenLabsAPIKey: return URL(string: "https://elevenlabs.io/app/settings/api-keys")
             case .assemblyAIAPIKey: return URL(string: "https://www.assemblyai.com/dashboard/api-keys")
             case .openAIAPIKey: return URL(string: "https://platform.openai.com/api-keys")

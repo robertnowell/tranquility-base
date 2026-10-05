@@ -434,11 +434,16 @@ extension StatusHUD {
         let useModel = nameFoldersWithModel
         Task.detached(priority: .utility) {
             var proposed: String?
-            let provider = AnthropicSummaryProvider(timeout: 6)
-            if useModel, provider.isConfigured {
-                let reply = try? await provider.complete(
-                    system: ProjectNamer.system,
-                    user: ProjectNamer.prompt(agents, vocabulary: vocabulary))
+            // Whichever pasted key the summaries use: OpenRouter first, then
+            // an Anthropic key stored before OpenRouter was offered.
+            let openRouter = OpenRouterSummaryProvider(timeout: 6)
+            let anthropic = AnthropicSummaryProvider(timeout: 6)
+            if useModel, openRouter.isConfigured || anthropic.isConfigured {
+                let system = ProjectNamer.system
+                let user = ProjectNamer.prompt(agents, vocabulary: vocabulary)
+                let reply = openRouter.isConfigured
+                    ? try? await openRouter.complete(system: system, user: user)
+                    : try? await anthropic.complete(system: system, user: user)
                 proposed = reply.flatMap { ProjectNamer.clean($0.text) }
             }
             await MainActor.run { [weak self] in

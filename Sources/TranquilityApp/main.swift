@@ -676,7 +676,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             AssemblyAIFileRecovery.managed = managedAudio.recovering()
             self.coordinator = Coordinator(
                 store: store,
-                summarizer: SummarizerChain(providers: [managed, AnthropicSummaryProvider(), DeterministicSummarizer()]),
+                summarizer: SummarizerChain(providers: [managed] + SummarizerChain.ownKeyProviders + [DeterministicSummarizer()]),
                 localSummaryOriginId: ManagedCredits.originId(),
                 speech: SpeechChain(preferred: premiumVoice),
                 remoteTransport: poller.map { p in
@@ -1642,7 +1642,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // shows it. Ruled 15 Sep after a floor summary read as a broken prompt.
         CreditStanding.observe { [weak self] _ in
             // Out of credits with a pasted key is not amber: the key carries on.
-            let ownKey = Secrets.read(.anthropicAPIKey) != nil
+            let ownKey = Secrets.read(.openRouterAPIKey) != nil || Secrets.read(.anthropicAPIKey) != nil
             DispatchQueue.main.async { self?.hud.setCreditStanding(CreditStanding.current.line(ownKey: ownKey)) }
         }
         // Offline, as its own quiet line: grey, not amber, and only after ten
