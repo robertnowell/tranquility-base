@@ -310,8 +310,9 @@ public struct AnthropicSummaryProvider: SummaryProvider {
         is not in the source message.
 
         proposal: ONE action, explicitly proposed in this completed turn and still open \
-        after its final message, specific and parameterized, ending in a decision \
-        answerable in one word: "Go?", "Ship it?". If the source offers alternatives, name \
+        after its final message, specific and parameterized, ending in a full question \
+        answerable in one word: "Should we ship it?", "Do you want to merge it?". If the \
+        source offers alternatives, name \
         the agent's preferred one and ask. If the whole turn proposes nothing, asks \
         nothing, and does not end on an open thread, close plainly with no question. If the\
          action is destructive or hard to reverse (deletes, force-pushes, sends to real \
@@ -335,8 +336,8 @@ public struct AnthropicSummaryProvider: SummaryProvider {
 
         Speech: no file paths, branch names, function or variable names, hashes or \
         UUIDs; describe them ("the asset pool"). Product, project and service names ARE \
-        speakable: say "Klaviyo", not "an email platform". Numbers as separate words: \
-        "twenty-two ninety-four", "four and a half hours". Easy to understand speech. \
+        speakable: say "Klaviyo", not "an email platform". Numbers as spoken words: \
+        "twenty-two ninety-four" for 2294, "four and a half hours". Easy to understand speech. \
         No lists, no labels. Assume the listener hears this once. Never use an em dash \
         in any field; use a period, comma or colon.
 
@@ -397,9 +398,10 @@ public struct AnthropicSummaryProvider: SummaryProvider {
         unresolved proposal. Never revive a withdrawn proposal or ask permission for work \
         already completed. If the whole turn does not say what comes next, say what \
         happened and stop; never invent a next task, and never take one from how the \
-        session opened. The work was done by the agent, not the user: "the session \
-        validated", never "you validated". A session with a next step always needs a reply;\
-         never say no input is needed.
+        session opened. The work was done by the agent, not the user: "we validated", \
+        never "you validated". When the agent is only waiting, watching or finishing \
+        work it already started, say so and stop: never ask whether to wait, watch or \
+        continue.
 
         If the message says the session is BLOCKED and waiting, say what it wants to do \
         and what the decision is.
@@ -408,32 +410,62 @@ public struct AnthropicSummaryProvider: SummaryProvider {
 
         Source: a watchdog for the audio daemon was redesigned after review closed a \
         wildcard sudo path and an unasked restart; a one-time install proves the rule.
-        {"spoken": {"recap": "Audio watchdog design locked in, PR three twenty nine \
-        auto-merging.", "proposal": "Install it once with your password to prove the \
-        sudo rule. Go?", "goal": "We are finding why tranquility base fails when \
-        sharing audio on Zoom", "findings": "The probe reads the audio daemon every \
-        twenty seconds with an eight second timeout, so Bluetooth renegotiation never \
-        trips it.", "solution": "One installer run proves the sudo rule with a three \
-        second dump of the healthy daemon; capture only by default.", "rationale": "We \
-        propose installing because the first draft's wildcard sudo path and unasked \
-        restart are both closed. We need to be careful: installation runs root \
-        commands."}, "written": {"headline": "Sudo hole closed, daemon restart moved to \
+        {"spoken": {"recap": "We finished the watchdog design. PR three twenty-nine \
+        auto-merges.", "proposal": "Do you want to install it once to prove the sudo \
+        rule?", "goal": "We are finding why tranquility base fails when sharing audio \
+        on Zoom", "findings": "The probe reads the audio daemon every twenty seconds. \
+        Bluetooth renegotiation never trips it because the timeout is eight seconds.", \
+        "solution": "One installer run proves the sudo rule. It dumps the healthy \
+        daemon for three seconds. By default it only captures.", "rationale": "We \
+        propose the install because review closed the sudo hole. The install runs \
+        root commands, so we must be careful."}, "written": {"headline": "Sudo hole closed, daemon restart moved to \
         you", "deck": "The watchdog captures audio daemon state safely; installing \
         proves the design. Whether you need the answer is still open."}}
 
         Source: research on a simplified token sign-in finished with three decisions \
         for the user and nothing to build yet.
-        {"spoken": {"recap": "Research complete; three decisions sit at the top of the \
-        page.", "proposal": "Review grant spend, zero-balance behavior and the grant \
-        gate. Proceed?", "goal": "We are designing a simplified token sign-in for \
-        Tranquility Base", "findings": "Voice is sixty-eight percent of cost. Only \
-        Tranquility Base degrades instead of stopping at zero. Email codes are weakest, \
-        capped at three dollars thirty-three.", "solution": null, "rationale": "We \
-        propose deciding now because the research settled the tradeoffs: voice \
-        dominates cost, degradation is yours alone, and email codes are weak but \
-        capped."}, "written": {"headline": "Three decisions ready: spend, degradation, \
+        {"spoken": {"recap": "We finished the research. Three decisions wait at the \
+        top.", "proposal": "Do you want to decide grant spend, zero balance and the \
+        gate?", "goal": "We are designing a simplified token sign-in for Tranquility \
+        Base", "findings": "Voice is sixty-eight percent of cost. Only Tranquility \
+        Base degrades at zero. Email codes are weakest but cap at three dollars \
+        thirty-three.", "solution": null, "rationale": "We propose a decision now \
+        because the research settled the tradeoffs."}, "written": {"headline": "Three decisions ready: spend, degradation, \
         gate", "deck": "Research complete. Voice dominates cost, you alone degrade \
         gracefully, email codes are weakest but capped. Choose each tradeoff."}}
+
+        ── WRITING STANDARD: modified ASD-STE100 Simplified Technical English ──
+
+        This standard overrides the style of everything above, including the \
+        examples. It applies to every spoken field. The goal keeps its own shape, \
+        given above.
+
+        From ASD-STE100, sentences: write short, complete sentences. Every sentence \
+        has a subject, a verb and its article. Do not write sentence fragments: \
+        "Digest posted to Slack" is wrong, and "We posted the digest to Slack" is right.
+
+        From ASD-STE100, verbs: use simple tenses and the active voice.
+
+        From ASD-STE100, punctuation: do not use semicolons.
+
+        Modified for speech, length: use twelve words or fewer in each sentence. The \
+        recap has two sentences at most. The word caps above still apply. Never drop \
+        an article, a subject or a verb to fit a cap. Cut a whole fact instead.
+
+        Modified for speech, numbers: write every number as the words a person says. \
+        Say "twelve oh three" for 1203 and "four point two" for 4.2. Write no digits \
+        in a spoken field.
+
+        Modified for speech, people: use "we" for the work. Ask the question to "you". \
+        STE allows no "should", but a spoken question may use it.
+
+        Added for clarity, cause: when there is a cause, say it with "because".
+
+        Added for clarity, names: say what a change, page or pull request is for, not \
+        only its number: "pull request five eighty-eight, which fixes the connection \
+        lost caption", never "pull request five eighty-eight" alone.
+
+        Added for accuracy: check every number and name against this turn.
         """ }
 
     public func brief(for request: SummaryRequest) async throws -> SessionBrief {
