@@ -87,10 +87,18 @@ public enum ProjectLayout {
             }
         }
         // Rule 3: the user's order, exactly. Only the rows inside a folder
-        // move with their lamps.
+        // move with their lamps. One exception: a folder whose rows are all
+        // dead (exited, there only to fill the floor) goes below every folder
+        // with a live row, still in the user's order among its kind (5 Oct
+        // 2026: a folder of one dead agent sat at the top). Idle is not dead:
+        // a folder must not jump each time its agent goes quiet and lights
+        // again (rule 3).
         let present = book.folders.filter { !(byFolder[$0.id]?.isEmpty ?? true) }
+        func allDead(_ f: ProjectBook.Folder) -> Bool { byFolder[f.id]?.allSatisfy { $0.lamp == .unlit } ?? false }
+        let live = present.filter { !allDead($0) }
+        let dead = present.filter(allDead)
         return Arrangement(
-            folders: present.map { ($0, SessionRow.quietRowsLast(byFolder[$0.id] ?? [])) },
+            folders: (live + dead).map { ($0, SessionRow.quietRowsLast(byFolder[$0.id] ?? [])) },
             loose: SessionRow.quietRowsLast(loose))
     }
 
