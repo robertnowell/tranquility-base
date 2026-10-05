@@ -113,6 +113,7 @@ public enum TurnText {
 
             if type == "user" {
                 if row["toolUseResult"] != nil { continue }
+                if !isPersonSpeaking(row) { continue }
                 let said = humanText(message["content"])
                 if said.isEmpty { continue }
                 close()
@@ -126,6 +127,23 @@ public enum TurnText {
         }
         close()
         return Array(turns.suffix(limit))
+    }
+
+    /// Whether a `type: "user"` row is the person, not the harness.
+    ///
+    /// The harness writes `user` rows of its own, and each one used to end the
+    /// agent's turn: a background task finishing (`origin.kind` is
+    /// "task-notification"), a skill's instructions or an image's size note
+    /// (`isMeta`). On 5 Oct 2026, four of thirteen real turns were cut short this
+    /// way, one from 36 messages to 5, so the summary of "the turn" was the
+    /// summary of its last few minutes. In the 150 newest transcripts, 379 such
+    /// rows; 378 rows were people.
+    static func isPersonSpeaking(_ row: [String: Any]) -> Bool {
+        if row["isMeta"] as? Bool == true { return false }
+        if let origin = row["origin"] as? [String: Any],
+           origin["kind"] as? String == "task-notification" { return false }
+        if row["promptSource"] as? String == "system" { return false }
+        return true
     }
 
     /// String content, or the text blocks of a content array. A `tool_result`
