@@ -985,13 +985,10 @@ TAG_ASK = _tag_ask(path)
 # THE EVIDENCE RULES (ruled 5 Oct 2026, hf-eit; share-as-page/references/brief.md,
 # Evidence rules). Advisory like the rest: it names the claim, it never blocks.
 # The draw test itself lives in hq-diagram, which refuses; this only checks that
-# a claim typed as needing a diagram has one, and that a claim typed as text does
-# not read like order or change (agents type their own claims, so the type is
-# cross-checked against the sentence).
+# a claim typed as needing a diagram has one. Words such as before and after
+# cannot distinguish a timeline from a branch; the draw test is structural.
 _DRAWN = {"flow", "structure", "states", "change"}
 _TYPES = _DRAWN | {"ranking", "screen", "versions", "lookup", "text"}
-_RELATIONAL = re.compile(r"\b(then|after|before|until|leads? to|calls?|sends?|reaches|flows?|routes?|depends|"
-                         r"from \S+ to|dropped|rose|fell|halved|doubled|down to|up to)\b", re.I)
 def _evidence_flags(body):
     flags = []
     if re.search(r"<details\b", body, re.I):
@@ -1006,8 +1003,6 @@ def _evidence_flags(body):
             named.append(short + " has no data-shows type")
         elif t in _DRAWN and "<svg" not in inner:
             named.append(short + " shows %s but carries no diagram (hq-diagram)" % t)
-        elif t == "text" and _RELATIONAL.search(claim):
-            named.append(short + " reads like order or change but is typed text")
         if len(re.findall(r"<pre\b", inner, flags=re.I)) > 2:
             named.append(short + " carries %d literal blocks; one, two at most" % len(re.findall(r"<pre\b", inner, flags=re.I)))
     flags += named[:4]

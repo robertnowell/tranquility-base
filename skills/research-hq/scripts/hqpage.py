@@ -13,18 +13,10 @@ the page's own address; one agent scaffolded, then waited on a deploy, and
 the app announced the empty template to Robert in the Hub window ("still
 getting empty reports, THIS MUST NEVER HAPPEN").
 
-Measured 27 Sep 2026, two hours after the artifact blocks shipped: four hub
-pages arrived, none on the template, all from sessions started weeks before.
-One had been handed the full rules at its prompt and wrote its usual page 68
-seconds later; another had been told sixteen times at the write. A session
-that has written pages copies its own last page, because that is the cheapest
-start it has, and a paragraph of context does not change the cost.
-
-This changes the cost. One command writes templates/brief.html into the
-session's own hub directory with the intranet:session line, the kicker and
-the :root tokens already filled (via hq-theme, so a --brand binds the session
-the same way `hq-theme <session> --brand=NAME` does), and prints the path.
-Everything else stays a placeholder comment. It refuses to overwrite.
+The command supplies the current markup and rules at creation, and checks
+publication before moving the file. Reading a template into a shell variable
+is not evidence that its contents reached the authoring model; the output
+therefore explicitly requires a visible read before writing.
 
 The session id is REQUIRED and taken from the command line, never guessed:
 the shell a session runs in carries no session id, and the SessionStart text
@@ -38,6 +30,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from html.parser import HTMLParser
 
 HERE = Path(__file__).resolve().parent
 SKILL = HERE.parent.parent / "share-as-page"
@@ -64,6 +57,28 @@ def usage(code=2):
     return code
 
 
+class PageStructure(HTMLParser):
+    """Parse real elements, so escaped examples and comments are not violations."""
+    def __init__(self):
+        super().__init__()
+        self.disclosures = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "details":
+            self.disclosures.append(self.getpos()[0])
+
+    handle_startendtag = handle_starttag
+
+
+def structure_errors(page):
+    parser = PageStructure()
+    parser.feed(page)
+    return [f"line {line}: <details> can hide evidence, even with open. "
+            'Use <section class="claim" data-shows="TYPE"> with a <div class="head">; '
+            "replace </summary> and </details> accordingly."
+            for line in parser.disclosures]
+
+
 def publish(session, slug):
     """Move a filled draft to its address and open it.
 
@@ -77,7 +92,12 @@ def publish(session, slug):
         print(f"hq-page: no draft at {draft}; start one with `hq-page new {slug} --session={session}`.",
               file=sys.stderr)
         return 1
-    left = re.findall(r'="FILL[^"]*"|base64,FILL', draft.read_text(encoding="utf-8"))
+    page = draft.read_text(encoding="utf-8")
+    errors = structure_errors(page)
+    if errors:
+        print("hq-page: publication stopped; the draft is unchanged.\n" + "\n".join(errors), file=sys.stderr)
+        return 1
+    left = re.findall(r'="FILL[^"]*"|base64,FILL', page)
     if left:
         print(f"hq-page: {draft} is not filled yet ({len(left)} placeholder(s) left, e.g. {left[0]}). "
               "Fill it, then publish.", file=sys.stderr)
@@ -168,6 +188,11 @@ def main(argv):
     fallback = " (no theme on record for that brand: house tokens, say so in one line)" if "NO THEME ON RECORD" in header else ""
     print(f"{out}")
     print(f"tokens: {header.strip('/* ').strip(' */')}{fallback}")
+    print('Claims must use <section class="claim" data-shows="TYPE">; never <details>, even with open.')
+    print(f"Before writing, READ {BRIEF} and {out} in a separate tool call that returns their contents. "
+          "Do not redirect this output or combine new, writing and publish in one call.")
+    print('Example: <section class="claim" data-shows="text"><div class="head">The claim.</div>'
+          '<div class="d"><pre>The literal evidence.</pre></div></section>')
     print(f"This is a DRAFT: nothing publishes or opens it. Fill it here: one sentence at headline "
           f"size, the dark needs-you block, one row per claim with its artifact under it (rules: {BRIEF}). "
           f"When it is finished, run: hq-page publish {slug} --session={session}")

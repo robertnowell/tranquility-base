@@ -27,7 +27,7 @@
         "cwd":{"type":"string","maxLength":4096},
         "hookEvent":{"enum":["Stop","Notification","SubagentStop"]},
         "notificationMatcher":{"type":"string","maxLength":512},
-        "earlierThisTurn":{"type":"string","maxLength":6000}
+        "earlierThisTurn":{"type":"string"}
       }
     },
     "request": {

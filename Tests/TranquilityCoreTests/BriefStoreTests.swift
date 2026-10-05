@@ -79,7 +79,7 @@ final class BriefStoreTests: XCTestCase {
         _ = try store.insert(event: QueuedEvent(
             createdAtMs: Int64(Date().timeIntervalSince1970 * 1000), hookEvent: .stop,
             sessionId: "sess-1", promptId: UUID().uuidString, cwd: "/tmp/promotions",
-            lastAssistantMessage: message, tty: "ttys001"))
+            lastAssistantMessage: message, earlierThisTurn: "", tty: "ttys001"))
     }
 
     /// Reopen the database as a brand-new process would — nothing in memory.

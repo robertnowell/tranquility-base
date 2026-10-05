@@ -430,7 +430,7 @@ final class Phase1bTests: XCTestCase {
 
         _ = try store.insert(event: QueuedEvent(
             hookEvent: .stop, sessionId: "sess-1", promptId: "p1",
-            cwd: "/tmp/promotions", lastAssistantMessage: "Export pipeline fixed; tests pass."))
+            cwd: "/tmp/promotions", lastAssistantMessage: "Export pipeline fixed; tests pass.", earlierThisTurn: ""))
 
         guard case .spoke(let announcement) = try await coordinator.announceNext() else {
             return XCTFail("expected an announcement")
@@ -452,7 +452,7 @@ final class Phase1bTests: XCTestCase {
         // A later turn is the same, with no name to inherit either way.
         _ = try store.insert(event: QueuedEvent(
             hookEvent: .stop, sessionId: "sess-1", promptId: "p2",
-            cwd: "/tmp/promotions", lastAssistantMessage: "Now doing something else."))
+            cwd: "/tmp/promotions", lastAssistantMessage: "Now doing something else.", earlierThisTurn: ""))
         guard case .spoke(let second) = try await coordinator.announceNext() else {
             return XCTFail("expected a second announcement")
         }

@@ -35,8 +35,7 @@ public struct SummaryRequest: Sendable {
     /// Required only by managed composition. Never inferred from a rowid/fork.
     public var managedSource: GatewaySource?
     /// What the agent said this turn BEFORE its final message, oldest first,
-    /// capped. Context for the recap and the findings; never the source of a
-    /// proposal, which still comes only from the final message. Absent when
+    /// without truncation. Later statements override earlier ones. Absent when
     /// the turn was one message, or the adapter cannot say. See `EarlierThisTurn`.
     public var earlierThisTurn: String?
 
@@ -310,14 +309,14 @@ public struct AnthropicSummaryProvider: SummaryProvider {
         adjectives: "three alerts posted", not "some alerts". Never speak a number that \
         is not in the source message.
 
-        proposal: ONE action, taken only from the agent's final message, specific and \
-        parameterized, ending in a decision answerable in one word: "Go?", "Ship it?". \
-        If the source offers alternatives, name the agent's preferred one and ask. If \
-        the message proposes nothing, asks nothing, and does not end on an open thread, \
-        close plainly with no question. If the action is destructive or hard to reverse \
-        (deletes, force-pushes, sends to real people, spends money), say so here, in a \
-        clause. The listener answers without opening the tab: "yes" must be a complete \
-        and safe reply.
+        proposal: ONE action, explicitly proposed in this completed turn and still open \
+        after its final message, specific and parameterized, ending in a decision \
+        answerable in one word: "Go?", "Ship it?". If the source offers alternatives, name \
+        the agent's preferred one and ask. If the whole turn proposes nothing, asks \
+        nothing, and does not end on an open thread, close plainly with no question. If the\
+         action is destructive or hard to reverse (deletes, force-pushes, sends to real \
+        people, spends money), say so here, in a clause. The listener answers without \
+        opening the tab: "yes" must be a complete and safe reply.
 
         findings: what the work TURNED UP, not what was done: results, numbers, \
         discoveries, surprises, failures. "Recovered three misfiled pieces; the scanner \
@@ -328,12 +327,11 @@ public struct AnthropicSummaryProvider: SummaryProvider {
         If the source ranks items, speak the count and the top ones. null when nothing \
         is proposed.
 
-        rationale: "We propose X because Y. We need to be careful about Z." Y is the \
-        reason for this action now, from the agent's final message. Z is the main risk \
-        and what breaks if it goes wrong; if there is no real risk, leave Z out rather \
-        than hedging. Name X concretely; "we propose addressing this" is a failure \
-        because the listener cannot resolve "this". null when the turn is closed with \
-        nothing behind it.
+        rationale: "We propose X because Y. We need to be careful about Z." Y is the reason\
+         for this action now, from this completed turn. Z is the main risk and what breaks \
+        if it goes wrong; if there is no real risk, leave Z out rather than hedging. Name X\
+         concretely; "we propose addressing this" is a failure because the listener cannot \
+        resolve "this". null when the turn is closed with nothing behind it.
 
         Speech: no file paths, branch names, function or variable names, hashes or \
         UUIDs; describe them ("the asset pool"). Product, project and service names ARE \
@@ -392,11 +390,16 @@ public struct AnthropicSummaryProvider: SummaryProvider {
 
         ── GROUNDING: overrides everything above ──
 
-        Every fact, and especially the proposal, comes from the agent's final message. \
-        If it does not say what comes next, say what happened and stop; never invent a \
-        next task, and never take one from how the session opened. The work was done by \
-        the agent, not the user: "the session validated", never "you validated". A \
-        session with a next step always needs a reply; never say no input is needed.
+        Every fact, including the proposal, comes from the complete assistant turn: \
+        earlierThisTurn followed by the final message. Read it chronologically. Later \
+        corrections, cancellations and completed actions override earlier statements. A \
+        final link or short sign-off does not erase earlier findings or an explicitly \
+        unresolved proposal. Never revive a withdrawn proposal or ask permission for work \
+        already completed. If the whole turn does not say what comes next, say what \
+        happened and stop; never invent a next task, and never take one from how the \
+        session opened. The work was done by the agent, not the user: "the session \
+        validated", never "you validated". A session with a next step always needs a reply;\
+         never say no input is needed.
 
         If the message says the session is BLOCKED and waiting, say what it wants to do \
         and what the decision is.

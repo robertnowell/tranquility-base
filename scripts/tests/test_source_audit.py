@@ -44,6 +44,7 @@ class SourceAuditTests(unittest.TestCase):
             "tests/test_run_stage.py",
             "tests/test_prepared_dev.py",
             "tests/test_door_answers.py",
+            "tests/test_hqpage.py",
         ):
             (self.repo / "scripts" / name).write_text(
                 "import os\nfrom pathlib import Path\n"

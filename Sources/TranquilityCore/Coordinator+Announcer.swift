@@ -400,18 +400,21 @@ extension Coordinator {
             : (event.transcriptPath
                 .flatMap { TranscriptArchive.lastAssistantMessage(in: URL(fileURLWithPath: $0)) } ?? "")
 
-        // THE TURN, NOT THE LAST LINE. What the agent said before its final
-        // message, from whichever source has it: a polled provider put it on
-        // the event when it saw the turn end; a file-based harness (Claude
-        // Code, Codex) has it in the transcript `TurnText` already reads for
-        // the hub. Only for a finished turn: a permission question is its own
-        // text and must not be diluted with what came before it. Nil when the
-        // turn was one message or nobody can say, and then the summary is
-        // exactly what it was before 17 Sep.
-        let earlier: String? = event.hookEvent == .stop
-            ? (event.earlierThisTurn
-               ?? EarlierThisTurn.earlier(blocks: TurnText.forSession(event.sessionId, limit: 1).last?.blocks ?? []))
-            : nil
+        var earlier = event.hookEvent == .stop ? event.earlierThisTurn : nil
+        if event.hookEvent == .stop, earlier == nil, !isRemote(event.sessionId) {
+            guard let path = TurnText.transcript(for: event.sessionId, suppliedPath: event.transcriptPath),
+                  let turn = TurnText.completed(in: path, finalMessage: lastMessage,
+                completedAt: Date(timeIntervalSince1970: Double(event.createdAtMs) / 1000)) else {
+                Coordinator.trace?("summary incomplete source: event \(event.latestId) session \(event.sessionId)")
+                let brief = SessionBrief(topic: event.projectLabel,
+                    happened: "The completed turn's full text could not be verified. Its summary is unavailable.")
+                return Summary(spoken: SpokenTextSanitizer().sanitize(brief.spokenText()),
+                               brief: brief, provider: "incomplete-source", latencyMs: 0)
+            }
+            earlier = EarlierThisTurn.earlier(blocks: turn.blocks)
+            Coordinator.trace?("summary source: event \(event.latestId) start \(turn.at?.timeIntervalSince1970.description ?? "unknown") "
+                + "completedMs \(event.createdAtMs) messages \(turn.blocks.count) sha256 \(TurnText.fingerprint(turn.blocks))")
+        }
 
         // One agents probe serves both the lexicon's live names and the label
         // stripping (dropped 14 Sep with the label instruction); summarizing must not double the
@@ -485,7 +488,7 @@ extension Coordinator {
     /// restart re-summarizes those exactly as before. Persisting best-effort;
     /// a failed write degrades restart catch-up, never the announcement.
     private func persistBrief(_ summary: Summary, for event: WaitingSession) {
-        let failedProviders: Set<String> = ["deterministic-fallback", "empty-source", "none"]
+        let failedProviders: Set<String> = ["deterministic-fallback", "empty-source", "incomplete-source", "none"]
         guard !failedProviders.contains(summary.provider) else { return }
         do {
             try store.saveBrief(
