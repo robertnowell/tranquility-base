@@ -1,5 +1,6 @@
 import Foundation
 import os
+import Security
 
 /// An `opencode serve` this app owns: one headless server in the workspace,
 /// on a port of its own, driven over HTTP and shared with the terminal.
@@ -23,6 +24,28 @@ public final class OpenCodeServer: @unchecked Sendable {
     private let process = Process()
     private let lock = NSLock()
     private var started = false
+
+    /// Which OpenCode the binary is, read from `--version` before it is
+    /// spawned. `.v1` until then. See `OpenCodeClient.API`.
+    public private(set) var api: OpenCodeClient.API = .v1
+
+    /// 2.x refuses every API call without HTTP Basic, and a server started
+    /// with no password generates one and prints it once, to a stdout this
+    /// app does not read. So the app picks it: random per launch, handed to
+    /// the server, to our transport and to the terminal's attach, and to
+    /// nobody else. 1.x is spawned without it, exactly as before.
+    public let password: String = {
+        var bytes = [UInt8](repeating: 0, count: 24)
+        _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+        return Data(bytes).base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+    }()
+
+    /// The password the transport must send: nil on 1.x.
+    public var transportPassword: String? { isV2 ? password : nil }
+
+    private var isV2: Bool { if case .v2 = api { return true } else { return false } }
 
     /// Where this server's pid is remembered across launches, so the next
     /// app instance can reap a server the previous one left behind. A child
@@ -58,12 +81,41 @@ public final class OpenCodeServer: @unchecked Sendable {
     }
 
     /// The terminal's way onto one of this server's sessions.
+    ///
+    /// 2.x has no `attach`: the TUI takes `--server` and reads the password
+    /// from `OPENCODE_PASSWORD` (driven against 2.0.23 in tmux, 6 Oct 2026:
+    /// it drew the session's transcript).
     public func attachCommand(session raw: String) -> String {
-        [binary, "attach", baseURL.absoluteString, "--session", raw]
-            .map(SessionLauncher.shellQuoted).joined(separator: " ")
+        guard isV2 else {
+            return [binary, "attach", baseURL.absoluteString, "--session", raw]
+                .map(SessionLauncher.shellQuoted).joined(separator: " ")
+        }
+        return "OPENCODE_PASSWORD=" + SessionLauncher.shellQuoted(password) + " "
+            + [binary, "--server", baseURL.absoluteString, "--session", raw]
+                .map(SessionLauncher.shellQuoted).joined(separator: " ")
     }
 
-    /// Spawn and wait until `GET /session` answers. Idempotent.
+    /// The major version `binary --version` reports: "1.18.31" and
+    /// "opencode v2.0.23" both occur. 1 when it cannot be read, which keeps
+    /// the route every Mac ran before 2.x.
+    static func majorVersion(binary: String) -> Int {
+        let probe = Process()
+        probe.executableURL = URL(fileURLWithPath: binary)
+        probe.arguments = ["--version"]
+        let out = Pipe(); probe.standardOutput = out; probe.standardError = FileHandle.nullDevice
+        probe.standardInput = FileHandle.nullDevice
+        guard (try? probe.run()) != nil else { return 1 }
+        probe.waitUntilExit()
+        let text = String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        return majorVersion(of: text)
+    }
+
+    static func majorVersion(of text: String) -> Int {
+        guard let range = text.range(of: #"\d+(?=\.\d)"#, options: .regularExpression) else { return 1 }
+        return Int(text[range]) ?? 1
+    }
+
+    /// Spawn and wait until the API answers. Idempotent.
     public func start(timeout: TimeInterval = 20) async throws {
         let already = lock.withLock { () -> Bool in
             if started { return true }
@@ -71,6 +123,12 @@ public final class OpenCodeServer: @unchecked Sendable {
             return false
         }
         if !already {
+            if Self.majorVersion(binary: binary) >= 2 {
+                api = .v2(directory: directory)
+                var environment = ProcessInfo.processInfo.environment
+                environment["OPENCODE_SERVER_PASSWORD"] = password
+                process.environment = environment
+            }
             process.executableURL = URL(fileURLWithPath: binary)
             process.arguments = ["serve", "--port", String(port), "--hostname", "127.0.0.1"]
             process.currentDirectoryURL = URL(fileURLWithPath: directory)
@@ -88,7 +146,12 @@ public final class OpenCodeServer: @unchecked Sendable {
             Self.registry.withLock { $0.append(self) }
         }
         let deadline = Date().addingTimeInterval(timeout)
-        var request = URLRequest(url: baseURL.appendingPathComponent("session"))
+        // 2.x serves its web app at `/session` with a 200 the moment it
+        // listens, so readiness is the API route, with the password.
+        var request = URLRequest(url: baseURL.appendingPathComponent(isV2 ? "api/session" : "session"))
+        if isV2, let basic = "opencode:\(password)".data(using: .utf8) {
+            request.setValue("Basic " + basic.base64EncodedString(), forHTTPHeaderField: "Authorization")
+        }
         request.timeoutInterval = 2
         while Date() < deadline {
             if !process.isRunning {

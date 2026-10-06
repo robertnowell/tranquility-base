@@ -302,3 +302,106 @@ enum Wire {
         }
     }
 }
+
+// MARK: - OpenCode 2.x
+
+extension Wire {
+
+    /// OpenCode 2's shapes, which are not 1.x's with a prefix. Read from a
+    /// live `opencode serve` 2.0.23 driven through a turn, a permission and a
+    /// question on 6 Oct 2026, and from the `openapi.json` it serves. Rule 1
+    /// still holds: everything optional, unknown ignored.
+    enum V2 {
+
+        /// `{ "data": X }`, which every 2.x route answers with.
+        struct One<T: Decodable>: Decodable { var data: T? }
+
+        /// One page of a list: `{ "data": [...], "cursor": { "next": ... } }`.
+        struct Page<T: Decodable>: Decodable {
+            var data: [T]?
+            var cursor: Cursor?
+            struct Cursor: Decodable { var next: String? }
+        }
+
+        /// A message is a timeline item now, with its own `type`: `user`
+        /// carries `text`, `assistant` carries `content` parts, and `idle`
+        /// (the turn's end marker) carries neither and is not a turn.
+        struct Message: Decodable {
+            var id: String?
+            var type: String?
+            var text: String?
+            var content: [Part]?
+            var time: Time?
+            struct Part: Decodable { var type: String?; var text: String? }
+            struct Time: Decodable { var created: Double? }
+
+            func turn() -> Turn? {
+                guard let id else { return nil }
+                let role: Turn.Role
+                let words: String
+                switch type {
+                case "user":
+                    role = .user
+                    words = text ?? ""
+                case "assistant":
+                    role = .agent
+                    words = (content ?? []).filter { $0.type == "text" }
+                        .compactMap(\.text).joined(separator: "\n")
+                default:
+                    return nil
+                }
+                let trimmed = words.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty else { return nil }
+                return Turn(id: id, at: Session.date(time?.created), role: role, text: trimmed)
+            }
+        }
+
+        /// What 1.x called a question. The agent's question tool raises one
+        /// with `metadata.kind == "question"`, one field per question, keyed
+        /// `q0`, `q1`... and answered `{ "answer": { key: value } }`, where a
+        /// value is the chosen option's `value` (an array for multiselect).
+        struct Form: Decodable {
+            var id: String
+            var sessionID: String
+            var title: String?
+            var fields: [Field]?
+
+            struct Field: Decodable {
+                var key: String
+                var type: String?
+                var title: String?
+                var description: String?
+                var options: [Option]?
+                var custom: Bool?
+                struct Option: Decodable { var value: String?; var label: String? }
+            }
+
+            func pending(session: AgentSession.ID) -> PendingRequest? {
+                let items = (fields ?? []).map { field in
+                    PendingRequest.Question(
+                        asked: field.description ?? field.title ?? title ?? "",
+                        // The VALUE is the id, for the reason the 1.x label
+                        // was: it is what the reply carries.
+                        options: (field.options ?? []).compactMap { option in
+                            guard let value = option.value ?? option.label else { return nil }
+                            return PendingRequest.Option(id: value, label: option.label ?? value)
+                        },
+                        allowsMultiple: field.type == "multiselect",
+                        allowsCustom: field.custom ?? (field.options ?? []).isEmpty)
+                }
+                guard !items.isEmpty, items.contains(where: { !$0.asked.isEmpty }) else { return nil }
+                return PendingRequest(id: id, session: session, questions: items)
+            }
+
+            /// The reply body: each field's key to its answer, in order.
+            func answer(_ answers: [[String]]) -> [String: Any] {
+                var out: [String: Any] = [:]
+                for (index, field) in (fields ?? []).enumerated() where index < answers.count {
+                    let chosen = answers[index]
+                    out[field.key] = field.type == "multiselect" ? chosen : (chosen.first ?? "")
+                }
+                return out
+            }
+        }
+    }
+}

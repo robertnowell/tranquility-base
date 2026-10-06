@@ -211,11 +211,28 @@ public struct HTTPTransport: OpenCodeClient.Transport {
     /// to find out why without editing the file. A failure worth recording is
     /// recorded WITH ITS REASON.
     public var trace: (@Sendable (String) -> Void)?
+    /// Where the event stream is: `event` on 1.x, `api/event` on 2.x.
+    public var eventPath: String
 
     public init(base: URL, password: String?, session: URLSession = .shared,
+                eventPath: String = "event",
                 trace: (@Sendable (String) -> Void)? = nil) {
         self.base = base; self.password = password; self.session = session
+        self.eventPath = eventPath
         self.trace = trace
+    }
+
+    /// `path` may carry a query (2.x lists take `?order=...&limit=...`).
+    /// `appendingPathComponent` would escape its `?` into the path, so the
+    /// query is split off and set as a query.
+    func url(_ path: String) -> URL {
+        let parts = path.split(separator: "?", maxSplits: 1).map(String.init)
+        let joined = base.appendingPathComponent(parts.first ?? "")
+        guard parts.count == 2,
+              var components = URLComponents(url: joined, resolvingAgainstBaseURL: false)
+        else { return joined }
+        components.percentEncodedQuery = parts[1]
+        return components.url ?? joined
     }
 
     private func authorized(_ request: inout URLRequest) {
@@ -226,7 +243,7 @@ public struct HTTPTransport: OpenCodeClient.Transport {
 
     public func send(method: String, path: String, body: Data?) async throws
         -> (status: Int, body: Data) {
-        var request = URLRequest(url: base.appendingPathComponent(path))
+        var request = URLRequest(url: url(path))
         request.httpMethod = method
         request.httpBody = body
         if body != nil {
@@ -260,7 +277,7 @@ public struct HTTPTransport: OpenCodeClient.Transport {
     }
 
     public func events() -> AsyncStream<Data>? {
-        var request = URLRequest(url: base.appendingPathComponent("event"))
+        var request = URLRequest(url: base.appendingPathComponent(eventPath))
         request.setValue("text/event-stream", forHTTPHeaderField: "accept")
         // No timeout: a stream that is quiet is not a stream that is broken,
         // and the 15 seconds above would tear down a healthy subscription
