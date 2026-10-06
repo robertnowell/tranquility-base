@@ -42,11 +42,32 @@ public struct OpenCodeClient: Sendable {
     /// `AgentProvider.id` of whoever owns this client, stamped onto every
     /// session and event so a row knows where it came from.
     public let provider: String
+    /// Which OpenCode this is talking to.
+    public let api: API
 
-    public init(transport: any Transport, provider: String) {
+    /// **OpenCode 2 is a different API, not a prefix.** Everything moved under
+    /// `/api`, every response is wrapped in `data`, questions became
+    /// session-scoped "forms", permissions became session-scoped, the async
+    /// prompt route is gone (the one prompt route is async now), abort is
+    /// `interrupt`, and the session list spans every directory the server has
+    /// ever seen. Found 6 Oct 2026, when New Agent on a Mac that had upgraded
+    /// to 2.0.23 got 405 from the web UI now served at `/session`.
+    ///
+    /// crobot stays `.v1`: its sandbox pins OpenCode 1.x.
+    public enum API: Sendable, Equatable {
+        case v1
+        /// `directory` scopes the session list to the workspace, which 1.x
+        /// did by itself and 2.x does only when asked.
+        case v2(directory: String?)
+    }
+
+    public init(transport: any Transport, provider: String, api: API = .v1) {
         self.transport = transport
         self.provider = provider
+        self.api = api
     }
+
+    private var isV2: Bool { if case .v2 = api { return true } else { return false } }
 
     public enum ClientError: Error, CustomStringConvertible, Equatable {
         /// The sandbox is asleep. **Normal, and not an error to log as one**:
@@ -85,15 +106,25 @@ public struct OpenCodeClient: Sendable {
     /// their parents, with `parentID` set. A subagent is the parent's
     /// business, not a row (Claude Code's and Codex's never were).
     public func childSessionIDs() async throws -> Set<String> {
-        let data = try await call("GET", "/session")
-        return Set(decodeList(data, as: Wire.Session.self).filter { $0.parentID != nil }.map(\.id))
+        Set(try await listed().filter { $0.parentID != nil }.map(\.id))
     }
 
     public func sessions() async throws -> [AgentSession] {
-        let data = try await call("GET", "/session")
+        let list = try await listed()
         let busy = await busySessions()
-        return decodeList(data, as: Wire.Session.self)
-            .map { $0.agentSession(provider: provider, busy: busy) }
+        return list.map { $0.agentSession(provider: provider, busy: busy) }
+    }
+
+    /// The server's sessions, raw. On 2.x the newest 200 in this workspace:
+    /// unscoped, a long-lived 2.x server lists every session it has from
+    /// every directory (109 on this Mac on 6 Oct), most of them not ours.
+    private func listed() async throws -> [Wire.Session] {
+        guard case .v2(let directory) = api else {
+            return decodeList(try await call("GET", "/session"), as: Wire.Session.self)
+        }
+        var path = "/api/session?order=desc&limit=200"
+        if let directory { path += "&directory=" + query(directory) }
+        return decodeList(try await call("GET", path), as: Wire.Session.self)
     }
 
     /// The ids the server is working on right now. Empty when it is idle.
@@ -107,6 +138,14 @@ public struct OpenCodeClient: Sendable {
     /// of a list that already succeeded, so losing it costs blue, never the
     /// row. The one thing it must not do is report everything busy.
     func busySessions() async -> Set<String> {
+        if isV2 {
+            // 2.x: `{ "data": { "<id>": { "type": "running" } } }`, and a
+            // session absent from it is idle.
+            guard let data = try? await call("GET", "/api/session/active"),
+                  let map = try? JSONDecoder().decode(Wire.V2.One<[String: Wire.Status]>.self, from: data)
+            else { return [] }
+            return Set((map.data ?? [:]).compactMap { key, value in value.type == "idle" ? nil : key })
+        }
         guard let data = try? await call("GET", "/session/status") else { return [] }
         if let array = try? JSONDecoder().decode([Wire.Status].self, from: data) {
             return Set(array.filter { $0.type != "idle" }.compactMap { $0.sessionID ?? $0.id })
@@ -120,8 +159,11 @@ public struct OpenCodeClient: Sendable {
     }
 
     public func start() async throws -> AgentSession.ID {
-        let data = try await call("POST", "/session", body: Data("{}".utf8))
-        guard let wire = try? JSONDecoder().decode(Wire.Session.self, from: data) else {
+        let data = try await call("POST", isV2 ? "/api/session" : "/session", body: Data("{}".utf8))
+        let decoded = isV2
+            ? (try? JSONDecoder().decode(Wire.V2.One<Wire.Session>.self, from: data))?.data
+            : try? JSONDecoder().decode(Wire.Session.self, from: data)
+        guard let wire = decoded else {
             throw ClientError.status(200, "session create returned no session")
         }
         return AgentSession.id(wire.id, provider: provider)
@@ -130,8 +172,29 @@ public struct OpenCodeClient: Sendable {
     // MARK: - Transcript
 
     public func transcript(_ session: String) async throws -> [Turn] {
+        if isV2 { return try await transcriptV2(session) }
         let data = try await call("GET", "/session/\(esc(session))/message")
         return decodeList(data, as: Wire.Message.self).compactMap { $0.turn() }
+    }
+
+    /// 2.x pages the timeline and defaults to NEWEST first, so read it
+    /// oldest first, page by page. Bounded, because a cursor that never
+    /// ends must not hold a poll for ever.
+    private func transcriptV2(_ session: String) async throws -> [Turn] {
+        let limit = 200
+        var turns: [Turn] = []
+        var cursor: String?
+        for _ in 0..<50 {
+            var path = "/api/session/\(esc(session))/message?order=asc&limit=\(limit)"
+            if let cursor { path += "&cursor=" + query(cursor) }
+            let page = try JSONDecoder().decode(Wire.V2.Page<Wire.V2.Message>.self,
+                                                from: try await call("GET", path))
+            let items = page.data ?? []
+            turns += items.compactMap { $0.turn() }
+            guard items.count == limit, let next = page.cursor?.next else { break }
+            cursor = next
+        }
+        return turns
     }
 
     public func send(_ text: String, to session: String) async throws -> SendOutcome {
@@ -139,6 +202,7 @@ public struct OpenCodeClient: Sendable {
         guard let body = try? JSONSerialization.data(withJSONObject: payload) else {
             return .failed(reason: "could not encode the message")
         }
+        if isV2 { return await promptV2(text, to: session) }
         do {
             _ = try await call("POST", "/session/\(esc(session))/message", body: body)
             return .accepted
@@ -174,6 +238,7 @@ public struct OpenCodeClient: Sendable {
     /// event stream, which is where a provider that owns the server reads
     /// them.
     public func sendAsync(_ text: String, to session: String) async throws -> SendOutcome {
+        if isV2 { return await promptV2(text, to: session) }
         let payload: [String: Any] = ["parts": [["type": "text", "text": text]]]
         guard let body = try? JSONSerialization.data(withJSONObject: payload) else {
             return .failed(reason: "could not encode the message")
@@ -188,9 +253,27 @@ public struct OpenCodeClient: Sendable {
         }
     }
 
+    /// 2.x has one prompt route, and it is the async one: it answers the
+    /// moment the input is admitted to the session's inbox, and the turn's
+    /// words arrive on the event stream. The body is `{ text }`, not parts.
+    private func promptV2(_ text: String, to session: String) async -> SendOutcome {
+        guard let body = try? JSONSerialization.data(withJSONObject: ["text": text]) else {
+            return .failed(reason: "could not encode the message")
+        }
+        do {
+            _ = try await call("POST", "/api/session/\(esc(session))/prompt", body: body)
+            return .accepted
+        } catch ClientError.asleep {
+            return .busy
+        } catch {
+            return .failed(reason: String(describing: error))
+        }
+    }
+
     /// Stop the turn that is running, if one is.
     public func abort(_ session: String) async throws {
-        _ = try await call("POST", "/session/\(esc(session))/abort")
+        _ = try await call("POST", isV2 ? "/api/session/\(esc(session))/interrupt"
+                                         : "/session/\(esc(session))/abort")
     }
 
     /// One session, as the server has it now: the model's title lands here
@@ -205,6 +288,12 @@ public struct OpenCodeClient: Sendable {
     }
 
     func questions(_ session: String) async throws -> [PendingRequest] {
+        if isV2 {
+            // Session-scoped on 2.x, where the scoped route is the real one.
+            let data = try await call("GET", "/api/session/\(esc(session))/form")
+            return decodeList(data, as: Wire.V2.Form.self)
+                .compactMap { $0.pending(session: AgentSession.id(session, provider: provider)) }
+        }
         let data = try await call("GET", "/question")
         return decodeList(data, as: Wire.Question.self)
             .filter { $0.sessionID == session }
@@ -212,6 +301,13 @@ public struct OpenCodeClient: Sendable {
     }
 
     func permissions(_ session: String) async throws -> [PendingRequest] {
+        if isV2 {
+            // `{id, sessionID, action, resources}`, which `Wire.Permission`
+            // already reads as its first-draft spelling.
+            let data = try await call("GET", "/api/session/\(esc(session))/permission")
+            return decodeList(data, as: Wire.Permission.self)
+                .map { $0.pending(session: AgentSession.id(session, provider: provider)) }
+        }
         let data = try await call("GET", "/permission")
         return decodeList(data, as: Wire.Permission.self)
             .filter { $0.sessionID == session }
@@ -225,6 +321,7 @@ public struct OpenCodeClient: Sendable {
     /// request it fetched, so it knows.
     public func respond(to request: PendingRequest, kind: RequestKind,
                         session: String, with response: Response) async throws -> SendOutcome {
+        if isV2 { return await respondV2(to: request, kind: kind, session: session, with: response) }
         do {
             switch kind {
             case .question where response.isRejection:
@@ -240,6 +337,37 @@ public struct OpenCodeClient: Sendable {
                 // is 404 PermissionNotFoundError on a live server for a permission
                 // that `/permission` lists; `/permission/{pid}/reply` returns true.
                 _ = try await call("POST", "/permission/\(esc(request.id))/reply", body: body)
+            }
+            return .accepted
+        } catch ClientError.asleep {
+            return .busy
+        } catch {
+            return .failed(reason: String(describing: error))
+        }
+    }
+
+    /// 2.x: both answered on routes under the session. A form is answered
+    /// by field key, which the request we hand upward does not carry, so the
+    /// form is read back first; a rejected form is deleted, which is how the
+    /// TUI's own dismiss cancels it (`form.cancelled`).
+    private func respondV2(to request: PendingRequest, kind: RequestKind,
+                           session: String, with response: Response) async -> SendOutcome {
+        let base = "/api/session/\(esc(session))"
+        do {
+            switch kind {
+            case .question where response.isRejection:
+                _ = try await call("DELETE", "\(base)/form/\(esc(request.id))")
+            case .question:
+                let data = try await call("GET", "\(base)/form/\(esc(request.id))")
+                guard let form = (try? JSONDecoder().decode(Wire.V2.One<Wire.V2.Form>.self, from: data))?.data
+                else { return .failed(reason: "the question could not be read back") }
+                let body = try JSONSerialization.data(
+                    withJSONObject: ["answer": form.answer(response.answers)])
+                _ = try await call("POST", "\(base)/form/\(esc(request.id))/reply", body: body)
+            case .permission:
+                let body = try JSONSerialization.data(
+                    withJSONObject: ["decision": permissionReply(response)])
+                _ = try await call("POST", "\(base)/permission/\(esc(request.id))/reply", body: body)
             }
             return .accepted
         } catch ClientError.asleep {
@@ -282,6 +410,12 @@ public struct OpenCodeClient: Sendable {
     }
 
     // MARK: -
+
+    /// Percent-encode one query value.
+    private func query(_ s: String) -> String {
+        s.addingPercentEncoding(withAllowedCharacters: .alphanumerics.union(
+            CharacterSet(charactersIn: "-._~"))) ?? s
+    }
 
     /// Percent-encode one path segment. A session id arrives from the server
     /// and a task id from a person, and neither is guaranteed path-safe.

@@ -22,8 +22,10 @@ public actor ServedOpenCodeProvider: AgentProvider {
 
     public nonisolated let id = "opencode"
     private let server: OpenCodeServer
-    private let client: OpenCodeClient
-    private let transport: HTTPTransport
+    /// Rebuilt at connect, once the server knows which OpenCode it is.
+    private var client: OpenCodeClient
+    private var transport: HTTPTransport
+    private let trace: (@Sendable (String) -> Void)?
     private let ledger: ProviderLedger?
     public nonisolated var directory: String { server.directory }
     public nonisolated var baseURL: URL { server.baseURL }
@@ -55,6 +57,7 @@ public actor ServedOpenCodeProvider: AgentProvider {
                 trace: (@Sendable (String) -> Void)? = nil) {
         self.server = OpenCodeServer(binary: binary, directory: directory, port: port, pidFile: pidFile)
         self.hostsPanes = hostsPanes
+        self.trace = trace
         self.transport = HTTPTransport(base: server.baseURL, password: nil, trace: trace)
         self.client = OpenCodeClient(transport: transport, provider: "opencode")
         self.ledger = ledger
@@ -84,6 +87,11 @@ public actor ServedOpenCodeProvider: AgentProvider {
 
     private func connect() async throws {
         try await server.start()
+        if case .v2 = server.api {
+            transport = HTTPTransport(base: server.baseURL, password: server.transportPassword,
+                                      eventPath: "api/event", trace: trace)
+            client = OpenCodeClient(transport: transport, provider: id, api: server.api)
+        }
         connected = true
         if hostsPanes { OpenCodePane.sweepStale(keeping: server.baseURL.port ?? 0) }
         guard let raw = transport.events() else { return }
@@ -109,10 +117,53 @@ public actor ServedOpenCodeProvider: AgentProvider {
         }
     }
 
+    /// A 2.x frame: `{type, data}` where 1.x had `{type, properties}`, and
+    /// different words for the same moments. Read off a live 2.0.23 on
+    /// 6 Oct 2026 through a turn, a permission, a question, a cancelled
+    /// question and an interrupt.
+    private struct EnvelopeV2: Decodable {
+        var type: String?
+        var data: Body?
+        struct Body: Decodable {
+            var sessionID: String?
+            /// `form.created` nests the form, session and all.
+            var form: Form?
+            struct Form: Decodable { var sessionID: String? }
+        }
+    }
+
+    /// 2.x's event names, as the 1.x ones `translate` already acts on, so
+    /// the one switch below decides what each moment means.
+    static func v1Equivalent(_ type: String) -> String? {
+        switch type {
+        case "session.execution.started": return "session.status.busy"
+        case "session.execution.succeeded", "session.execution.interrupted": return "session.idle"
+        case "session.execution.failed": return "session.error"
+        case "permission.asked", "form.created": return "permission.asked"
+        case "permission.replied", "permission.rejected", "form.replied", "form.cancelled":
+            return "permission.replied"
+        case "session.created", "session.renamed": return "session.updated"
+        default: return nil
+        }
+    }
+
     private func translate(_ data: Data) async {
+        if case .v2 = client.api {
+            guard let e = try? JSONDecoder().decode(EnvelopeV2.self, from: data),
+                  let type = e.type.flatMap(Self.v1Equivalent),
+                  let raw = e.data?.sessionID ?? e.data?.form?.sessionID else { return }
+            await act(type, raw: raw)
+            return
+        }
         guard let e = try? JSONDecoder().decode(Envelope.self, from: data), let type = e.type else { return }
         let raw = e.properties?.sessionID ?? e.properties?.info?.sessionID ?? e.properties?.info?.id
-        guard let raw, !raw.isEmpty, !forgotten.contains(raw) else { return }
+        guard let raw else { return }
+        let status = e.properties?.status?.type
+        await act(type == "session.status" && status != nil ? "session.status.\(status!)" : type, raw: raw)
+    }
+
+    private func act(_ type: String, raw: String) async {
+        guard !raw.isEmpty, !forgotten.contains(raw) else { return }
         if sessions[raw] == nil, !children.contains(raw) {
             // First sight of a session this instance did not start: a
             // subagent's events must not conjure a row for it.
@@ -121,13 +172,9 @@ public actor ServedOpenCodeProvider: AgentProvider {
         }
         if children.contains(raw) { return }
         switch type {
-        case "session.status":
-            switch e.properties?.status?.type {
-            case "busy": working(raw)
-            case "idle": await finished(raw)
-            default: break
-            }
-        case "session.idle":
+        case "session.status.busy":
+            working(raw)
+        case "session.status.idle", "session.idle":
             await finished(raw)
         case "message.part.updated", "message.part.delta", "message.updated":
             // Words, not state. `session.status` says busy and idle, and a
