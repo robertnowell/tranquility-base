@@ -204,7 +204,7 @@ public actor GatewayAuthority {
     }
 
     /// The proof the mint requires, and the request that carries it.
-    private func fetch(token: String, generation: UUID) async throws -> String {
+    private func fetch(token: String, generation: UUID, isRetry: Bool = false) async throws -> String {
         // No access token yet, so the proof carries no `ath`: this IS the
         // request that asks for one.
         let proof = try DeviceKey.proof(
@@ -214,6 +214,17 @@ public actor GatewayAuthority {
         let (status, body) = try await exchange(proof, token)
         try Task.checkCancellation()
         guard self.generation == generation, deviceToken() == token else { throw CancellationError() }
+
+        let code = (try? JSONSerialization.jsonObject(with: body) as? [String: Any])?["error"] as? String
+        // The hub accepts a proof for 60 seconds. A request signed at launch
+        // and then frozen by sleep reaches it hours later, and URLSession's
+        // timeouts do not count the hours asleep. On 6 and 8 Oct that stale
+        // proof came back 401 at wake and read as a revoked Mac: "Sign in
+        // for credits" after every reboot, fixed only by pairing again.
+        // Sign a fresh one once; a key that is truly wrong fails twice.
+        if status == 401, code == "invalid_dpop_proof", !isRetry {
+            return try await fetch(token: token, generation: generation, isRetry: true)
+        }
 
         switch status {
         case 200:
@@ -230,7 +241,6 @@ public actor GatewayAuthority {
             // browser, and it is deliberately narrow.
             throw Failure.connectionRejected
         case 403:
-            let code = (try? JSONSerialization.jsonObject(with: body) as? [String: Any])?["error"] as? String
             throw code == "rebinding_required" ? Failure.rebindingRequired : Failure.connectionRejected
         default:
             // Including 503. An outage is not a sign-out.
