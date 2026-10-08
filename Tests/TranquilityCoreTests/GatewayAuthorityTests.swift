@@ -200,6 +200,27 @@ final class GatewayAuthorityTests: XCTestCase {
         await assertFails(garbled, with: .temporarilyUnavailable)
     }
 
+    /// A proof that went stale while the Mac slept is not a sign-out. The
+    /// mint is asked again with a fresh proof; a key that is really wrong
+    /// fails the second time too and still sends the person to pair.
+    func testAStaleProofIsSignedAgainOnceBeforeItReadsAsASignOut() async throws {
+        let calls = MintCalls()
+        let stale = (401, Data(#"{"error":"invalid_dpop_proof"}"#.utf8))
+        let woke = authority { _, _ in
+            await calls.next() == 1 ? stale : minted("fresh")
+        }
+        let token = try await woke.bearer()
+        XCTAssertEqual(token, "fresh")
+        let afterWake = await calls.value
+        XCTAssertEqual(afterWake, 2)
+
+        let wrongKey = MintCalls()
+        let mismatched = authority { _, _ in _ = await wrongKey.next(); return stale }
+        await assertFails(mismatched, with: .connectionRejected)
+        let tries = await wrongKey.value
+        XCTAssertEqual(tries, 2)
+    }
+
     /// The request carries both credentials, and the proof is for this URL.
     func testTheExchangeCarriesADeviceTokenAndAProofForThisRoute() async throws {
         let seen = Box()
@@ -296,6 +317,11 @@ final class DeviceKeyStoreTests: XCTestCase {
 private actor Counter {
     private(set) var value = 0
     func bump() { value += 1 }
+}
+
+private actor MintCalls {
+    private(set) var value = 0
+    func next() -> Int { value += 1; return value }
 }
 
 private actor Box {
