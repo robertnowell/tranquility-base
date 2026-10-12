@@ -1752,7 +1752,14 @@ extension StatusHUD {
         let widthBefore = panel?.frame.width ?? 0
         showIdle(rows: mixed + [.init(id: "f", name: "new one", aux: "new", lamp: .ready)])
         let widthHeldOnArrival = abs((panel?.frame.width ?? 0) - widthBefore) < 1
+        // The pill's glass adapts light over light windows and the old view
+        // kept that look once stretched back (11 Oct 2026): expanding must
+        // hand the slab a glass the pill never wore.
+        let pillGlass = glassView
         setCollapsed(false)
+        let expandRenewsTheGlass: Bool
+        if #available(macOS 26.0, *) { expandRenewsTheGlass = glassView != nil && glassView !== pillGlass }
+        else { expandRenewsTheGlass = true }  // the frost is not rebuilt, only re-pinned
         showIdle(rows: mixed)
         settleAnimations()
         // The bug the user reported: expanding out of the strip left the left
@@ -1900,6 +1907,13 @@ extension StatusHUD {
         } ?? false
         let countAtRest = collapsedFace
         let countHasInk = collapsedCountInk > 20
+        // The pill's ink follows its glass (12 Oct 2026): rendered under light,
+        // the count is dark; under dark, light. Pixels, not tokens.
+        let countOnLight = collapsedCountLightness(under: .aqua)
+        let countOnDark = collapsedCountLightness(under: .darkAqua)
+        Permissions.log(String(format: "collapse drill: count L* on light glass %.1f, on dark %.1f",
+                               countOnLight, countOnDark))
+        let pillInkFollowsTheGlass = countOnLight >= 0 && countOnLight < 40 && countOnDark > 60
         // Hover swaps both slots for Expand and Close, and puts them back.
         collapsedSetHovering(true)
         let faceOnHover = collapsedFace
@@ -1969,6 +1983,7 @@ extension StatusHUD {
             ("expandRestoresTheLeftEdge", expandRestoredLeft),
             ("widthHeldOnArrival", widthHeldOnArrival),
             ("expandRestoresTheGrid", expandedAgain),
+            ("expandRenewsTheGlass", expandRenewsTheGlass),
             ("glowLit", glowLit),
             ("glowDecayedOnItsOwn", glowDecayed),
             ("glowTimerCompletedWithinDeadline", glowTimerCompleted),
@@ -1980,6 +1995,7 @@ extension StatusHUD {
             ("pillCountsOneUnread", unreadCountsOne),
             ("pillLampIsSolidGreen", lampIsSolidGreen),
             ("pillCountIsInked", countHasInk),
+            ("pillInkFollowsTheGlass", pillInkFollowsTheGlass),
             ("hoverSwapsToExpandAndClose", hoverTakesThePill),
             ("zeroUnreadReadsZero", zeroCount),
             ("zeroUnreadLampIsARing", zeroIsARing),

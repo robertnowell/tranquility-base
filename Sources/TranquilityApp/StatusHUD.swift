@@ -137,6 +137,9 @@ final class StatusHUD: NSObject {
     var collapsedFace: CollapsedStrip.Face? { strip?.lastFace }
     var collapsedCountInk: Int { strip?.countInkForTesting() ?? 0 }
     func collapsedSetHovering(_ on: Bool) { strip?.setHoveringForTesting(on) }
+    func collapsedCountLightness(under name: NSAppearance.Name) -> CGFloat {
+        strip?.countInkLightnessForTesting(under: NSAppearance(named: name)) ?? -1
+    }
     /// In a window, visible, and actually in the view tree. NOT
     /// `panel.contentView === strip` any more: the strip is a sibling inside the
     /// panel's rounded background now, so the old check asserted an arrangement
@@ -161,6 +164,14 @@ final class StatusHUD: NSObject {
     func setCollapsed(_ collapsed: Bool) {
         guard collapsed != isCollapsed else { return }
         isCollapsed = collapsed
+        // A width change is a new glass (11 Oct 2026). Collapsed over a light
+        // window, the small pill's glass turns itself light to match what is
+        // behind it, and the same glass view stretched back to the slab stays
+        // light under our fixed light text. AppKit's appearance says dark the
+        // whole time, so keepGlassDark cannot see it: app.log shows both of
+        // Robert's unreadable screenshots seconds after an expand, with no
+        // renewal and no "resolved light". A fresh glass starts from dark.
+        renewGlass(because: collapsed ? "collapsed" : "expanded")
         render()
     }
     /// Derived, not stored. True exactly while the undo countdown is live AND the

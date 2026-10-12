@@ -2725,6 +2725,23 @@ extension StatusHUD {
         checks.append(("checkmarkOnReady≥3",
                        StateLegend.Measure.contrast(surface, StateLegend.Palette.ready) >= 3.0))
 
+        // The light half (12 Oct 2026), owed the same floors on light glass.
+        let lightSurface = StateLegend.Palette.Light.surface
+        for token in StateLegend.lightContrastFloors {
+            let ratio = StateLegend.Measure.contrast(token.ink, lightSurface)
+            checks.append(("\(token.name)≥\(token.floor)", ratio >= token.floor))
+            Permissions.log(String(format: "contrast: %@ = %.2f:1 (floor %.1f) on light glass",
+                                   token.name, ratio, token.floor))
+        }
+        let lightRamp = [StateLegend.Palette.Light.ink, StateLegend.Palette.Light.secondary,
+                         StateLegend.Palette.Light.muted, StateLegend.Palette.Light.hint]
+            .map { StateLegend.Measure.contrast($0, lightSurface) }
+        checks.append(("lightInkRampOrdered", zip(lightRamp, lightRamp.dropFirst()).allSatisfy { $0 > $1 }))
+        checks.append(("lightLampΔL*≥\(StateLegend.lampLightnessFloor)",
+                       StateLegend.Measure.lightnessGap(StateLegend.Palette.Light.ready,
+                                                        StateLegend.Palette.Light.working)
+                       >= StateLegend.lampLightnessFloor))
+
         Permissions.log(String(format: "contrast: lamp ΔL* = %.1f", lampGap))
         SelfTest.report("contrast", checks)
     }
