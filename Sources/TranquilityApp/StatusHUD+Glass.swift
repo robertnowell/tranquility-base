@@ -13,6 +13,14 @@ import AppKit
 /// and is rebuilt after every event that re-composites windows. Every check and
 /// rebuild is logged, so a recurrence is provable from app.log.
 /// Research record: agent fab03130, 2026-10-02-glass-light-state.
+///
+/// LIGHT IS ALLOWED ON THE PILL (12 Oct 2026). Small glass flips light over a
+/// light window by Apple's design, through the dark pin and through a dark
+/// tint; nothing holds it. So the pin is on the WINDOW only. Unpinned, the
+/// glass hands its flip to its content as effectiveAppearance, and the pill's
+/// ink is adaptive (StateLegend.Palette.Adaptive). The slab is large glass and
+/// holds dark under the window's pin; a width change still gets a fresh glass,
+/// so a flip the pill took cannot stretch onto the slab.
 extension StatusHUD {
     static let darkAppearance = NSAppearance(named: .darkAqua)
 
@@ -39,19 +47,19 @@ extension StatusHUD {
         Permissions.log("glass: keeper installed; \(describeAppearance())")
     }
 
-    /// The cheap check, on every show: anything in the chain resolving light
-    /// means the glass is stale, and it is rebuilt before it is seen.
+    /// The cheap check, on every show: the window losing its dark pin means
+    /// the glass is stale, and it is rebuilt before it is seen. The glass and
+    /// its content are not checked: on the pill, light is the glass working.
     func keepGlassDark(on event: String) {
-        guard let panel, let glass = glassView else { return }
+        guard let panel, glassView != nil else { return }
         func isDark(_ a: NSAppearance) -> Bool { a.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua }
-        if panel.appearance?.name != .darkAqua || !isDark(panel.effectiveAppearance)
-            || !isDark(glass.effectiveAppearance) {
+        if panel.appearance?.name != .darkAqua || !isDark(panel.effectiveAppearance) {
             renewGlass(because: "\(event): resolved light")
         }
     }
 
-    /// A new glass view in place of the old one, dark pinned on the window,
-    /// the glass and the surface. The surface and everything on it move
+    /// A new glass view in place of the old one, dark pinned on the window
+    /// alone (the glass and surface inherit it). The surface and everything on it move
     /// across untouched; the radius in force (slab or collapsed pill) is kept.
     func renewGlass(because reason: String) {
         guard let panel, let surface = surfaceView else { return }
@@ -60,20 +68,19 @@ extension StatusHUD {
         // reply being typed; it is handed straight back.
         let typing = panel.firstResponder
         panel.appearance = Self.darkAppearance
-        surface.appearance = Self.darkAppearance
+        surface.appearance = nil
         if #available(macOS 26.0, *), let old = glassView as? NSGlassEffectView {
             let glass = NSGlassEffectView(frame: old.frame)
             glass.style = .regular
             glass.cornerRadius = old.cornerRadius
             glass.autoresizingMask = [.width, .height]
-            glass.appearance = Self.darkAppearance
             old.contentView = nil
             glass.contentView = surface
             panel.contentView = glass
             glassView = glass
             if let typing, typing !== panel { panel.makeFirstResponder(typing) }
         } else {
-            glassView?.appearance = Self.darkAppearance
+            glassView?.appearance = nil
         }
         Permissions.log("glass: renewed (\(reason)); was \(before); now \(describeAppearance())")
     }
@@ -81,6 +88,7 @@ extension StatusHUD {
     func describeAppearance() -> String {
         "panel=\(panel?.appearance?.name.rawValue ?? "nil")/\(panel?.effectiveAppearance.name.rawValue ?? "-") "
             + "glass=\(glassView?.effectiveAppearance.name.rawValue ?? "-") "
+            + "content=\(surfaceView?.effectiveAppearance.name.rawValue ?? "-") "
             + "app=\(NSApp.effectiveAppearance.name.rawValue)"
     }
 }

@@ -146,13 +146,25 @@ final class CollapsedStrip: NSView {
 
     // MARK: - Paint
 
+    /// The pill is small glass, and small glass flips light over a light
+    /// window (12 Oct 2026). The flip arrives here as a new effective
+    /// appearance; the ink is adaptive and resolves in draw(_:), so a repaint
+    /// is all it takes to follow it.
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        needsDisplay = true
+    }
+
+    /// Which way the glass under the pill resolved, for the log and the drill.
+    var resolvesLight: Bool { effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .aqua }
+
     override func draw(_ dirtyRect: NSRect) {
         // No background: the pill IS the panel's glass, rounded to half its
         // width while collapsed (see `Geometry`). Painting here would square it.
         drawGlow()
         if hovering {
-            drawGlyph(StateLegend.Glyph.back, in: topRect, color: StateLegend.Palette.secondary)
-            drawGlyph(StateLegend.Glyph.denied, in: bottomRect, color: StateLegend.Palette.secondary)
+            drawGlyph(StateLegend.Glyph.back, in: topRect, color: StateLegend.Palette.Adaptive.secondary)
+            drawGlyph(StateLegend.Glyph.denied, in: bottomRect, color: StateLegend.Palette.Adaptive.secondary)
             lastFace = .controls
         } else {
             drawLamp()
@@ -170,10 +182,10 @@ final class CollapsedStrip: NSView {
     /// read rule the grid draws, at the size of one lamp.
     private func drawLamp() {
         if unreadCount > 0 {
-            Lamp.ready.fill.setFill()
+            StateLegend.Palette.Adaptive.ready.setFill()
             NSBezierPath(ovalIn: lampDot).fill()
         } else {
-            Lamp.ready.fill.setStroke()
+            StateLegend.Palette.Adaptive.ready.setStroke()
             let ring = NSBezierPath(ovalIn: lampDot.insetBy(dx: 1, dy: 1))
             ring.lineWidth = 2
             ring.stroke()
@@ -183,7 +195,7 @@ final class CollapsedStrip: NSView {
     private func drawCount() {
         let attrs: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: 17, weight: .semibold),
-            .foregroundColor: unreadCount > 0 ? StateLegend.Palette.ink : StateLegend.Palette.hint,
+            .foregroundColor: unreadCount > 0 ? StateLegend.Palette.Adaptive.ink : StateLegend.Palette.Adaptive.hint,
         ]
         let text = (unreadCount > 99 ? "99+" : "\(unreadCount)") as NSString
         let size = text.size(withAttributes: attrs)
@@ -241,6 +253,28 @@ final class CollapsedStrip: NSView {
             }
         }
         return ink
+    }
+
+    /// The count's ink as rendered under `appearance`: mean L* of its opaque
+    /// pixels. Light glass must get dark ink and dark glass light ink.
+    func countInkLightnessForTesting(under appearance: NSAppearance?) -> CGFloat {
+        let kept = self.appearance
+        self.appearance = appearance
+        defer { self.appearance = kept; needsDisplay = true }
+        guard let rep = bitmapImageRepForCachingDisplay(in: bounds) else { return -1 }
+        cacheDisplay(in: bounds, to: rep)
+        let sx = CGFloat(rep.pixelsWide) / bounds.width
+        let sy = CGFloat(rep.pixelsHigh) / bounds.height
+        let top = max(0, Int((bounds.maxY - bottomRect.maxY) * sy))
+        let bottom = min(rep.pixelsHigh, Int((bounds.maxY - bottomRect.minY) * sy))
+        var sum: CGFloat = 0, n: CGFloat = 0
+        for y in top..<bottom {
+            for x in 0..<Int(bounds.width * sx) {
+                guard let c = rep.colorAt(x: x, y: y), c.alphaComponent > 0.9 else { continue }
+                sum += StateLegend.Measure.lightness(c); n += 1
+            }
+        }
+        return n > 0 ? sum / n : -1
     }
 
     /// A picture of the pill next to the log, every deploy: the panel's only

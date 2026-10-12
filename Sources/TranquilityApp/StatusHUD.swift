@@ -137,6 +137,9 @@ final class StatusHUD: NSObject {
     var collapsedFace: CollapsedStrip.Face? { strip?.lastFace }
     var collapsedCountInk: Int { strip?.countInkForTesting() ?? 0 }
     func collapsedSetHovering(_ on: Bool) { strip?.setHoveringForTesting(on) }
+    func collapsedCountLightness(under name: NSAppearance.Name) -> CGFloat {
+        strip?.countInkLightnessForTesting(under: NSAppearance(named: name)) ?? -1
+    }
     /// In a window, visible, and actually in the view tree. NOT
     /// `panel.contentView === strip` any more: the strip is a sibling inside the
     /// panel's rounded background now, so the old check asserted an arrangement

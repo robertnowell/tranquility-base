@@ -234,7 +234,9 @@ extension StatusHUD {
             glass.style = .regular
             glass.cornerRadius = Self.panelRadius
             glass.autoresizingMask = [.width, .height]
-            glass.appearance = NSAppearance(named: .darkAqua)
+            // No appearance pin on the glass or the surface (12 Oct 2026): the
+            // window's dark pin reaches them, and small glass that flips light
+            // must be free to tell its content so. See StatusHUD+Glass.swift.
             glass.contentView = background
             glassView = glass
         } else {
@@ -258,7 +260,6 @@ extension StatusHUD {
         // corner instead of colliding with it.
         surfaceView = background
         dropSurface = background
-        background.appearance = NSAppearance(named: .darkAqua)
 
         // Widgets carry no initial visibility: build() is only reached from
         // render(), which writes every widget's visibility before the panel is

@@ -1907,6 +1907,13 @@ extension StatusHUD {
         } ?? false
         let countAtRest = collapsedFace
         let countHasInk = collapsedCountInk > 20
+        // The pill's ink follows its glass (12 Oct 2026): rendered under light,
+        // the count is dark; under dark, light. Pixels, not tokens.
+        let countOnLight = collapsedCountLightness(under: .aqua)
+        let countOnDark = collapsedCountLightness(under: .darkAqua)
+        Permissions.log(String(format: "collapse drill: count L* on light glass %.1f, on dark %.1f",
+                               countOnLight, countOnDark))
+        let pillInkFollowsTheGlass = countOnLight >= 0 && countOnLight < 40 && countOnDark > 60
         // Hover swaps both slots for Expand and Close, and puts them back.
         collapsedSetHovering(true)
         let faceOnHover = collapsedFace
@@ -1988,6 +1995,7 @@ extension StatusHUD {
             ("pillCountsOneUnread", unreadCountsOne),
             ("pillLampIsSolidGreen", lampIsSolidGreen),
             ("pillCountIsInked", countHasInk),
+            ("pillInkFollowsTheGlass", pillInkFollowsTheGlass),
             ("hoverSwapsToExpandAndClose", hoverTakesThePill),
             ("zeroUnreadReadsZero", zeroCount),
             ("zeroUnreadLampIsARing", zeroIsARing),

@@ -186,6 +186,66 @@ enum StateLegend {
         /// 4.5:1. Same hue, so the doors keep their own colour.
         static let accent = hex(0x8FA2B1)
 
+        // MARK: The light half, for glass that flips (12 Oct 2026)
+        //
+        // Small Liquid Glass flips light over a light window, by design and
+        // with no switch: pinned dark and tinted 60% near-black, the pill still
+        // went light (probe, 12 Oct). Unpinned, the glass hands its flip to its
+        // content as effectiveAppearance, so ink that follows it stays legible.
+        // Ruled by Robert the same day: "sure proceed" on adaptive ink, the
+        // window keeping its dark pin so the slab stays dark.
+        //
+        // Neutral greys, not the putty half below (olive was ruled out 1 Oct).
+        // Measured against `Light.surface`, a conservative light glass: the
+        // probe's light pill read #F9F9F9 over white, darker over busy pages.
+        // On light, the working lamp sits DARKER than ready (the note below),
+        // so the ordering check is the dark ground's alone.
+        enum Light {
+            static let surface = hex(0xE4E4E7)
+            static let ink = hex(0x26262A)          // 11.88:1
+            static let secondary = hex(0x3C3C40)    // 8.65:1
+            static let muted = hex(0x48484C)        // 7.17:1
+            static let hint = hex(0x55555A)         // 5.84:1
+            static let faint = hex(0xA3A3A8)        // deco, 1.98:1
+            static let hairline = hex(0x26262A, alpha: 0.18)
+            static let hairlineSoft = hex(0x26262A, alpha: 0.09)
+            static let hover = hex(0xD6D6DA)
+            static let socket = hex(0xC4C4C8)
+            static let ready = hex(0x2F7A44)        // 4.15:1, L* 45.6
+            static let working = hex(0x3A5674)      // 5.99:1, L* 35.6
+            static let fault = hex(0x9A5B0C)        // 4.27:1
+            static let accent = hex(0x4B5E6E)       // 5.30:1
+        }
+
+        /// One colour per appearance, resolved where it is DRAWN. Only safe
+        /// inside draw(_:) or with the view's appearance made current: outside
+        /// a draw, AppKit resolves against the app, which is light on a light
+        /// Mac, and would put light-mode ink on the dark slab. That is why the
+        /// static tokens above stay fixed and only views that can sit on
+        /// flipped glass reach for these.
+        static func adaptive(_ dark: NSColor, _ light: NSColor) -> NSColor {
+            NSColor(name: nil) { appearance in
+                appearance.bestMatch(from: [.aqua, .darkAqua]) == .aqua ? light : dark
+            }
+        }
+
+        /// The palette as the glass sees it. The pill draws in these.
+        enum Adaptive {
+            static let ink = adaptive(Palette.ink, Light.ink)
+            static let secondary = adaptive(Palette.secondary, Light.secondary)
+            static let muted = adaptive(Palette.muted, Light.muted)
+            static let hint = adaptive(Palette.hint, Light.hint)
+            static let faint = adaptive(Palette.faint, Light.faint)
+            static let hairline = adaptive(Palette.hairline, Light.hairline)
+            static let hairlineSoft = adaptive(Palette.hairlineSoft, Light.hairlineSoft)
+            static let hover = adaptive(Palette.hover, Light.hover)
+            static let socket = adaptive(Palette.socket, Light.socket)
+            static let ready = adaptive(Palette.ready, Light.ready)
+            static let working = adaptive(Palette.working, Light.working)
+            static let fault = adaptive(Palette.fault, Light.fault)
+            static let accent = adaptive(Palette.accent, Light.accent)
+        }
+
         // MARK: The light console, kept for the swap
         //
         // Not dead code — the measured light half of the same design, held here
@@ -379,6 +439,20 @@ enum StateLegend {
          ("hovered(accent)", hovered(Palette.accent), 4.5),
          ("hovered(secondary)", hovered(Palette.secondary), 4.5),
          ("hovered(ink)", hovered(Palette.ink), 7.0)]
+    }
+
+    /// The light half's floors, against light glass. Same owed floors as the
+    /// dark ground; the hovered rows are absent because the pill never hovers
+    /// an ink, it swaps glyphs.
+    static var lightContrastFloors: [(name: String, ink: NSColor, floor: CGFloat)] {
+        [("light.ink", Palette.Light.ink, 7.0),
+         ("light.secondary", Palette.Light.secondary, 4.5),
+         ("light.muted", Palette.Light.muted, 4.5),
+         ("light.hint", Palette.Light.hint, 4.5),
+         ("light.ready", Palette.Light.ready, 3.0),
+         ("light.working", Palette.Light.working, 3.0),
+         ("light.fault", Palette.Light.fault, 3.0),
+         ("light.accent", Palette.Light.accent, 4.5)]
     }
 
     /// The lamp separation the busy panel was ruled on. Below this the ready and
