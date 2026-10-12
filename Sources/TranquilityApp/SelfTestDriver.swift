@@ -1752,7 +1752,14 @@ extension StatusHUD {
         let widthBefore = panel?.frame.width ?? 0
         showIdle(rows: mixed + [.init(id: "f", name: "new one", aux: "new", lamp: .ready)])
         let widthHeldOnArrival = abs((panel?.frame.width ?? 0) - widthBefore) < 1
+        // The pill's glass adapts light over light windows and the old view
+        // kept that look once stretched back (11 Oct 2026): expanding must
+        // hand the slab a glass the pill never wore.
+        let pillGlass = glassView
         setCollapsed(false)
+        let expandRenewsTheGlass: Bool
+        if #available(macOS 26.0, *) { expandRenewsTheGlass = glassView != nil && glassView !== pillGlass }
+        else { expandRenewsTheGlass = true }  // the frost is not rebuilt, only re-pinned
         showIdle(rows: mixed)
         settleAnimations()
         // The bug the user reported: expanding out of the strip left the left
@@ -1969,6 +1976,7 @@ extension StatusHUD {
             ("expandRestoresTheLeftEdge", expandRestoredLeft),
             ("widthHeldOnArrival", widthHeldOnArrival),
             ("expandRestoresTheGrid", expandedAgain),
+            ("expandRenewsTheGlass", expandRenewsTheGlass),
             ("glowLit", glowLit),
             ("glowDecayedOnItsOwn", glowDecayed),
             ("glowTimerCompletedWithinDeadline", glowTimerCompleted),
