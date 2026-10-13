@@ -1305,14 +1305,19 @@ extension AppDelegate {
     /// so words spoken before the id exists are a window too small to build
     /// a promise for. A failure is a card with the provider's reason, because
     /// a silent no-op after pressing New Agent is the defect this replaces.
-    private func startProviderAgent(_ provider: any AgentProvider) {
+    ///
+    /// `brief` is empty for New Agent and carries the handoff fragment when a
+    /// row's "Continue work with" picked this provider (12 Oct): the provider
+    /// sends it as the session's first message, which is what the staged
+    /// fragment is for a terminal launch.
+    private func startProviderAgent(_ provider: any AgentProvider, brief: Brief = Brief(prompt: "")) {
         // **The door, if the provider has one.** One verb, one place: an agent
         // that begins in its own UI (crobot, in a web page) is opened there,
         // and `start` is not called. Its first question — which repository? —
         // is answered where every later question would be, on the agent's own
         // surface, so New Agent never renders a provider's questions itself
         // (ruled 15 Sep). A local harness returns nil here and is begun below.
-        if let compose = provider.composeURL(for: Brief(prompt: "")) {
+        if let compose = provider.composeURL(for: brief) {
             Permissions.log("new agent: \(provider.id) opens its own compose page")
             Track.record("new_agent_compose", ["provider": .token(provider.id)])
             NSWorkspace.shared.open(compose)
@@ -1331,7 +1336,7 @@ extension AppDelegate {
         Task { @MainActor [weak self] in
             guard let self else { return }
             do {
-                let id = try await provider.start(Brief(prompt: ""))
+                let id = try await provider.start(brief)
                 Permissions.log("new agent: \(provider.id) started \(id)")
                 self.agents?.kick()
                 // The destination follows the launch, unless you moved on
@@ -1375,61 +1380,93 @@ extension AppDelegate {
     /// The grid's handoff is deliberately an ordinary New Agent launch with
     /// one staged message fragment. Everything that can wait — the live probe,
     /// archive lookup, and rollout walk — stays off the main actor; the UI half
-    /// receives only resolved strings and enters `newSession` once.
-    func continueWork(from sourceSessionId: String, name sourceName: String) {
+    /// receives only resolved strings and enters the launch once.
+    ///
+    /// `harness` is whichever agent the submenu picked (12 Oct), so the source
+    /// may be a terminal session or a provider agent, and the destination may
+    /// be either too — a terminal harness enters `newSession` with the
+    /// fragment staged; a provider is started with the fragment as its brief,
+    /// the way New Agent would start it. The source's own kind is allowed,
+    /// which makes this a fork of the work into a fresh context.
+    func continueWork(from sourceSessionId: String, name sourceName: String, to harness: String) {
+        // Read on the main actor, where they live; only values cross.
+        let provider = agents?.snapshot.agent(sourceSessionId)
+        let destinationProvider = providerRegistry?.provider(harness)
         Task.detached(priority: .userInitiated) { [weak self] in
-            let live = (ClaudeAgentsCLI().sessions() ?? [])
-                + FileSessionOwnershipStore.shared.liveNonRegistrySessions()
-            guard let source = live.first(where: { $0.sessionId == sourceSessionId }),
-                  let directory = source.cwd else {
-                await MainActor.run {
-                    self?.hud.showResult("That agent is no longer available to hand off.")
+            let sourceHarness: String
+            let directory: String?
+            if let provider {
+                sourceHarness = provider.provider
+                directory = provider.directory
+            } else {
+                let live = (ClaudeAgentsCLI().sessions() ?? [])
+                    + FileSessionOwnershipStore.shared.liveNonRegistrySessions()
+                guard let source = live.first(where: { $0.sessionId == sourceSessionId }) else {
+                    await MainActor.run {
+                        self?.hud.showResult("That agent is no longer available to hand off.")
+                    }
+                    return
                 }
-                return
+                sourceHarness = source.harness
+                directory = source.cwd
             }
             var isDirectory: ObjCBool = false
-            guard FileManager.default.fileExists(atPath: directory, isDirectory: &isDirectory),
+            guard let directory,
+                  FileManager.default.fileExists(atPath: directory, isDirectory: &isDirectory),
                   isDirectory.boolValue else {
                 await MainActor.run {
                     self?.hud.showResult("That agent's working directory is no longer available.")
                 }
                 return
             }
-            guard let destination = AgentHandoff.destination(for: source.harness) else {
+            guard destinationProvider != nil
+                    || KnownHarnesses.all.contains(where: { $0.id == harness }) else {
                 await MainActor.run {
-                    self?.hud.showResult("That agent's harness cannot be handed off yet.")
+                    self?.hud.showResult("No launcher for \(harness): it is not an installed agent or a terminal harness.")
                 }
                 return
             }
 
             let logLocation: String
-            if source.harness == CodexAdapter().id {
+            if sourceHarness == CodexAdapter().id {
                 logLocation = CodexRollout.rolloutPath(forSessionId: sourceSessionId)
                     ?? CodexRollout.sessionsDirectory.path
-            } else {
+            } else if sourceHarness == ClaudeCodeAdapter().id {
                 logLocation = TranscriptArchive.transcriptPath(forSessionId: sourceSessionId)
                     ?? TranscriptArchive.projectsDirectory.path
+            } else if let provider {
+                // A provider's transcript is not a file of ours; its own
+                // id, named, is what the destination can look up.
+                logLocation = "the \(AgentHandoff.sourceLabel(for: sourceHarness)) session "
+                    + "\(provider.providerID) (its own transcript; not a file on disk)"
+            } else {
+                logLocation = TranscriptArchive.projectsDirectory.path
             }
             let reportsDirectory = HomeBase.existingPage(sessionId: sourceSessionId)
                 .map { ($0 as NSString).deletingLastPathComponent }
             let fragment = AgentHandoff.fragment(
                 sourceName: sourceName,
-                sourceHarness: source.harness,
+                sourceHarness: sourceHarness,
                 sourceSessionId: sourceSessionId,
+                directory: directory,
                 logLocation: logLocation,
                 reportsDirectory: reportsDirectory)
-            let command = AgentDefaults.load(for: destination.harness)
-            let adapter = KnownHarnesses.adapter(for: destination.harness)
+            let command = AgentDefaults.load(for: harness)
+            let adapter = KnownHarnesses.adapter(for: harness)
 
             await MainActor.run { [weak self] in
                 Track.record("agent_handoff_requested", [
                     "source_agent_id": Track.hash(sourceSessionId),
-                    "source_harness": .token(source.harness),
-                    "destination_harness": .token(destination.harness),
+                    "source_harness": .token(sourceHarness),
+                    "destination_harness": .token(harness),
                     "has_reports": .bool(reportsDirectory != nil),
                 ])
-                self?.newSession(directory: directory, command: command,
-                                 adapter: adapter, initialFragments: [fragment])
+                if let destinationProvider {
+                    self?.startProviderAgent(destinationProvider, brief: Brief(prompt: fragment))
+                } else {
+                    self?.newSession(directory: directory, command: command,
+                                     adapter: adapter, initialFragments: [fragment])
+                }
             }
         }
     }

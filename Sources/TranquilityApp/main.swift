@@ -1178,8 +1178,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hud.onNewSession = { [weak self] in self?.newSession() }
         hud.onManagerToggle = { [weak self] in self?.toggleManagerMode() }
         hud.managerAvailable = ManagerConfig.webrtc() != nil || ManagerConfig.availability() != .unset
-        hud.onContinueWork = { [weak self] id, name in
-            self?.continueWork(from: id, name: name)
+        hud.onContinueWork = { [weak self] id, name, harness in
+            self?.continueWork(from: id, name: name, to: harness)
+        }
+        // Every ready agent whose start can carry the fragment. crobot begins
+        // on its own compose page, which takes a repository and not words, so
+        // the handoff would arrive empty; it is not offered.
+        hud.handoffDestinations = { [weak self] in
+            AgentHandoff.destinations(ready: StatusHUD.agentTiles()) { harness in
+                guard let provider = self?.providerRegistry?.provider(harness) else { return true }
+                return provider.composeURL(for: Brief(prompt: "")) == nil
+            }
         }
         hud.onRevive = { [weak self] id, name in self?.revive(id, name: name) }
         // Ruled 13 Aug on the Past Agents face, moved to the grid 16 Aug: the

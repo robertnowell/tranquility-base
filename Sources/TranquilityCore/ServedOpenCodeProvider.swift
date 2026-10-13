@@ -190,7 +190,11 @@ public actor ServedOpenCodeProvider: AgentProvider {
             await retitled(raw)
         case "session.error":
             let session = seen(raw: raw, state: .failed)
-            emit(session.id, .failed(reason: "opencode reported a session error"))
+            // The server's own sentence when it stored one: "opencode
+            // reported a session error" told Robert nothing on 12 Oct, while
+            // the failed message carried the provider's exact refusal.
+            let why = (try? await client.lastError(raw)) ?? nil
+            emit(session.id, .failed(reason: why.map { "opencode: \($0)" } ?? "opencode reported a session error"))
         default:
             break
         }
@@ -398,7 +402,7 @@ public actor ServedOpenCodeProvider: AgentProvider {
     public func start(_ brief: Brief) async throws -> AgentSession.ID {
         try await connectIfNeeded()
         ledger?.mark(id)
-        let appID = try await client.start()
+        let appID = try await client.start(model: OpenCodeModelChoice.preferred())
         guard let listed = try await client.sessions().first(where: { $0.id == appID }) else {
             throw LocalOpenCodeProvider.ProviderError.noSuchSession(appID)
         }
