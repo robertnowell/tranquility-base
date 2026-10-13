@@ -239,6 +239,16 @@ extension StatusHUD {
             // must be free to tell its content so. See StatusHUD+Glass.swift.
             glass.contentView = background
             glassView = glass
+            // The pill's dark ground (13 Oct 2026): a host holding a dark
+            // underlay with the glass on top. See holdPillDark.
+            let host = NSView(frame: glass.frame)
+            let underlay = NSView(frame: host.bounds)
+            underlay.wantsLayer = true
+            underlay.layer?.backgroundColor = NSColor.clear.cgColor
+            underlay.autoresizingMask = [.width, .height]
+            host.addSubview(underlay)
+            host.addSubview(glass)
+            glassUnderlay = underlay
         } else {
             // Before Tahoe: the frosted material the system's own popovers
             // used, which honours Reduce Transparency the same way.
@@ -1046,7 +1056,7 @@ extension StatusHUD {
             Track.record("strip_clicked", ["band": "dismiss"])
             self?.dismiss()
         }
-        panel.contentView = glassView ?? background
+        panel.contentView = glassUnderlay?.superview ?? glassView ?? background
         self.expandedRoot = background
 
         // Inside the SAME rounded background as the grid. Collapsing morphs one

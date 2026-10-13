@@ -37,9 +37,11 @@ extension StatusHUD {
                                     height: CollapsedStrip.height))
             // A pill, not a slab: rounded to half the width (1 Oct 2026).
             setPanelRadius(CollapsedStrip.width / 2)
+            holdPillDark(true)
             return
         }
         setPanelRadius(Self.panelRadius)
+        holdPillDark(false)
         NSLayoutConstraint.deactivate(stripEdges)
         NSLayoutConstraint.activate(stackEdges)
         strip?.isHidden = true

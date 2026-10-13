@@ -14,13 +14,16 @@ import AppKit
 /// rebuild is logged, so a recurrence is provable from app.log.
 /// Research record: agent fab03130, 2026-10-02-glass-light-state.
 ///
-/// LIGHT IS ALLOWED ON THE PILL (12 Oct 2026). Small glass flips light over a
-/// light window by Apple's design, through the dark pin and through a dark
-/// tint; nothing holds it. So the pin is on the WINDOW only. Unpinned, the
-/// glass hands its flip to its content as effectiveAppearance, and the pill's
-/// ink is adaptive (StateLegend.Palette.Adaptive). The slab is large glass and
-/// holds dark under the window's pin; a width change still gets a fresh glass,
-/// so a flip the pill took cannot stretch onto the slab.
+/// THE PILL STAYS DARK (13 Oct 2026, Robert: "let's just stop the small pill
+/// adapting"). Small glass flips light over a light window by Apple's design,
+/// through the dark pin and through a dark tint. What it reads is the backdrop,
+/// and a dark layer inside our own window, under the glass, is backdrop: the
+/// probe held the pill dark over pure white from 20% black, and flipped at
+/// 15%. The underlay is lit at 45% while collapsed and clear on the slab, so
+/// the slab looks as it did. Unpinned, the glass would still hand any flip to
+/// its content as effectiveAppearance, and the pill's ink stays adaptive
+/// (StateLegend.Palette.Adaptive) as the fallback. A width change still gets a
+/// fresh glass, so no flip can stretch onto the slab.
 extension StatusHUD {
     static let darkAppearance = NSAppearance(named: .darkAqua)
 
@@ -76,13 +79,34 @@ extension StatusHUD {
             glass.autoresizingMask = [.width, .height]
             old.contentView = nil
             glass.contentView = surface
-            panel.contentView = glass
+            if let host = glassUnderlay?.superview, old.superview === host {
+                host.replaceSubview(old, with: glass)
+            } else {
+                panel.contentView = glass
+            }
             glassView = glass
             if let typing, typing !== panel { panel.makeFirstResponder(typing) }
         } else {
             glassView?.appearance = nil
         }
         Permissions.log("glass: renewed (\(reason)); was \(before); now \(describeAppearance())")
+    }
+
+    /// Light the underlay under the pill, clear it under the slab. 45% is a
+    /// little over twice the 20% that held the pill over pure white.
+    static let pillUnderlayAlpha: CGFloat = 0.45
+    func holdPillDark(_ collapsed: Bool) {
+        let ground = collapsed ? StateLegend.Palette.kleinVoid.withAlphaComponent(Self.pillUnderlayAlpha) : .clear
+        glassUnderlay?.layer?.backgroundColor = ground.cgColor
+    }
+
+    /// The underlay's opacity now, for the collapse drill.
+    var pillUnderlayAlphaForTesting: CGFloat {
+        guard let underlay = glassUnderlay, let host = underlay.superview,
+              let color = underlay.layer?.backgroundColor,
+              host.subviews.first === underlay,
+              underlay.frame.equalTo(host.bounds) else { return 0 }
+        return color.alpha
     }
 
     func describeAppearance() -> String {
