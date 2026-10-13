@@ -240,6 +240,15 @@ extension StatusHUD {
             row("exited", .unlit, revivable: true),   // REVIVE's row: no kill
             row("unproven", .unlit),                  // liveness unknown: no kill
         ]
+        // A fixed roster, so the drill measures the menu and not which
+        // binaries this Mac happens to have. Three agents, the source's own
+        // kind among them: the submenu is a fork as much as a handoff.
+        let priorDestinations = handoffDestinations
+        handoffDestinations = {
+            [.init(harness: ClaudeCodeAdapter().id, label: "Claude Code"),
+             .init(harness: CodexAdapter().id, label: "Codex"),
+             .init(harness: "opencode", label: "OpenCode")]
+        }
         showIdle(rows: rows)
         let menus = Dictionary(uniqueKeysWithValues: gridRowsForTesting)
         let liveCarry = ["ready", "working", "codex", "fault"]
@@ -251,15 +260,19 @@ extension StatusHUD {
         // The menu names its target, because the name IS the confirmation.
         let titles = items.map(\.title)
         let named = titles.last ?? ""
-        let codexTitles = (waitingRows.arrangedSubviews.compactMap { $0 as? GridRowView }
-            .first { $0.identifier?.rawValue == "codex" }?.menu?.items.map(\.title)) ?? []
+        let choices = items.indices.contains(1) ? (items[1].submenu?.items ?? []) : []
+        let choiceTitles = choices.map(\.title)
+        let codexChoices = (waitingRows.arrangedSubviews.compactMap { $0 as? GridRowView }
+            .first { $0.identifier?.rawValue == "codex" }?.menu?.items
+            .first { $0.title == "Continue work with" }?.submenu?.items.map(\.title)) ?? []
         let priorContinue = onContinueWork
-        var continued: (String, String)?
-        onContinueWork = { continued = ($0, $1) }
-        if items.indices.contains(1) {
-            _ = items[1].target?.perform(items[1].action, with: items[1])
+        var continued: (String, String, String)?
+        onContinueWork = { continued = ($0, $1, $2) }
+        if let opencode = choices.first(where: { $0.title == "OpenCode" }) {
+            _ = opencode.target?.perform(opencode.action, with: opencode)
         }
         onContinueWork = priorContinue
+        handoffDestinations = priorDestinations
         showIdle(rows: [])
 
         SelfTest.report("terminate", [
@@ -267,12 +280,14 @@ extension StatusHUD {
             ("liveRowsCarryIt", liveCarry),
             ("deadRowsDoNot", deadDoNot),
             ("goToAgentIsFirst", titles.first == "Go to agent"),
-            ("claudeHandsOffToCodex",
-             titles.dropFirst().first == "Continue work with Codex"),
-            ("codexHandsOffToClaudeCode",
-             codexTitles.contains("Continue work with Claude Code")),
-            ("handoffNamesTheSource",
-             continued?.0 == "ready" && continued?.1 == "agent-ready"),
+            ("continueWorkIsASubmenu",
+             titles.dropFirst().first == "Continue work with" && !choices.isEmpty),
+            ("everyReadyAgentIsOfferedIncludingTheOwnKind",
+             choiceTitles == ["Claude Code", "Codex", "OpenCode"]),
+            ("aCodexRowOffersTheSame",
+             codexChoices == ["Claude Code", "Codex", "OpenCode"]),
+            ("handoffNamesTheSourceAndTheDestination",
+             continued?.0 == "ready" && continued?.1 == "agent-ready" && continued?.2 == "opencode"),
             ("destructiveIsLastAndSeparated",
              items.count == 4 && items[2].isSeparatorItem),
             ("theItemNamesItsTarget", named == "End session \u{201C}agent-ready\u{201D}"),

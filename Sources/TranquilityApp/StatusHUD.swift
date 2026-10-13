@@ -3585,9 +3585,17 @@ final class StatusHUD: NSObject {
     var onOpenShell: ((String, String) -> Void)?
     /// Go to Agent for a row whose screen lives in a named pane of ours.
     var onAttachPane: ((String) -> Void)?
-    /// Wired by the app: create an ordinary agent under the other harness,
-    /// carrying this live row's context into its first explicit user message.
-    var onContinueWork: ((_ id: String, _ name: String) -> Void)?
+    /// Wired by the app: create an ordinary agent under `harness`, carrying
+    /// this live row's context into its first explicit user message. Any
+    /// ready agent, the row's own kind included (12 Oct: "it effectively
+    /// becomes a fork capability").
+    var onContinueWork: ((_ id: String, _ name: String, _ harness: String) -> Void)?
+    /// Wired by the app: which agents the row menu may continue into. The
+    /// default is every ready tile; the app narrows it to the ones whose
+    /// start can carry the fragment.
+    var handoffDestinations: () -> [AgentHandoff.Destination] = {
+        AgentHandoff.destinations(ready: StatusHUD.agentTiles())
+    }
 
     // MARK: - The message tray's wires
 
@@ -4606,8 +4614,10 @@ final class StatusHUD: NSObject {
     /// duplicates the left-click everywhere except green. That repetition is
     /// deliberate: a menu that hid the item on the lamps whose tap already
     /// does it would be teaching the exception rather than the rule. CONTINUE
-    /// WORK is another harmless create action and follows it. END SESSION stays
-    /// last and separated because it is the only destructive verb.
+    /// WORK WITH is another harmless create action and follows it, as a
+    /// submenu with one row per ready agent (12 Oct; it was one item naming
+    /// the other harness). END SESSION stays last and separated because it
+    /// is the only destructive verb.
     private func rowMenu(for item: SessionRow) -> NSMenu? {
         guard SessionRow.isLive(item) else { return nil }
         let menu = NSMenu()
@@ -4617,13 +4627,19 @@ final class StatusHUD: NSObject {
         go.target = self
         go.representedObject = item.id
         menu.addItem(go)
-        if let destination = AgentHandoff.destination(for: item.harness) {
-            let handoff = NSMenuItem(
-                title: "Continue work with \(destination.label)",
-                action: #selector(continueWorkGridRowPicked(_:)),
-                keyEquivalent: "")
-            handoff.target = self
-            handoff.representedObject = item.id
+        let destinations = handoffDestinations()
+        if !destinations.isEmpty {
+            let handoff = NSMenuItem(title: "Continue work with", action: nil, keyEquivalent: "")
+            let choices = NSMenu(title: "Continue work with")
+            for destination in destinations {
+                let choice = NSMenuItem(title: destination.label,
+                                        action: #selector(continueWorkGridRowPicked(_:)),
+                                        keyEquivalent: "")
+                choice.target = self
+                choice.representedObject = HandoffPick(sessionId: item.id, harness: destination.harness)
+                choices.addItem(choice)
+            }
+            handoff.submenu = choices
             menu.addItem(handoff)
         }
         if let folder = projects.current.folder(of: item.id, origin: SessionLineage.lastKnownOrigin) {
@@ -4670,14 +4686,26 @@ final class StatusHUD: NSObject {
         }
     }
 
+    /// What a "Continue work with" choice carries: the row and the agent
+    /// picked for it. A class because `representedObject` is `Any`, and
+    /// Sendable so it can cross to the main actor like the ids do.
+    final class HandoffPick: NSObject, Sendable {
+        let sessionId: String
+        let harness: String
+        init(sessionId: String, harness: String) {
+            self.sessionId = sessionId
+            self.harness = harness
+        }
+    }
+
     @objc nonisolated private func continueWorkGridRowPicked(_ sender: NSMenuItem) {
-        let picked = sender.representedObject as? String
+        let picked = sender.representedObject as? HandoffPick
         MainActor.assumeIsolated {
-            guard let id = picked,
-                  let row = face.sessionRows.first(where: { $0.id == id }) else { return }
-            Track.record("row_menu", ["item": "continue_work",
-                                       "agent_id": Track.hash(id), "surface": "grid"])
-            onContinueWork?(id, row.name)
+            guard let picked,
+                  let row = face.sessionRows.first(where: { $0.id == picked.sessionId }) else { return }
+            Track.record("row_menu", ["item": "continue_work", "agent_id": Track.hash(picked.sessionId),
+                                       "destination_harness": .token(picked.harness), "surface": "grid"])
+            onContinueWork?(picked.sessionId, row.name, picked.harness)
         }
     }
 

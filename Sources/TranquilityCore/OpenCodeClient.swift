@@ -158,8 +158,14 @@ public struct OpenCodeClient: Sendable {
         return []
     }
 
-    public func start() async throws -> AgentSession.ID {
-        let data = try await call("POST", isV2 ? "/api/session" : "/session", body: Data("{}".utf8))
+    /// `model` pins the session to a model on 2.x, whose default with no
+    /// model configured is the catalog's newest entry (see
+    /// `OpenCodeModelChoice`). 1.x takes an empty body as before.
+    public func start(model: OpenCodeModelChoice? = nil) async throws -> AgentSession.ID {
+        var payload: [String: Any] = [:]
+        if isV2, let model { payload["model"] = model.ref }
+        let body = (try? JSONSerialization.data(withJSONObject: payload)) ?? Data("{}".utf8)
+        let data = try await call("POST", isV2 ? "/api/session" : "/session", body: body)
         let decoded = isV2
             ? (try? JSONDecoder().decode(Wire.V2.One<Wire.Session>.self, from: data))?.data
             : try? JSONDecoder().decode(Wire.Session.self, from: data)
@@ -195,6 +201,15 @@ public struct OpenCodeClient: Sendable {
             cursor = next
         }
         return turns
+    }
+
+    /// The provider's own words for the newest failed turn, when the server
+    /// stored them; nil on 1.x and for a session whose last message is fine.
+    public func lastError(_ session: String) async throws -> String? {
+        guard isV2 else { return nil }
+        let data = try await call("GET", "/api/session/\(esc(session))/message?limit=5")
+        let page = try JSONDecoder().decode(Wire.V2.Page<Wire.V2.Message>.self, from: data)
+        return (page.data ?? []).compactMap { $0.error?.message }.first
     }
 
     public func send(_ text: String, to session: String) async throws -> SendOutcome {

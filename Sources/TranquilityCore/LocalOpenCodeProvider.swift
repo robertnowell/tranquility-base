@@ -157,7 +157,7 @@ public struct LocalOpenCodeProvider: AgentProvider {
 
     public func start(_ brief: Brief) async throws -> AgentSession.ID {
         guard can.canStart else { throw ProviderError.unsupported }
-        let id = try await client.start()
+        let id = try await client.start(model: OpenCodeModelChoice.preferred())
         // The brief is the first message. A local server has no repository or
         // branch to take, which is why `Brief` carries both as optional.
         if !brief.prompt.isEmpty {

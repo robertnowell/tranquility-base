@@ -332,8 +332,12 @@ extension Wire {
             var text: String?
             var content: [Part]?
             var time: Time?
+            /// An assistant message that ended in a provider error carries
+            /// it here, with the provider's own words in `message`.
+            var error: Failure?
             struct Part: Decodable { var type: String?; var text: String? }
             struct Time: Decodable { var created: Double? }
+            struct Failure: Decodable { var type: String?; var message: String? }
 
             func turn() -> Turn? {
                 guard let id else { return nil }
