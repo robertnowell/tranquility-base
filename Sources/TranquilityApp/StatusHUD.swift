@@ -3918,6 +3918,10 @@ final class StatusHUD: NSObject {
     /// The panel's material, hosting the surface (1 Oct 2026): regular
     /// Liquid Glass on macOS 26, the frosted popover material before it.
     var glassView: NSView?
+    /// A dark layer under the glass, lit only while collapsed (13 Oct 2026):
+    /// small glass reads what is behind it, and this is behind it. Its
+    /// superview is the window's content view; the glass is its sibling.
+    var glassUnderlay: NSView?
     /// The glass keeper's notification tokens and appearance watch (StatusHUD+Glass).
     var glassKeeperObservers: [NSObjectProtocol] = []
     var appearanceWatch: NSKeyValueObservation?
@@ -3937,6 +3941,7 @@ final class StatusHUD: NSObject {
             glassView?.layer?.cornerRadius = radius
         }
         surfaceView?.layer?.cornerRadius = radius
+        glassUnderlay?.layer?.cornerRadius = radius
     }
 
     /// The radius the panel's glass carries now: the drill's proof the

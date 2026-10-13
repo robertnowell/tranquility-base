@@ -1756,7 +1756,17 @@ extension StatusHUD {
         // kept that look once stretched back (11 Oct 2026): expanding must
         // hand the slab a glass the pill never wore.
         let pillGlass = glassView
+        // The pill stays dark (13 Oct 2026): a dark underlay sits under its
+        // glass while collapsed, and is cleared when the slab comes back.
+        let pillUnderlayWhileCollapsed = pillUnderlayAlphaForTesting
         setCollapsed(false)
+        let slabUnderlayAfterExpand = pillUnderlayAlphaForTesting
+        Permissions.log(String(format: "collapse drill: underlay alpha pill %.2f, slab %.2f",
+                               pillUnderlayWhileCollapsed, slabUnderlayAfterExpand))
+        let pillHasADarkGround: Bool
+        if #available(macOS 26.0, *) {
+            pillHasADarkGround = pillUnderlayWhileCollapsed >= 0.4 && slabUnderlayAfterExpand < 0.01
+        } else { pillHasADarkGround = true }  // the frost honours the dark pin
         let expandRenewsTheGlass: Bool
         if #available(macOS 26.0, *) { expandRenewsTheGlass = glassView != nil && glassView !== pillGlass }
         else { expandRenewsTheGlass = true }  // the frost is not rebuilt, only re-pinned
@@ -1984,6 +1994,7 @@ extension StatusHUD {
             ("widthHeldOnArrival", widthHeldOnArrival),
             ("expandRestoresTheGrid", expandedAgain),
             ("expandRenewsTheGlass", expandRenewsTheGlass),
+            ("pillHasADarkGround", pillHasADarkGround),
             ("glowLit", glowLit),
             ("glowDecayedOnItsOwn", glowDecayed),
             ("glowTimerCompletedWithinDeadline", glowTimerCompleted),
