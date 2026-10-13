@@ -261,6 +261,10 @@ final class StatusHUD: NSObject {
 
     var currentTarget: (sessionId: String, pid: Int?, label: String)?
 
+    /// The pane a launch stopped in, while its question card is up: the one
+    /// door a card with no session can have. Cleared when the stage changes.
+    var launchQuestionDoor: SessionRow.Door?
+
     /// What the card's second door opens: the agent's hub, or the one report
     /// this turn just wrote. A door that says one thing and opens another is
     /// worse than no door, so the LABEL follows the destination (ruled 15 Aug,
@@ -914,7 +918,12 @@ final class StatusHUD: NSObject {
     /// seconds, well inside the launch's own wait — and a card that could not
     /// then adopt the session it was opened for would send the user back to
     /// the grid to find an agent they had just personally started.
-    func showLaunchQuestion(_ question: String, windowOpened: Bool = true) {
+    /// `pane` is the tmux session holding the screen, when the launcher has
+    /// one (12 Oct). The card has no session id yet, so it had no GO TO AGENT
+    /// at all: a Codex launch stopped on its usage-limit screen, and the card
+    /// read the screen back with nowhere to go. Robert: "any question is
+    /// fine, just send the user to the agent." The pane IS the agent here.
+    func showLaunchQuestion(_ question: String, windowOpened: Bool = true, pane: String? = nil) {
         guard launchCardIsWaiting else {
             // Never onto a stranger's card. A launch question carries no
             // session id, so it would attach to whatever happens to be on
@@ -935,6 +944,7 @@ final class StatusHUD: NSObject {
         guard transition(to: .result, because: "the launch stopped on a question")
         else { return }
         awaitingGreetingBinding = stillBinding
+        launchQuestionDoor = pane.map { .pane($0) }
         Permissions.log("launch question: \(question)")
         face = Face(title: label,
                     body: "It's asking you something before it starts:\n\n\(question)\n\n"
@@ -2033,6 +2043,7 @@ final class StatusHUD: NSObject {
     /// happened to do it: every time that obligation lived at a call site instead,
     /// some call site forgot, and the forgetting was silent.
     private func leaving(for next: PanelState) {
+        launchQuestionDoor = nil
         releasePendingSend(for: next)
         // An armed card that changes face is no longer the card you clicked.
         releasePaste(because: "face changed to \(next.name)", repaint: false)
@@ -4165,7 +4176,7 @@ final class StatusHUD: NSObject {
     /// The current target's door when it is not a pane of ours: a page or a
     /// program. Nil for a terminal (the pid is the door) and for none.
     var remoteDoorForCurrentTarget: SessionRow.Door? {
-        guard let target = currentTarget else { return nil }
+        guard let target = currentTarget else { return launchQuestionDoor }
         let door = face.sessionRows.first(where: { $0.id == target.sessionId })?.door
             ?? agentDoorForSession?(target.sessionId)
         guard let door, door.isRemote else { return nil }
