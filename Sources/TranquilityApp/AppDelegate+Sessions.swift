@@ -1674,6 +1674,33 @@ extension AppDelegate {
     /// findable process is said so once, never chased in a loop.
     func goToSession(_ sessionId: String, reviveIfGone: Bool = true) {
         let began = Date()
+        // **A provider agent's door first** (12 Oct). The walk below knows
+        // terminal sessions only, so an OpenCode agent reached from the Past
+        // Agents list or a row menu was "not live any more, and nothing on
+        // disk can bring it back", on a card whose own GO TO AGENT button
+        // would have opened its pane: the card asks the snapshot for the
+        // door and this function never did. The row and the card already
+        // take `AgentSession.door`; this is the third copy of that verb,
+        // made the same.
+        if let agent = agents?.snapshot.agent(sessionId) {
+            switch agent.door {
+            case .page(let url):
+                Permissions.log("goTo: \(sessionId.prefix(8)) is a \(agent.provider) agent; opening its page")
+                NSWorkspace.shared.open(url)
+                hud.finishGoToSession(nil, about: sessionId)
+                return
+            case .shell(let command, let directory):
+                openShell(command, in: directory)
+                hud.finishGoToSession(nil, about: sessionId)
+                return
+            case .pane(let name):
+                attachPane(name)
+                hud.finishGoToSession(nil, about: sessionId)
+                return
+            case .terminal, .none:
+                break
+            }
+        }
         // `detail` is the transfer failure's reason (the app's own words, an
         // AppleScript error, why a resume did not restart), never the user's,
         // and until now it reached app.log only. Scrubbed and bounded by .prose.
@@ -2586,7 +2613,7 @@ extension AppDelegate {
         // property on the delegate — two launches can be in flight at once and
         // neither one's question is news about the other.
         let launchQuestion = LaunchQuestionSeen()
-        let reportQuestion: @Sendable (String) -> Void = { [weak self] asked in
+        let reportQuestion: @Sendable (String, String?) -> Void = { [weak self] asked, paneName in
             // Classified, never quoted: the question is the pane's own text
             // and a trust prompt names the directory it is asking about.
             let lower = asked.lowercased()
@@ -2602,7 +2629,7 @@ extension AppDelegate {
                                                    "question": .token(kind),
                                                    "text": .prose(asked)])
             launchQuestion.mark()
-            Task { @MainActor in self?.hud.showLaunchQuestion(asked) }
+            Task { @MainActor in self?.hud.showLaunchQuestion(asked, pane: paneName) }
         }
 
         Task.detached(priority: .userInitiated) { [weak self] in
@@ -2656,7 +2683,8 @@ extension AppDelegate {
             let tty = pane.paneTty
             Task.detached(priority: .utility) {
                 SessionLauncher.watchForTrustPrompt(
-                    pane: pane, adapter: adapter, onNeedsHuman: reportQuestion)
+                    pane: pane, adapter: adapter,
+                    onNeedsHuman: { reportQuestion($0, pane.sessionName) })
             }
             Track.record("agent_launched", ["harness": .token(adapter.id), "how": "new",
                                             "ms": .int(Int(Date().timeIntervalSince(requestedAt) * 1000))])
@@ -2785,7 +2813,7 @@ extension AppDelegate {
                         screen.isEmpty
                             ? "It never started, and its screen could not be read."
                             : screen,
-                        windowOpened: opened)
+                        windowOpened: opened, pane: pane.sessionName)
                 }
                 return
             }

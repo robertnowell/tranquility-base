@@ -159,10 +159,21 @@ extension StatusHUD {
     func launchQuestionDrill() {
         _ = showGreeting(line: "Drill greeting.", label: "question-drill")
         let spinnerFirst = launchCardIsWaiting
-        showLaunchQuestion("Update available! 0.149.0 -> 0.150.0")
+        showLaunchQuestion("Update available! 0.149.0 -> 0.150.0", pane: "tb-drill-pane")
         let spinnerDown = !launchCardIsWaiting
         let saysWhatItAsks = face.body.contains("Update available! 0.149.0 -> 0.150.0")
         let amberPlacard = face.placardOverride == StateLegend.needsAnswerPlacard
+        // The card has no session yet, and still has somewhere to go: the
+        // pane the launch stopped in (12 Oct: "any question is fine, just
+        // send the user to the agent"). The button is up, and it attaches
+        // that pane rather than walking a registry the pane is not in.
+        let hasADoor = !goButton.isHidden
+        let priorAttach = onAttachPane
+        var attached: String?
+        onAttachPane = { attached = $0 }
+        goToSession()
+        onAttachPane = priorAttach
+        let doorIsThePane = attached == "tb-drill-pane"
         // Amber is not painted by the placard string; `.result` reads
         // `face.lens`, and a launch question must arrive on the needs-you
         // channel rather than the advisory one the invitation uses.
@@ -190,6 +201,8 @@ extension StatusHUD {
             ("saysWhatItAsks", saysWhatItAsks),
             ("wearsTheAskingYouPlacard", amberPlacard),
             ("onTheNeedsYouChannel", onTheNeedsYouChannel),
+            ("hasAGoToAgentDoor", hasADoor),
+            ("theDoorIsTheLaunchPane", doorIsThePane),
             ("stillAdoptsItsAgent", stillAdoptsItsAgent),
             ("refusedWhenNoCardIsWaiting", refusedWithNoCard),
             ("stillSaysItOnTheStrip", saidItAnyway),
