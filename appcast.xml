@@ -6,6 +6,14 @@
     <description>Updates for Tranquility Base.</description>
     <language>en</language>
     <item>
+      <title>Version 0.3.1491</title>
+      <sparkle:version>1491</sparkle:version>
+      <sparkle:shortVersionString>0.3.1491</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <pubDate>Tue, 13 Oct 2026 16:33:42 +0000</pubDate>
+      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1491-605faed05/TranquilityBase-0.3.1491.dmg" type="application/octet-stream" length="46147282" sparkle:edSignature="8rbZRfGI1Ktb/AG0hkuJUtXxFGDc9d6zziBJ3nPGfALiwOfbvJ0Ed+S9eOfZcTtaraRikm64wrGS3/BrcISACQ==" />
+    </item>
+    <item>
       <title>Version 0.3.1490</title>
       <sparkle:version>1490</sparkle:version>
       <sparkle:shortVersionString>0.3.1490</sparkle:shortVersionString>
@@ -77,16 +85,8 @@
       <pubDate>Mon, 05 Oct 2026 22:48:15 +0000</pubDate>
       <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1481-f51531175/TranquilityBase-0.3.1481.dmg" type="application/octet-stream" length="45844902" sparkle:edSignature="XDAYG65aftekzwiHC7CG30UGD91xnK9jZyniZAC7l+TmwEoQlAhJlWmLlnN/GW0UFgZasSYBE9AykrXWAwHMAQ==" />
     </item>
-    <item>
-      <title>Version 0.3.1480</title>
-      <sparkle:version>1480</sparkle:version>
-      <sparkle:shortVersionString>0.3.1480</sparkle:shortVersionString>
-      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <pubDate>Mon, 05 Oct 2026 22:02:18 +0000</pubDate>
-      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1480-ccbed511d/TranquilityBase-0.3.1480.dmg" type="application/octet-stream" length="45842273" sparkle:edSignature="W0QxHdMib51omHxEfKbCX8Y53XCk3wBjM0k45uS4KPkoEc+MNKLEvKoMlx2nwrLKALzkvQvkSVS2MwPvAHPbCg==" />
-    </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: /wDGxe5QTXEsKIC0i+ntFDREA7oovEvysbmjRUNK8Odboyncu/cRvKzX/+xJ/RGEAdIGRSVhFA6pYduNNybzAA==
+edSignature: 9MMEk6rGhAj9tJds5Fbf0c01g1HHrUc8vw73i9RhrcaoxLw1kWpbEQqamoeuP6bi2uCg6L2LRDzM2p1LbY0FDw==
 length: 6457
 -->
