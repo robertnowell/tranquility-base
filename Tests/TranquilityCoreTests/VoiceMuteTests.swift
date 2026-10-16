@@ -59,6 +59,25 @@ final class VoiceMuteTests: XCTestCase {
         XCTAssertFalse(warmed)
     }
 
+    /// The greeting bypasses the chain, so it is the leak to pin: muted, it
+    /// neither plays a cached line nor reaches the network for a new one.
+    func testMutedGreetingReturnsBeforeAnyWork() async {
+        let suite = "VoiceMuteTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        let saved = VoiceMute.defaults
+        VoiceMute.defaults = defaults
+        defer { VoiceMute.defaults = saved; defaults.removePersistentDomain(forName: suite) }
+        VoiceMute.isOn = true
+        let started = Date()
+        // A voice id with no cached file: unmuted, this would read the key
+        // and POST to ElevenLabs. Muted, it must return at once.
+        await GreetingCache.speak("never rendered \(UUID().uuidString)", voiceId: "no-such-voice")
+        XCTAssertLessThan(Date().timeIntervalSince(started), 0.05)
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: GreetingCache.url(voiceId: "no-such-voice", text: "x").deletingLastPathComponent()
+                .appendingPathComponent("no-such-voice").path))
+    }
+
     func testFlagDefaultsOffAndPersists() {
         let suite = "VoiceMuteTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!

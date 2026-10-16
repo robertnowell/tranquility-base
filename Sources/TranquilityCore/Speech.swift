@@ -757,7 +757,14 @@ public struct SpeechChain: Sendable {
     /// because the chain is what both the announcement and the ⌃⌃ ladder hold.
     let clips = ClipCache()
     /// Read per utterance, never cached: the mute button takes effect on the
-    /// next thing spoken. Injectable so a test does not flip the machine's own.
+    /// next thing spoken.
+    ///
+    /// Defaults to never muted, and the app passes `VoiceMute.isOn` where it
+    /// builds its chain. The default used to BE `VoiceMute.isOn`, which read
+    /// the machine's own setting: the day it shipped, muting the panel turned
+    /// a dozen Coordinator tests red on that Mac and nowhere else, because
+    /// every chain a test built went silent. A default that reads the
+    /// developer's disk fails only on the machines that have the state.
     let isMuted: @Sendable () -> Bool
 
     public init(
@@ -766,7 +773,7 @@ public struct SpeechChain: Sendable {
         // chosen from the menu takes effect on the next announcement rather than the
         // next launch.
         fallback: any SpeechProvider = SystemSpeechProvider(),
-        isMuted: @escaping @Sendable () -> Bool = { VoiceMute.isOn }
+        isMuted: @escaping @Sendable () -> Bool = { false }
     ) {
         self.preferred = preferred
         self.fallback = fallback
