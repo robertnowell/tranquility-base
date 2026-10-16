@@ -871,6 +871,18 @@ extension AppDelegate {
                         hud.showResult(
                             "Playback failed (\(failure)). It's still waiting. "
                             + "tap ⌃ Ctrl + ⌥ Option to hear it again.")
+                    } else if VoiceMute.isOn, case .speaking = hud.state {
+                        // Stopped BY the mute, from the card (ruled 16 Oct).
+                        // Muted, nothing else can stop a line, because a muted
+                        // line never starts. So this is the speaker button:
+                        // the voice goes, the card stays, and the whole line
+                        // lights, because dim means NOT REACHED YET and nothing
+                        // more is coming to reach it. The same ending the
+                        // manager's barge-in uses. The face test keeps a
+                        // refused stage out: a refusal never showed this card.
+                        Permissions.log("announce: muted mid-line, card kept")
+                        lastStatusLine = "muted"
+                        hud.completeHighlight()
                     } else {
                         // No read-state claim here: stopping it yourself OPENS
                         // the turn (13 Aug), stopping it before any audio does

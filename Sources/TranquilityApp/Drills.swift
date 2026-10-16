@@ -3388,4 +3388,30 @@ extension StatusHUD {
             ("anEmptyCardIsLeftAlone", (onNothing ?? 0) == 0),
         ])
     }
+
+    /// The speaker sits where the talking happens (ruled 16 Oct): on the grid
+    /// and on the card that speaks, never on settings, where it would be a
+    /// second voice control beside the voice pane. Faces only: what a click
+    /// does to a live line is the announce path's business, asserted in Core.
+    func muteWhereTheTalkingIsDrill() {
+        showIdle(rows: [])
+        let onGrid = muteButton.isHidden == false
+        currentTarget = ("drill", 1, "promotions copy")
+        _ = showAnnouncement(
+            spoken: SpokenTextSanitizer().sanitize("Finished the poller. Go?"),
+            sessionId: "drill", pid: 1, project: "promotions copy", cwd: "/tmp")
+        let onCard = muteButton.isHidden == false
+        muteButton.superview?.layoutSubtreeIfNeeded()
+        let mute = muteButton.frame, gear = gearButton.frame
+        showSettings(voices: [], roster: [], note: "")
+        let onSettings = muteButton.isHidden == false
+        showIdle(rows: [])
+
+        SelfTest.report("muteWhereTheTalkingIs", [
+            ("onTheGrid", onGrid),
+            ("onTheSpeakingCard", onCard),
+            ("notOnSettings", !onSettings),
+            ("leftOfTheGearOnTheCard", mute.maxX <= gear.minX),
+        ])
+    }
 }
