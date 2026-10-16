@@ -6,6 +6,14 @@
     <description>Updates for Tranquility Base.</description>
     <language>en</language>
     <item>
+      <title>Version 0.3.1493</title>
+      <sparkle:version>1493</sparkle:version>
+      <sparkle:shortVersionString>0.3.1493</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <pubDate>Fri, 16 Oct 2026 19:30:51 +0000</pubDate>
+      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1493-1b5b2b975/TranquilityBase-0.3.1493.dmg" type="application/octet-stream" length="46176244" sparkle:edSignature="K91KNhg4G+5pR83GpKU5akR8jhwhQoEo7r6YgfqmjC0hZHzck2U19pN/ReNkX8McVfGIirL5LraQVtgSpYHNBw==" />
+    </item>
+    <item>
       <title>Version 0.3.1492</title>
       <sparkle:version>1492</sparkle:version>
       <sparkle:shortVersionString>0.3.1492</sparkle:shortVersionString>
@@ -77,16 +85,8 @@
       <pubDate>Mon, 05 Oct 2026 23:26:31 +0000</pubDate>
       <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1483-52194100f/TranquilityBase-0.3.1483.dmg" type="application/octet-stream" length="45887720" sparkle:edSignature="kIEYheih5GuCH3Zg2kTSDAyNCFa2q2HCQ8DgFjFtiW3DylAw359Ck7r8g3S1JjK2jWnB8hfdNzcVyurUoWTiDA==" />
     </item>
-    <item>
-      <title>Version 0.3.1482</title>
-      <sparkle:version>1482</sparkle:version>
-      <sparkle:shortVersionString>0.3.1482</sparkle:shortVersionString>
-      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <pubDate>Mon, 05 Oct 2026 23:07:25 +0000</pubDate>
-      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1482-1b1230eb4/TranquilityBase-0.3.1482.dmg" type="application/octet-stream" length="46553483" sparkle:edSignature="aaHXyXzQVWM+xUV3bbJEjB9xk5OwOuF9HGa39+QRgZefWuaNpPABXjyMF+iW/FJBESwrFBbsTiKzFZUgUXebBQ==" />
-    </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: 190Nd6t+UIjLgO1f2/GUNHa/276JSuRQKFGJhQpe74jQDN3AWyndK7AXfWOVR0acyZpFykoSRjLD7DTM8lkjDg==
+edSignature: ZeokTwaQDDpw4/+VVFfpnUGcRVaco2afA39bbLTSzZmQxMn905EUrIiV5Pi8Av2kdlF9LK8xH7yUFV4e/e7PBw==
 length: 6457
 -->
