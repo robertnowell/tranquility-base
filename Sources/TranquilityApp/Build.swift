@@ -402,6 +402,21 @@ extension StatusHUD {
         gearButton.widthAnchor.constraint(equalToConstant: 26).isActive = true
         gearButton.heightAnchor.constraint(equalToConstant: 26).isActive = true
 
+        // The voice switch, left of the gear (ruled 16 Oct: settings stays the
+        // rightmost). Same box and ink as the gear so the pair reads as one
+        // cluster; the glyph is set by `reinkMuteButton`, which owns the state.
+        muteButton = ConsoleButton(image: NSImage(systemSymbolName: "speaker.wave.2",
+                                                  accessibilityDescription: "Mute voice")!
+                                     .withSymbolConfiguration(.init(pointSize: 13, weight: .medium))!,
+                                  target: self, action: #selector(muteTapped))
+        muteButton.isBordered = false
+        muteButton.restingInk = StateLegend.Lens.chrome.color
+        muteButton.translatesAutoresizingMaskIntoConstraints = false
+        muteButton.widthAnchor.constraint(equalToConstant: 26).isActive = true
+        muteButton.heightAnchor.constraint(equalToConstant: 26).isActive = true
+        muteButton.isHidden = true
+        reinkMuteButton()
+
         // A breadcrumb, not a button in a row of actions: it says where you are and
         // the only way out is back the way you came.
         backButton = ConsoleButton(title: StateLegend.backTitle, target: self,
@@ -862,6 +877,7 @@ extension StatusHUD {
 
         background.addSubview(stack)
         background.addSubview(gearButton)
+        background.addSubview(muteButton)
         // Above everything: the sticky overlays the last grid rows on purpose.
         // It has no constraint to the background's own edges, so it contributes
         // nothing to the fitting size resizeToFit() measures — the panel is
@@ -1030,6 +1046,8 @@ extension StatusHUD {
                 equalTo: background.trailingAnchor,
                 constant: -(StatusHUD.contentColumn - gearButton.inkOverhang.trailing)),
             gearButton.centerYAnchor.constraint(equalTo: stateLabel.centerYAnchor),
+            muteButton.trailingAnchor.constraint(equalTo: gearButton.leadingAnchor, constant: -2),
+            muteButton.centerYAnchor.constraint(equalTo: gearButton.centerYAnchor),
             meter.widthAnchor.constraint(equalToConstant: 348),
             meter.heightAnchor.constraint(equalToConstant: 28),
             micRow.widthAnchor.constraint(equalToConstant: 348),

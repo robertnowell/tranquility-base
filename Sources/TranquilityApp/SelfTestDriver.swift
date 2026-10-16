@@ -108,11 +108,15 @@ extension StatusHUD {
         let placard = inkRect(stateLabel)
         let chip = rect(receiptChip)
         let gear = rect(gearButton)
+        let mute = rect(muteButton)
 
         SelfTest.report("topBand", [
             ("collapseClearsPlacard", clear(collapse, placard)),
             ("placardClearsReceipt", clear(placard, chip)),
             ("receiptClearsGear", clear(chip, gear)),
+            ("receiptClearsMute", clear(chip, mute)),
+            ("placardClearsMute", clear(placard, mute)),
+            ("muteClearsGear", clear(mute, gear)),
             ("collapseClearsReceipt", clear(collapse, chip)),
             ("lanesAreInOrder", collapse.isNull || placard.isNull
                 || collapse.maxX <= placard.minX),
@@ -2301,7 +2305,7 @@ extension StatusHUD {
             ("newSession", newSessionButton), ("openPage", openPageButton),
             ("restartAudio", restartAudioButton),
             ("voices", voiceList),
-            ("gear", gearButton), ("back", backButton), ("rows", waitingRows),
+            ("gear", gearButton), ("mute", muteButton), ("back", backButton), ("rows", waitingRows),
             // In the matrix because it is the one widget that belongs to the
             // MODE rather than to a face: a diff that shows it going out when
             // the face changes is exactly the 26 Sep failure.
