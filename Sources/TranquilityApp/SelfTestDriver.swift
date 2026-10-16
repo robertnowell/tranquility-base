@@ -2263,6 +2263,7 @@ extension StatusHUD {
         droppedInputDrill()
         typingOpensTheLineDrill()
         interruptedLineIsFullyLitDrill()
+        muteWhereTheTalkingIsDrill()
 
         endCapture(because: "selftest cleanup")
         showIdle(rows: [])

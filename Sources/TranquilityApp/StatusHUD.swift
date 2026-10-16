@@ -2930,15 +2930,19 @@ final class StatusHUD: NSObject {
                 stateLabel.attributedStringValue = Widgets.placardText(notice, color: noticeLens.color)
             }
         }
-        // The voice switch belongs to the grid alone (ruled 16 Oct: "you can
-        // only unmute from the grid for now"), and only while the gear it sits
-        // beside is up. Decided here, after every arm has had its say about
-        // the gear, so no face can forget to hide it.
-        if case .idle = state, face.grid, gearButton?.isHidden == false {
-            muteButton?.isHidden = false
-        } else {
-            muteButton?.isHidden = true
+        // The voice switch sits on the grid and on the card that talks
+        // (ruled 16 Oct: "that's where the talking happens"), and only while
+        // the gear it sits beside is up. Preparing counts as the card: it is
+        // the same stage a moment earlier, and a mute pressed there means the
+        // line that is about to start. Decided here, after every arm has had
+        // its say about the gear, so no face can forget to hide it.
+        let talkingFace: Bool
+        switch state {
+        case .idle: talkingFace = face.grid
+        case .preparing, .speaking: talkingFace = true
+        default: talkingFace = false
         }
+        muteButton?.isHidden = !(talkingFace && gearButton?.isHidden == false)
         clearPlacardOfControls()
 
         // The message tray's chips, derived rather than stored: whatever Core
@@ -4000,7 +4004,9 @@ final class StatusHUD: NSObject {
             Permissions.log("preparing: still waiting at 250ms — painting the card")
             // One identity: no app-name masthead — the Preparing pill and the body
             // carry it. The callsign arrives with the announcement itself.
-            self.face = Face(body: "Writing the summary and fetching the voice…")
+            // Muted fetches no voice, so the wait line does not claim one.
+            self.face = Face(body: VoiceMute.isOn ? "Writing the summary…"
+                                                  : "Writing the summary and fetching the voice…")
             self.render()
         }
         preparingPaint = paint
@@ -4556,7 +4562,9 @@ final class StatusHUD: NSObject {
 
     /// Voice off, or back on. Muting stops whatever is talking, because a
     /// mute that lets the current line finish is not one; unmuting changes
-    /// nothing until the next thing you hear, which then speaks.
+    /// nothing until the next thing you hear, which then speaks. On a card,
+    /// the stop keeps the card: the app reads a stop while muted as the line
+    /// arriving as text, not as you walking away from it.
     @objc nonisolated func muteTapped() {
         MainActor.assumeIsolated {
             VoiceMute.isOn.toggle()
