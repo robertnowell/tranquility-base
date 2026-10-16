@@ -65,6 +65,33 @@ The shape never changes. The skin is one `:root` block, and it belongs to the su
 - **Tell the user in one line, do not ask.** "Recorded U Vape from its Kopi brand record, accent #FF6699" or "Coframe declares no colour; its pages stay on the house theme." Permission is not needed; a wrong colour is one `--learn` away from right and the source is on the row.
 - **Never invent a token.** The frequency of hexes in a stylesheet is not a brand. If no source gives a colour, the house is the honest answer.
 
+## Writing standard: modified ASD-STE100, ruled 16 Oct 2026
+
+The layout rules above say where words go. This section says how to write them. The spoken updates already follow a modified ASD-STE100 (`contracts/gateway/v1/summary.prompt.txt`, Writing standard). Pages use the same grammar, without the spoken word caps. Robert, 16 Oct: the reports are "honestly sometimes quite hard to follow".
+
+It applies to every sentence you write: the headline, the lede, the needs-you block, each claim row, each caption. It does not apply to artifacts. Quote code, rows, logs and prompts exactly.
+
+From ASD-STE100:
+
+- **Complete sentences.** Every sentence has a subject and a verb, and keeps its articles. "Wave 5 in, holdout set." is wrong. "We imported wave 5 and kept a holdout." is right. A headline is a sentence too.
+- **Short sentences, one idea each.** Twenty words at most. If a sentence holds "and", "so" or "but" between two facts, think about two sentences.
+- **Simple tenses, active voice.** Name who did it: "We merged it", "Sunset suppressed them", not "it was merged" or "having been suppressed".
+- **No semicolons.** Use a full stop. A colon may introduce a list or an example.
+- **One word for one thing.** Choose one name for each thing and keep it on the whole page. If you call it "K2" in the lede, do not call it "the new account" in a claim.
+- **No more than three nouns in a row.** "the Sunset-to-K2 hand-off step" becomes "a step that moves people from Sunset to K2".
+- **No idioms or metaphors.** Not "the catch", "the payoff", "housekeeping", "closes the loop", "moves the needle". Say the literal fact.
+- **Instructions are commands, condition first.** In the needs-you block each option is one action: "If you agree, merge PR 2456." Say what happens next in a second sentence.
+
+Modified for pages:
+
+- **Explain every name the first time.** An account, segment, flow, script or code name gets a few words that say what it is: "K2, the second Klaviyo account". Do this once, where the name first appears on the page, usually the lede. After that, use the bare name. Ruled 16 Oct: explaining it again in every claim row made a test report 41% longer, and half of that growth was the same explanation repeated.
+- **Identifiers go in captions and artifacts.** Segment IDs, hashes, file paths and function names are evidence. Keep them out of the headline, the lede and the claim rows.
+- **Numbers keep digits.** Give each one a unit and, for a share, its denominator: "646 of 1,311 people".
+- **Say why with "because".** When a sentence gives a cause, use the word.
+- **Clear references.** "It", "this" and "that" point to a thing named in the same sentence or the sentence before. If not, repeat the name.
+
+Check it before you publish: read each sentence alone. If a reader who missed the turn cannot say who did what, rewrite it.
+
 ## What stays out
 
 Methodology, agent counts, source tiers, the order you did the work in, and findings that are true but bear on no decision. They belong in the record (a `report.md` beside the page, or the transcript), not on the page. The page cites the record in one line at the bottom.
