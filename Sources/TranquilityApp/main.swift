@@ -1149,6 +1149,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // opening on the tab that is not first is the kind of small lie that
         // makes a tab bar feel decorative.
         hud.onOpenSettings = { [weak self] in self?.hud.showAgentSettings() }
+        hud.onMuteVoice = { [weak self] in self?.coordinator?.speech.stop() }
         // The wedged card's door. The password sheet blocks the thread that
         // asks, so the ask is detached and only the outcome comes back here.
         hud.onRestartAudio = { [weak self] in

@@ -775,6 +775,8 @@ enum StateLegend {
     static let composePlaceholder = "type a message or paste"
     static let attachTip = "Pick a file to send with your reply. Or \u{2318}V to paste, or drop a file on the card."
     static let recordTip = "Click, talk, then click Send. Or hold \u{2325} Option."
+    static let muteTip = "Mute the voice. Agents arrive as text only."
+    static let unmuteTip = "Voice is off. Click to hear the next agent."
     static let sendTip = "Send what you said. Or tap \u{2325} Option."
 
     /// What hovering `Controls` reveals, in order of how often you reach for it.

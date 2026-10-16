@@ -228,6 +228,8 @@ final class StatusHUD: NSObject {
     var voiceStack: NSStackView!
     var voiceListHeight: NSLayoutConstraint!
     var gearButton: ConsoleButton!
+    /// The voice switch, left of the gear on the grid. See `VoiceMute`.
+    var muteButton: ConsoleButton!
     var collapseButton: ConsoleButton!
     /// Is the pointer on the panel at all — the signal behind the collapse
     /// control's two faces. See `PanelHoverView`.
@@ -1304,7 +1306,8 @@ final class StatusHUD: NSObject {
         var lead: CGFloat = 0
         if collapseButton?.isHidden == false { lead = 24 }
         if pastBackButton?.isHidden == false { lead = 30 }
-        let tail: CGFloat = gearButton?.isHidden == false ? 30 : 0
+        var tail: CGFloat = gearButton?.isHidden == false ? 30 : 0
+        if muteButton?.isHidden == false { tail += 28 }
         let existing = text.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
         let style = (existing?.mutableCopy() as? NSMutableParagraphStyle) ?? NSMutableParagraphStyle()
         style.firstLineHeadIndent = max(style.firstLineHeadIndent, lead)
@@ -2927,6 +2930,15 @@ final class StatusHUD: NSObject {
                 stateLabel.attributedStringValue = Widgets.placardText(notice, color: noticeLens.color)
             }
         }
+        // The voice switch belongs to the grid alone (ruled 16 Oct: "you can
+        // only unmute from the grid for now"), and only while the gear it sits
+        // beside is up. Decided here, after every arm has had its say about
+        // the gear, so no face can forget to hide it.
+        if case .idle = state, face.grid, gearButton?.isHidden == false {
+            muteButton?.isHidden = false
+        } else {
+            muteButton?.isHidden = true
+        }
         clearPlacardOfControls()
 
         // The message tray's chips, derived rather than stored: whatever Core
@@ -4526,6 +4538,8 @@ final class StatusHUD: NSObject {
     /// green.
     var onDismiss: ((_ turnStaysOwed: Bool) -> Void)?
     var onOpenSettings: (() -> Void)?
+    /// Muting silences the line in progress; the app owns the speech chain.
+    var onMuteVoice: (() -> Void)?
     var onLeaveSettings: (() -> Void)?
 
     /// PROVISIONAL (08 Aug): opens Settings, which today lands on the Voices
@@ -4538,6 +4552,32 @@ final class StatusHUD: NSObject {
             Track.record("placard_clicked", ["which": "mic_settings", "face": .token(state.name)])
             onOpenSettings?()
         }
+    }
+
+    /// Voice off, or back on. Muting stops whatever is talking, because a
+    /// mute that lets the current line finish is not one; unmuting changes
+    /// nothing until the next thing you hear, which then speaks.
+    @objc nonisolated func muteTapped() {
+        MainActor.assumeIsolated {
+            VoiceMute.isOn.toggle()
+            Track.record("placard_clicked", ["which": VoiceMute.isOn ? "mute" : "unmute",
+                                             "face": .token(state.name)])
+            Permissions.log("voice: \(VoiceMute.isOn ? "muted" : "unmuted") from the grid")
+            reinkMuteButton()
+            if VoiceMute.isOn { onMuteVoice?() }
+        }
+    }
+
+    /// Speaker with waves while the voice is on, struck through while it is
+    /// off: the glyph shows the state, the tooltip names the click.
+    func reinkMuteButton() {
+        guard let muteButton else { return }
+        let muted = VoiceMute.isOn
+        muteButton.image = NSImage(
+            systemSymbolName: muted ? "speaker.slash" : "speaker.wave.2",
+            accessibilityDescription: muted ? "Unmute voice" : "Mute voice")?
+            .withSymbolConfiguration(.init(pointSize: 13, weight: .medium))
+        muteButton.toolTip = muted ? StateLegend.unmuteTip : StateLegend.muteTip
     }
 
     @objc nonisolated func gearTapped() {

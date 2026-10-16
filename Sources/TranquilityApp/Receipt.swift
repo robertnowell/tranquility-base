@@ -186,10 +186,15 @@ extension StatusHUD {
             color: receipt.landed ? StateLegend.Palette.ready : StateLegend.Palette.secondary)
         chip.sizeToFit()
         // Right edge measured from the gear itself rather than a guessed
-        // margin, so the two never collide whatever the panel width.
-        let gearLeft = gearButton.superview.map { view in
-            view.convert(gearButton.frame, to: host).minX
-        } ?? host.bounds.width - 34
+        // margin, so the two never collide whatever the panel width. The
+        // mute switch, when it is up, sits left of the gear and is the edge
+        // instead: the receipt's lane ends at the leftmost control.
+        let gearLeft = [gearButton, muteButton]
+            .compactMap { button -> CGFloat? in
+                guard let button, !button.isHidden, let view = button.superview else { return nil }
+                return view.convert(button.frame, to: host).minX
+            }
+            .min() ?? host.bounds.width - 34
         // LEFT edge measured from the placard's ink, for the same reason, and
         // this half was missing: a long callsign simply grew leftwards until it
         // was drawing through "A G E N T S". Found by topBandDrill on its first

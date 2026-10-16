@@ -2551,6 +2551,7 @@ extension StatusHUD {
         var checks: [(String, Bool)] = []
         let controls: [(String, ConsoleButton?)] = [
             ("go", goButton), ("openPage", openPageButton), ("gear", gearButton),
+            ("mute", muteButton),
             ("collapse", collapseButton), ("back", backButton),
             ("pastBack", pastBackButton), ("dontSend", dontSendButton),
             ("micSettings", micSettingsButton), ("newSession", newSessionButton),
