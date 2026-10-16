@@ -47,6 +47,11 @@ public enum GreetingCache {
     /// first thing an agent says and everything it says afterwards are the same
     /// person.
     public static func speak(_ text: String, voiceId: String? = nil) async {
+        // Muted is muted everywhere (16 Oct 2026). The greeting is the one
+        // line that bypasses `SpeechChain`, so it carries the check itself:
+        // without it a new agent still said hello aloud, and a line or voice
+        // not yet on disk still paid ElevenLabs to render it.
+        guard !VoiceMute.isOn else { return }
         let voiceId = voiceId ?? VoiceCatalog.selectedVoiceId
         let file = url(voiceId: voiceId, text: text)
 
