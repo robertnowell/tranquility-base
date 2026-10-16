@@ -678,7 +678,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 store: store,
                 summarizer: SummarizerChain(providers: [managed] + SummarizerChain.ownKeyProviders + [DeterministicSummarizer()]),
                 localSummaryOriginId: ManagedCredits.originId(),
-                speech: SpeechChain(preferred: premiumVoice),
+                speech: SpeechChain(preferred: premiumVoice, isMuted: { VoiceMute.isOn }),
                 remoteTransport: poller.map { p in
                     RemoteDispatchTransport(
                         registry: registry,
@@ -1149,6 +1149,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // opening on the tab that is not first is the kind of small lie that
         // makes a tab bar feel decorative.
         hud.onOpenSettings = { [weak self] in self?.hud.showAgentSettings() }
+        hud.onMuteVoice = { [weak self] in self?.coordinator?.speech.stop() }
         // The wedged card's door. The password sheet blocks the thread that
         // asks, so the ask is detached and only the outcome comes back here.
         hud.onRestartAudio = { [weak self] in

@@ -756,17 +756,33 @@ public struct SpeechChain: Sendable {
     /// same object `speak` finds. Lives on the chain rather than the provider
     /// because the chain is what both the announcement and the ⌃⌃ ladder hold.
     let clips = ClipCache()
+    /// Read per utterance, never cached: the mute button takes effect on the
+    /// next thing spoken.
+    ///
+    /// Defaults to never muted, and the app passes `VoiceMute.isOn` where it
+    /// builds its chain. The default used to BE `VoiceMute.isOn`, which read
+    /// the machine's own setting: the day it shipped, muting the panel turned
+    /// a dozen Coordinator tests red on that Mac and nowhere else, because
+    /// every chain a test built went silent. A default that reads the
+    /// developer's disk fails only on the machines that have the state.
+    let isMuted: @Sendable () -> Bool
 
     public init(
         preferred: (any SpeechProvider)? = ElevenLabsSpeechProvider(),
         // Bare: the provider resolves the preferred voice per utterance, so a voice
         // chosen from the menu takes effect on the next announcement rather than the
         // next launch.
-        fallback: any SpeechProvider = SystemSpeechProvider()
+        fallback: any SpeechProvider = SystemSpeechProvider(),
+        isMuted: @escaping @Sendable () -> Bool = { false }
     ) {
         self.preferred = preferred
         self.fallback = fallback
+        self.isMuted = isMuted
     }
+
+    /// The provider name a muted utterance reports, so telemetry and the log
+    /// can tell "chose silence" from "the voice failed".
+    public static let mutedProvider = "muted"
 
     /// Render an utterance now so a later `speak` of the SAME text in the SAME
     /// voice plays instantly. Best-effort by construction: it returns a Bool for
@@ -777,6 +793,9 @@ public struct SpeechChain: Sendable {
     /// voice has no network half to pay in advance.
     @discardableResult
     public func prewarm(_ text: SanitizedSpokenText, voice: String? = nil) async -> Bool {
+        // Muted renders nothing ahead: a clip prefetched for a voice that is off
+        // is the cost the mute exists to save.
+        guard !isMuted() else { return false }
         guard let eleven = preferred as? ElevenLabsSpeechProvider, eleven.isConfigured else {
             return false
         }
@@ -898,6 +917,15 @@ public struct SpeechChain: Sendable {
         let mine = generation.current
         guard mine == generation.current else {
             return Spoken(provider: "none", completed: false)
+        }
+        // Muted: the text is the delivery. It is on the card before this is
+        // called (`onWillSpeak`), so it counts as opened exactly as audio
+        // that started would, and it returns at once: no synthesis, no
+        // fallback voice, no word events. Callers light the whole line on a
+        // completed return, which is the right face for text nobody reads aloud.
+        if isMuted() {
+            ElevenLabsSpeechProvider.trace?("chain: muted, text only (\(text.text.count) chars)")
+            return Spoken(provider: Self.mutedProvider, completed: true, heardAny: true)
         }
         if let preferred, preferred.isConfigured, !sessionHasNoCloudVoice {
             do {
