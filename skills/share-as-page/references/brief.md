@@ -84,7 +84,7 @@ From ASD-STE100:
 
 Modified for pages:
 
-- **Explain every name the first time.** An account, segment, flow, script or code name gets a few words that say what it is: "K2, the second Klaviyo account". Do this in the lede, in the needs-you block, and in each claim row, because many readers read only the rows.
+- **Explain every name the first time.** An account, segment, flow, script or code name gets a few words that say what it is: "K2, the second Klaviyo account". Do this once, where the name first appears on the page, usually the lede. After that, use the bare name. Ruled 16 Oct: explaining it again in every claim row made a test report 41% longer, and half of that growth was the same explanation repeated.
 - **Identifiers go in captions and artifacts.** Segment IDs, hashes, file paths and function names are evidence. Keep them out of the headline, the lede and the claim rows.
 - **Numbers keep digits.** Give each one a unit and, for a share, its denominator: "646 of 1,311 people".
 - **Say why with "because".** When a sentence gives a cause, use the word.
