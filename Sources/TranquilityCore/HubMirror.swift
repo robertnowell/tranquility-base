@@ -489,6 +489,9 @@ public final class HubMirror: @unchecked Sendable {
                 "produced_at": Self.iso(firstWrites[c.path] ?? Self.birth(of: c.path) ?? c.mtime),
             ]
             if let pub = Self.meta(html, "url"), pub.hasPrefix("http") { json["published_url"] = pub }
+            let (rules, app) = Self.provenance(html: html, session: c.session)
+            json["rules_version"] = rules
+            if let app { json["app_version"] = app }
             do {
                 let (status, body) = try await transport.post("api/ingest", json: json)
                 guard (200..<300).contains(status) else {
@@ -983,7 +986,8 @@ public final class HubMirror: @unchecked Sendable {
     /// One turn, in the shape the hub keys on: `source_key` is the session and
     /// the event row, so the same brief twice is one row there.
     static func turnPayload(_ b: StoredBrief, session: WaitingSession?, live: LiveSession?,
-                            said: TurnText.Turn? = nil) -> [String: Any] {
+                            said: TurnText.Turn? = nil,
+                            rulesRoot: URL = RulesStore.root) -> [String: Any] {
         var json: [String: Any] = [
             "session_id": b.sessionId,
             "source_key": "\(b.sessionId):\(b.eventRowid)",
@@ -1003,7 +1007,46 @@ public final class HubMirror: @unchecked Sendable {
         put("prose", said?.prose)
         put("cwd", session?.cwd)
         put("agent_title", displayName(session: session, live: live, sessionId: b.sessionId, callsign: b.callsign))
+        json["rules_version"] = seenRules(session: b.sessionId, rulesRoot: rulesRoot) ?? "none"
+        put("app_version", appVersion)
         return json
+    }
+
+    // MARK: - Provenance
+
+    // Which rules a session was given, carried to the hub with its turns and
+    // pages (24 Oct 2026). Robert: "we should have clear logs to know whether
+    // the other mac followed our rules or not, it shouldn't be guesswork."
+    // visual-output-hook.sh records the version per session in rules/seen; it
+    // never left the Mac, so a page from another Mac could not say which
+    // rules it was written under. "none" is sent, never nothing, so a session
+    // that was never given the rules is visible as such.
+
+    /// The rules version recorded for this session on this Mac, if any.
+    static func seenRules(session: String, rulesRoot: URL = RulesStore.root) -> String? {
+        let url = RulesStore.seenDirectory(in: rulesRoot).appendingPathComponent(session)
+        guard let raw = try? String(contentsOf: url, encoding: .utf8) else { return nil }
+        let v = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return v.range(of: "^[0-9a-f]{6,64}$", options: .regularExpression) != nil ? v : nil
+    }
+
+    /// This app's version, e.g. "0.3.1495 (1495)".
+    static var appVersion: String? {
+        let info = Bundle.main.infoDictionary
+        guard let short = info?["CFBundleShortVersionString"] as? String else { return nil }
+        if let build = info?["CFBundleVersion"] as? String, build != short { return "\(short) (\(build))" }
+        return short
+    }
+
+    /// A page's own stamp (hq-page writes intranet:rules and intranet:app at
+    /// publish) wins; a page written another way falls back to the session's
+    /// record, then "none".
+    static func provenance(html: String, session: String,
+                           rulesRoot: URL = RulesStore.root) -> (rules: String, app: String?) {
+        let stamped = meta(html, "rules").flatMap { $0.isEmpty ? nil : $0 }
+        let rules = stamped ?? seenRules(session: session, rulesRoot: rulesRoot) ?? "none"
+        let app = meta(html, "app").flatMap { $0.isEmpty || $0 == "none" ? nil : $0 } ?? appVersion
+        return (rules, app)
     }
 
     /// What the grid calls it, by the grid's own rule, or the brief's callsign

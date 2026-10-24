@@ -660,4 +660,40 @@ final class HubMirrorTests: XCTestCase {
         try await Task.sleep(nanoseconds: 400_000_000)
         XCTAssertEqual(hub.count("api/heartbeat"), settled, "the sweep kept going after stop()")
     }
+
+    // MARK: - Provenance (24 Oct 2026): which rules a page and a turn were written under.
+
+    private func rulesRoot(seen: String?) throws -> URL {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("tb-rules-\(UUID().uuidString)")
+        let dir = RulesStore.seenDirectory(in: root)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        if let seen { try seen.write(to: dir.appendingPathComponent(session), atomically: true, encoding: .utf8) }
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        return root
+    }
+
+    func testATurnCarriesItsSessionsRulesVersionOrSaysNone() throws {
+        let b = StoredBrief(eventRowid: 7, sessionId: session, atMs: 1_700_000_000_000, topic: "t",
+                            goal: nil, happened: "Done.", nextStep: nil, question: nil, risk: nil,
+                            rationale: nil, findings: nil, solution: nil, recap: nil, proposal: nil,
+                            headline: nil, deck: nil, pullRequests: nil, branch: nil,
+                            callsign: nil, provider: "test")
+        let given = try rulesRoot(seen: "3f6d1085bd5e\n")
+        XCTAssertEqual(HubMirror.turnPayload(b, session: nil, live: nil, rulesRoot: given)["rules_version"] as? String,
+                       "3f6d1085bd5e")
+        let never = try rulesRoot(seen: nil)
+        XCTAssertEqual(HubMirror.turnPayload(b, session: nil, live: nil, rulesRoot: never)["rules_version"] as? String,
+                       "none", "a session never given the rules is sent as none, not left out")
+    }
+
+    func testAPagesOwnStampWinsThenTheSessionRecordThenNone() throws {
+        let given = try rulesRoot(seen: "3f6d1085bd5e")
+        let never = try rulesRoot(seen: nil)
+        let stamped = #"<meta name="intranet:session" content="x"><meta name="intranet:rules" content="d8053510e223"><meta name="intranet:app" content="0.3.1495">"#
+        XCTAssertEqual(HubMirror.provenance(html: stamped, session: session, rulesRoot: given).rules, "d8053510e223")
+        XCTAssertEqual(HubMirror.provenance(html: stamped, session: session, rulesRoot: given).app, "0.3.1495")
+        XCTAssertEqual(HubMirror.provenance(html: "<p>hand written</p>", session: session, rulesRoot: given).rules, "3f6d1085bd5e")
+        XCTAssertEqual(HubMirror.provenance(html: "<p>hand written</p>", session: session, rulesRoot: never).rules, "none")
+        XCTAssertNil(HubMirror.seenRules(session: session, rulesRoot: try rulesRoot(seen: "not a version")))
+    }
 }
