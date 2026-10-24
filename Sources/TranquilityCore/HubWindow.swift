@@ -76,11 +76,29 @@ public final class HubWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, 
     /// Show a hub address here. False, and nothing shown, when `url` is not
     /// the hub: the caller keeps its old door for that.
     @discardableResult
-    public func show(_ url: URL) -> Bool {
+    public func show(_ url: URL) -> Bool { show(url, byPerson: true) }
+
+    /// `hub_opened` (24 Oct 2026): the kind of page a person opened, and
+    /// nothing else about it. An agent's own report arriving (`offer`) is
+    /// not a person opening anything, so it is not counted.
+    nonisolated public static func pageType(_ url: URL?) -> String {
+        guard let url else { return "home" }
+        let path = url.path
+        if path == "/open" { return (url.query ?? "").contains("slug=") ? "report" : "agent" }
+        if path.hasPrefix("/d/") { return "document" }
+        if path.hasPrefix("/a/") { return "agent" }
+        if path == "/connect" { return "connect" }
+        if path.isEmpty || path == "/" || path == "/home" { return "home" }
+        return "other"
+    }
+
+    @discardableResult
+    func show(_ url: URL, byPerson: Bool) -> Bool {
         guard isHub(url) else {
             log("hub window: \(Self.describe(url)) is not the hub; left to the caller")
             return false
         }
+        if byPerson { Track.record("hub_opened", ["page_type": .token(Self.pageType(url))]) }
         log("hub window: showing \(Self.describe(url))")
         let web = make()
         lastShown = url
@@ -102,13 +120,14 @@ public final class HubWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, 
             log("hub window: open already; a report \(Self.describe(url)) arrived and was left for the sidebar")
             return true
         }
-        return show(url)
+        return show(url, byPerson: false)
     }
 
     /// Open the window on the hub's home, or on whatever it last showed.
     public func showHub() {
         guard let home = base() else { log("hub window: no hub address; nothing to show"); return }
         let web = make()
+        Track.record("hub_opened", ["page_type": .token(Self.pageType(web.url))])
         log("hub window: opened\(web.url == nil ? " on the hub's home" : ", on \(Self.describe(web.url))")")
         if web.url == nil { web.load(URLRequest(url: home)) }
         present()

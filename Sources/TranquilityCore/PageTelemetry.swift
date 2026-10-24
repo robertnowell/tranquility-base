@@ -17,10 +17,12 @@ import Foundation
 ///   path is version 1; a later write of the same path is a republish,
 ///   `republished: true` with its version, so a count of version 1 is a
 ///   count of pages.
-/// - `session_rules`: one per session each time the rules version it was
-///   given changes (visual-output-hook.sh writes it at session start;
-///   tbase-hook.sh refreshes it on a later prompt). `current` says whether
-///   it equals the version this install ships now.
+/// - `turn_completed`: one per finished turn the spool files, with the
+///   agent (hashed), its harness and the rules version its session holds.
+/// - `session_seen`: once when a session's first turn is filed, and again
+///   each time the rules version it holds changes (visual-output-hook.sh
+///   writes it at session start; tbase-hook.sh refreshes it on a later
+///   prompt). `current` says whether it equals what this install ships.
 ///
 /// How this relates to `rules_state`: that event's `fingerprint` names the
 /// whole staged rules store, once per install per reconcile. The session
@@ -49,11 +51,21 @@ public enum PageTelemetry {
     }
 
     struct State: Codable {
+        init() {}
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            offset = try c.decodeIfPresent(UInt64.self, forKey: .offset) ?? 0
+            versions = try c.decodeIfPresent([String: Int].self, forKey: .versions) ?? [:]
+            sessions = try c.decodeIfPresent([String: String].self, forKey: .sessions) ?? [:]
+            harnesses = try c.decodeIfPresent([String: String].self, forKey: .harnesses) ?? [:]
+        }
         var offset: UInt64 = 0
         /// sha256(path) -> how many writes were reported.
         var versions: [String: Int] = [:]
         /// session -> the rules version last reported for it.
         var sessions: [String: String] = [:]
+        /// session -> its harness, learned from its first filed turn.
+        var harnesses: [String: String] = [:]
     }
 
     static func stateURL(_ root: URL) -> URL { root.appendingPathComponent("pages-telemetry.json") }
@@ -102,6 +114,40 @@ public enum PageTelemetry {
         save(state, root)
     }
 
+    /// Finished turns the spool just filed (`SpoolDrainer.DrainResult.completed`).
+    public static func turnsCompleted(_ turns: [(session: String, harness: String)],
+                                      root: URL = RulesStore.root, emit: Emit) {
+        guard !turns.isEmpty else { return }
+        lock.lock(); defer { lock.unlock() }
+        var state = load(root)
+        let current = currentSessionVersion(root: root)
+        for turn in turns where ArtifactStore.isPlausibleSession(turn.session) {
+            let rules = seenVersion(turn.session, root: root)
+            let harness = token(turn.harness)
+            emit("turn_completed", ["agent_id": Track.hash(turn.session), "harness": harness,
+                                    "rules_version": .token(rules)])
+            if state.harnesses[turn.session] == nil {
+                state.harnesses[turn.session] = harness.tokenString
+                state.sessions[turn.session] = rules
+                emit("session_seen", sessionProps(turn.session, harness: harness.tokenString, rules: rules,
+                                                  current: current, first: true))
+            }
+        }
+        save(state, root)
+    }
+
+    static func seenVersion(_ session: String, root: URL) -> String {
+        let url = RulesStore.seenDirectory(in: root).appendingPathComponent(session)
+        let raw = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+        return version(raw.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    static func sessionProps(_ session: String, harness: String, rules: String,
+                             current: String?, first: Bool) -> [String: TrackValue] {
+        ["agent_id": Track.hash(session), "harness": token(harness), "rules_version": .token(rules),
+         "current": .bool(current != nil && rules == current), "first": .bool(first)]
+    }
+
     static func drainPages(root: URL, state: inout State, emit: Emit) {
         guard let handle = try? FileHandle(forReadingFrom: logURL(root)) else { return }
         defer { try? handle.close() }
@@ -139,25 +185,27 @@ public enum PageTelemetry {
         }
     }
 
+    /// A session already seen whose rules record changed: say so. A session
+    /// with a record but no filed turn yet waits for its first turn, which
+    /// is when its harness is known.
     static func drainSessions(root: URL, state: inout State, emit: Emit) {
-        let dir = RulesStore.seenDirectory(in: root)
-        guard let names = try? FileManager.default.contentsOfDirectory(atPath: dir.path) else { return }
         let current = currentSessionVersion(root: root)
-        for name in names.sorted() where ArtifactStore.isPlausibleSession(name) {
-            let raw = (try? String(contentsOf: dir.appendingPathComponent(name), encoding: .utf8)) ?? ""
-            let v = version(raw.trimmingCharacters(in: .whitespacesAndNewlines))
-            guard state.sessions[name] != v else { continue }
-            let first = state.sessions[name] == nil
-            state.sessions[name] = v
-            emit("session_rules", [
-                "agent_id": Track.hash(name),
-                "rules_version": .token(v),
-                "current": .bool(current != nil && v == current),
-                "first": .bool(first),
-            ])
+        let dir = RulesStore.seenDirectory(in: root)
+        let names = Set((try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? [])
+        for (session, harness) in state.harnesses.sorted(by: { $0.key < $1.key }) {
+            guard names.contains(session) else { continue }
+            let v = seenVersion(session, root: root)
+            guard state.sessions[session] != v else { continue }
+            state.sessions[session] = v
+            emit("session_seen", sessionProps(session, harness: harness, rules: v, current: current, first: false))
         }
-        // Forget sessions whose record RulesStore.pruneSeen removed.
-        let live = Set(names)
-        state.sessions = state.sessions.filter { live.contains($0.key) }
+        // Kept even when RulesStore.pruneSeen removes the record: a session
+        // forgotten here would be "first" again at its next turn. A few
+        // bytes per session; bounded at 20,000 by dropping the record of
+        // sessions whose seen file is gone.
+        if state.harnesses.count > 20_000 {
+            state.harnesses = state.harnesses.filter { names.contains($0.key) }
+            state.sessions = state.sessions.filter { names.contains($0.key) }
+        }
     }
 }

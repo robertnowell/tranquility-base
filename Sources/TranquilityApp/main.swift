@@ -1900,12 +1900,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 RulesReconcile.run(trigger: "hourly", note: { [weak self] in self?.hud.note($0) })
             }
         }
-        // Pages published and the rules each session holds, into Track
-        // (PageTelemetry, 24 Oct 2026). File reads, so off the main actor.
-        Task.detached(priority: .utility) { PageTelemetry.drain(emit: Track.record) }
-        Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { _ in
-            Task.detached(priority: .utility) { PageTelemetry.drain(emit: Track.record) }
+        // Pages published, turns finished, the rules each session holds and
+        // a daily count of what the person did, into Track (PageTelemetry,
+        // UsageDay; 24 Oct 2026). File reads, so off the main actor.
+        Coordinator.onTurnsCompleted = { turns in
+            Task.detached(priority: .utility) { PageTelemetry.turnsCompleted(turns, emit: Track.record) }
         }
+        let telemetryTick: @Sendable () -> Void = {
+            Task.detached(priority: .utility) {
+                PageTelemetry.drain(emit: Track.record)
+                UsageDay.shared.flush(emit: Track.record)
+            }
+        }
+        telemetryTick()
+        Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { _ in telemetryTick() }
 
         // Fix stale Write() permission rules to Edit() before they matter. A
         // deep-research install left these in a remote user's settings, printed

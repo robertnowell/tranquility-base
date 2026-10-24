@@ -72,22 +72,41 @@ final class PageTelemetryTests: XCTestCase {
         XCTAssertEqual(drain(r).filter { $0.0 == "page_published" }.count, 1)
     }
 
-    func testEachSessionsRulesVersionIsSentOncePerChange() throws {
+    func testATurnIsCountedAndItsSessionIsSeenOnce() throws {
+        let r = try root()
+        try "3f6d1085bd5e\n".write(to: RulesStore.seenDirectory(in: r).appendingPathComponent(a), atomically: true, encoding: .utf8)
+        var out: [(String, [String: TrackValue])] = []
+        PageTelemetry.turnsCompleted([(a, "codex"), (b, "claude")], root: r) { out.append(($0, $1)) }
+        let turns = out.filter { $0.0 == "turn_completed" }
+        XCTAssertEqual(turns.count, 2)
+        XCTAssertEqual(turns[0].1["harness"], .token("codex"))
+        XCTAssertEqual(turns[0].1["rules_version"], .token("3f6d1085bd5e"))
+        XCTAssertEqual(turns[1].1["rules_version"], .token("none"), "no record: none, never left out")
+        let seen = out.filter { $0.0 == "session_seen" }
+        XCTAssertEqual(seen.count, 2)
+        XCTAssertTrue(seen.allSatisfy { $0.1["first"] == .bool(true) })
+        XCTAssertTrue(out.allSatisfy { $0.1.values.allSatisfy(\.isAdmissible) })
+
+        out = []
+        PageTelemetry.turnsCompleted([(a, "codex")], root: r) { out.append(($0, $1)) }
+        XCTAssertEqual(out.map(\.0), ["turn_completed"], "a second turn: no second session_seen")
+    }
+
+    func testASeenSessionIsSeenAgainOnlyWhenItsRulesChange() throws {
         let r = try root()
         let seen = RulesStore.seenDirectory(in: r)
-        try "3f6d1085bd5e\n".write(to: seen.appendingPathComponent(a), atomically: true, encoding: .utf8)
-        try "garbage".write(to: seen.appendingPathComponent(b), atomically: true, encoding: .utf8)
-        let first = drain(r).filter { $0.0 == "session_rules" }
-        XCTAssertEqual(first.count, 2)
-        let versions = Set(first.compactMap { $0.1["rules_version"]?.tokenString })
-        XCTAssertEqual(versions, ["3f6d1085bd5e", "none"], "an unreadable record is none, not dropped")
-        XCTAssertTrue(first.allSatisfy { $0.1["first"] == .bool(true) && $0.1["current"] == .bool(false) })
-        XCTAssertTrue(drain(r).filter { $0.0 == "session_rules" }.isEmpty, "unchanged: nothing sent")
+        try "3f6d1085bd5e".write(to: seen.appendingPathComponent(a), atomically: true, encoding: .utf8)
+        try "3f6d1085bd5e".write(to: seen.appendingPathComponent(b), atomically: true, encoding: .utf8)
+        PageTelemetry.turnsCompleted([(a, "claude")], root: r) { _, _ in }
+        XCTAssertTrue(drain(r).filter { $0.0 == "session_seen" }.isEmpty,
+                      "unchanged; and b has no turn yet, so its harness is unknown and it waits")
         try "d8053510e223".write(to: seen.appendingPathComponent(a), atomically: true, encoding: .utf8)
-        let changed = drain(r).filter { $0.0 == "session_rules" }
+        let changed = drain(r).filter { $0.0 == "session_seen" }
         XCTAssertEqual(changed.count, 1)
         XCTAssertEqual(changed[0].1["rules_version"], .token("d8053510e223"))
+        XCTAssertEqual(changed[0].1["harness"], .token("claude"))
         XCTAssertEqual(changed[0].1["first"], .bool(false))
+        XCTAssertTrue(drain(r).filter { $0.0 == "session_seen" }.isEmpty)
     }
 
     func testCurrentIsTrueWhenTheSessionHoldsWhatThisInstallShips() throws {
@@ -101,6 +120,8 @@ final class PageTelemetryTests: XCTestCase {
         let v = try XCTUnwrap(PageTelemetry.currentSessionVersion(root: r))
         XCTAssertEqual(v, "7cb5cd885e6d", "the same hash visual-output-hook.sh prints")
         try v.write(to: RulesStore.seenDirectory(in: r).appendingPathComponent(a), atomically: true, encoding: .utf8)
-        XCTAssertEqual(drain(r).first { $0.0 == "session_rules" }?.1["current"], .bool(true))
+        var out: [(String, [String: TrackValue])] = []
+        PageTelemetry.turnsCompleted([(a, "claude")], root: r) { out.append(($0, $1)) }
+        XCTAssertEqual(out.first { $0.0 == "session_seen" }?.1["current"], .bool(true))
     }
 }

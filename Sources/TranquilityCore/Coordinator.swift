@@ -163,8 +163,15 @@ public struct Coordinator: Sendable {
 
     @discardableResult
     public func intake() throws -> SpoolDrainer.DrainResult {
-        try SpoolDrainer(store: store, summaryOriginId: localSummaryOriginId).drain()
+        let result = try SpoolDrainer(store: store, summaryOriginId: localSummaryOriginId).drain()
+        if !result.completed.isEmpty { Self.onTurnsCompleted?(result.completed) }
+        return result
     }
+
+    /// Every caller of `intake` files turns, and several discard the result,
+    /// so `turn_completed` is raised here rather than at one call site. Set
+    /// once by the app; nil in tests, so no test writes telemetry state.
+    nonisolated(unsafe) public static var onTurnsCompleted: (@Sendable ([(session: String, harness: String)]) -> Void)?
 
     /// Summaries computed in memory, ahead of being asked for.
     ///

@@ -165,9 +165,11 @@ public enum Track {
 
     /// Point the funnel at a directory and give it the install id as salt.
     public static func configure(directory: URL, installId: String) {
-        lock.lock(); defer { lock.unlock() }
+        lock.lock()
         storeURL = directory.appendingPathComponent("events.jsonl")
         salt = installId
+        lock.unlock()
+        UsageDay.shared.configure(url: directory.appendingPathComponent("usage-day.json"))
     }
 
     public static var eventsURL: URL? { lock.lock(); defer { lock.unlock() }; return storeURL }
@@ -270,6 +272,7 @@ public enum Track {
         if let capture { enriched["capture_id"] = capture }
         if let attempt { enriched["attempt_id"] = attempt }
         let event = TrackEvent(name: name, at: now, properties: enriched)
+        UsageDay.shared.observe(name, properties, at: now)
         queue.async {
             if let url { append(event, to: url) }
             if let sink {

@@ -25,6 +25,10 @@ public struct SpoolDrainer: Sendable {
         /// Rows retired without being spoken: superseded by a newer turn, or
         /// answered by the user typing into that session.
         public var retired: Int = 0
+        /// Finished turns newly filed by this drain, for `turn_completed`:
+        /// the session and the harness it ran in. Replays and duplicates are
+        /// not here, so a turn is counted once.
+        public var completed: [(session: String, harness: String)] = []
     }
 
     /// Move every spooled line into the queue. Safe to call repeatedly.
@@ -78,6 +82,9 @@ public struct SpoolDrainer: Sendable {
             let source = summaryOriginId.map { GatewaySource.localHook(event, originId: $0) }
             if try store.insert(event: event, summarySource: source) != nil {
                 result.inserted += 1
+                if record.hookEvent == HookEventKind.stop.rawValue {
+                    result.completed.append((record.sessionId, record.harnessToken))
+                }
             } else {
                 result.duplicates += 1
             }
@@ -101,6 +108,22 @@ public struct SpoolDrainer: Sendable {
         var earlierThisTurn: String?
         var notificationMatcher: String?
         var tty: String?
+        /// Written by tbase-hook.sh since 24 Oct 2026. Older lines carry none,
+        /// and the transcript's location answers instead.
+        var harness: String?
+
+        var harnessToken: String {
+            if let harness, ["claude", "codex", "opencode"].contains(harness) { return harness }
+            return Self.harness(fromTranscript: transcriptPath)
+        }
+
+        static func harness(fromTranscript path: String?) -> String {
+            guard let path else { return "unknown" }
+            if path.contains("/.codex/") { return "codex" }
+            if path.contains("/.claude/") { return "claude" }
+            if path.lowercased().contains("opencode") { return "opencode" }
+            return "unknown"
+        }
 
         func toEvent() -> QueuedEvent {
             QueuedEvent(

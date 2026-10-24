@@ -125,6 +125,12 @@ record = {
     "lastAssistantMessage": msg,
     "notificationMatcher": p.get("matcher") or p.get("notification_type"),
     "tty": os.environ.get("VOICE_DISPATCH_TTY") or None,
+    # For turn_completed (24 Oct 2026): which harness, from where its
+    # transcript lives, the one field every harness fills differently.
+    "harness": ("codex" if "/.codex/" in (p.get("transcript_path") or "")
+                else "claude" if "/.claude/" in (p.get("transcript_path") or "")
+                else "opencode" if "opencode" in (p.get("transcript_path") or "").lower()
+                else "unknown"),
 }
 
 if not record["sessionId"]:
