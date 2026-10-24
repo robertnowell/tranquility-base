@@ -130,5 +130,50 @@ class WritingStandardCheckTests(unittest.TestCase):
         self.assertIn('"Ready for review."', ask)
 
 
+class PageMetricsLineTests(unittest.TestCase):
+    """The hook's half of page_published: one line per live page, none for drafts."""
+
+    def run_hook_on(self, home, rel, page):
+        import json, os, re
+        ns = _hook_namespace()
+        source = (ROOT / "hooks/artifact-hook.sh").read_text()
+        start = source.index("def _record_page_metrics(path):")
+        stop = source.index("\n_record_page_metrics(path)", start)
+        ns.update({"os": os, "json": json, "re": re})
+        target = Path(home) / "Documents/agents" / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(page)
+        with patch.dict(os.environ, {"HOME": home, "TB_PAGE_HARNESS": "codex"}):
+            exec(source[start:stop], ns)
+            ns["_record_page_metrics"](str(target))
+        log = Path(home) / "Library/Application Support/VoiceDispatch/rules/pages.jsonl"
+        return [json.loads(l) for l in log.read_text().splitlines()] if log.exists() else []
+
+    PAGE = ('<head><meta name="intranet:session" content="s"><meta name="intranet:type" content="audit">'
+            '<meta name="intranet:brand" content="U Vape"></head><h1>Four fixes, five checks.</h1>'
+            '<p class="lede">The sync fails; the alert stays green.</p>'
+            '<section class="claim" data-shows="text"><span class="c">One claim holds.</span></section>')
+
+    def test_a_live_page_writes_one_line_with_its_counts_and_none_without_a_record(self):
+        with tempfile.TemporaryDirectory() as home:
+            lines = self.run_hook_on(home, "abcdef12-3456/report.html", self.PAGE)
+        self.assertEqual(len(lines), 1)
+        line = lines[0]
+        self.assertEqual((line["session"], line["harness"], line["type"], line["rules"]),
+                         ("abcdef12-3456", "codex", "audit", "none"))
+        self.assertEqual((line["claims"], line["semicolons"], line["headline_has_verb"], line["ste_flags"]),
+                         (1, 1, False, 2))
+
+    def test_a_page_stamped_with_rules_reports_them(self):
+        with tempfile.TemporaryDirectory() as home:
+            page = self.PAGE.replace("</head>", '<meta name="intranet:rules" content="3f6d1085bd5e"></head>')
+            self.assertEqual(self.run_hook_on(home, "abcdef12-3456/r.html", page)[0]["rules"], "3f6d1085bd5e")
+
+    def test_drafts_and_hubs_are_not_pages(self):
+        with tempfile.TemporaryDirectory() as home:
+            self.assertEqual(self.run_hook_on(home, "abcdef12-3456/_drafts/report.html", self.PAGE), [])
+            self.assertEqual(self.run_hook_on(home, "abcdef12-3456/index.html", self.PAGE), [])
+
+
 if __name__ == "__main__":
     unittest.main()

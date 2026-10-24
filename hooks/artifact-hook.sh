@@ -753,6 +753,15 @@ case "$FILE" in
 esac
 
 [ "$MODE" = "advisory" ] && STAMP=0 && META=0
+# Which harness wrote it, for the page_published event: read from where the
+# payload's transcript lives, the one field every harness fills differently.
+case "$PAYLOAD" in
+  *'/.codex/'*)   TB_PAGE_HARNESS=codex;;
+  *'/.claude/'*)  TB_PAGE_HARNESS=claude;;
+  *[Oo]pen[Cc]ode*|*'/opencode/'*) TB_PAGE_HARNESS=opencode;;
+  *)              TB_PAGE_HARNESS=unknown;;
+esac
+export TB_PAGE_HARNESS
 python3 - "$FILE" "$LINK_SESSION" "$SHORT" "$TODAY" "$STAMP" "$TITLE" "$META" "$MISFILED" "$OWNER" <<'PY' 2>/dev/null || true
 import html as htmllib
 import json, re, sys
@@ -1276,6 +1285,63 @@ if PAGE_PROBLEMS:
         pass
 
 SHAPE_ASK = _shape_ask(path)
+
+# PAGE TELEMETRY (24 Oct 2026). Robert: "this should be in our telemetry. we
+# should know how many documents are created, what rules each mac is using."
+# One JSON line per write of a live page in an agent folder, appended to
+# rules/pages.jsonl. The app drains it (PageTelemetry) into the page_published
+# event, counting a second write of the same page as a republish. Only counts
+# and tokens leave the Mac: the path and brand stay in this local line, and the
+# app sends the brand as a salted hash. Drafts and hubs are not pages.
+def _record_page_metrics(path):
+    try:
+        import time as _t
+        agents = os.path.realpath(os.path.expanduser("~/Documents/agents"))
+        real = os.path.realpath(path)
+        rel = os.path.relpath(real, agents)
+        parts = rel.split(os.sep)
+        if (rel.startswith("..") or len(parts) < 2 or not real.endswith(".html")
+                or "_drafts" in parts or parts[-1] == "index.html"
+                or not re.fullmatch(r"[0-9a-f-]{8,64}", parts[0])):
+            return
+        with open(real, "r", encoding="utf-8", errors="ignore") as fh:
+            src = fh.read()
+        if not re.search(r'<meta\s+name="intranet:', src):
+            return
+        body = re.sub(r"<(script|style)\b[^>]*>.*?</\1>", " ", src, flags=re.S | re.I)
+        def _meta(name):
+            m = re.search(r'<meta\s+name="intranet:%s"\s+content="([^"]*)"' % name, src)
+            return m.group(1).strip() if m else ""
+        found = _ste_flags(body)
+        session = parts[0]
+        rules = _meta("rules")
+        if not rules:
+            try:
+                with open(os.path.join(os.path.expanduser(
+                        "~/Library/Application Support/VoiceDispatch/rules/seen"), session)) as fh:
+                    rules = fh.read().strip()
+            except OSError:
+                rules = ""
+        line = {
+            "at_ms": int(_t.time() * 1000), "session": session, "path": real,
+            "harness": os.environ.get("TB_PAGE_HARNESS") or "unknown",
+            "type": _meta("type"), "brand": _meta("brand"),
+            "rules": rules if re.fullmatch(r"[0-9a-f]{6,64}", rules or "") else "none",
+            "words": len(re.sub(r"<[^>]+>", " ", body).split()),
+            "claims": len(re.findall(r'<section class="claim', body)),
+            "semicolons": sum(1 for r, _ in found if r == "semicolon"),
+            "long_sentences": sum(1 for r, _ in found if r.endswith(" words")),
+            "headline_has_verb": not any(r == "headline with no verb" for r, _ in found),
+            "ste_flags": len(found),
+        }
+        log_dir = os.path.expanduser("~/Library/Application Support/VoiceDispatch/rules")
+        os.makedirs(log_dir, exist_ok=True)
+        with open(os.path.join(log_dir, "pages.jsonl"), "a") as fh:
+            fh.write(json.dumps(line) + "\n")
+    except Exception:
+        pass
+
+_record_page_metrics(path)
 
 # A misfile is louder than anything else this hook says, because it is the one
 # failure that makes the archive assert something untrue about who did the work.
