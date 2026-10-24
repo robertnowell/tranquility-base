@@ -201,12 +201,19 @@ summaries are the point.
   which chord you pressed in which panel face and what the app did with it,
   panel faces changing, each agent's lamp changing, launches, captures (their
   length in seconds, never their words), transcription lengths in characters
-  and words, replies and their outcomes, settings changed. A property can only
-  be a word from a fixed vocabulary, a number, a yes/no, or a salted hash of a
-  session or directory id; the code has no way to send text. `events.jsonl`
-  beside `failures.jsonl` is the local copy. On by default; "Diagnostics ›
+  and words, replies and their outcomes, settings changed. A property is a
+  word from a fixed vocabulary, a number, a yes/no, a salted hash of a session
+  or directory id, or, since 7 Sep 2026, a short line of the app's or an
+  agent's own error text (a provider's HTTP error, an update failure), scrubbed
+  of home paths, emails and keys and cut to 240 characters. `events.jsonl`
+  beside `failures.jsonl` is the local copy. On by default, with no first-run
+  notice for now (ruled 24 Oct 2026, docs/rulings/ruling-usage-on-leaks-closed-first.md); "Diagnostics ›
   Send usage and failure reports" turns both off, "Reset install id" severs
   the random id that groups them.
+- **Never sent:** anything you say or dictate, transcripts, what you type into
+  an agent, an agent's replies, the text of a notice or card the panel shows,
+  a pane's screen, tab and folder names, file paths, page contents, and brand
+  names (a page's brand is sent only as a salted hash).
 - Long-running headless `claude -p` jobs can be announced while still executing.
 - On-disk state still lives in `~/Library/Application Support/VoiceDispatch/`
   and credentials under the Keychain service `voice-dispatch` — both predate the

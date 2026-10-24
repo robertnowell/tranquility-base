@@ -216,9 +216,16 @@ public enum Track {
     /// stop, where the app's sentences put their own words, and never what
     /// comes after, where they put the user's ("Typed into Terminal.",
     /// "Install id copied: ad8e...", "could not save. <error>").
+    ///
+    /// And only its first three words (24 Oct 2026, the leak pass). A card
+    /// names its tab or folder BEFORE the colon too: "Couldn't type into
+    /// Kopi launch: ..." sent "couldn_t_type_into_kopi_launch". The verb
+    /// phrase comes first and the label after it, so three words keep the
+    /// app's phrase and drop the user's name for things.
     public static func phrase(_ text: String) -> TrackValue {
         let head = text.split(whereSeparator: { $0 == ":" || $0 == "." }).first.map(String.init) ?? text
-        return token(from: String(head.prefix(32)))
+        let words = head.split(whereSeparator: { $0 == " " || $0 == "\n" || $0 == "\t" }).prefix(3)
+        return token(from: String(words.joined(separator: " ").prefix(32)))
     }
 
     /// The agent's or the app's own words, scrubbed at the door. Never the
