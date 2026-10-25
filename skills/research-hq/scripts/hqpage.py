@@ -25,6 +25,7 @@ land on the wrong hub.
 """
 import json
 import os
+import plistlib
 import re
 import subprocess
 import sys
@@ -49,6 +50,57 @@ def agents_root():
     except Exception:
         pass
     return Path.home() / "Documents" / "agents"
+
+
+# PROVENANCE (24 Oct 2026). Robert: "we should have clear logs to know whether
+# the other mac followed our rules or not, it shouldn't be guesswork." Every
+# published page carries the rules version its session was given (the record
+# visual-output-hook.sh writes to rules/seen/<session>) and the app version that
+# installed those rules. A missing record is written as "none", never omitted,
+# so a page written without the rules says so on its face.
+def rules_dir():
+    return Path(os.environ.get("TB_RULES_DIR") or
+                Path.home() / "Library" / "Application Support" / "VoiceDispatch" / "rules")
+
+
+def provenance(session):
+    root = rules_dir()
+    try:
+        rules = (root / "seen" / session).read_text(encoding="utf-8").strip()
+    except OSError:
+        rules = ""
+    if not re.fullmatch(r"[0-9a-f]{6,64}", rules):
+        rules = "none"
+    app = "none"
+    try:
+        info = json.loads((root / "app.json").read_text(encoding="utf-8"))
+        with open(Path(info["path"]) / "Contents" / "Info.plist", "rb") as f:
+            plist = plistlib.load(f)
+        short, build = plist.get("CFBundleShortVersionString"), plist.get("CFBundleVersion")
+        if short:
+            app = f"{short} ({build})" if build and build != short else str(short)
+    except Exception:
+        pass
+    return rules, app
+
+
+def stamp_provenance(page, session):
+    """Write intranet:rules and intranet:app into the head, replacing old values."""
+    rules, app = provenance(session)
+    for name, value in (("rules", rules), ("app", app)):
+        tag = f'<meta name="intranet:{name}" content="{value}">'
+        pat = re.compile(rf'<meta\s+name="intranet:{name}"\s+content="[^"]*"\s*/?>')
+        if pat.search(page):
+            page = pat.sub(lambda _m: tag, page, count=1)
+        else:
+            anchor = re.search(r'<meta\s+name="intranet:session"[^>]*>', page)
+            if anchor:
+                page = page[:anchor.end()] + "\n" + tag + page[anchor.end():]
+            elif "</head>" in page:
+                page = page.replace("</head>", tag + "\n</head>", 1)
+            else:
+                page = tag + "\n" + page
+    return page
 
 
 def usage(code=2):
@@ -102,6 +154,7 @@ def publish(session, slug):
         print(f"hq-page: {draft} is not filled yet ({len(left)} placeholder(s) left, e.g. {left[0]}). "
               "Fill it, then publish.", file=sys.stderr)
         return 1
+    draft.write_text(stamp_provenance(page, session), encoding="utf-8")
     draft.replace(out)
     print(out)
     subprocess.run([sys.executable, str(HERE / "hq-open"), str(out)])
@@ -183,6 +236,7 @@ def main(argv):
         page = page.replace("<h1><!-- TITLE: the one sentence they cannot miss. A finding with a verb, not a topic. --></h1>",
                             f"<h1>{title}</h1>")
 
+    page = stamp_provenance(page, session)
     out_dir.mkdir(parents=True, exist_ok=True)
     out.write_text(page, encoding="utf-8")
     fallback = " (no theme on record for that brand: house tokens, say so in one line)" if "NO THEME ON RECORD" in header else ""

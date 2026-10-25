@@ -753,6 +753,15 @@ case "$FILE" in
 esac
 
 [ "$MODE" = "advisory" ] && STAMP=0 && META=0
+# Which harness wrote it, for the page_published event: read from where the
+# payload's transcript lives, the one field every harness fills differently.
+case "$PAYLOAD" in
+  *'/.codex/'*)   TB_PAGE_HARNESS=codex;;
+  *'/.claude/'*)  TB_PAGE_HARNESS=claude;;
+  *[Oo]pen[Cc]ode*|*'/opencode/'*) TB_PAGE_HARNESS=opencode;;
+  *)              TB_PAGE_HARNESS=unknown;;
+esac
+export TB_PAGE_HARNESS
 python3 - "$FILE" "$LINK_SESSION" "$SHORT" "$TODAY" "$STAMP" "$TITLE" "$META" "$MISFILED" "$OWNER" <<'PY' 2>/dev/null || true
 import html as htmllib
 import json, re, sys
@@ -1015,6 +1024,107 @@ def _evidence_flags(body):
     return flags
 
 
+# THE WRITING STANDARD (24 Oct 2026; brief.md, Writing standard: modified
+# ASD-STE100). Robert: "context is the main problem, but if the report fails,
+# just ask the agent to retry." So this never blocks: it quotes the sentences
+# that break the rules a parser can count, and asks for a rewrite while the
+# writer still has the page open. Prose only: pre, code, tables, quotes, svg
+# and the stamped footer are evidence, quoted exactly, and are removed first.
+# What it counts: semicolons, sentences over twenty words, and a headline with
+# no finite verb. The verb test is a heuristic, tuned on the 24 Oct audit's
+# headlines (Tests: test_hqpage.py): a listed verb counts when something that
+# can be a subject comes before it, and a quantity at the start of a clause
+# ("Four fixes, five checks") marks a noun. A comma-joined headline gets no
+# credit for a past participle ("Four tiers, every cell filled"). An unlisted
+# verb is flagged wrongly; it advises, so the cost is one rewrite request. It
+# cannot see unexplained names, idioms or tense; those stay in the brief.
+_STE_AUX = set("am is are was were be been has have had do does did will would can cannot "
+               "could should may might must shall isn't aren't wasn't don't doesn't didn't won't "
+               "can't".split())
+_STE_STEMS = ("add ask beat break bring build call carry catch change check choose close come cost "
+              "count cut decide delete drop end exist fail fall fill find fit fix follow get give go "
+              "grow hide hold keep land leave let like list live lose make matter mean merge miss move "
+              "need open owe pass pay pick plan point print prove put reach read refuse remove replace "
+              "run save say see seem send ship show sit skip sound spend start stay stop take tell "
+              "think track try turn wait want warn win work write repeat apply copy pick print").split()
+_STE_PAST = set("broke built came caught chose found gave got grew held hid kept knew left lost made "
+                "meant met paid ran said sat saw sent shot sold spent stood took told went won wrote".split())
+_STE_QUANT = set("a an the one two three four five six seven eight nine ten eleven twelve every each "
+                 "no none all both half most some many few then".split())
+def _ste_forms(stem):
+    e = stem[:-1] if stem.endswith("e") else stem
+    y = stem[:-1] + "ie" if stem.endswith("y") else None
+    out = {stem, stem + "s", stem + "es", e + "ed", stem + "ed", stem + "d"}
+    if y:
+        out |= {y + "s", y + "d"}
+    return out
+_STE_PRESENT = set()
+_STE_REGULAR_PAST = set()
+for _st in _STE_STEMS:
+    for _f in _ste_forms(_st):
+        (_STE_REGULAR_PAST if _f.endswith("d") and _f != _st else _STE_PRESENT).add(_f)
+def _ste_headline_has_verb(head):
+    comma = "," in head
+    clauses = [c.split() for c in re.split(r"[,:]", head.lower())]
+    for words in clauses:
+        words = [re.sub(r"[^a-z0-9']", "", w) for w in words]
+        words = [w for w in words if w]
+        for i, w in enumerate(words):
+            prev = words[i - 1] if i else ""
+            if w in _STE_AUX:
+                return True
+            if w in _STE_PAST or w in _STE_REGULAR_PAST:
+                if i > 0 and not comma:
+                    return True
+                continue
+            if w in _STE_PRESENT:
+                if i == 0 and not comma and w in _STE_STEMS:
+                    return True          # an imperative: "Repeat the early-bird week."
+                if i > 0 and not (i == 1 and (prev in _STE_QUANT or prev.isdigit())):
+                    return True
+    return False
+def _ste_prose(body):
+    """Sentences of prose, with evidence and the footer stripped."""
+    t = re.sub(r"<(pre|code|table|blockquote|svg|script|style)\b.*?</\1>", " ", body, flags=re.S | re.I)
+    t = re.sub(r'<div class="tb-agent-footer.*', " ", t, flags=re.S)
+    t = re.sub(r"<br\s*/?>|</(p|h\d|li|div|figcaption|small|span|em|section)>", "\n", t, flags=re.I)
+    t = html_unescape(re.sub(r"<[^>]+>", " ", t))
+    out = []
+    for line in t.split("\n"):
+        line = re.sub(r"\s+", " ", line).strip()
+        if len(line.split()) < 3:
+            continue
+        out += [x for x in re.split(r'(?<=[.?!])\s+(?=[A-Z0-9"$#(])', line) if len(x.split()) >= 3]
+    return out
+def html_unescape(s):
+    import html as _h
+    return _h.unescape(s)
+def _ste_flags(body):
+    """[(rule, sentence)] for the rules a parser can count, headline first."""
+    found = []
+    h1 = re.search(r"<h1\b[^>]*>(.*?)</h1>", body, flags=re.S | re.I)
+    if h1:
+        head = re.sub(r"\s+", " ", html_unescape(re.sub(r"<[^>]+>", " ", h1.group(1)))).strip()
+        if head and not _ste_headline_has_verb(head):
+            found.append(("headline with no verb", head))
+    for s in _ste_prose(body):
+        if ";" in s:
+            found.append(("semicolon", s))
+        elif len(s.split()) > 20:
+            found.append(("%d words" % len(s.split()), s))
+    return found
+def _ste_ask(body):
+    found = _ste_flags(body)
+    if not found:
+        return ""
+    lines = "".join('\n  - (%s) "%s"' % (rule, s if len(s) <= 220 else s[:217] + "...") for rule, s in found[:5])
+    more = " (%d more)" % (len(found) - 5) if len(found) > 5 else ""
+    return ("\n\nWRITING STANDARD (modified ASD-STE100): %d sentence%s break%s it%s:%s\n"
+            "Rewrite these sentences under brief.md, Writing standard, then publish again. "
+            "Complete sentences with a verb, twenty words at most, no semicolons."
+            % (len(found), "" if len(found) == 1 else "s", "s" if len(found) == 1 else "", more, lines))
+
+
 def _shape_ask(path):
     try:
         with open(path, "r", encoding="utf-8", errors="ignore") as fh:
@@ -1111,7 +1221,8 @@ def _shape_ask(path):
     return ("\n\nSHAPE OF THIS PAGE (advisory, not a gate): " + " · ".join(parts) + "."
             + (" " + "; ".join(flags) + "." if flags else " Within target.")
             + tpl
-            + " The target and the worked example are in share-as-page/references/brief.md.")
+            + " The target and the worked example are in share-as-page/references/brief.md."
+            + _ste_ask(body))
 
 # ---------------------------------------------------------------------------
 # A REPORT THAT WILL NOT WORK, said the moment it is written (30 Sep 2026).
@@ -1174,6 +1285,63 @@ if PAGE_PROBLEMS:
         pass
 
 SHAPE_ASK = _shape_ask(path)
+
+# PAGE TELEMETRY (24 Oct 2026). Robert: "this should be in our telemetry. we
+# should know how many documents are created, what rules each mac is using."
+# One JSON line per write of a live page in an agent folder, appended to
+# rules/pages.jsonl. The app drains it (PageTelemetry) into the page_published
+# event, counting a second write of the same page as a republish. Only counts
+# and tokens leave the Mac: the path and brand stay in this local line, and the
+# app sends the brand as a salted hash. Drafts and hubs are not pages.
+def _record_page_metrics(path):
+    try:
+        import time as _t
+        agents = os.path.realpath(os.path.expanduser("~/Documents/agents"))
+        real = os.path.realpath(path)
+        rel = os.path.relpath(real, agents)
+        parts = rel.split(os.sep)
+        if (rel.startswith("..") or len(parts) < 2 or not real.endswith(".html")
+                or "_drafts" in parts or parts[-1] == "index.html"
+                or not re.fullmatch(r"[0-9a-f-]{8,64}", parts[0])):
+            return
+        with open(real, "r", encoding="utf-8", errors="ignore") as fh:
+            src = fh.read()
+        if not re.search(r'<meta\s+name="intranet:', src):
+            return
+        body = re.sub(r"<(script|style)\b[^>]*>.*?</\1>", " ", src, flags=re.S | re.I)
+        def _meta(name):
+            m = re.search(r'<meta\s+name="intranet:%s"\s+content="([^"]*)"' % name, src)
+            return m.group(1).strip() if m else ""
+        found = _ste_flags(body)
+        session = parts[0]
+        rules = _meta("rules")
+        if not rules:
+            try:
+                with open(os.path.join(os.path.expanduser(
+                        "~/Library/Application Support/VoiceDispatch/rules/seen"), session)) as fh:
+                    rules = fh.read().strip()
+            except OSError:
+                rules = ""
+        line = {
+            "at_ms": int(_t.time() * 1000), "session": session, "path": real,
+            "harness": os.environ.get("TB_PAGE_HARNESS") or "unknown",
+            "type": _meta("type"), "brand": _meta("brand"),
+            "rules": rules if re.fullmatch(r"[0-9a-f]{6,64}", rules or "") else "none",
+            "words": len(re.sub(r"<[^>]+>", " ", body).split()),
+            "claims": len(re.findall(r'<section class="claim', body)),
+            "semicolons": sum(1 for r, _ in found if r == "semicolon"),
+            "long_sentences": sum(1 for r, _ in found if r.endswith(" words")),
+            "headline_has_verb": not any(r == "headline with no verb" for r, _ in found),
+            "ste_flags": len(found),
+        }
+        log_dir = os.path.expanduser("~/Library/Application Support/VoiceDispatch/rules")
+        os.makedirs(log_dir, exist_ok=True)
+        with open(os.path.join(log_dir, "pages.jsonl"), "a") as fh:
+            fh.write(json.dumps(line) + "\n")
+    except Exception:
+        pass
+
+_record_page_metrics(path)
 
 # A misfile is louder than anything else this hook says, because it is the one
 # failure that makes the archive assert something untrue about who did the work.
