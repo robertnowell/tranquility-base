@@ -530,7 +530,7 @@ public final class HubMirror: @unchecked Sendable {
         let why = status == 413
             ? "too large for the hub (HTTP 413, \(size) after inline images were moved out)"
             : "the hub answered HTTP \(status) (\(size))"
-        Failures.report(.pageRefused, reason: "page \(slug) not sent: \(why)", session: c.session)
+        Failures.report(.pageRefused, reason: "page not sent: \(why)", session: c.session)
         Self.writeRefusal(session: c.session, slug: slug, path: c.path, reason: why, root: artifactRoot)
     }
 

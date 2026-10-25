@@ -527,9 +527,13 @@ public enum Failures {
         // agent's and the app's own words, scrubbed and bounded by `.prose`,
         // which the 7 Sep privacy ruling allows; only the user's own speech is
         // privileged, and none of it is on this path.
+        // A notice's reason is the card the panel painted, and a card names
+        // the tab or folder it is about. Off the Mac it is the phrase only;
+        // the full card stays in the local failures.jsonl (leak pass, 24 Oct).
+        let shared = Self.telemetryReason(kind: kind, reason: reason)
         var mirror: [String: TrackValue] = [
             "kind": .token(kind.rawValue), "site": Track.token(from: site),
-            "reason": .prose(reason)]
+            "reason": shared]
         if let harness { mirror["harness"] = .token(harness) }
         if let session { mirror["agent_id"] = Track.hash(session) }
         Track.record("failure", mirror)
@@ -542,8 +546,16 @@ public enum Failures {
             event.captureId = captureId
             store?.append(event)
             trace?("\(kind.rawValue) at \(site): \(event.reason.prefix(120))")
-            sink?(event)
+            var outbound = event
+            if kind == .notice { outbound.reason = shared.tokenString }
+            sink?(outbound)
         }
+    }
+
+    /// What leaves the Mac as a failure's reason: a notice's phrase, any
+    /// other reason scrubbed and bounded as `.prose`.
+    static func telemetryReason(kind: FailureKind, reason: String) -> TrackValue {
+        kind == .notice ? Track.phrase(reason) : TrackValue.prose(reason).scrubbed
     }
 
     /// The panel's receipt. Every card becomes a record; a card whose site

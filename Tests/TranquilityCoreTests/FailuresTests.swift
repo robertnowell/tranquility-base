@@ -37,6 +37,27 @@ final class FailuresTests: XCTestCase {
     /// count with no cause off the user's machine. It now carries the reason
     /// too (scrubbed, bounded), which is what makes a failing self-update
     /// debuggable from telemetry.
+    /// Leak pass, 24 Oct 2026: a notice card names a tab or folder. Off the
+    /// Mac it is the phrase; the local record keeps the whole card.
+    func testANoticeLeavesAsItsPhraseAndTheLocalRecordKeepsTheCard() throws {
+        Track.resetForTesting()
+        Track.configure(directory: dir, installId: "install-x")
+        let mirrored = expectation(description: "mirror")
+        let sent = expectation(description: "sink")
+        let product = Box<TrackEvent?>(nil)
+        let outbound = Box<FailureEvent?>(nil)
+        Track.attach { e in if e.name == "failure" { product.update { $0 = e }; mirrored.fulfill() } }
+        Failures.attach { e in outbound.update { $0 = e }; sent.fulfill() }
+        Failures.notice("Couldn't type into Acme Secret Launch: the tab is gone.")
+        wait(for: [mirrored, sent], timeout: 2)
+        Track.detach()
+        XCTAssertEqual(product.value?.properties["reason"], .token("couldn_t_type_into"))
+        XCTAssertEqual(outbound.value?.reason, "couldn_t_type_into")
+        Failures.flush()
+        let local = try String(contentsOf: dir.appendingPathComponent("failures.jsonl"), encoding: .utf8)
+        XCTAssertTrue(local.contains("Acme Secret Launch"), "the local record keeps the whole card")
+    }
+
     func testTheProductMirrorCarriesTheReasonNotJustTheKind() {
         Track.resetForTesting()
         Track.configure(directory: dir, installId: "install-x")
