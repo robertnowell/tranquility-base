@@ -36,7 +36,7 @@ enum Diagnostics {
             ProductDefaults.shared.set(newValue, forKey: sendKey)
             Track.record("setting_changed", ["key": "diagnostics_send", "value": .bool(newValue)])
             apply()
-            Analytics.apply(enabled: newValue)
+            applyAnalytics()
         }
     }
 
@@ -161,8 +161,7 @@ enum Diagnostics {
     /// is known and the toggle is on; otherwise it stays dormant.
     @MainActor
     private static func applyAnalytics() {
-        Analytics.start(key: sendingEnabled ? posthog?.key : nil, host: posthog?.host)
-        if !sendingEnabled { Analytics.apply(enabled: false) }
+        Analytics.reconcile(enabled: sendingEnabled, key: posthog?.key, host: posthog?.host)
     }
 
     /// Reconcile the SDK with the toggle and the DSN. Idempotent.

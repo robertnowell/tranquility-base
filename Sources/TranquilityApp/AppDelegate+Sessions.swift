@@ -677,7 +677,7 @@ extension AppDelegate {
                         let card = "\(launch.label) never came up, nothing was sent. "
                             + "Your words are kept; check Terminal for a prompt."
                         Failures.report(.launchNeverRegistered,
-                                        reason: "\(launch.label) never registered within 30s of launch",
+                                        reason: "launch never registered within 30s",
                                         card: card)
                         hud.showResult(card)
                         rebuildMenu()
@@ -2616,18 +2616,13 @@ extension AppDelegate {
         let reportQuestion: @Sendable (String, String?) -> Void = { [weak self] asked, paneName in
             // Classified, never quoted: the question is the pane's own text
             // and a trust prompt names the directory it is asking about.
-            let lower = asked.lowercased()
-            let kind = lower.contains("trust") ? "trust"
-                : lower.contains("update") ? "update"
-                : lower.contains("hook") ? "hooks"
-                : lower.contains("log in") || lower.contains("sign in") || lower.contains("login") ? "sign_in"
-                : "other"
-            // Both: the kind for counting, the pane's own words for reading.
-            // A trust prompt names the directory it is asking about, and that
-            // is the fact that makes the alert actionable (ruled 7 Sep).
+            // The kind only. The pane's words named the directory a trust
+            // prompt asks about; that stays on the Mac (leak pass, 24 Oct,
+            // superseding the 7 Sep allowance for this field).
+            let kind = PaneScreen.kind(asked)
             Track.record("launch_question_shown", ["harness": .token(adapter.id),
-                                                   "question": .token(kind),
-                                                   "text": .prose(asked)])
+                                                   "question": .token(kind == "none" ? "other" : kind),
+                                                   "screen_lines": .int(PaneScreen.lineCount(asked))])
             launchQuestion.mark()
             Task { @MainActor in self?.hud.showLaunchQuestion(asked, pane: paneName) }
         }
@@ -2793,9 +2788,11 @@ extension AppDelegate {
                 // names its expectation rather than what happened is the
                 // exact shape this whole day was spent unpicking.
                 let waited = Int(Date().timeIntervalSince(launchedAt).rounded())
+                // Facts about the screen, never the screen: it names folders,
+                // tabs and whatever the agent printed (leak pass, 24 Oct).
                 Track.record("launch_unregistered", ["harness": .token(adapter.id), "seconds": .int(waited),
-                                                     "process_alive": .bool(started != nil),
-                                                     "screen": .prose(screen.isEmpty ? "(nothing readable)" : screen)])
+                                                     "process_alive": .bool(started != nil)]
+                    .merging(PaneScreen.facts(screen)) { a, _ in a })
                 Permissions.log("launcher: nothing registered in \(dir) after \(waited)s"
                     + (started == nil ? " and no process is alive on \(tty)"
                                       : " though a process is alive on \(tty)")

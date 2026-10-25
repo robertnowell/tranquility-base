@@ -1943,7 +1943,8 @@ final class StatusHUD: NSObject {
             Permissions.log("notice: refused in \(state.name): \(text)")
             return
         }
-        Track.record("notice_flashed", ["notice": Track.phrase(text), "text": .prose(text)])
+        // The phrase only: the text names tabs and folders (leak pass, 24 Oct).
+        Track.record("notice_flashed", ["notice": Track.phrase(text)])
         noticeLens = lens
         noticeUnderCard = onCard
         noticeExpiry?.cancel()

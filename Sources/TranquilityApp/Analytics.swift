@@ -55,12 +55,25 @@ enum Analytics {
         Permissions.log("\(channel): reporting on, sdk started in \(ms) ms")
     }
 
-    /// The toggle. Off means the SDK keeps nothing and sends nothing.
+    /// The toggle. Off means the SDK keeps nothing and sends nothing. On
+    /// starts the SDK if it never started and clears an opt-out the SDK
+    /// persisted from an earlier launch (TelemetryConsent, 24 Oct 2026).
     @MainActor
-    static func apply(enabled: Bool) {
-        guard started else { return }
-        if enabled { PostHogSDK.shared.optIn() } else { PostHogSDK.shared.optOut() }
-        Permissions.log("\(channel): \(enabled ? "opted in" : "opted out")")
+    static func reconcile(enabled: Bool, key: String?, host: String?) {
+        let optedOut = started && PostHogSDK.shared.isOptOut()
+        for action in TelemetryConsent.actions(enabled: enabled, started: started, optedOut: optedOut) {
+            switch action {
+            case .start:
+                start(key: key, host: host)
+            case .optIn:
+                guard started else { continue }
+                PostHogSDK.shared.optIn()
+                Permissions.log("\(channel): opted in")
+            case .optOut:
+                PostHogSDK.shared.optOut()
+                Permissions.log("\(channel): opted out")
+            }
+        }
     }
 
     @MainActor
