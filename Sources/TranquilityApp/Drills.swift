@@ -3393,7 +3393,19 @@ extension StatusHUD {
     /// and on the card that speaks, never on settings, where it would be a
     /// second voice control beside the voice pane. Faces only: what a click
     /// does to a live line is the announce path's business, asserted in Core.
+    ///
+    /// The grid is the expanded grid. A collapsed panel hides the gear, and
+    /// the mute goes with it, so the first version failed onTheGrid on every
+    /// deploy to a Mac whose user keeps the panel collapsed (25 Oct). The
+    /// preference is durable, so it is saved and restored, as the collapse
+    /// drill does.
     func muteWhereTheTalkingIsDrill() {
+        let widthBeforeDrill = isCollapsed
+        defer { setCollapsed(widthBeforeDrill) }
+        setCollapsed(true)
+        showIdle(rows: [])
+        let onCollapsedGrid = muteButton.isHidden == false
+        setCollapsed(false)
         showIdle(rows: [])
         let onGrid = muteButton.isHidden == false
         currentTarget = ("drill", 1, "promotions copy")
@@ -3409,6 +3421,7 @@ extension StatusHUD {
 
         SelfTest.report("muteWhereTheTalkingIs", [
             ("onTheGrid", onGrid),
+            ("notOnTheCollapsedGrid", !onCollapsedGrid),
             ("onTheSpeakingCard", onCard),
             ("notOnSettings", !onSettings),
             ("leftOfTheGearOnTheCard", mute.maxX <= gear.minX),
