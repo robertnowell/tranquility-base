@@ -45,6 +45,45 @@ extension Coordinator {
         await prewarmAnnouncement(summary, for: session)
     }
 
+    /// The TEXT for every unheard waiting turn, not only the first in line
+    /// (ruled 26 Oct 2026). `prepareNext` covers the row ⌃⌥ will play; a click
+    /// names any row, and a click on the second one paid the model call at
+    /// the press: 16 of 103 presses, p50 6.0s, every one of them a click
+    /// (app.log 24 to 26 Oct). Robert: "text for all", with the voice still
+    /// "only for the first in line" and only when unmuted, which
+    /// `prewarmAnnouncement` already is.
+    ///
+    /// Grid order, top row first, one summary at a time. The caller must not
+    /// await this on the beat: the grid repaint waits behind whatever the
+    /// beat awaits, and six summaries are half a minute.
+    @discardableResult
+    public func prepareWaitingText(
+        excluding inFlight: DeliveryInFlight = DeliveryInFlight(),
+        gridOrder: [String] = GridOrder.inMemory()
+    ) async throws -> Int {
+        guard await prepared.beginSweep() else { return 0 }
+        let rows: [WaitingSession]
+        do {
+            rows = try GridOrder.rank(waiting(), id: \.sessionId, order: gridOrder).filter {
+                !$0.heard && !inFlight.supersedesWaiting($0.sessionId, latestId: $0.latestId)
+            }
+        } catch {
+            await prepared.endSweep()
+            throw error
+        }
+        var written = 0
+        for session in rows where !Task.isCancelled {
+            guard await !prepared.has(session.sessionId, latest: session.latestId),
+                  await prepared.shouldSweep(session.latestId, now: Date()) else { continue }
+            let summary = await resolveSummary(for: session)
+            await prepared.put(summary, for: session.sessionId, latest: session.latestId)
+            written += 1
+        }
+        await prepared.endSweep()
+        if written > 0 { Coordinator.trace?("prepare: text written ahead for \(written) of \(rows.count) waiting") }
+        return written
+    }
+
     /// The announcement's own clip, in the session's own voice. Only the main
     /// summary — the ⌃⌃ ladder is deliberately NOT rendered here: a rung is
     /// ~1.4x the length of the announcement and three of them is ~4x, spent on a

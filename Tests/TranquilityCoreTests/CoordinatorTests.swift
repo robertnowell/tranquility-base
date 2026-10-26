@@ -913,6 +913,50 @@ final class CoordinatorTests: XCTestCase {
         XCTAssertEqual(counting.calls, 2, "re-summarized for the newer event")
     }
 
+    /// A click names any waiting row, not only the first in line. Its text
+    /// must already be written, or the click waits for the model (26 Oct:
+    /// 16 of 103 presses, p50 6.0s, every one a click on a second row).
+    func testTextIsWrittenAheadForEveryWaitingRow() async throws {
+        final class CountingSummary: SummaryProvider, @unchecked Sendable {
+            let name = "counting"; let isConfigured = true
+            var calls = 0
+            func brief(for request: SummaryRequest) async throws -> SessionBrief {
+                calls += 1
+                return SessionBrief(topic: "T", happened: "H",
+                                    recap: request.lastAssistantMessage, proposal: "P?")
+            }
+        }
+        let counting = CountingSummary()
+        let registry = EnrolmentRegistry(url: tmpDir.appendingPathComponent("enrolled.json"))
+        let live = ["old", "new"].enumerated().map {
+            LiveSession(pid: $0.offset + 1, sessionId: $0.element, cwd: "/tmp",
+                        status: "idle", name: $0.element, waitingFor: nil)
+        }
+        let coordinator = Coordinator(
+            store: store, summarizer: SummarizerChain(providers: [counting]),
+            speech: SpeechChain(preferred: SilentSpeech(), fallback: SilentSpeech()),
+            gate: InterruptGate(minimumIdleSeconds: 0, signals: .quiescent),
+            tmuxTransport: RecordingTransport(), enrolment: registry,
+            agents: FakeAgents(live: live),
+            recovery: RecoveryChain(providers: [], maxAttemptsPerProvider: 1, backoff: [0]))
+
+        try append(.stop, session: "old", at: 1_000, message: "the second row")
+        try append(.stop, session: "new", at: 9_000, message: "the first row")
+        let written = try await coordinator.prepareWaitingText(gridOrder: [])
+        XCTAssertEqual(written, 2)
+        XCTAssertEqual(counting.calls, 2)
+
+        // A second sweep finds both written and pays for nothing.
+        let again = try await coordinator.prepareWaitingText(gridOrder: [])
+        XCTAssertEqual(again, 0)
+
+        guard case .spoke(let spoken) = try await coordinator.announceNext(only: "old") else {
+            return XCTFail("expected an announcement")
+        }
+        XCTAssertTrue(spoken.spoken.text.contains("the second row"))
+        XCTAssertEqual(counting.calls, 2, "the click found its text ready")
+    }
+
     func testNewestSessionFirst() async throws {
         let coordinator = try makeCoordinator()
         try append(.stop, session: "old", at: 1_000, message: "older session")

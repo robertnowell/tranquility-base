@@ -934,6 +934,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // for a summary and a voice render on the session you are
                 // mid-reply to, for an announcement that must not play.
                 try? await coordinator.prepareNext(excluding: self.delivering)
+                // Then the text for every other waiting row, so a click on
+                // any of them opens at once. NOT awaited: the repaint below
+                // must not wait behind six model calls.
+                let inFlight = self.delivering
+                Task { try? await coordinator.prepareWaitingText(excluding: inFlight) }
 
                 // Reflect arrivals without being asked. The panel only ever redrew
                 // on a keypress, so a session finishing while you were looking
