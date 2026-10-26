@@ -213,6 +213,27 @@ public struct Coordinator: Sendable {
                   entry.latestId == latest else { return nil }
             return entry.summary
         }
+
+        /// The text sweep (`prepareWaitingText`) runs one at a time. The beat
+        /// fires every five seconds and a sweep over six rows can outlast it;
+        /// two sweeps would pay for the same summary twice.
+        private var sweeping = false
+        func beginSweep() -> Bool {
+            guard !sweeping else { return false }
+            sweeping = true
+            return true
+        }
+        func endSweep() { sweeping = false }
+
+        /// When the sweep last tried each event. A summary that fails is not
+        /// cached (`put` refuses it), so without this a provider outage would
+        /// cost one model call per waiting row on every beat.
+        private var sweptAt: [Int64: Date] = [:]
+        func shouldSweep(_ latest: Int64, now: Date, retryAfter: TimeInterval = 60) -> Bool {
+            if let last = sweptAt[latest], now.timeIntervalSince(last) < retryAfter { return false }
+            sweptAt[latest] = now
+            return true
+        }
     }
 
     let prepared: PreparedSummaries
