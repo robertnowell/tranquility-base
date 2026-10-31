@@ -136,6 +136,16 @@ public final class HubWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, 
         present(byPerson: true)
     }
 
+    /// A click on the app's Dock tile (30 Oct 2026, Robert: "if I click the
+    /// TB icon it should still bring hub forward"). The window the person
+    /// already has comes forward and takes the keys, on whatever page it
+    /// shows. No window: nothing opens, the grid is the tile's own answer.
+    public func bringForward() {
+        guard let window, window.isVisible else { return }
+        log("hub window: brought forward by the person")
+        present(byPerson: true)
+    }
+
     /// The hub's host exactly, or one of its own subdomains (Clerk's sign-in
     /// API lives at clerk.<hub host>). Anything else is not the hub.
     func isHub(_ url: URL) -> Bool {

@@ -53,12 +53,17 @@ extension AppDelegate {
         }
     }
 
-    /// A click on the tile: the grid, exactly as a click on the status item.
+    /// A click on the tile: the grid, exactly as a click on the status item,
+    /// and the Hub window the person already has, in front (30 Oct 2026,
+    /// Robert). An agent's report no longer activates the app, so a window
+    /// it opened can sit behind other apps; the tile is the door that
+    /// brings it back.
     func applicationShouldHandleReopen(_ sender: NSApplication,
                                        hasVisibleWindows flag: Bool) -> Bool {
         Track.record("dock_clicked", ["button": "left",
                                       "panel_was_on_screen": .bool(hud.isOnScreen)])
         showPanel()
+        HubWindow.shared.bringForward()
         return false
     }
 

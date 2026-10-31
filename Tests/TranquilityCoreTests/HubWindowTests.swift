@@ -99,6 +99,18 @@ final class HubWindowTests: XCTestCase {
         XCTAssertNotEqual(h.lastShown?.path, "/d/second", "an open window stays on its page")
     }
 
+    /// The Dock tile brings the window the person has forward, on its own
+    /// page, and opens nothing when there is none (30 Oct).
+    func testTheDockTileBringsAnExistingWindowForwardAndOpensNone() {
+        let h = hub()
+        h.bringForward()
+        XCTAssertNil(h.window, "no window: the tile opens nothing")
+        XCTAssertTrue(h.offer(URL(string: "https://hq.example.test/d/first")!))
+        h.bringForward()
+        XCTAssertEqual(h.lastShown?.path, "/d/first", "the page it showed stays")
+        XCTAssertEqual(h.window?.isVisible, true)
+    }
+
     func testTheHubAndItsOwnSubdomainsAreTheHub() {
         let h = hub()
         XCTAssertTrue(h.isHub(URL(string: "https://hq.example.test/d/x")!))
