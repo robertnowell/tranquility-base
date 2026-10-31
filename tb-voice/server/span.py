@@ -47,6 +47,7 @@ it is how the manager comes to type "send that to the agent" into an agent.
 
 import json
 import re
+import time
 from dataclasses import dataclass
 
 from loguru import logger
@@ -57,8 +58,25 @@ from vocab import Line, LineKind, Role
 # Lines the developer said that can be part of what is sent. A COMMAND is in
 # here and marked, never dropped: see the docstring, 29 Sep 17:01.
 SENDABLE = {LineKind.TALK, LineKind.DICTATION, LineKind.COMMAND}
-# How far back a send may reach.
+# How far back a send may reach, as a count.
 MAX_CANDIDATES = 60
+# And as time. "That message" is something they said a moment ago; it is not a
+# thing they said on Thursday.
+#
+# The ledger is offered "since the last message was sent", which on a Mac that
+# has never sent one is everything it has. Measured 29 Sep 23:28: an agent
+# answered on stage, the developer said "Send that message to the agent", and
+# the picker was handed sixty lines reaching back days -- [223] "Invite the
+# next agent, please.", [233] "Tranquility, can you explain your capabilities,
+# please?", eleven more of the same -- with the line he meant, said eight
+# seconds earlier, buried at the end. It answered none, and on that list it was
+# right again.
+#
+# Counting is not the bound that matters; recency is. Anything older is reached
+# with `range`, which exists precisely for "what I said about pricing" and can
+# name a day. Five minutes is long enough to hold a thought that was
+# interrupted and short enough that yesterday cannot answer for today.
+RECENT_SECONDS = 300.0
 
 
 @dataclass(frozen=True)
@@ -111,12 +129,20 @@ def _without_the_request(cands: list[Candidate], request: str) -> list[Candidate
     return [c for c in cands if not _same_utterance(c.text, request)]
 
 
-def from_ledger_rows(rows: list[dict], request: str = "") -> list[Candidate]:
+def from_ledger_rows(rows: list[dict], request: str = "", now: float | None = None) -> list[Candidate]:
     """The Mac's ledger since the last action (wire v1 `ledger`), parsed into
     types at this boundary. A row with an unknown role or kind is skipped and
-    logged, never guessed."""
+    logged, never guessed; a row older than `RECENT_SECONDS` is not a candidate
+    for "that message" and is left to `range`.
+
+    A row with no `t` is kept: an older Mac's ledger does not carry one, and
+    the count below still bounds it."""
+    now = time.time() if now is None else now
     out = []
     for r in rows:
+        at = r.get("t")
+        if isinstance(at, (int, float)) and now - at > RECENT_SECONDS:
+            continue
         try:
             role, kind = Role(r.get("role")), LineKind(r.get("kind"))
         except ValueError:
