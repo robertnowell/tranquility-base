@@ -85,15 +85,30 @@ final class HubWindowTests: XCTestCase {
         XCTAssertEqual(ins, 1)
     }
 
-    /// A report an agent opens never moves an open window (ruled 29 Sep).
+    /// A report an agent opens never moves an open window (ruled 29 Sep), and
+    /// never takes the keys when it opens a closed one (30 Oct).
     func testAnOfferedReportOpensAClosedWindowAndLeavesAnOpenOneAlone() {
         let h = hub()
         XCTAssertFalse(h.offer(URL(string: "https://elsewhere.test/x")!), "not the hub: the caller's")
         XCTAssertTrue(h.offer(URL(string: "https://hq.example.test/d/first")!))
         XCTAssertEqual(h.lastShown?.path, "/d/first")
+        XCTAssertEqual(h.window?.isVisible, true, "a closed window opens on the report")
+        XCTAssertNotEqual(h.window?.isKeyWindow, true, "an agent's report never takes focus")
         h.window?.orderFront(nil)
         XCTAssertTrue(h.offer(URL(string: "https://hq.example.test/d/second")!))
         XCTAssertNotEqual(h.lastShown?.path, "/d/second", "an open window stays on its page")
+    }
+
+    /// The Dock tile brings the window the person has forward, on its own
+    /// page, and opens nothing when there is none (30 Oct).
+    func testTheDockTileBringsAnExistingWindowForwardAndOpensNone() {
+        let h = hub()
+        h.bringForward()
+        XCTAssertNil(h.window, "no window: the tile opens nothing")
+        XCTAssertTrue(h.offer(URL(string: "https://hq.example.test/d/first")!))
+        h.bringForward()
+        XCTAssertEqual(h.lastShown?.path, "/d/first", "the page it showed stays")
+        XCTAssertEqual(h.window?.isVisible, true)
     }
 
     func testTheHubAndItsOwnSubdomainsAreTheHub() {
