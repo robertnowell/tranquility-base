@@ -12,7 +12,7 @@ page within about twenty seconds, so this waits for the hub to know it
 Ruled 12 Sep 2026: sessions no longer open local files.
 
 It opens in Tranquility Base's Hub window when the app has one, and in the
-browser otherwise. Without an app address in ~/.claude/hq.json it opens the
+browser otherwise. The app is never brought to the front for it. Without an app address in ~/.claude/hq.json it opens the
 file, as before.
 """
 import json, os, subprocess, sys, time, urllib.request
@@ -65,7 +65,8 @@ def main():
                 break
             time.sleep(4)
     # The app's Hub window first, the browser always as the fallback (29 Sep
-    # 2026, hf-o8t.4): the app is the one this script ships inside.
+    # 2026, hf-o8t.4): the app is the one this script ships inside. The app
+    # decides what to do with the page; this script must not bring it forward.
     if in_app(url):
         print(url)
         return
@@ -111,7 +112,11 @@ def in_app(url):
     from urllib.parse import quote
     link = "tranquilitybase://hub?url=" + quote(url, safe="")
     kind, value = app
-    args = ["open", "-a", value, link] if kind == "path" else ["open", "-b", value, link]
+    # -g: hand the link over without activating the app. Without it, every
+    # page an agent opened pulled the Hub window over the person's work even
+    # though the app itself left the window alone (30 Oct 2026, Robert:
+    # "I don't like when TB focuses my knowledge base window").
+    args = ["open", "-g", "-a", value, link] if kind == "path" else ["open", "-g", "-b", value, link]
     return subprocess.run(args).returncode == 0
 
 if __name__ == "__main__":

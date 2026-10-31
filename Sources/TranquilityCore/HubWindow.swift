@@ -103,7 +103,7 @@ public final class HubWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, 
         let web = make()
         lastShown = url
         web.load(URLRequest(url: url))
-        present()
+        present(byPerson: byPerson)
         return true
     }
 
@@ -111,8 +111,11 @@ public final class HubWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, 
     /// Ruled 29 Sep (Robert): with the Hub window open, do nothing, neither
     /// focus it nor move it off the page being read; the toast and the
     /// sidebar's live order already say a report arrived. With no window,
-    /// open it on the report. True when handled here (including left alone);
-    /// false for an address that is not the hub, which the caller sends on.
+    /// open it on the report, behind whatever the person is working in:
+    /// the app is not activated and the window is not made key (30 Oct,
+    /// Robert: "I don't like when TB focuses my knowledge base window").
+    /// True when handled here (including left alone); false for an address
+    /// that is not the hub, which the caller sends on.
     @discardableResult
     public func offer(_ url: URL) -> Bool {
         guard isHub(url) else { return false }
@@ -130,7 +133,7 @@ public final class HubWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, 
         Track.record("hub_opened", ["page_type": .token(Self.pageType(web.url))])
         log("hub window: opened\(web.url == nil ? " on the hub's home" : ", on \(Self.describe(web.url))")")
         if web.url == nil { web.load(URLRequest(url: home)) }
-        present()
+        present(byPerson: true)
     }
 
     /// The hub's host exactly, or one of its own subdomains (Clerk's sign-in
@@ -141,7 +144,12 @@ public final class HubWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, 
         return h == host || h.hasSuffix("." + host)
     }
 
-    private func present() {
+    /// A person's door brings the app forward and gives the window the keys.
+    /// An agent's report only puts the window on screen: `orderFront` from
+    /// an app that is not active leaves it behind the active app's windows,
+    /// and neither the app nor the window takes focus (30 Oct 2026).
+    private func present(byPerson: Bool) {
+        guard byPerson else { window?.orderFront(nil); return }
         if activates { NSApp.activate(ignoringOtherApps: true) }
         window?.makeKeyAndOrderFront(nil)
     }
