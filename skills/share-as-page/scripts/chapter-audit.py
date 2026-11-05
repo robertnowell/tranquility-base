@@ -406,7 +406,7 @@ def write_page(path, raw, page, refcheck, cites, verifier, today):
     reach = sum(1 for r in refcheck.values() if r.get("found"))
     audit = (f'<section class="audit" id="audit"><h2>Audit of this chapter</h2>'
              f'<p>The chapter makes {len(claims_only)} cited claims from {nrefs} sources, plus {nattr} attribution markers on captions and source lines. Every claim carries the sentence from its source that supports it. {reach} of {nrefs} sources had every quote found in the live page or its archive on {today}. '
-             f'{("The verifier was " + verifier + ", a different model than the author, asked whether each quote supports its sentence.") if verifier else "No verifier has judged support yet."} '
+             f'{("The verifier was " + verifier + ", a different model than the author. It judged whether each quote supports its sentence.") if verifier else "No verifier has judged support yet."} '
              f'A person has checked none of them yet.</p>'
              f'<table><caption>Claims by verdict, counted by chapter-audit on {today}</caption><thead><tr><th>Verdict</th><th class="num">Claims</th></tr></thead><tbody>{rows}</tbody></table>'
              f'<p class="legend">Markers in the text: <i class="ok"></i>supported <i class="partial"></i>partial <i class="inferred"></i>inferred <i class="fail"></i>failed <i class="unreachable"></i>unreachable <i></i>unchecked</p>'
