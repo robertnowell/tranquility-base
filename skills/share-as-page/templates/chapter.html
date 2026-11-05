@@ -73,6 +73,8 @@ a{color:inherit;text-decoration:underline;text-decoration-color:var(--accent);te
 .cite.inferred::before{background:transparent;border-color:var(--accent)}
 .cite.fail::before{background:var(--red);border-color:var(--red)}
 .cite.unreachable::before{background:var(--faint);border-color:var(--faint)}
+/* An attribution marker says where a caption or source line came from. It is not a claim and carries no dot. */
+.cite.attr::before{display:none}
 /* FRONT MATTER: what you will be able to do, terms you need, contents. Each is a list, open. */
 .objectives ol,.toc ol{padding-left:22px;margin:0}
 .objectives li,.toc li{margin:6px 0}

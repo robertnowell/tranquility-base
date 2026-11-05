@@ -95,7 +95,8 @@ class Page(HTMLParser):
             sent = self._sentence("".join(self.cur or []))
             self.cites.append({"ref": (a.get("href") or "").lstrip("#"), "certainty": a.get("data-certainty", ""),
                                "support": a.get("data-support", ""), "sentence": sent, "line": self.getpos()[0],
-                               "section": self.section, "block": getattr(self, "cur_tag", None)})
+                               "section": self.section, "block": getattr(self, "cur_tag", None),
+                               "quote": norm(a.get("data-quote") or ""), "attr": "attr" in cls})
         if tag == "li":
             if self.section == "objectives": self.counts["objectives"] += 1
             if self.section == "check": self.counts["questions"] += 1
@@ -255,8 +256,8 @@ def fetch_text(url):
     return status, text
 
 
-def check_quote(ref):
-    q = canon(ref["quote"])
+def check_quote(ref, quote=None):
+    q = canon(quote if quote is not None else ref["quote"])
     if not q:
         return {"live": None, "found": None, "where": None}
     out = {"live": None, "archive": None, "found": False, "where": None}
@@ -295,19 +296,28 @@ def archive(ref):
 
 # ---------- verifying ----------
 def verify(cites, refs, model, batch=8):
-    """Ask MODEL, through the claude CLI, whether each quote supports its sentence."""
+    """Ask MODEL, through the claude CLI, whether each quote supports the clause it follows. Attribution markers are skipped.
+
+    The claim handed to the verifier is the sentence up to the marker, so the clause just before the marker is what
+    the quote must support. The source's identity (who, what, when) is given too: a citation names its source, so
+    "the 2019 study found" needs no repetition inside the quote."""
     results = {}
-    items = [c for c in cites if c["ref"] in refs and refs[c["ref"]]["quote"]]
+    items = [c for c in cites if c["ref"] in refs and c["quote"] and not c["attr"]]
     for i in range(0, len(items), batch):
         chunk = items[i:i + batch]
         lines = []
         for n, c in enumerate(chunk):
-            lines.append(f"CLAIM {n}: {c['sentence']}\nQUOTE {n} (from the cited source): {refs[c['ref']]['quote']}\n")
-        prompt = ("You are a fact checker. For each pair below, decide whether the QUOTE directly supports the CLAIM. "
-                  "'supported' means the fact in the claim is present explicitly in the quote (numbers, names and dates match). "
-                  "'partial' means the quote supports part of the claim or a weaker version. 'unsupported' means the quote does not "
-                  "support the claim or contradicts it. Judge only from the quote; do not use outside knowledge. "
-                  "Answer with a JSON array only, one object per pair: {\"n\": <int>, \"verdict\": \"supported|partial|unsupported\", \"why\": \"<one short sentence>\"}.\n\n"
+            r = refs[c["ref"]]
+            lines.append(f"CLAIM {n} (the text up to the citation marker; the clause at its END is what this citation supports): {c['sentence']}\n"
+                         f"SOURCE {n}: {r.get('text', '')[:200]}\nQUOTE {n} (verbatim from that source): {c['quote']}\n")
+        prompt = ("You are a fact checker. For each item, decide whether QUOTE, read together with the SOURCE's identity "
+                  "(its author, title and date), directly supports the clause at the end of CLAIM. Earlier clauses in the same "
+                  "sentence may be supported by other citations; ignore them. 'supported': every substantive fact in that clause "
+                  "(number, name, mechanism, date) is present in the quote or in the source identity, allowing paraphrase and unit "
+                  "changes (5MB = 5 MB, 2.2x = 2.2 times, 'per container' = 'per microVM' when the source is about microVMs). "
+                  "'partial': a substantive fact in the clause is absent. 'unsupported': the quote contradicts the clause or is about "
+                  "something else. Judge only from the quote and the source identity. Answer with a JSON array only: "
+                  "{\"n\": <int>, \"verdict\": \"supported|partial|unsupported\", \"why\": \"<one short sentence>\"}.\n\n"
                   + "\n".join(lines))
         r = subprocess.run(["claude", "-p", "--model", model, "--output-format", "text", prompt], capture_output=True, text=True, timeout=600)
         m = re.search(r"\[[\s\S]*\]", r.stdout)
@@ -318,7 +328,7 @@ def verify(cites, refs, model, batch=8):
         for obj in arr:
             try:
                 results[id(chunk[int(obj["n"])])] = (obj.get("verdict", ""), obj.get("why", ""))
-            except (KeyError, ValueError, IndexError):
+            except (KeyError, ValueError, IndexError, TypeError):
                 pass
     for c in items:
         c["verifier"] = results.get(id(c), ("", ""))
@@ -327,7 +337,9 @@ def verify(cites, refs, model, batch=8):
 
 # ---------- writing ----------
 def verdict_for(c, refcheck):
-    rc = refcheck.get(c["ref"]) or {}
+    if c.get("attr"):
+        return "attr"
+    rc = c.get("check") or refcheck.get(c["ref"]) or {}
     if c.get("support") == "inferred":
         base = "inferred"
     elif rc.get("found") is False and rc.get("live") not in (200,) and rc.get("archive") not in (200,):
@@ -359,7 +371,7 @@ def write_page(path, raw, page, refcheck, cites, verifier, today):
         if not c:
             return m.group(0)
         v = c["verdict"]
-        cls = {"found": "", "unchecked": ""}.get(v, v)
+        cls = {"found": "", "unchecked": "", "attr": "attr"}.get(v, v)
         tag = re.sub(r'class="cite[^"]*"', f'class="cite{(" " + cls) if cls else ""}"', m.group(0))
         tag = re.sub(r'\sdata-verdict="[^"]*"', "", tag)
         return tag.replace("<a ", f'<a data-verdict="{v}" ', 1)
@@ -367,7 +379,7 @@ def write_page(path, raw, page, refcheck, cites, verifier, today):
     # ref verdict spans and archive attrs
     for rid, r in page.refs.items():
         rc = refcheck.get(rid) or {}
-        label = {None: "", True: "quote found " + (rc.get("where") or ""), False: ("source unreachable" if (rc.get("live") not in (200,) and rc.get("archive") not in (200,)) else "quote not found")}[rc.get("found")]
+        label = {None: "", True: f"{rc.get('quotes', 1)} quote{'s' if rc.get('quotes', 1) != 1 else ''} found " + (rc.get("where") or ""), False: ("source unreachable" if (rc.get("live") not in (200,) and rc.get("archive") not in (200,)) else f"{rc.get('quotes_found', 0)} of {rc.get('quotes', 1)} quotes found")}[rc.get("found")]
         pat = re.compile(rf'(<li id="{rid}"[^>]*>)([\s\S]*?)(</li>)')
         def fix(m):
             body = re.sub(r'<span class="verdict">[^<]*</span>', "", m.group(2))
@@ -380,6 +392,8 @@ def write_page(path, raw, page, refcheck, cites, verifier, today):
     counts = {}
     for c in cites:
         counts[c["verdict"]] = counts.get(c["verdict"], 0) + 1
+    nattr = counts.pop("attr", 0)
+    claims_only = [c for c in cites if not c.get("attr")]
     order = [("ok", "Supported: the quote is in the source and supports the sentence"),
              ("partial", "Partial: the quote supports part of the sentence"),
              ("inferred", "Inferred: the author says so, the source implies it"),
@@ -391,7 +405,7 @@ def write_page(path, raw, page, refcheck, cites, verifier, today):
     nrefs = len(page.refs)
     reach = sum(1 for r in refcheck.values() if r.get("found"))
     audit = (f'<section class="audit" id="audit"><h2>Audit of this chapter</h2>'
-             f'<p>The chapter makes {len(cites)} cited claims from {nrefs} sources. The quote for {reach} of {nrefs} sources was found in the source or its archive on {today}. '
+             f'<p>The chapter makes {len(claims_only)} cited claims from {nrefs} sources, plus {nattr} attribution markers on captions and source lines. Every claim carries the sentence from its source that supports it. {reach} of {nrefs} sources had every quote found in the live page or its archive on {today}. '
              f'{("The verifier was " + verifier + ", a different model than the author, asked whether each quote supports its sentence.") if verifier else "No verifier has judged support yet."} '
              f'A person has checked none of them yet.</p>'
              f'<table><caption>Claims by verdict, counted by chapter-audit on {today}</caption><thead><tr><th>Verdict</th><th class="num">Claims</th></tr></thead><tbody>{rows}</tbody></table>'
@@ -401,8 +415,9 @@ def write_page(path, raw, page, refcheck, cites, verifier, today):
     Path(path).write_text(out, encoding="utf-8")
     Path(str(path).replace(".html", ".audit.json")).write_text(json.dumps({
         "date": today, "verifier": verifier,
-        "sources": {rid: {k: v for k, v in r.items() if k != "text"} | (refcheck.get(rid) or {}) for rid, r in page.refs.items()},
+        "sources": {rid: {k: v for k, v in r.items() if k != "text"} | {"check": refcheck.get(rid) or {}} for rid, r in page.refs.items()},
         "claims": [{k: v for k, v in c.items() if k != "block"} for c in cites]}, indent=1, default=str), encoding="utf-8")
+
 
 
 def main(argv):
@@ -428,11 +443,28 @@ def main(argv):
                 r["archive_new"] = a
                 r["archive"] = a or r["archive"]
                 print(f"archive {rid}: {a or 'none'}")
+    for c in page.cites:
+        if not c["quote"] and c["ref"] in page.refs:
+            c["quote"] = page.refs[c["ref"]]["quote"]
     if opts.get("fetch"):
+        checks = {}
+        for c in page.cites:
+            key = (c["ref"], c["quote"])
+            if c["ref"] not in page.refs:
+                continue
+            if key not in checks:
+                checks[key] = check_quote(page.refs[c["ref"]], c["quote"])
+            c["check"] = checks[key]
         for rid, r in page.refs.items():
-            refcheck[rid] = check_quote(r)
+            mine = [v for (k, _), v in checks.items() if k == rid] or [check_quote(r)]
+            refcheck[rid] = {"live": mine[0].get("live"), "archive": mine[0].get("archive"),
+                             "found": all(v.get("found") for v in mine), "where": mine[0].get("where"),
+                             "quotes": len(mine), "quotes_found": sum(1 for v in mine if v.get("found"))}
             rc = refcheck[rid]
-            print(f"fetch {rid}: live {rc.get('live')} archive {rc.get('archive')} quote {'FOUND in ' + str(rc.get('where')) if rc.get('found') else 'NOT FOUND'}")
+            print(f"fetch {rid}: live {rc.get('live')} archive {rc.get('archive')} quotes {rc['quotes_found']} of {rc['quotes']} found")
+            for (k, q), v in checks.items():
+                if k == rid and not v.get("found"):
+                    print(f"   NOT FOUND: {q[:100]}")
     if opts.get("verify"):
         verifier = str(opts["verify"])
         verify(page.cites, page.refs, verifier)
