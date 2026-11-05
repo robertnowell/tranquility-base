@@ -135,14 +135,14 @@ td.id,th.id{white-space:nowrap}
 .audit .legend i.inferred{border-color:var(--accent)}.audit .legend i.fail{background:var(--red);border-color:var(--red)}.audit .legend i.unreachable{background:var(--faint)}
 /* SOURCES: numbered, who, what, when, live and archived address, access date, version or commit, and the quote that supports the claim. */
 .sources ol{padding-left:0;margin:0;list-style:none;counter-reset:ref}
-.sources li{counter-increment:ref;display:grid;grid-template-columns:34px 1fr;gap:10px;padding:12px 0;border-bottom:1px solid var(--line);font-size:14.5px;line-height:1.45}
-.sources li::before{content:counter(ref);font-family:var(--mono);font-size:12px;color:var(--accent);font-weight:700;padding-top:2px}
+.sources li{counter-increment:ref;position:relative;padding:12px 0 12px 44px;border-bottom:1px solid var(--line);font-size:14.5px;line-height:1.45}
+.sources li::before{content:counter(ref);position:absolute;left:0;top:14px;font-family:var(--mono);font-size:12px;color:var(--accent);font-weight:700}
 .sources li:target{background:var(--paper);margin:0 -10px;padding-left:10px;padding-right:10px}
 .sources .who{color:var(--heading);font-weight:600}
 .sources .meta{display:block;color:var(--muted);font-size:13px;margin-top:3px}
 .sources q{display:block;margin-top:6px;padding-left:12px;border-left:2px solid var(--line);color:var(--ink);font-style:italic;quotes:none}
 .sources q::before,.sources q::after{content:none}
-.sources .verdict{font-family:var(--mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-left:8px}
+.sources .verdict{display:block;font-family:var(--mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-top:6px}
 .tail{margin-top:72px;border-top:1px solid var(--line);padding-top:24px}
 .tail p{font-size:14px;color:var(--muted);margin:0 0 8px}
 @media (max-width:640px){.part>h2{grid-template-columns:28px 1fr;font-size:22px}.terms dl{grid-template-columns:1fr}.terms dd{margin-bottom:8px}}
