@@ -44,25 +44,28 @@ Each claim gets a record with these fields: `id`, `claim`, `ref`, `quote`, `verd
 - **Certainty is a separate field from the verdict.** A claim can be fully supported by a weak source. Four levels, as GRADE uses: high, moderate, low, very low. Likelihood words and confidence words are different things (IPCC guidance).
 - **Unchecked claims stay visible.** The audit table counts them, and each carries a hollow marker in the text. Nothing is silently dropped.
 
-## Figures: the form from the data's job, the colour from the method
+## Figures: a mechanism per figure, in one grammar
 
-- **Twenty numbers or fewer is a table**, not a chart (Tufte, Visual Display, "Tables usually outperform graphics in reporting on small data sets of 20 numbers or less").
-- **Pick the form by the job** (compare, trend, part-to-whole, distribution) with the dataviz skill's `choosing-a-form.md`. Never a dual axis. Never a pie.
-- **Two titles.** The headline states the finding in under 15 words, sentence case, active voice. The subtitle gives the measure, the geography and the period (UK Analysis Function; ONS chart text).
-- **Text in charts is 14px or more**, 12px only in small multiples (ONS typography). Horizontal labels only.
-- **Five colours or fewer** on one chart (ONS). Four per stack or cluster (Analysis Function). Direct labels before legends.
-- **Colour comes from the validated palette** and is run through `validate_palette.js` before shipping. Sequential is one hue. Emphasis is one hue plus grey.
-- **Marks need 3:1 against the surface** or the values must be readable another way (WCAG 1.4.11). Every chart has a data table under it, so the relief always exists.
-- **Alt text is "[chart type] of [data] showing [finding]"** (Datawrapper, after Cesal), under 160 characters (Urban Institute), and it does not repeat the title.
-- **A diagram only when the draw test passes** (brief.md, Evidence rules), drawn with `hq-diagram`.
+Ruled 5 Nov 2026 after the first-principles pass (`2026-11-05-textbook-information-design`). The measured exemplars (Crafting Interpreters, OSTEP, the Rust book, Distill) run 0.4 to 1.9 figures per thousand words, and what they draw is state and mechanism, not charts. A chapter needs four to eight such figures, and almost no tables.
 
-## Reading on screen
+- **Every figure carries one mechanism or one state**, and the caption's bold run-in states it as a sentence (Rougier rules 2 and 4). A figure that restates the text gives nothing (Larkin and Simon).
+- **A boundary is an enclosing region with no arrow. Layers are rows. An arrow means something moves or causes**, is labelled with what crosses it, and a figure uses at most two arrow styles (Heiser and Tversky 2006).
+- **Every box carries a type and a role** (C4 notation). Identity is labelled directly. A key covers notation only.
+- **One accent for the thing being taught, one warn tone for the attacker or the break, everything else grey** (Red Blob, Distill). Text inside a figure never wears the data colour. Smallest effective difference.
+- **Simplified beats detailed** (Butcher 2006). Five to nine boxes. One flow.
+- **Same layout for a comparison**, so the one thing that changes is the only thing that moves (small multiples).
+- **Draw with `figlib.py`**, which encodes the grammar as inline SVG. `hq-diagram` stays for flows with a branch, merge or loop when Graphviz layout is wanted.
+- **Charts** keep the two-title rule (UK Analysis Function), 14px text (ONS), five colours or fewer, direct labels, a data table under the chart (WCAG 1.4.11) and alt text of the form "[chart type] of [data] showing [finding]".
+- **Twenty numbers or fewer is a table** (Tufte), and a table is for lookups only. A table that explains a mechanism is a figure that has not been drawn yet.
 
-- **Text at 720px, figures at 1000px.** Butterick: 45 to 90 characters a line. Tufte CSS holds text at 55% of the page and lets figures take 90%. Distill holds text at 480px of a 720px page column at 1180px wide.
-- **Body 17px, line height 1.5.** Butterick: 15 to 25px on the web, 120% to 145% leading.
-- **No paragraph over 80 words.** Readers scan. NN/g: 20% to 28% of words on an average visit.
-- **Print is a first-class output.** Paper beat screen for comprehension on informational text, g = 0.21 over 54 studies (Delgado 2018). Figures and tables do not break across pages. Sources print in full.
-- **Nothing is collapsed.** No `<details>`, no tabs, no accordion. The house rule, and the same GOV.UK finding.
+## The page, set for an hour of reading
+
+- **Body in the house serif at 19px, line-height 1.6, measure 66 characters** (Bringhurst 2.1.2: 45 to 75, 66 ideal; Butterick: 15 to 25px, leading 120 to 145 percent). Sans only for figures, tables, captions and the kicker.
+- **Four type sizes. Hierarchy by space and italic, not caps and weight** (Butterick; Tufte CSS). Part headings at 1.5 times body with a hairline under them and air above (Distill). No mono capitals in the body.
+- **A margin column** at 1100px and up for the crux question and notes (Tufte CSS, Distill's gutter). A crux first in every part (OSTEP). Two to four notes per part at most.
+- **Chrome in greys, colour inside the figures.** Cite dots grey when supported, amber or red only when the audit found something. Links underlined in the hairline colour.
+- **Figures step out of the text column in named widths**: body, wide, page (Distill's layout ladder). Captions below, 14.5px sans, a bold run-in that states the finding, then what to see, then the source as attribution.
+- **No paragraph over 80 words. Print is first class.** Figures and tables do not break across pages. Notes fall inline in print.
 
 ## Writing standard
 

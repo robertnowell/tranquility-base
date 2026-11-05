@@ -37,120 +37,131 @@
 :root{--panel:#f2f3f4;--panel-ink:#1a1c1f;--panel-line:#d6d9dd;--diff-add-bg:#dafbe1;--diff-add:#116329;--diff-del-bg:#ffebe9;--diff-del:#82071e;--mark:#ffd400}
 @media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--panel:#1e2024;--panel-ink:#e8e9eb;--panel-line:#3a3d42;--diff-add-bg:#12351c;--diff-add:#7ee787;--diff-del-bg:#3b1a1c;--diff-del:#ffa198}}
 
-/* CHAPTER. Read references/chapter.md first. The brief lets one reader act in seconds; the chapter lets one
-   reader learn one subject in an hour and check every sentence. Text at 720px, figures at 1000px, nothing collapsed. */
+/* CHAPTER, second shape (6 Nov 2026, after the first-principles pass on textbook design). Read references/chapter.md.
+   The brief is read in seconds; a chapter is read for an hour. So: a serif at a 66-character measure (Bringhurst 2.1.2),
+   leading 1.6, four type sizes, hierarchy by space and italic rather than caps and weight (Butterick), a margin column
+   for notes and crux questions (Tufte CSS, Distill's gutter), page chrome in greys with the colour budget spent inside
+   figures (Red Blob, Distill), figures that step out of the text column in named widths (Distill's l-body/l-page), and
+   captions below the figure with a bold run-in that states the finding (Distill). Nothing collapses. */
 *{box-sizing:border-box}
 html{scroll-behavior:smooth}
-body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:17px;line-height:1.5;-webkit-font-smoothing:antialiased;counter-reset:part fig tbl}
-main{max-width:1000px;margin:0 auto;padding:56px 20px 96px}
-h1,.lede,.part>p,.part>ol,.part>ul,.objectives,.terms,.toc,.worked,.check,.summary,.answers,.k,.tail,.sources,.audit>p{max-width:720px}
-.k{font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--serif);font-size:19px;line-height:1.6;-webkit-font-smoothing:antialiased;counter-reset:part fig tbl;font-feature-settings:"kern","liga","onum"}
+main{max-width:1120px;margin:0 auto;padding:64px 24px 120px;position:relative}
+/* The text column: 66 characters of this serif. The margin column to its right holds notes. */
+.col,h1,.lede,.part>p,.part>ol,.part>ul,.part>h3,.objectives,.terms,.toc,.worked,.check,.summary,.answers,.k,.tail,.sources,.audit,.crux,.part>.tail{max-width:66ch}
+.k{font-family:var(--sans);font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-variant-numeric:tabular-nums}
 .k a{color:inherit;text-decoration:none}
-/* The title is the thesis in one sentence. Chapter titles are smaller than a brief's headline: this page is read, not glanced. */
-h1{font-size:clamp(40px,6.5vw,64px);line-height:1.02;letter-spacing:-.03em;font-weight:600;color:var(--heading);margin:14px 0 24px}
-.lede{font-size:22px;line-height:1.35;color:var(--muted);margin:0 0 40px}
+h1{font-family:var(--serif);font-size:clamp(36px,5vw,54px);line-height:1.08;letter-spacing:-.015em;font-weight:600;color:var(--heading);margin:16px 0 22px}
+.lede{font-size:22px;line-height:1.45;color:var(--muted);margin:0 0 48px}
 .lede b{color:var(--heading);font-weight:600}
-/* Section labels for the front and back matter, as in the brief. */
-h2{font-size:13px;font-family:var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--muted);font-weight:500;margin:56px 0 12px;padding-bottom:10px;border-bottom:1px solid var(--line)}
-/* Part headings are sentences with a verb, numbered by CSS. Read only the headings and the argument survives. */
-.part{counter-increment:part;margin-top:64px}
-.part>h2{font-family:var(--sans);font-size:26px;line-height:1.2;letter-spacing:-.02em;text-transform:none;font-weight:600;color:var(--heading);border:0;padding:0;margin:0 0 18px;max-width:720px;display:grid;grid-template-columns:40px 1fr;gap:12px;align-items:baseline}
-.part>h2::before{content:counter(part);font-family:var(--mono);font-size:13px;color:var(--accent);font-weight:700;letter-spacing:0}
-.part>h3{font-size:18px;font-weight:600;color:var(--heading);margin:28px 0 8px;max-width:720px}
-p{margin:0 0 16px}
-/* No paragraph over 80 words: the check script counts. */
-.part p,.part li{font-size:17px}
-.part>ol,.part>ul{padding-left:22px}
-.part li{margin:4px 0}
-a{color:inherit;text-decoration:underline;text-decoration-color:var(--accent);text-underline-offset:3px}
-/* A CITE sits after the sentence it supports. The marker carries the audit verdict as a class:
-   .ok supported (filled), .partial (amber), .inferred (hollow accent), .fail unsupported or contradicted (red),
-   .unreachable (grey), none yet = unchecked (hollow). The number links to the source. */
-.cite{font-family:var(--mono);font-size:11px;vertical-align:super;line-height:0;text-decoration:none;color:var(--muted);margin-left:2px;white-space:nowrap}
-.cite::before{content:'';display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:3px;border:1.5px solid var(--faint);vertical-align:0}
-.cite.ok::before{background:var(--accent);border-color:var(--accent)}
-.cite.partial::before{background:var(--amber);border-color:var(--amber)}
-.cite.inferred::before{background:transparent;border-color:var(--accent)}
-.cite.fail::before{background:var(--red);border-color:var(--red)}
+/* Front and back matter labels: serif italic, a hairline, no caps. */
+h2{font-family:var(--serif);font-size:18px;font-style:italic;font-weight:400;color:var(--muted);margin:56px 0 14px;padding-bottom:8px;border-bottom:1px solid var(--line);letter-spacing:0;text-transform:none}
+/* A part heading is a sentence with a verb, numbered. 1.5 times body, 600, with a hairline under it and air above (Distill). */
+.part{counter-increment:part;margin-top:80px;clear:both}
+.part>h2{font-family:var(--serif);font-size:29px;line-height:1.2;font-style:normal;font-weight:600;color:var(--heading);border:0;border-bottom:1px solid var(--line);padding:0 0 14px;margin:0 0 22px;max-width:66ch}
+.part>h2::before{content:counter(part) "  ";font-family:var(--sans);font-size:14px;font-weight:600;color:var(--muted);letter-spacing:.04em;vertical-align:.5em;margin-right:4px}
+.part>h3{font-family:var(--serif);font-size:21px;font-style:italic;font-weight:400;color:var(--heading);margin:36px 0 10px}
+p{margin:0 0 1em}
+.part>ol,.part>ul{padding-left:1.4em}
+.part li{margin:.3em 0}
+a{color:inherit;text-decoration:underline;text-decoration-color:var(--line);text-decoration-thickness:1px;text-underline-offset:3px}
+a:hover{text-decoration-color:var(--ink)}
+/* The crux: the question a part answers, in the margin on a wide screen, as a short italic block otherwise (OSTEP's crux boxes). */
+.crux{font-style:italic;color:var(--muted);font-size:17px;line-height:1.5;margin:0 0 20px;padding-left:16px;border-left:2px solid var(--line)}
+.crux b{font-style:normal;font-weight:600;color:var(--heading)}
+/* A margin note: small serif, floated into the margin column at wide widths (Tufte CSS), inline and indented otherwise. */
+.note{font-size:15px;line-height:1.45;color:var(--muted);margin:0 0 1em;padding-left:16px;border-left:2px solid var(--line)}
+.note b{color:var(--heading);font-weight:600}
+@media (min-width:1100px){
+  .note{float:right;clear:right;width:250px;margin:0 0 1.2em 32px;padding-left:0;border-left:0}
+  .crux{float:right;clear:right;width:250px;margin:4px 0 1em 32px;padding-left:0;border-left:0}
+}
+/* A cite marker: a small superscript number. The audit verdict is a dot that stays quiet when the claim is supported. */
+.cite{font-family:var(--sans);font-size:11px;vertical-align:super;line-height:0;text-decoration:none;color:var(--muted);margin-left:1px;white-space:nowrap}
+.cite::before{content:'';display:inline-block;width:5px;height:5px;border-radius:50%;margin-right:2px;border:1px solid var(--faint);vertical-align:1px;opacity:.7}
+.cite.ok::before{background:var(--line);border-color:var(--line)}
+.cite.partial::before{background:var(--amber);border-color:var(--amber);opacity:1}
+.cite.inferred::before{background:transparent;border-color:var(--accent);opacity:1}
+.cite.fail::before{background:var(--red);border-color:var(--red);opacity:1}
 .cite.unreachable::before{background:var(--faint);border-color:var(--faint)}
-/* An attribution marker says where a caption or source line came from. It is not a claim and carries no dot. */
 .cite.attr::before{display:none}
-/* FRONT MATTER: what you will be able to do, terms you need, contents. Each is a list, open. */
-.objectives ol,.toc ol{padding-left:22px;margin:0}
-.objectives li,.toc li{margin:6px 0}
-.terms dl{margin:0;display:grid;grid-template-columns:max-content 1fr;gap:6px 18px}
+/* Front matter lists. */
+.objectives ol,.toc ol{padding-left:1.4em;margin:0}
+.objectives li,.toc li{margin:.35em 0}
+.terms dl{margin:0;display:grid;grid-template-columns:max-content 1fr;gap:.35em 1.2em;font-size:17px;line-height:1.5}
 .terms dt{font-weight:600;color:var(--heading)}
-.terms dd{margin:0;color:var(--ink)}
+.terms dd{margin:0}
 .toc a{text-decoration:none}
 .toc a:hover{text-decoration:underline}
-/* The line that ends a section says what it showed. */
-.part .tail{font-size:15px;color:var(--muted);border-left:3px solid var(--line);padding-left:16px;margin:24px 0 0;max-width:720px}
-/* FIGURES take the page. Two titles: the headline says the finding, the subtitle names the measure, place and period.
-   A source line and a data table sit under every chart, so every value is readable without colour. */
-figure{margin:36px 0}
+/* The line that ends a part: italic, no rule. */
+.part .tail{font-style:italic;color:var(--muted);font-size:17px;margin:20px 0 0;padding:0;border:0}
+/* FIGURES. Widths: .w-body stays in the text column, .w-wide takes text plus margin, .w-page takes the page.
+   Captions sit below, 15px sans, with a bold run-in that states the finding; the measure line follows in grey. */
+figure{margin:40px 0;clear:both}
+figure.w-wide{max-width:1000px}
+figure.w-page{max-width:none}
+figure.w-body{max-width:66ch}
 .chart{counter-increment:fig}
-.chart .ft{margin:0 0 12px;max-width:720px}
-.chart .ft b{display:block;font-size:19px;line-height:1.3;color:var(--heading);font-weight:600;letter-spacing:-.01em}
-.chart .ft b::before{content:"Figure " counter(fig) ". ";font-family:var(--mono);font-size:12px;letter-spacing:.06em;color:var(--accent);font-weight:700}
-.chart .ft .sub{display:block;font-size:14px;color:var(--muted);margin-top:4px}
+.fig{counter-increment:fig}
+.art{padding:4px 0}
+.art svg{max-width:100%;height:auto;display:block}
+figcaption{font-family:var(--sans);font-size:14.5px;line-height:1.5;color:var(--muted);margin-top:12px;max-width:66ch}
+figcaption b{color:var(--heading);font-weight:600}
+figcaption b::before{content:"Figure " counter(fig) "  ";font-weight:600;color:var(--muted);letter-spacing:.02em}
+figcaption .sub{display:block;margin-top:2px}
+figcaption .src{display:block;margin-top:4px;color:var(--faint)}
+figcaption a{text-decoration-color:var(--line)}
 .chart .art{border-top:1px solid var(--line);border-bottom:1px solid var(--line);padding:16px 0}
-.chart svg{max-width:100%;height:auto;display:block;font-family:var(--sans)}
-.chart .src,.tbl .src,.fig .src{font-size:13.5px;color:var(--muted);margin:10px 0 0}
-.chart .src a,.tbl .src a{text-decoration-color:var(--line)}
-/* The data table under a chart: full ink, hairlines, numbers right in tabular figures. */
-table{border-collapse:collapse;width:100%;font-size:14.5px;margin:0}
-caption{text-align:left;font-size:13.5px;color:var(--ink);padding:0 0 8px;caption-side:top}
-th{text-align:left;font-weight:600;color:var(--heading);padding:6px 10px 6px 0;border-bottom:1px solid var(--ink);vertical-align:bottom}
-td{padding:7px 10px 7px 0;border-bottom:1px solid var(--line);vertical-align:top}
+.chart svg{font-family:var(--sans)}
+/* Tables are set in the sans with tabular figures: hairlines, title above as a sentence. */
+table{border-collapse:collapse;width:100%;font-family:var(--sans);font-size:14.5px;line-height:1.45;margin:0}
+caption{text-align:left;padding:0 0 10px;caption-side:top;font-family:var(--sans)}
+.tbl{counter-increment:tbl}
+.tbl caption b{display:block;font-size:16px;color:var(--heading);font-weight:600;line-height:1.35}
+.tbl caption b::before{content:"Table " counter(tbl) "  ";font-weight:600;color:var(--muted)}
+.tbl caption .sub{display:block;font-size:14px;color:var(--muted);margin-top:3px}
+th{text-align:left;font-weight:600;color:var(--heading);padding:6px 12px 8px 0;border-bottom:1px solid var(--ink);vertical-align:bottom}
+td{padding:8px 12px 8px 0;border-bottom:1px solid var(--line);vertical-align:top}
 .num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
 td.id,th.id{white-space:nowrap}
-.chart table{margin-top:14px}
+.chart table{margin-top:16px}
 .chart .ft+.art+table caption{display:none}
-/* A TABLE as the figure itself (twenty numbers or fewer: Tufte). Numbered as a table, titled above. */
-.tbl{counter-increment:tbl}
-.tbl caption b{display:block;font-size:17px;color:var(--heading);font-weight:600;line-height:1.3}
-.tbl caption b::before{content:"Table " counter(tbl) ". ";font-family:var(--mono);font-size:12px;letter-spacing:.06em;color:var(--accent);font-weight:700}
-.tbl caption .sub{display:block;font-size:14px;color:var(--muted);margin-top:3px}
-/* DIAGRAM from hq-diagram, between hairlines. CODE on the neutral panel. QUOTE with a left rule. As in the brief. */
-.fig .art{border-top:1px solid var(--line);border-bottom:1px solid var(--line);padding:16px 0}
-.fig svg{max-width:100%;height:auto;display:block}
-.fig figcaption,.code figcaption,.quote figcaption{font-size:13.5px;line-height:1.45;color:var(--ink);margin-top:9px}
-.code pre{margin:0;padding:12px 14px;background:var(--panel);color:var(--panel-ink);border:1px solid var(--panel-line);border-radius:4px;font-family:var(--mono);font-size:12.5px;line-height:1.55;white-space:pre-wrap;word-break:break-word;max-width:720px}
-.quote blockquote{margin:0;padding:2px 0 2px 18px;border-left:3px solid var(--accent);font-size:16px;line-height:1.45;color:var(--ink);max-width:720px}
+.tbl .src,.chart .src{font-family:var(--sans);font-size:13.5px;color:var(--faint);margin:10px 0 0}
+/* Code on the neutral panel. A quote with a left rule. */
+.code pre{margin:0;padding:12px 14px;background:var(--panel);color:var(--panel-ink);border:1px solid var(--panel-line);border-radius:4px;font-family:var(--mono);font-size:13px;line-height:1.55;white-space:pre-wrap;word-break:break-word;max-width:66ch}
+.quote blockquote{margin:0;padding:2px 0 2px 18px;border-left:2px solid var(--line);font-size:18px;line-height:1.5;color:var(--ink);max-width:66ch;font-style:italic}
 .quote blockquote p{margin:0}
-/* WORKED EXAMPLE: labelled so an expert can skip it, never collapsed. A left rule in the accent and a label. */
-.worked{margin:32px 0;padding:4px 0 4px 20px;border-left:3px solid var(--accent)}
-.worked h3{font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);margin:0 0 10px;font-weight:600}
-.worked p,.worked li{font-size:16px}
-.worked .code pre{font-size:12px}
-/* BACK MATTER */
-.check ol,.answers ol{padding-left:22px;margin:0}
-.check li,.answers li{margin:8px 0}
-.summary p{font-size:17px}
-/* AUDIT: written by chapter-audit. A counts table, then the verifier and date. Unchecked claims stay visible. */
-.audit table{max-width:720px}
-.audit .legend{font-size:13.5px;color:var(--muted);margin:10px 0 0;max-width:720px}
-.audit .legend i{display:inline-block;width:8px;height:8px;border-radius:50%;margin:0 4px 0 10px;vertical-align:0;border:1.5px solid var(--faint)}
-.audit .legend i.ok{background:var(--accent);border-color:var(--accent)}.audit .legend i.partial{background:var(--amber);border-color:var(--amber)}
+/* The worked example: a labelled block, never collapsed. */
+.worked{margin:36px 0;padding:4px 0 4px 20px;border-left:2px solid var(--accent);clear:both}
+.worked h3{font-family:var(--sans);font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:0 0 10px;font-weight:600}
+.worked p,.worked li{font-size:17px}
+.worked ol{padding-left:1.4em}
+/* Back matter. */
+.check ol,.answers ol{padding-left:1.4em;margin:0}
+.check li,.answers li{margin:.5em 0}
+.summary p{font-size:19px}
+.audit{font-family:var(--sans);font-size:15px}
+.audit p{max-width:66ch}
+.audit table{max-width:66ch}
+.audit .legend{font-size:13.5px;color:var(--muted);margin:10px 0 0;max-width:66ch}
+.audit .legend i{display:inline-block;width:7px;height:7px;border-radius:50%;margin:0 4px 0 10px;vertical-align:0;border:1px solid var(--faint)}
+.audit .legend i.ok{background:var(--line);border-color:var(--line)}.audit .legend i.partial{background:var(--amber);border-color:var(--amber)}
 .audit .legend i.inferred{border-color:var(--accent)}.audit .legend i.fail{background:var(--red);border-color:var(--red)}.audit .legend i.unreachable{background:var(--faint)}
-/* SOURCES: numbered, who, what, when, live and archived address, access date, version or commit, and the quote that supports the claim. */
 .sources ol{padding-left:0;margin:0;list-style:none;counter-reset:ref}
-.sources li{counter-increment:ref;position:relative;padding:12px 0 12px 44px;border-bottom:1px solid var(--line);font-size:14.5px;line-height:1.45}
-.sources li::before{content:counter(ref);position:absolute;left:0;top:14px;font-family:var(--mono);font-size:12px;color:var(--accent);font-weight:700}
-.sources li:target{background:var(--paper);margin:0 -10px;padding-left:10px;padding-right:10px}
+.sources li{counter-increment:ref;position:relative;padding:12px 0 12px 40px;border-bottom:1px solid var(--line);font-size:15.5px;line-height:1.5}
+.sources li::before{content:counter(ref);position:absolute;left:0;top:14px;font-family:var(--sans);font-size:12px;color:var(--muted);font-weight:600}
+.sources li:target{background:var(--paper)}
 .sources .who{color:var(--heading);font-weight:600}
-.sources .meta{display:block;color:var(--muted);font-size:13px;margin-top:3px}
+.sources .meta{display:block;color:var(--muted);font-family:var(--sans);font-size:13px;margin-top:3px}
 .sources q{display:block;margin-top:6px;padding-left:12px;border-left:2px solid var(--line);color:var(--ink);font-style:italic;quotes:none}
 .sources q::before,.sources q::after{content:none}
-.sources .verdict{display:block;font-family:var(--mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-top:6px}
-.tail{margin-top:72px;border-top:1px solid var(--line);padding-top:24px}
-.tail p{font-size:14px;color:var(--muted);margin:0 0 8px}
-@media (max-width:640px){.part>h2{grid-template-columns:28px 1fr;font-size:22px}.terms dl{grid-template-columns:1fr}.terms dd{margin-bottom:8px}}
-/* PRINT is a first-class output: paper beat screen for informational text (Delgado 2018). Figures and tables keep together. */
+.sources .verdict{display:block;font-family:var(--sans);font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--faint);margin-top:6px}
+.tail{margin-top:80px;border-top:1px solid var(--line);padding-top:24px}
+.tail p{font-size:15px;color:var(--muted);margin:0 0 8px}
+@media (max-width:640px){body{font-size:17px}.part>h2{font-size:24px}.terms dl{grid-template-columns:1fr}.terms dd{margin-bottom:8px}main{padding:40px 18px 80px}}
 @page{size:A4;margin:18mm 16mm}
-@media print{body{font-size:11pt;background:#fff;color:#000}main{max-width:none;padding:0}
-  h1{font-size:28pt}.part{break-before:auto}.part>h2{break-after:avoid}figure,table,.worked,.sources li{break-inside:avoid}
-  .cite{color:#000}a{text-decoration:none;color:inherit}.toc{display:none}.chart .art{border-color:#999}}
+@media print{body{font-size:11pt;background:#fff;color:#000}main{max-width:none;padding:0}.note,.crux{float:none;width:auto;margin:0 0 1em;padding-left:12px;border-left:1px solid #999}
+  h1{font-size:26pt}.part>h2{break-after:avoid}figure,table,.worked,.sources li{break-inside:avoid}.cite{color:#000}a{text-decoration:none;color:inherit}.toc{display:none}}
 </style></head>
 <body><main>
 
@@ -179,20 +190,28 @@ td.id,th.id{white-space:nowrap}
 <section class="part" id="p1"><h2><!-- Sentence heading with a verb --></h2>
 <p><!-- Prose. --><a class="cite" href="#r1" data-certainty="high">1</a></p>
 
-  <!-- A CHART. Two titles, the art, the data table, the source line. Chart text 14px or more. Five colours or fewer.
-       Alt text on the svg: "[chart type] of [data] showing [finding]", under 160 characters. -->
-  <figure class="chart"><figcaption class="ft"><b><!-- The finding, under 15 words --></b><span class="sub"><!-- measure, place, period --></span></figcaption>
-  <div class="art"><!-- inline SVG with role="img" aria-label="…" --></div>
-  <table><caption>Data for the figure</caption><thead><tr><th><!-- Column --></th><th class="num"><!-- Number --></th></tr></thead><tbody><tr><td></td><td class="num"></td></tr></tbody></table>
-  <p class="src">Source: <!-- who, what, when, the table or section --> <a class="cite" href="#r1">1</a></p></figure>
+  <!-- THE CRUX: the question this part answers, first (OSTEP). In the margin at wide widths. -->
+  <p class="crux"><b>The crux.</b> <!-- the question, in one sentence --></p>
+
+  <!-- AN EXPLANATORY FIGURE, drawn with figlib in one grammar: a boundary is an enclosing region with no arrow, layers are
+       rows, an arrow means something moves or causes and is labelled with what crosses it, every box has a type and a role,
+       one accent for the thing being taught, one warn tone for the attacker or the break. Widths: w-body, w-wide, w-page.
+       The caption sits below: a bold run-in that states the one finding, then what to see, then the source as an attribution. -->
+  <figure class="fig w-wide"><div class="art"><!-- the SVG --></div>
+  <figcaption><b><!-- The finding, one sentence. --></b> <!-- What to see. --> <span class="src">Drawn from <!-- the sources --> <a class="cite attr" href="#r1">1</a></span></figcaption></figure>
+
+  <!-- A CHART: the art, the caption with the finding and the measure line, the data table, the source. Chart text 14px or more. -->
+  <figure class="chart w-wide"><div class="art"><!-- inline SVG with role="img" aria-label="[chart type] of [data] showing [finding]" --></div>
+  <figcaption><b><!-- The finding, under 15 words --></b><span class="sub"><!-- measure, place, period --></span><span class="src">Source: <!-- who, what, when --> <a class="cite attr" href="#r1">1</a></span></figcaption>
+  <table><caption>Data for the figure</caption><thead><tr><th><!-- Column --></th><th class="num"><!-- Number --></th></tr></thead><tbody><tr><td></td><td class="num"></td></tr></tbody></table></figure>
+
+  <!-- A MARGIN NOTE: one idea the main text should not stop for. -->
+  <aside class="note"><b><!-- Term. --></b> <!-- one or two sentences --></aside>
 
   <!-- A TABLE as the figure (twenty numbers or fewer). -->
   <figure class="tbl"><table><caption><b><!-- The finding --></b><span class="sub"><!-- measure, place, period --></span></caption>
   <thead><tr><th></th><th class="num"></th></tr></thead><tbody><tr><td></td><td class="num"></td></tr></tbody></table>
   <p class="src">Source: <!-- … --> <a class="cite" href="#r1">1</a></p></figure>
-
-  <!-- A DIAGRAM, only when the draw test passes: hq-diagram in.dot --png look.png > out.svg -->
-  <figure class="fig"><div class="art"><!-- the SVG --></div><figcaption><!-- What to see. --> <span class="src"><!-- drawn from --></span></figcaption></figure>
 
   <!-- A QUOTE under fifty words, who and when in the caption. CODE verbatim. -->
   <figure class="quote"><blockquote><p><!-- the words --></p></blockquote><figcaption><!-- Who, where, when. --> <a class="cite" href="#r1">1</a></figcaption></figure>

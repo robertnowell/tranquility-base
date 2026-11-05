@@ -68,7 +68,7 @@ class Page(HTMLParser):
             self.chart["sub"] = True
         if self.chart and tag == "table":
             self.chart["table"] = True
-        if self.chart and tag == "p" and "src" in cls:
+        if self.chart and tag in ("p", "span") and "src" in cls:
             self.chart["src"] = True
         if tag == "svg":
             s = {"line": self.getpos()[0], "label": a.get("aria-label", ""), "role": a.get("role"), "sizes": []}
