@@ -5,7 +5,7 @@ import os, re, subprocess, sys, time
 from pathlib import Path
 sys.dont_write_bytecode = True
 HERE = Path(__file__).resolve().parent
-TEMPLATE = HERE.parent / "templates" / "chapter.html"
+TEMPLATE = HERE / "chapter.html"
 HQ_THEME = "hq-theme"
 
 def main(argv):
@@ -36,6 +36,6 @@ def main(argv):
         page = page.replace("<title><!-- TITLE: the thesis, under ten words --></title>", f"<title>{opts['title']}</title>")
     out.parent.mkdir(parents=True, exist_ok=True); out.write_text(page, encoding="utf-8")
     print(out); print(f"tokens: {header.strip('/* ').strip(' */')}")
-    print(f"Read {HERE.parent / 'references' / 'chapter.md'} and the draft before writing. Audit with chapter-audit, then: hq-page publish {slug} --session={session}")
+    print(f"Read {HERE/'chapter.md'} and the draft before writing. Audit with chapter-audit, then: hq-page publish {slug} --session={session}")
     return 0
 if __name__ == "__main__": sys.exit(main(sys.argv))
