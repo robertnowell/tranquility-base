@@ -156,7 +156,9 @@ def canon(s):
     s = s.replace("–", "-").replace("—", "-").replace("­", "").replace(" ", " ")
     s = "".join(c for c in s if not unicodedata.combining(c))
     s = re.sub(r"[^\w\s%$.,:;()/'\"-]", " ", s.lower())
-    return re.sub(r"\s+", " ", s).strip()
+    s = re.sub(r"\s+", " ", s).strip()
+    # Inline code and links in HTML leave a space before punctuation ("idle , not terminated ."); fold it.
+    return re.sub(r" ([.,:;)])", r"\1", s).replace("( ", "(")
 
 
 # ---------- structure ----------
@@ -227,6 +229,11 @@ def fetch_text(url):
     if url.startswith("/") or url.startswith("file://"):
         fp = Path(url.replace("file://", ""))
         text = fp.read_text(errors="replace") if fp.exists() else ""
+        if fp.suffix in (".html", ".htm"):
+            # A hub page is HTML: a quote must match its text, not its markup.
+            import html as _html
+            text = re.sub(r"<(script|style)[^>]*>.*?</\1>", " ", text, flags=re.S | re.I)
+            text = _html.unescape(re.sub(r"<[^>]+>", " ", text))
         return (200 if fp.exists() else 404), text
     if url.startswith("https://api.github.com/"):
         # GitHub's API refuses anonymous bursts; gh carries the user's token.
@@ -319,12 +326,17 @@ def verify(cites, refs, model, batch=8):
                   "something else. Judge only from the quote and the source identity. Answer with a JSON array only: "
                   "{\"n\": <int>, \"verdict\": \"supported|partial|unsupported\", \"why\": \"<one short sentence>\"}.\n\n"
                   + "\n".join(lines))
-        r = subprocess.run(["claude", "-p", "--model", model, "--output-format", "text", prompt], capture_output=True, text=True, timeout=600)
-        m = re.search(r"\[[\s\S]*\]", r.stdout)
-        try:
-            arr = json.loads(m.group(0)) if m else []
-        except json.JSONDecodeError:
-            arr = []
+        arr = []
+        for attempt in range(3):  # a batch that comes back empty or short is asked again
+            r = subprocess.run(["claude", "-p", "--model", model, "--output-format", "text", prompt], capture_output=True, text=True, timeout=600)
+            m = re.search(r"\[[\s\S]*\]", r.stdout)
+            try:
+                arr = json.loads(m.group(0)) if m else []
+            except json.JSONDecodeError:
+                arr = []
+            if len(arr) >= len(chunk):
+                break
+            print(f"verifier batch {i // batch}: {len(arr)} of {len(chunk)} verdicts, retrying")
         for obj in arr:
             try:
                 results[id(chunk[int(obj["n"])])] = (obj.get("verdict", ""), obj.get("why", ""))
