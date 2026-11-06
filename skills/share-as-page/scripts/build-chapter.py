@@ -38,9 +38,9 @@ for rid, who, t, when, url, loc, quote in refs.REFS:
     arch = prev.get(rid, "") if prev.get(rid, "").startswith("http") else ""
     archlink = f' · <a href="{html.escape(arch)}">archive</a>' if arch else ""
     lis.append(f'<li id="{rid}" data-url="{html.escape(url)}" data-archive="{html.escape(arch)}" data-accessed="{refs.A}" data-locator="{html.escape(loc)}">'
-               f'<span class="who">{html.escape(who)}</span>, {html.escape(t)}, {html.escape(when)}.'
+               f'<span class="who">{html.escape(who)}</span>, <span class="t">{html.escape(t)}</span>, {html.escape(when)}.'
                f'<span class="meta">{live}{archlink} · accessed {refs.A} · {html.escape(loc)}</span>'
-               f'<q>{html.escape(quote)}</q></li>')
+               f'<blockquote class="q">{html.escape(quote)}</blockquote></li>')
 body = body.replace("{{SOURCES}}", "\n".join(lis))
 left = re.findall(r"\{\{[A-Z_]+\}\}", body)
 if left: sys.exit(f"unfilled figure placeholders: {left}")

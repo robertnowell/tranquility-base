@@ -153,7 +153,7 @@ td.id,th.id{white-space:nowrap}
 .sources li:target{background:var(--paper)}
 .sources .who{color:var(--heading);font-weight:600}
 .sources .meta{display:block;color:var(--muted);font-family:var(--sans);font-size:13px;margin-top:3px}
-.sources q{display:block;margin-top:6px;padding-left:12px;border-left:2px solid var(--line);color:var(--ink);font-style:italic;quotes:none}
+.sources blockquote.q{display:block;margin:6px 0 0;padding-left:12px;border-left:2px solid var(--line);color:var(--ink);font-style:italic;font-size:inherit}
 .sources q::before,.sources q::after{content:none}
 .sources .verdict{display:block;font-family:var(--sans);font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--faint);margin-top:6px}
 .tail{margin-top:80px;border-top:1px solid var(--line);padding-top:24px}
@@ -236,9 +236,9 @@ td.id,th.id{white-space:nowrap}
 <section class="audit" id="audit"><h2>Audit of this chapter</h2><p class="gap">Not audited yet. Run chapter-audit.</p></section>
 
 <!-- 13. SOURCES. One li per source, id rN. data-url is the live address, data-archive the Wayback copy, data-accessed the date.
-     data-locator is the table, section, line or commit. The <q> is the sentence in the source that supports the claims citing it. -->
+     data-locator is the table, section, line or commit. The <blockquote class="q"> is the sentence in the source that supports the claims citing it. -->
 <section class="sources"><h2>Sources</h2><ol>
-<li id="r1" data-url="FILL: https://…" data-archive="FILL: https://web.archive.org/web/…" data-accessed="FILL: 2026-11-05" data-locator="FILL: section or table"><span class="who"><!-- Author or organisation --></span>, <!-- Title -->, <!-- date, version --><span class="meta"><!-- live link · archive link · accessed · locator --></span><q><!-- The supporting sentence, verbatim. --></q></li>
+<li id="r1" data-url="FILL: https://…" data-archive="FILL: https://web.archive.org/web/…" data-accessed="FILL: 2026-11-05" data-locator="FILL: section or table"><span class="who"><!-- Author or organisation --></span>, <!-- Title -->, <!-- date, version --><span class="meta"><!-- live link · archive link · accessed · locator --></span><blockquote class="q"><!-- The supporting sentence, verbatim. --></blockquote></li>
 </ol></section>
 
 <!-- 14. ANSWERS to Check yourself. -->
