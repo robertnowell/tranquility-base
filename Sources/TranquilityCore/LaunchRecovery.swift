@@ -3,6 +3,7 @@ import Foundation
 /// A launch receipt is written before spawning. It is never automatically replayed.
 public struct LaunchRecoveryRecord: Codable, Equatable, Sendable, Identifiable {
     public var id: String
+    public var enforcesAccount: Bool?
     public var targetID: String
     public var directory: String
     public var createdAt: Date
@@ -11,7 +12,8 @@ public struct LaunchRecoveryRecord: Codable, Equatable, Sendable, Identifiable {
     public var sessionID: String?
     public var state: String
     public var instruction: String?
-    public init(id: String, targetID: String, directory: String) {
+    public init(id: String, targetID: String, directory: String, enforcesAccount: Bool = true) {
+        self.enforcesAccount = enforcesAccount
         self.id = id; self.targetID = targetID; self.directory = directory
         createdAt = Date(); state = "prepared"
     }
@@ -47,7 +49,7 @@ public final class LaunchRecoveryStore: @unchecked Sendable {
     /// Exact launched pane + account. Same-directory sessions cannot steal a handoff.
     public static func matches(_ session: LiveSession, record: LaunchRecoveryRecord) -> Bool {
         guard session.cwd == record.directory,
-              session.accountTargetID == record.targetID,
+              (record.enforcesAccount == false || session.accountTargetID == record.targetID),
               let pane = record.paneID, let name = record.paneSession,
               let tmux = session.registryTmux else { return false }
         return tmux.hasPrefix(name + ":") && tmux.hasSuffix("." + pane)

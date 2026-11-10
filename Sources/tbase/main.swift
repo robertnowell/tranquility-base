@@ -955,7 +955,7 @@ case "reconcile":
             let sessionId = useCodex
                 ? LaunchGreeting.awaitCodexRegistration(excluding: before)
                 : LaunchGreeting.awaitRegistration(directory: dir, excluding: before, matches: {
-                    $0.accountTargetID == (launch.account?.id ?? adapter.id)
+                    (launch.account == nil || $0.accountTargetID == launch.account?.id)
                         && $0.registryTmux?.hasPrefix(pane.sessionName + ":") == true
                         && $0.registryTmux?.hasSuffix("." + pane.paneId) == true
                 })

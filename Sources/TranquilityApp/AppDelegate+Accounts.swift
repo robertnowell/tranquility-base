@@ -82,7 +82,7 @@ extension AppDelegate {
         let attachments = coordinator?.attachments
         Task.detached(priority: .userInitiated) { [weak self] in
             do {
-                let records = try LaunchRecoveryStore.shared.records().filter { $0.state != "bound" }
+                let records = try LaunchRecoveryStore.shared.records().filter { $0.state != "bound" && $0.state != "discarded" }
                 ClaudeAgentsCLI.invalidate()
                 let sessions = ClaudeAgentsCLI().sessions() ?? []
                 for record in records {
@@ -110,15 +110,26 @@ extension AppDelegate {
                     return
                 }
                 await MainActor.run {
-                    guard let self else { return }
+                    guard self != nil else { return }
                     let alert = NSAlert()
                     alert.messageText = "Pending launch recovery"
                     alert.informativeText = records.isEmpty
                         ? "No unbound launches were found. Saved delivery receipts remain available for inspection."
                         : "The original session could not be identified yet. Your drafts are retained. No new session was started and nothing was resent."
-                    alert.addButton(withTitle: "Show saved recovery files"); alert.addButton(withTitle: "Done")
-                    if alert.runModal() == .alertFirstButtonReturn {
+                    alert.addButton(withTitle: "Show saved recovery files")
+                    if !records.isEmpty { alert.addButton(withTitle: "Discard all \(records.count) pending drafts") }
+                    alert.addButton(withTitle: "Done")
+                    let action = alert.runModal()
+                    if action == .alertFirstButtonReturn {
                         NSWorkspace.shared.activateFileViewerSelecting([LaunchRecoveryStore.shared.fileURL])
+                    } else if !records.isEmpty, action == .alertSecondButtonReturn {
+                        Task.detached {
+                            for record in records {
+                                attachments?.clearStaged(session: record.id)
+                                guard attachments?.persistenceError == nil else { return }
+                                try? LaunchRecoveryStore.shared.update(record.id) { $0.state = "discarded"; $0.instruction = nil }
+                            }
+                        }
                     }
                 }
             } catch { await MainActor.run { self?.hud.showResult(error.localizedDescription) } }

@@ -194,4 +194,14 @@ final class SavedAccountsTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), "broken")
     }
 
+    func testLegacyWrapperUsesObservedAccountButStillRequiresExactLaunchedPane() {
+        var record = LaunchRecoveryRecord(id: "legacy", targetID: "claude-code", directory: "/same", enforcesAccount: false)
+        record.paneID = "%1"; record.paneSession = "tb-legacy"
+        var session = LiveSession(pid: 7, sessionId: "b", cwd: "/same", status: nil, name: nil, waitingFor: nil)
+        session.accountTargetID = "account-b"; session.registryTmux = "tb-legacy:@1.%1"
+        XCTAssertTrue(LaunchRecoveryStore.matches(session, record: record))
+        session.registryTmux = "tb-other:@1.%1"
+        XCTAssertFalse(LaunchRecoveryStore.matches(session, record: record))
+    }
+
 }

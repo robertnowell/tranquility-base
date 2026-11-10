@@ -2593,7 +2593,7 @@ extension AppDelegate {
                                            conversationAtLaunch: conversationAtLaunch) : nil
         if let launch {
             do { try LaunchRecoveryStore.shared.save(LaunchRecoveryRecord(
-                id: launch.stagingKey, targetID: account?.id ?? adapter.id, directory: dir)) }
+                id: launch.stagingKey, targetID: account?.id ?? adapter.id, directory: dir, enforcesAccount: account != nil)) }
             catch { hud.showResult("Could not save the pending launch: \(error.localizedDescription)"); return }
             // Newest launch wins immediately, not when registration eventually
             // finishes. Releasing the old promise wakes any answer already
@@ -2755,7 +2755,7 @@ extension AppDelegate {
                 : LaunchGreeting.awaitRegistration(
                     directory: dir, excluding: before,
                     matches: { session in
-                        session.accountTargetID == (account?.id ?? adapter.id)
+                        (account == nil || session.accountTargetID == account?.id)
                             && session.registryTmux?.hasPrefix(pane.sessionName + ":") == true
                             && session.registryTmux?.hasSuffix("." + pane.paneId) == true
                     },
