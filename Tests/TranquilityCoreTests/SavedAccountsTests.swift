@@ -34,6 +34,17 @@ final class SavedAccountsTests: XCTestCase {
         XCTAssertThrowsError(try store.save(SavedAccount(label: "Main", configDirectory: SavedAccountStore.defaultRoot.path)))
     }
 
+    func testMissingProfileIdentityIgnoresURLDirectoryHint() throws {
+        let store = SavedAccountStore(fileURL: root.appendingPathComponent("accounts.json"))
+        let missing = root.appendingPathComponent("not-created-yet").path
+        let account = SavedAccount(label: "Pending", configDirectory: missing)
+        try store.save(account)
+        XCTAssertEqual(store.targetID(root: URL(fileURLWithPath: missing, isDirectory: false)), account.id)
+        let status: [String: Any] = ["loggedIn": true, "authMethod": "claude.ai",
+                                     "email": "a@example.test", "configDirectory": missing]
+        XCTAssertNoThrow(try SavedAccountIdentity.decode(JSONSerialization.data(withJSONObject: status), account: account))
+    }
+
     func testCorruptRegistryIsNotOverwritten() throws {
         let file = root.appendingPathComponent("accounts.json")
         try Data("not json".utf8).write(to: file)

@@ -82,12 +82,12 @@ public final class SavedAccountStore: @unchecked Sendable {
             throw AccountConfigurationError.invalid("Choose an account name and a separate profile folder.")
         }
         var values = read()
-        if let existing = values.first(where: { $0.id == account.id }), existing.root != account.root {
+        if let existing = values.first(where: { $0.id == account.id }), existing.root.path != account.root.path {
             throw AccountConfigurationError.invalid("A saved account’s profile cannot be moved. Import it as a new entry.")
         }
-        let canonical = account.root.resolvingSymlinksInPath()
-        guard canonical != Self.defaultRoot.resolvingSymlinksInPath(),
-              !values.contains(where: { $0.id != account.id && $0.root.resolvingSymlinksInPath() == canonical }) else {
+        let canonical = account.root.resolvingSymlinksInPath().path
+        guard canonical != Self.defaultRoot.resolvingSymlinksInPath().path,
+              !values.contains(where: { $0.id != account.id && $0.root.resolvingSymlinksInPath().path == canonical }) else {
             throw AccountConfigurationError.invalid("That profile already belongs to a saved account.")
         }
         values.removeAll { $0.id == account.id }; values.append(account)
@@ -119,9 +119,9 @@ public final class SavedAccountStore: @unchecked Sendable {
     }
     public var roots: [URL] { [Self.defaultRoot] + all().map(\.root) }
     public func targetID(root: URL) -> String? {
-        let canonical = root.resolvingSymlinksInPath()
-        if canonical == Self.defaultRoot.resolvingSymlinksInPath() { return ClaudeCodeAdapter().id }
-        return all().first { $0.root.resolvingSymlinksInPath() == canonical }?.id
+        let canonical = root.resolvingSymlinksInPath().path
+        if canonical == Self.defaultRoot.resolvingSymlinksInPath().path { return ClaudeCodeAdapter().id }
+        return all().first { $0.root.resolvingSymlinksInPath().path == canonical }?.id
     }
     public func root(targetID: String) -> URL? {
         targetID == ClaudeCodeAdapter().id ? Self.defaultRoot : account(targetID)?.root
@@ -178,7 +178,7 @@ public struct SavedAccountIdentity: Sendable, Equatable {
               value["authMethod"] as? String == "claude.ai",
               let email = value["email"] as? String, !email.isEmpty,
               let directory = value["configDirectory"] as? String,
-              URL(fileURLWithPath: directory).standardizedFileURL == account.root else {
+              URL(fileURLWithPath: directory).standardizedFileURL.path == account.root.path else {
             throw AccountConfigurationError.invalid("This profile needs a subscription sign-in, or another authentication route overrides it.")
         }
         let identity = SavedAccountIdentity(email: email, organization: value["orgId"] as? String)
