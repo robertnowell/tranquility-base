@@ -155,4 +155,43 @@ final class SavedAccountsTests: XCTestCase {
         for variable in SavedAccount.authenticationOverrides { XCTAssertTrue(command.contains("-u " + variable)) }
     }
 
+    func testResumeUsesDurableAccountAndRefusesMissingOrDuplicateOrigin() throws {
+        let accounts = SavedAccountStore(fileURL: root.appendingPathComponent("accounts.json"))
+        let bindings = SessionAccountStore(fileURL: root.appendingPathComponent("bindings.json"))
+        let a = SavedAccount(label: "A", configDirectory: root.appendingPathComponent("A").path)
+        let b = SavedAccount(label: "B", configDirectory: root.appendingPathComponent("B").path)
+        try accounts.save(a); try accounts.save(b)
+        let id = UUID().uuidString.lowercased()
+        try bindings.bind(id, targetID: b.id, root: b.root)
+        let resumed = HarnessLaunch.forExistingSession(id, accounts: accounts, bindings: bindings)
+        XCTAssertEqual(resumed.account?.id, b.id)
+        XCTAssertEqual(resumed.adapter.id, ClaudeCodeAdapter().id)
+        for account in [a, b] {
+            let project = account.projects.appendingPathComponent("project")
+            try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
+            try Data("{}".utf8).write(to: project.appendingPathComponent(id + ".jsonl"))
+        }
+        XCTAssertNotNil(HarnessLaunch.forExistingSession(id, accounts: accounts, bindings: bindings).resolutionError)
+        try JSONEncoder().encode([a]).write(to: accounts.fileURL)
+        XCTAssertNotNil(HarnessLaunch.forExistingSession(id, accounts: accounts, bindings: bindings).resolutionError)
+    }
+
+    func testMalformedDuplicateRegistryIsUnknownAndCannotBeOverwritten() throws {
+        let accounts = SavedAccountStore(fileURL: root.appendingPathComponent("accounts.json"))
+        let a = SavedAccount(label: "A", configDirectory: root.appendingPathComponent("A").path)
+        try JSONEncoder().encode([a, a]).write(to: accounts.fileURL)
+        XCTAssertFalse(accounts.isReadable)
+        XCTAssertThrowsError(try accounts.save(a))
+        XCTAssertEqual(try JSONDecoder().decode([SavedAccount].self, from: Data(contentsOf: accounts.fileURL)).count, 2)
+    }
+
+    func testCorruptRecoveryTrayIsRetainedAndBlocksDispatch() throws {
+        let file = root.appendingPathComponent("tray.json")
+        try Data("broken".utf8).write(to: file)
+        let tray = AttachmentStore(fileURL: file)
+        XCTAssertNotNil(tray.persistenceError)
+        tray.stage("new draft", session: "s")
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), "broken")
+    }
+
 }

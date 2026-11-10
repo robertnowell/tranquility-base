@@ -1436,7 +1436,9 @@ extension AppDelegate {
                     ?? CodexRollout.sessionsDirectory.path
             } else if sourceHarness == ClaudeCodeAdapter().id {
                 logLocation = TranscriptArchive.transcriptPath(forSessionId: sourceSessionId)
-                    ?? TranscriptArchive.projectsDirectory.path
+                    ?? SessionAccountStore.shared.binding(sourceSessionId).map {
+                        URL(fileURLWithPath: $0.configDirectory).appendingPathComponent("projects").path
+                    } ?? TranscriptArchive.projectsDirectory.path
             } else if let provider {
                 // A provider's transcript is not a file of ours; its own
                 // id, named, is what the destination can look up.

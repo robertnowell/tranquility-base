@@ -86,27 +86,30 @@ public struct HarnessLaunch: Sendable {
     /// when `SessionDiscovery` comes up empty. Deliberately not the Settings
     /// default: what a NEW agent would be has nothing to do with what THIS
     /// session is, and confusing the two is what ended a live session.
-    public static func forExistingSession(_ sessionId: String) -> HarnessLaunch {
-        guard SavedAccountStore.shared.isReadable, SessionAccountStore.shared.isReadable else {
+    public static func forExistingSession(_ sessionId: String, accounts: SavedAccountStore = .shared, bindings: SessionAccountStore = .shared) -> HarnessLaunch {
+        guard accounts.isReadable, bindings.isReadable else {
             return HarnessLaunch(adapter: ClaudeCodeAdapter(), command: "", resolutionError: "Saved account provenance is unreadable. Repair it before resuming.")
         }
-        if let binding = SessionAccountStore.shared.binding(sessionId) {
-            if binding.targetID == ClaudeCodeAdapter().id { return HarnessLaunch(harness: binding.targetID) }
-            if let account = SavedAccountStore.shared.account(binding.targetID), account.root.path == binding.configDirectory {
-                return HarnessLaunch(harness: account.id)
-            }
-            return HarnessLaunch(adapter: ClaudeCodeAdapter(), command: "", resolutionError: "This session’s saved account is missing or has moved. Reconnect it before resuming.")
-        }
-        let roots = SavedAccountStore.shared.roots.filter {
+        let roots = accounts.roots.filter {
             TranscriptArchive.transcriptPath(forSessionId: sessionId, projects: $0.appendingPathComponent("projects")) != nil
                 || SessionRegistry.entry(forSessionId: sessionId, in: $0.appendingPathComponent("sessions")) != nil
         }
         if roots.count > 1 {
             return HarnessLaunch(adapter: ClaudeCodeAdapter(), command: "", resolutionError: "More than one account contains this conversation. Resolve its origin before resuming.")
         }
-        if let root = roots.first, let target = SavedAccountStore.shared.targetID(root: root) {
-            do { try SessionAccountStore.shared.bind(sessionId, targetID: target, root: root) }
+        if let binding = bindings.binding(sessionId) {
+            if binding.targetID == ClaudeCodeAdapter().id { return HarnessLaunch(harness: binding.targetID) }
+            if let account = accounts.account(binding.targetID), account.root.path == binding.configDirectory {
+                return HarnessLaunch(adapter: ClaudeCodeAdapter(), command: account.command, account: account)
+            }
+            return HarnessLaunch(adapter: ClaudeCodeAdapter(), command: "", resolutionError: "This session’s saved account is missing or has moved. Reconnect it before resuming.")
+        }
+        if let root = roots.first, let target = accounts.targetID(root: root) {
+            do { try bindings.bind(sessionId, targetID: target, root: root) }
             catch { return HarnessLaunch(adapter: ClaudeCodeAdapter(), command: "", resolutionError: error.localizedDescription) }
+            if let account = accounts.account(target) {
+                return HarnessLaunch(adapter: ClaudeCodeAdapter(), command: account.command, account: account)
+            }
             return HarnessLaunch(harness: target)
         }
         let isCodex = CodexRollout.rolloutPath(forSessionId: sessionId) != nil

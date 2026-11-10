@@ -55,7 +55,17 @@ public final class SavedAccountStore: @unchecked Sendable {
     }
     private func read() -> [SavedAccount] {
         guard let data = try? Data(contentsOf: fileURL) else { return [] }
-        return (try? JSONDecoder().decode([SavedAccount].self, from: data)) ?? []
+        return (try? Self.decode(data)) ?? []
+    }
+    private static func decode(_ data: Data) throws -> [SavedAccount] {
+        let values = try JSONDecoder().decode([SavedAccount].self, from: data)
+        let roots = values.map { $0.root.resolvingSymlinksInPath().path }
+        guard Set(values.map(\.id)).count == values.count, Set(roots).count == values.count,
+              !roots.contains(defaultRoot.resolvingSymlinksInPath().path),
+              values.allSatisfy({ UUID(uuidString: $0.id) != nil && $0.configDirectory.hasPrefix("/") && !$0.label.isEmpty }) else {
+            throw AccountConfigurationError.invalid("Saved account entries contain duplicate or invalid identities.")
+        }
+        return values
     }
     public func account(_ id: String) -> SavedAccount? { all().first { $0.id == id } }
     public func save(_ account: SavedAccount) throws {
@@ -63,10 +73,10 @@ public final class SavedAccountStore: @unchecked Sendable {
         let descriptor = try Self.acquireWriteLock(fileURL)
         defer { Self.releaseWriteLock(descriptor) }
         if FileManager.default.fileExists(atPath: fileURL.path) {
-            _ = try JSONDecoder().decode([SavedAccount].self, from: Data(contentsOf: fileURL))
+            _ = try Self.decode(Data(contentsOf: fileURL))
         }
         guard !account.label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              account.configDirectory.hasPrefix("/"), !account.id.isEmpty,
+              account.configDirectory.hasPrefix("/"), UUID(uuidString: account.id) != nil,
               account.root.path != NSHomeDirectory(),
               !KnownHarnesses.all.contains(where: { $0.id == account.id }) else {
             throw AccountConfigurationError.invalid("Choose an account name and a separate profile folder.")
@@ -97,7 +107,7 @@ public final class SavedAccountStore: @unchecked Sendable {
     static func releaseWriteLock(_ descriptor: Int32) { flock(descriptor, LOCK_UN); Darwin.close(descriptor) }
     public var isReadable: Bool {
         guard FileManager.default.fileExists(atPath: fileURL.path) else { return true }
-        return (try? JSONDecoder().decode([SavedAccount].self, from: Data(contentsOf: fileURL))) != nil
+        return (try? Self.decode(Data(contentsOf: fileURL))) != nil
     }
     static func write<T: Encodable>(_ value: T, to url: URL) throws {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
