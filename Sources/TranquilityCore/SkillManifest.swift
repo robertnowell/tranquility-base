@@ -105,7 +105,12 @@ public enum SkillManifest {
                legacyDirs: [])
     }
 
-    public static var targets: [Target] { [claudeCode, codex, openCode] }
+    public static var targets: [Target] {
+        [claudeCode, codex, openCode] + SavedAccountStore.shared.all().map {
+            Target(id: $0.id, label: "Claude · " + $0.label,
+                   skillsDir: $0.root.appendingPathComponent("skills"), homeURL: $0.root, legacyDirs: [])
+        }
+    }
 
     /// The harnesses this Mac actually has. Stable order, so a report reads
     /// the same way twice.

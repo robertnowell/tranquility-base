@@ -36,9 +36,11 @@ public final class TranscriptTitles: @unchecked Sendable {
     /// by replacing every non-alphanumeric character with "-"
     /// ("/Users/x/a.b" → "-Users-x-a-b").
     public static func defaultPath(cwd: String, sessionId: String) -> String {
+        if let found = TranscriptArchive.transcriptPath(forSessionId: sessionId) { return found }
         let slug = String(cwd.map { $0.isLetter || $0.isNumber ? $0 : "-" })
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        return "\(home)/.claude/projects/\(slug)/\(sessionId).jsonl"
+        let root = SessionAccountStore.shared.binding(sessionId)?.configDirectory
+            ?? SavedAccountStore.defaultRoot.path
+        return "\(root)/projects/\(slug)/\(sessionId).jsonl"
     }
 
     /// The latest `aiTitle` in the transcript, or nil while none exists yet

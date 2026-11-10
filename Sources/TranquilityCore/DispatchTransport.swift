@@ -614,6 +614,9 @@ public struct LiveSession: Sendable, Decodable {
     ///
     /// `agents --json` does not emit it, and the default is right there:
     /// everything that CLI returns is Claude Code by construction.
+    public var accountTargetID: String? = nil
+    public var configDirectory: String? = nil
+    public var registryTmux: String? = nil
     public var harness: String = ClaudeCodeAdapter().id
     public var pid: Int
     public var sessionId: String
@@ -810,6 +813,12 @@ public struct ClaudeAgentsCLI: ClaudeAgentsReading {
         // the conversation people know.
         let sessions = SessionRegistry.standingInForParkedJobs(
             witnessed, entries: entries, isAlive: ProcessProbe.isAlive, trace: Self.trace)
+        for session in sessions {
+            if let target = session.accountTargetID, let root = session.configDirectory {
+                do { try SessionAccountStore.shared.bind(session.sessionId, targetID: target, root: URL(fileURLWithPath: root)) }
+                catch { Self.trace?("liveness: account origin conflict"); return nil }
+            }
+        }
         Self.cache.put(sessions)
         return sessions
     }
@@ -841,6 +850,9 @@ public struct ClaudeAgentsCLI: ClaudeAgentsReading {
                                    waitingFor: entry.waitingFor)
             // The file spells a daemon-hosted job "bg"; the CLI spelled it
             // "background" and `isBackground` still reads that word.
+            live.accountTargetID = entry.accountTargetID
+            live.configDirectory = entry.configDirectory
+            live.registryTmux = entry.tmux
             live.kind = entry.kind == "bg" ? "background" : entry.kind
             live.startedAt = entry.startedAt
             return live
@@ -905,7 +917,7 @@ public enum TranscriptWatcher {
     public static func waitForUserText(
         _ text: String, sessionId: String, knownPath: String?,
         timeout: TimeInterval, pollInterval: TimeInterval,
-        projects: URL = TranscriptArchive.projectsDirectory,
+        projects: URL? = nil,
         fromByteOffset: Int64 = 0
     ) async -> Bool {
         let deadline = Date().addingTimeInterval(timeout)

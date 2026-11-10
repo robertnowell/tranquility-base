@@ -42,12 +42,14 @@ public enum Subprocess {
         _ executablePath: String,
         _ arguments: [String],
         environment: [String: String]? = nil,
+        directory: URL? = nil,
         stdin: Data? = nil,
         timeout: TimeInterval
     ) -> Result<String, ScriptError> {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: executablePath)
         p.arguments = arguments
+        p.currentDirectoryURL = directory
         if let environment { p.environment = environment }
 
         let out = Pipe(), err = Pipe()

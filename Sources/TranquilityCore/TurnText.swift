@@ -278,6 +278,9 @@ public enum TurnText {
     /// `~/.claude/projects/<slugged-cwd>/<session>.jsonl`. The project directory
     /// is not derivable from the id, so this looks for the file by name.
     static func claudeTranscript(for sessionId: String, home: URL) -> URL? {
+        if home == FileManager.default.homeDirectoryForCurrentUser {
+            return TranscriptArchive.transcriptPath(forSessionId: sessionId).map { URL(fileURLWithPath: $0) }
+        }
         let root = home.appendingPathComponent(".claude/projects", isDirectory: true)
         guard let dirs = try? FileManager.default.contentsOfDirectory(
             at: root, includingPropertiesForKeys: nil) else { return nil }

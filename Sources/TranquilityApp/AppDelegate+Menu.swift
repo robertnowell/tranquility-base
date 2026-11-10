@@ -102,6 +102,10 @@ extension AppDelegate {
         icon?.isTemplate = true
         newSession.image = icon
         menu.addItem(newSession)
+        let accounts = NSMenuItem(title: "Saved accounts…", action: #selector(manageSavedAccounts), keyEquivalent: "")
+        accounts.target = self; menu.addItem(accounts)
+        let recovery = NSMenuItem(title: "Recover pending launch…", action: #selector(recoverSavedLaunches), keyEquivalent: "")
+        recovery.target = self; menu.addItem(recovery)
 
         // The hub, in its own window (hf-o8t, 29 Sep): every page every agent
         // wrote, without a browser tab. Only when this Mac has a hub.

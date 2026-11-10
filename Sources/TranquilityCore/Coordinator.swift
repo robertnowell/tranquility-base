@@ -130,7 +130,7 @@ public struct Coordinator: Sendable {
                 // safe" premise this reverses and why.
                 SessionLauncher.OwnershipTransfer.toTmux(
                     sessionId: sessionId,
-                    launch: HarnessLaunch(harness: harness),
+                    launch: HarnessLaunch.forExistingSession(sessionId),
                     directory: directory)?.pane
             }
     ) {

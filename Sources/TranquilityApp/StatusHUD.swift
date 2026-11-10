@@ -222,7 +222,7 @@ final class StatusHUD: NSObject {
     /// Which harness the Agents tab is currently showing fields for — pane-
     /// local UI state, not a setting. Defaults to whichever is the default
     /// harness the moment settings first open; switching it with the picker
-    /// changes only what's displayed here, never `AgentDefaults.defaultHarness`
+    /// changes only what's displayed here, never `AgentDefaults.defaultTarget`
     /// itself (that's `harnessPicker.onMakeDefault`'s job, explicitly).
     var viewingHarness: String = ClaudeCodeAdapter().id
     var voiceStack: NSStackView!
@@ -1501,8 +1501,8 @@ final class StatusHUD: NSObject {
         // from the same setting a terminal harness uses (#471). Before this
         // the pane was empty for a provider default and two launch drills
         // went red on every deploy after Robert chose OpenCode.
-        let isHarness = KnownHarnesses.all.contains { $0.id == harness }
-        launchRow.isHidden = !isHarness
+        let isHarness = KnownHarnesses.all.contains { $0.id == SavedAccountStore.shared.backend(harness) }
+        launchRow.isHidden = !isHarness || SavedAccountStore.shared.account(harness) != nil
         directoryRow.isHidden = false
         if isHarness {
             launchRow.show(AgentDefaults.load(for: harness))
@@ -2851,7 +2851,7 @@ final class StatusHUD: NSObject {
                 // default — a picker left pointed at Codex from a previous
                 // visit would otherwise silently show the wrong harness's
                 // fields the next time settings open.
-                viewingHarness = AgentDefaults.defaultHarness
+                viewingHarness = AgentDefaults.defaultTarget
                 agentGrid.update(agents: Self.agentTiles(), selected: viewingHarness)
                 showAgentFields(for: viewingHarness)
                 bodyLabel.stringValue = face.body
@@ -3527,7 +3527,7 @@ final class StatusHUD: NSObject {
         waitingRows.addArrangedSubview(hairline(StateLegend.Palette.hairlineSoft))
         let newRow = SplitPlacardRowView(
             width: Self.gridWidth, target: self,
-            leadingHarness: AgentDefaults.defaultHarness,
+            leadingHarness: AgentDefaults.defaultTarget,
             leading: (StateLegend.newAgentTitle, "+", #selector(newSessionRowTapped)),
             trailing: (StateLegend.pastAgentsTitle, "↺", #selector(pastAgentsRowTapped)))
         waitingRows.addArrangedSubview(newRow)
@@ -3621,6 +3621,9 @@ final class StatusHUD: NSObject {
     /// Wired by the app: which agents the row menu may continue into. The
     /// default is every ready tile; the app narrows it to the ones whose
     /// start can carry the fragment.
+    var onNewAccountSession: ((String) -> Void)?
+    var onManageAccounts: (() -> Void)?
+    var onRecoverLaunches: (() -> Void)?
     var handoffDestinations: () -> [AgentHandoff.Destination] = {
         AgentHandoff.destinations(ready: StatusHUD.agentTiles())
     }
@@ -3706,8 +3709,27 @@ final class StatusHUD: NSObject {
     }
 
     @objc nonisolated private func newSessionRowTapped() {
-        MainActor.assumeIsolated { onNewSession?() }
+        MainActor.assumeIsolated {
+            guard !SavedAccountStore.shared.all().isEmpty else { onNewSession?(); return }
+            let menu = NSMenu()
+            for destination in AgentHandoff.destinations(ready: Self.agentTiles()) {
+                let item = NSMenuItem(title: destination.label, action: #selector(newAccountSessionPicked(_:)), keyEquivalent: "")
+                item.target = self; item.representedObject = destination.id; menu.addItem(item)
+            }
+            menu.addItem(.separator())
+            let add = NSMenuItem(title: "Manage saved accounts…", action: #selector(manageAccountsPicked), keyEquivalent: "")
+            add.target = self; menu.addItem(add)
+            let recover = NSMenuItem(title: "Recover pending launch…", action: #selector(recoverLaunchesPicked), keyEquivalent: "")
+            recover.target = self; menu.addItem(recover)
+            menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
+        }
     }
+
+    @objc private func newAccountSessionPicked(_ sender: NSMenuItem) {
+        if let id = sender.representedObject as? String { onNewAccountSession?(id) }
+    }
+    @objc private func manageAccountsPicked() { onManageAccounts?() }
+    @objc private func recoverLaunchesPicked() { onRecoverLaunches?() }
 
     /// The roster pane's rows: roster members first, in assignment order, then
     /// the rest grouped by category. Rows draw their own bottom hairline (no
@@ -4701,7 +4723,7 @@ final class StatusHUD: NSObject {
                                         action: #selector(continueWorkGridRowPicked(_:)),
                                         keyEquivalent: "")
                 choice.target = self
-                choice.representedObject = HandoffPick(sessionId: item.id, harness: destination.harness)
+                choice.representedObject = HandoffPick(sessionId: item.id, harness: destination.id)
                 choices.addItem(choice)
             }
             handoff.submenu = choices

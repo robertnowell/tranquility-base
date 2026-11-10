@@ -690,7 +690,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // from, so the reply goes where the row said it would. Asking
                 // the registry instead would be asking what COULD be remote
                 // rather than what is.
-                isRemote: { [weak poller] id in poller?.snapshot.agent(id) != nil })
+                isRemote: { [weak poller] id in poller?.snapshot.agent(id) != nil },
+                attachments: .persistent())
             // The mirror: every page and turn into the hub, while the panel
             // runs. Nil until this Mac is connected; nothing else changes.
             HubWindow.shared.log = { Permissions.log($0) }
@@ -1182,6 +1183,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // The separate waiting-list face is gone: the idle grid IS the list.
         hud.onPickWaiting = { [weak self] id in self?.announceNext(only: id) }
         hud.onNewSession = { [weak self] in self?.newSession() }
+        hud.onNewAccountSession = { [weak self] id in self?.newSession(targetID: id) }
+        hud.onManageAccounts = { [weak self] in self?.manageSavedAccounts() }
+        hud.onRecoverLaunches = { [weak self] in self?.recoverSavedLaunches() }
         hud.onManagerToggle = { [weak self] in self?.toggleManagerMode() }
         hud.managerAvailable = ManagerConfig.webrtc() != nil || ManagerConfig.availability() != .unset
         hud.onContinueWork = { [weak self] id, name, harness in
@@ -2454,6 +2458,14 @@ if CommandLine.arguments.contains("--selftest-credits-onboarding") {
     }
     probeApplication.run()
     exit(1)
+}
+
+// Account UI only: no delegate, microphone, rules repair or live-app ownership.
+if CommandLine.arguments.contains("--selftest-saved-accounts") {
+    _ = NSApplication.shared
+    let passed = SavedAccountsDrill.run()
+    print(passed ? "Saved accounts UI: PASS" : "Saved accounts UI: FAIL")
+    exit(passed ? 0 : 1)
 }
 
 // Product choices lived in the production bundle's defaults before Dev had a

@@ -29,6 +29,7 @@ final class AgentGridRow: NSView {
     static let tileHeight: CGFloat = 64
     static let markSize: CGFloat = 26
 
+    private let gridWidth: CGFloat
     private var tiles: [String: NSButton] = [:]
     private var agents: [AgentRoster.Agent] = []
     private(set) var selected: String
@@ -43,9 +44,18 @@ final class AgentGridRow: NSView {
     init(width: CGFloat, agents: [AgentRoster.Agent], selected: String) {
         self.selected = selected
         self.agents = agents
+        self.gridWidth = width
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
 
+        widthAnchor.constraint(equalToConstant: width).isActive = true
+        rebuildTiles()
+    }
+
+    private func rebuildTiles() {
+        for view in subviews { view.removeFromSuperview() }
+        tiles.removeAll()
+        let width = gridWidth
         let rows = max(1, Int(ceil(Double(agents.count) / Double(Self.columns))))
         let tileWidth = width / CGFloat(Self.columns)
 
@@ -58,7 +68,7 @@ final class AgentGridRow: NSView {
             // The vendor's own mark, at the tile's size. A missing one draws
             // nothing rather than a placeholder: a hole is honest and a grey
             // box pretending to be a logo is not.
-            if let png = AgentMarks.png(agent.id), let image = NSImage(data: png) {
+            if let png = AgentMarks.png(SavedAccountStore.shared.backend(agent.id)), let image = NSImage(data: png) {
                 image.size = NSSize(width: Self.markSize, height: Self.markSize)
                 button.image = image
                 // Without this the cell draws the mark at its own pixel size
@@ -90,9 +100,6 @@ final class AgentGridRow: NSView {
             }
         }
 
-        NSLayoutConstraint.activate([
-            widthAnchor.constraint(equalToConstant: width),
-        ])
         paint()
     }
 
@@ -100,9 +107,10 @@ final class AgentGridRow: NSView {
     required init?(coder: NSCoder) { fatalError("not used") }
 
     func update(agents: [AgentRoster.Agent], selected: String) {
+        let changed = self.agents.map(\.id) != agents.map(\.id)
         self.agents = agents
         self.selected = selected
-        paint()
+        if changed { rebuildTiles() } else { paint() }
     }
 
     /// The whole visual language, in one place.
@@ -137,6 +145,7 @@ final class AgentGridRow: NSView {
             // ones that are. It is still legible and still tappable: being
             // signed out is an ordinary state, not a disabled control.
             button.alphaValue = ready ? 1.0 : 0.62
+            button.toolTip = agent.name
         }
     }
 
@@ -168,7 +177,7 @@ extension StatusHUD {
     /// not to the person choosing one.
     static func agentTiles() -> [AgentRoster.Agent] {
         let offerable = Set(AgentRoster.validated.filter { $0.reach.isOfferable }.map(\.id))
-        return AgentRoster.grid(
+        let base = AgentRoster.grid(
             installed: { id in
                 // A harness is installed if its binary resolves; a provider is
                 // installed if it has been configured at all, which is what
@@ -184,5 +193,12 @@ extension StatusHUD {
                 KnownHarnesses.all.contains { $0.id == id } || ProviderConfig.baseURL(id) != nil
             })
             .filter { offerable.contains($0.id) }
+        let accounts = SavedAccountStore.shared.all()
+        guard !accounts.isEmpty, let original = base.first(where: { $0.id == ClaudeCodeAdapter().id }) else { return base }
+        return base.flatMap { agent -> [AgentRoster.Agent] in
+            guard agent.id == original.id else { return [agent] }
+            return [AgentRoster.Agent(id: agent.id, name: "Claude · Main", glyph: agent.glyph, standing: agent.standing)]
+                + accounts.map { AgentRoster.Agent(id: $0.id, name: "Claude · " + $0.label, glyph: agent.glyph, standing: agent.standing) }
+        }
     }
 }

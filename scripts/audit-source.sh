@@ -109,6 +109,9 @@ swift build >/dev/null
 echo "→ isolated Past Agents search UI"
 scripts/test-past-agents-search.sh
 
+echo "→ isolated saved account UI"
+scripts/test-saved-accounts.sh
+
 echo "→ isolated credits onboarding UI"
 scripts/test-credits-onboarding.sh
 

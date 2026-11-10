@@ -96,7 +96,19 @@ public enum SessionLineage {
     /// Every `continued-in` link on disk. Only Claude Code writes these, so
     /// only its project tree is walked; Codex's own equivalent is
     /// `CodexLineage.scan`, and `current` merges the two.
-    public static func scan(projects: URL = TranscriptArchive.projectsDirectory) -> Map {
+    public static func scan(projects: URL? = nil) -> Map {
+        guard let projects else {
+            var map: Map = [:]
+            var duplicates: Set<String> = []
+            for root in SavedAccountStore.shared.roots {
+                for (next, origin) in scan(projects: root.appendingPathComponent("projects")) {
+                    if map[next] != nil { duplicates.insert(next) }
+                    map[next] = origin
+                }
+            }
+            for id in duplicates { map.removeValue(forKey: id) }
+            return map
+        }
         let fm = FileManager.default
         guard let projectNames = try? fm.contentsOfDirectory(atPath: projects.path) else { return [:] }
         var map: Map = [:]
