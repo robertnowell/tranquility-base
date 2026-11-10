@@ -153,13 +153,23 @@ public final class SessionAccountStore: @unchecked Sendable {
     }
     public func bind(_ sessionID: String, targetID: String, root: URL) throws {
         lock.lock(); defer { lock.unlock() }
+        let binding = SessionAccountBinding(targetID: targetID, configDirectory: root.standardizedFileURL.path)
+        // Observing an immutable binding is a read. Concurrent CLI readers must
+        // not turn a healthy registry into an unknown witness by taking the
+        // writer lock for every session on every discovery pass.
+        if FileManager.default.fileExists(atPath: fileURL.path) {
+            let observed = try JSONDecoder().decode([String: SessionAccountBinding].self, from: Data(contentsOf: fileURL))
+            if let old = observed[sessionID] {
+                guard old == binding else { throw AccountConfigurationError.invalid("This conversation has conflicting saved-account origins.") }
+                return
+            }
+        }
         let descriptor = try SavedAccountStore.acquireWriteLock(fileURL)
         defer { SavedAccountStore.releaseWriteLock(descriptor) }
         if FileManager.default.fileExists(atPath: fileURL.path) {
             _ = try JSONDecoder().decode([String: SessionAccountBinding].self, from: Data(contentsOf: fileURL))
         }
         var values = read()
-        let binding = SessionAccountBinding(targetID: targetID, configDirectory: root.standardizedFileURL.path)
         if let old = values[sessionID] {
             guard old == binding else { throw AccountConfigurationError.invalid("This conversation has conflicting saved-account origins.") }
             return

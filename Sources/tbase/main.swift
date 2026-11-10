@@ -429,12 +429,19 @@ do {
                 : "REFUSED — its directory is gone, so --resume would land nowhere.")
             exit(2)
         }
-        print("would run  \(AgentDefaults.load()) \(command.arguments.joined(separator: " "))")
+        let accountLaunch = HarnessLaunch.forExistingSession(session.sessionId)
+        if let error = accountLaunch.resolutionError {
+            print("REFUSED — \(error)")
+            exit(2)
+        }
+        let resumeCommand = SessionLauncher.manualRevival(sessionId: session.sessionId,
+                                                          directory: command.cwd, launch: accountLaunch)
+        print("would run  \(resumeCommand)")
         print("in         \(command.cwd)")
         if args.contains("--dry-run") { print(""); print("dry run — nothing launched"); break }
         print("")
         switch SessionLauncher.resume(sessionId: session.sessionId, directory: command.cwd,
-                                      launch: HarnessLaunch(harness: session.harness)) {
+                                      launch: accountLaunch) {
         case .success:
             print("resumed in a detached tmux pane — `tbase targets` finds it, "
                 + "or click Go to Agent")
@@ -1468,7 +1475,7 @@ case "reconcile":
                 // Claude Code one by construction; Codex targets never reach
                 // this branch. Named rather than defaulted, because a default
                 // here is exactly what ended a session with the wrong binary.
-                launch: HarnessLaunch(harness: ClaudeCodeAdapter().id),
+                launch: HarnessLaunch.forExistingSession(sessionId),
                 directory: cwd) {
                 pane = transferred.pane
                 dispatchPid = transferred.pid

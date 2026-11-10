@@ -78,6 +78,18 @@ final class SavedAccountsTests: XCTestCase {
         XCTAssertEqual(SessionAccountStore(fileURL: file).binding("session")?.targetID, "A")
     }
 
+    func testObservedBindingDoesNotContendWithAnotherWriter() throws {
+        let file = root.appendingPathComponent("sessions.json")
+        let store = SessionAccountStore(fileURL: file)
+        let profile = root.appendingPathComponent("A")
+        try store.bind("session", targetID: "A", root: profile)
+        let descriptor = try SavedAccountStore.acquireWriteLock(file)
+        defer { SavedAccountStore.releaseWriteLock(descriptor) }
+        XCTAssertNoThrow(try store.bind("session", targetID: "A", root: profile))
+        XCTAssertThrowsError(try store.bind("session", targetID: "B", root: profile))
+        XCTAssertThrowsError(try store.bind("new-session", targetID: "A", root: profile))
+    }
+
     func testTwoRegistryRootsAndAmbiguousID() throws {
         let a = root.appendingPathComponent("a"), b = root.appendingPathComponent("b")
         for profile in [a, b] { try FileManager.default.createDirectory(at: profile.appendingPathComponent("sessions"), withIntermediateDirectories: true) }
