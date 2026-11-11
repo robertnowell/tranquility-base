@@ -2603,7 +2603,9 @@ extension AppDelegate {
             pendingLaunch = launch
             superseded?.abandon()
             if let superseded {
-                try? LaunchRecoveryStore.shared.update(superseded.stagingKey) { $0.state = "unresolved" }
+                try? LaunchRecoveryStore.shared.update(superseded.stagingKey) {
+                    if $0.state != "bound" && $0.state != "discarded" { $0.state = "unresolved" }
+                }
             }
             for fragment in initialFragments {
                 _ = coordinator?.attachments.stage(fragment, session: launch.stagingKey)

@@ -129,6 +129,8 @@ enum SavedAccountsLiveDrill {
             try require(unresolved.paneID == nil, "identity mismatch refuses process creation")
             try require(AttachmentStore.persistent().staged(for: unresolved.id).contains { $0.contains(secondID!) }, "failed launch preserves its source pointer on disk")
             try require(try LaunchRecoveryStore.shared.records().first { $0.id == unresolved.id }?.instruction == "KEEP_THIS_FAILED_LAUNCH_INSTRUCTION", "failed launch preserves its typed instruction on disk")
+            let successful = try LaunchRecoveryStore.shared.records().filter { $0.sessionID != nil }
+            try require(successful.allSatisfy { $0.state == "bound" }, "later launches preserve completed handoff receipts")
             print("Saved accounts live app: PASS")
             return true
         } catch {
