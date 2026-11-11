@@ -1,8 +1,8 @@
 #!/bin/bash
 # Packaging acceptance for the side-by-side development identity. Builds both
 # envelopes from this checkout, compares their code, and proves the production
-# installer refuses to put Dev at the production path. Nothing is launched or
-# installed.
+# installer refuses to put Dev at the production path. An isolated UI drill
+# launches the final signed Dev executable. Nothing is installed.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 . "$(dirname "$0")/lib/paths.sh"
@@ -58,6 +58,24 @@ env -u MallocStackLogging TB_ARCHS="${TB_ARCHS:-arm64}" \
 PROD="$(tb_bundle_dir debug)/Tranquility Base.app"
 DEV="$(tb_bundle_dir debug)/Tranquility Base Dev.app"
 scripts/audit-dev.sh "$DEV" "$PROD"
+
+# A valid resource seal does not prove dyld can load the signed frameworks.
+# Run before AppDelegate startup, with isolated state and no live app ownership.
+python3 - "$DEV" "$TMP" <<'PYCODE'
+import os, subprocess, sys
+env = dict(os.environ, VOICE_DISPATCH_SUPPORT_DIR=sys.argv[2] + "/support",
+           TB_AGENTS_ROOT=sys.argv[2] + "/agents")
+result = subprocess.run([sys.argv[1] + "/Contents/MacOS/TranquilityApp",
+                         "--selftest-saved-accounts"], env=env, timeout=30,
+                        text=True, capture_output=True)
+print(result.stdout, end="")
+if result.returncode:
+    print(result.stderr, file=sys.stderr, end="")
+    sys.exit("Final signed Dev bundle failed its isolated launch drill")
+if "PASS" not in result.stdout:
+    sys.exit("Final signed Dev bundle produced no passing drill receipt")
+print("✓ final signed Dev bundle loads its embedded frameworks")
+PYCODE
 
 set +e
 INSTALL_OUTPUT=$(scripts/install.sh "$DEV" --no-login-item 2>&1)

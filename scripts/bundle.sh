@@ -438,6 +438,24 @@ if [ -z "$IDENTITY" ]; then
   fi
 fi
 
+# A local certificate has no Apple Team ID. Hardened-runtime library
+# validation cannot match its embedded frameworks even when all use that same
+# certificate. Permit that specific local Dev envelope, never production or
+# Apple-team-signed Dev. The final signed bundle is exercised by the lane drill.
+FINAL_ENTITLEMENTS=TranquilityBase.entitlements
+select_final_entitlements() {
+  local framework_team
+  framework_team=$(codesign -dv "$APP_DIR/Contents/Frameworks/LiveKitWebRTC.framework" 2>&1 \
+    | sed -n 's/^TeamIdentifier=//p')
+  if [ "$BUNDLE_ID" = com.robertnowell.voice-dispatch.dev ] \
+     && [ "${VD_APP_CHANNEL:-}" = development ] \
+     && [ "$framework_team" = "not set" ]; then
+    FINAL_ENTITLEMENTS="$APP_DIR/../local-dev.entitlements"
+    cp TranquilityBase.entitlements "$FINAL_ENTITLEMENTS"
+    /usr/libexec/PlistBuddy -c 'Add :com.apple.security.cs.disable-library-validation bool true' "$FINAL_ENTITLEMENTS"
+  fi
+}
+
 if [ -z "$IDENTITY" ]; then
   # Reached only if identity creation itself failed. Still sign ad-hoc WITH
   # entitlements — without them the hardened-runtime denials are silent — but say
@@ -455,8 +473,9 @@ if [ -z "$IDENTITY" ]; then
     --options runtime --timestamp=none "$APP_DIR/Contents/Resources/tbase"
   sparkle_sign "$APP_DIR" - --timestamp=none
   webrtc_sign "$APP_DIR" - --timestamp=none
+  select_final_entitlements
   codesign --force --sign - --identifier "$BUNDLE_ID" \
-    --entitlements TranquilityBase.entitlements \
+    --entitlements "$FINAL_ENTITLEMENTS" \
     --options runtime --timestamp=none "$APP_DIR"
 else
   # --entitlements is not optional here. With the hardened runtime enabled, a
@@ -468,8 +487,9 @@ else
     --options runtime --timestamp=none "$APP_DIR/Contents/Resources/tbase"
   sparkle_sign "$APP_DIR" "$IDENTITY" --timestamp=none
   webrtc_sign "$APP_DIR" "$IDENTITY" --timestamp=none
+  select_final_entitlements
   codesign --force --sign "$IDENTITY" --identifier "$BUNDLE_ID" \
-    --entitlements TranquilityBase.entitlements \
+    --entitlements "$FINAL_ENTITLEMENTS" \
     --options runtime --timestamp=none "$APP_DIR"
   echo "signed as: $IDENTITY"
 fi
