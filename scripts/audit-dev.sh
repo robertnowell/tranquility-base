@@ -35,16 +35,30 @@ case "$DEV_SIGNING" in
   *) fail "ad-hoc signature would reset TCC on rebuild" ;;
 esac
 DEV_ENTITLEMENTS=$(codesign -d --entitlements :- "$DEV" 2>/dev/null || true)
-case "$DEV_ENTITLEMENTS" in
-  *com.apple.security.cs.disable-library-validation*)
-    fail "temporary icon-helper entitlement leaked into the final app" ;;
-esac
+DEV_TEAM=$(printf '%s\n' "$DEV_SIGNING" | sed -n 's/^TeamIdentifier=//p')
+if [ "$DEV_TEAM" = "not set" ]; then
+  # Local certificates cannot satisfy the hardened runtime's Team-ID match.
+  case "$DEV_ENTITLEMENTS" in
+    *com.apple.security.cs.disable-library-validation*) ;;
+    *) fail "local Dev cannot load its embedded frameworks without the scoped exception" ;;
+  esac
+else
+  case "$DEV_ENTITLEMENTS" in
+    *com.apple.security.cs.disable-library-validation*)
+      fail "Apple-team-signed Dev must retain library validation" ;;
+  esac
+fi
 
 if [ -n "$PROD" ]; then
   [ -d "$PROD" ] || fail "no Prod comparison bundle at $PROD"
   PROD_ID=$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" \
     "$PROD/Contents/Info.plist" 2>/dev/null || echo "")
   [ "$PROD_ID" = "com.robertnowell.voice-dispatch" ] || fail "comparison is not Prod"
+  PROD_ENTITLEMENTS=$(codesign -d --entitlements :- "$PROD" 2>/dev/null || true)
+  case "$PROD_ENTITLEMENTS" in
+    *com.apple.security.cs.disable-library-validation*)
+      fail "local Dev exception leaked into production" ;;
+  esac
   DEV_COMMIT=$(read_dev TBSourceCommit)
   PROD_COMMIT=$(/usr/libexec/PlistBuddy -c "Print :TBSourceCommit" \
     "$PROD/Contents/Info.plist" 2>/dev/null || echo "")
