@@ -7,22 +7,25 @@ import XCTest
 /// the file must actually be read, and it must be impossible for a bad file to
 /// leave a hub with no theme.
 ///
-/// The first test is the one that earns its keep. It asserts the shipped file
-/// and the compiled fallback agree field by field, which is the only way to know
-/// the extraction was faithful rather than approximately faithful.
+/// Fixtures verify both the compiled fallback and intentional file overrides.
+/// The operator's personal theme file is never a test input.
 final class ThemeFileTests: XCTestCase {
 
     private var dir: String = ""
+    private var previousThemePath: String?
 
     override func setUp() {
         super.setUp()
+        previousThemePath = ProcessInfo.processInfo.environment["HQ_THEMES"]
         dir = NSTemporaryDirectory() + "tb-theme-tests-" + UUID().uuidString
         try? FileManager.default.createDirectory(atPath: dir,
                                                  withIntermediateDirectories: true)
+        setenv("HQ_THEMES", dir + "/does-not-exist.json", 1)
     }
 
     override func tearDown() {
-        unsetenv("HQ_THEMES")
+        if let previousThemePath { setenv("HQ_THEMES", previousThemePath, 1) }
+        else { unsetenv("HQ_THEMES") }
         try? FileManager.default.removeItem(atPath: dir)
         super.tearDown()
     }
@@ -91,18 +94,26 @@ final class ThemeFileTests: XCTestCase {
                        HomeBase.Theme.kopi.accent)
     }
 
-    /// THE ONE THAT MATTERS: the shipped file says exactly what the binary says.
-    /// If this fails, the extraction was wrong and every page an author styles
-    /// from the file disagrees with the hub the app renders.
-    func testTheShippedFileMatchesTheCompiledTable() throws {
-        let shipped = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".claude/hq-themes.json")
-        try XCTSkipUnless(FileManager.default.fileExists(atPath: shipped.path),
-                          "no hq-themes.json on this machine")
-        setenv("HQ_THEMES", shipped.path, 1)
-        XCTAssertEqual(HomeBase.Theme.editorial, HomeBase.Theme.builtInEditorial)
-        XCTAssertEqual(HomeBase.Theme.kopi, HomeBase.Theme.builtInKopi)
-        XCTAssertEqual(HomeBase.Theme.mirai, HomeBase.Theme.builtInMirai)
-        XCTAssertEqual(HomeBase.Theme.agentInks, HomeBase.Theme.builtInAgentInks)
+    /// User configuration is an override, not an immutable shipped fixture.
+    /// Exercise real file parsing for every theme without reading the operator's file.
+    func testConfiguredThemesAndPaletteOverrideTheCompiledDefaults() throws {
+        write("""
+        {"themes":{
+          "editorial":{"nameplate":"Fixture House","accent":"#102030","has_dark":false},
+          "kopi":{"heading":"#AABBCC","serif":"Fixture Serif","sans":"Fixture Sans","font_sheet":"fixture.css"},
+          "mirai":{"nameplate":"Fixture Mirai","bg":"#eeeeee"}
+        },"agent_inks":["#112233","#445566"]}
+        """)
+        XCTAssertEqual(HomeBase.Theme.editorial.nameplate, "Fixture House")
+        XCTAssertEqual(HomeBase.Theme.editorial.accent, "#102030")
+        XCTAssertFalse(HomeBase.Theme.editorial.hasDark)
+        XCTAssertEqual(HomeBase.Theme.kopi.heading, "#AABBCC")
+        XCTAssertEqual(HomeBase.Theme.kopi.serif, "Fixture Serif")
+        XCTAssertEqual(HomeBase.Theme.kopi.sans, "Fixture Sans")
+        XCTAssertEqual(HomeBase.Theme.kopi.fontSheet, "fixture.css")
+        XCTAssertEqual(HomeBase.Theme.mirai.nameplate, "Fixture Mirai")
+        XCTAssertEqual(HomeBase.Theme.mirai.bg, "#eeeeee")
+        XCTAssertEqual(HomeBase.Theme.agentInks, ["#112233", "#445566"])
+        XCTAssertEqual(HomeBase.Theme.editorial.paper, HomeBase.Theme.builtInEditorial.paper)
     }
 }

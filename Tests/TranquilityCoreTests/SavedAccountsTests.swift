@@ -9,6 +9,32 @@ final class SavedAccountsTests: XCTestCase {
     }
     override func tearDownWithError() throws { try FileManager.default.removeItem(at: root) }
 
+    func testConcurrentEnrollmentPreservesEverySessionAndPrefix() throws {
+        let file = root.appendingPathComponent("enrolled.json")
+        DispatchQueue.concurrentPerform(iterations: 32) { index in
+            let registry = EnrolmentRegistry(url: file)
+            do {
+                try registry.enrol(sessionId: "session-\(index)")
+                try registry.enrol(cwdPrefix: "/project-\(index)/")
+            } catch { XCTFail("Concurrent enrollment failed: \(error)") }
+        }
+        let registry = EnrolmentRegistry(url: file)
+        XCTAssertEqual(Set(registry.summary().sessions), Set((0..<32).map { "session-\($0)" }))
+        XCTAssertEqual(Set(registry.summary().prefixes), Set((0..<32).map { "/project-\($0)/" }))
+        try registry.revoke(sessionId: "session-0")
+        XCTAssertFalse(registry.isEnrolled(sessionId: "session-0", cwd: nil))
+        XCTAssertTrue(registry.isEnrolled(sessionId: "session-1", cwd: nil))
+    }
+
+    func testCorruptEnrollmentRemainsClosedAndCannotBeOverwritten() throws {
+        let file = root.appendingPathComponent("enrolled.json")
+        try Data("broken".utf8).write(to: file)
+        let registry = EnrolmentRegistry(url: file)
+        XCTAssertFalse(registry.isEnrolled(sessionId: "A", cwd: "/"))
+        XCTAssertThrowsError(try registry.enrol(sessionId: "A"))
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), "broken")
+    }
+
     func testNamesCanChangeWithoutMovingCredentials() throws {
         let file = root.appendingPathComponent("accounts.json")
         let store = SavedAccountStore(fileURL: file)
