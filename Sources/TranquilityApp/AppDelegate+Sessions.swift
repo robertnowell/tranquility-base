@@ -2612,6 +2612,7 @@ extension AppDelegate {
             // whole point of the staging key is the first seconds.
             refreshDropTarget()
         }
+        let speakGreeting = speakLaunchGreeting
         if greet, hud.showGreeting(line: line, label: label) {
             // Through the greeting cache, which is what it is for: one fixed
             // sentence per voice, synthesized once and replayed from disk
@@ -2619,7 +2620,7 @@ extension AppDelegate {
             // brief that has not been written yet. Detached because the audio
             // is not the panel's business and the panel is already up.
             Task.detached(priority: .userInitiated) {
-                await GreetingCache.speak(line, voiceId: voice)
+                await speakGreeting(line, voice)
             }
         }
 

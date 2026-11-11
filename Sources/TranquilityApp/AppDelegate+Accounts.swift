@@ -2,6 +2,25 @@ import AppKit
 import TranquilityCore
 
 extension AppDelegate {
+    func wireSavedAccountActions() {
+        hud.onNewSession = { [weak self] in self?.newSession() }
+        hud.onNewAccountSession = { [weak self] id in self?.newSession(targetID: id) }
+        hud.onManageAccounts = { [weak self] in self?.manageSavedAccounts() }
+        hud.onRecoverLaunches = { [weak self] in self?.recoverSavedLaunches() }
+        hud.onContinueWork = { [weak self] id, name, harness in
+            self?.continueWork(from: id, name: name, to: harness)
+        }
+        // Every ready agent whose start can carry the fragment. crobot begins
+        // on its own compose page, which takes a repository and not words, so
+        // the handoff would arrive empty; it is not offered.
+        hud.handoffDestinations = { [weak self] in
+            AgentHandoff.destinations(ready: StatusHUD.agentTiles()) { harness in
+                guard let provider = self?.providerRegistry?.provider(harness) else { return true }
+                return provider.composeURL(for: Brief(prompt: "")) == nil
+            }
+        }
+    }
+
     @objc func manageSavedAccounts() {
         let alert = NSAlert()
         alert.messageText = "Saved accounts"

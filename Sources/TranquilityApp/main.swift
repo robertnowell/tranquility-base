@@ -65,6 +65,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let onboarding = OnboardingWindow()
     let utterancePlayer = UtterancePlayer()
     let hud = StatusHUD()
+    var speakLaunchGreeting: @Sendable (String, String?) async -> Void = { text, voice in
+        await GreetingCache.speak(text, voiceId: voice)
+    }
 
     /// Self-update. Lazy because its closures read `hud` and `store`, which are
     /// properties of the object being initialised.
@@ -1182,24 +1185,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         // The separate waiting-list face is gone: the idle grid IS the list.
         hud.onPickWaiting = { [weak self] id in self?.announceNext(only: id) }
-        hud.onNewSession = { [weak self] in self?.newSession() }
-        hud.onNewAccountSession = { [weak self] id in self?.newSession(targetID: id) }
-        hud.onManageAccounts = { [weak self] in self?.manageSavedAccounts() }
-        hud.onRecoverLaunches = { [weak self] in self?.recoverSavedLaunches() }
+        wireSavedAccountActions()
         hud.onManagerToggle = { [weak self] in self?.toggleManagerMode() }
         hud.managerAvailable = ManagerConfig.webrtc() != nil || ManagerConfig.availability() != .unset
-        hud.onContinueWork = { [weak self] id, name, harness in
-            self?.continueWork(from: id, name: name, to: harness)
-        }
-        // Every ready agent whose start can carry the fragment. crobot begins
-        // on its own compose page, which takes a repository and not words, so
-        // the handoff would arrive empty; it is not offered.
-        hud.handoffDestinations = { [weak self] in
-            AgentHandoff.destinations(ready: StatusHUD.agentTiles()) { harness in
-                guard let provider = self?.providerRegistry?.provider(harness) else { return true }
-                return provider.composeURL(for: Brief(prompt: "")) == nil
-            }
-        }
         hud.onRevive = { [weak self] id, name in self?.revive(id, name: name) }
         // Ruled 13 Aug on the Past Agents face, moved to the grid 16 Aug: the
         // right-click ends the session. SIGTERM first — a Claude session dies
@@ -2454,6 +2442,18 @@ if CommandLine.arguments.contains("--selftest-credits-onboarding") {
     let probeApplication = NSApplication.shared
     Task { @MainActor in
         let passed = await CreditsOnboardingDrill.run()
+        exit(passed ? 0 : 1)
+    }
+    probeApplication.run()
+    exit(1)
+}
+
+// Opt-in native account acceptance, isolated before normal app services start.
+if CommandLine.arguments.contains("--selftest-saved-accounts-live") {
+    let probeApplication = NSApplication.shared
+    probeApplication.setActivationPolicy(.accessory)
+    Task { @MainActor in
+        let passed = await SavedAccountsLiveDrill.run()
         exit(passed ? 0 : 1)
     }
     probeApplication.run()
