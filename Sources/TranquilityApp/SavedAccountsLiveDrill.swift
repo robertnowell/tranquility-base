@@ -18,6 +18,7 @@ enum SavedAccountsLiveDrill {
               directory.hasPrefix(support.deletingLastPathComponent().path + "/"),
               env["CLAUDE_CONFIG_DIR"] == nil else {
             print("FAIL explicit isolated support, project and saved target are required")
+            print("support=\(support.path), project=\(env["TB_ACCOUNT_DRILL_PROJECT"] ?? "missing"), saved=\(SavedAccountStore.shared.all().count), configUnset=\(env["CLAUDE_CONFIG_DIR"] == nil)")
             return false
         }
         let delegate = AppDelegate()
