@@ -16,9 +16,11 @@ public enum AgentHandoff {
     public struct Destination: Equatable, Sendable, Identifiable {
         public let harness: String
         public let label: String
-        public var id: String { harness }
+        public let targetID: String
+        public var id: String { targetID }
 
-        public init(harness: String, label: String) {
+        public init(harness: String, label: String, targetID: String? = nil) {
+            self.targetID = targetID ?? harness
             self.harness = harness
             self.label = label
         }
@@ -36,7 +38,7 @@ public enum AgentHandoff {
         carriesFragment: (String) -> Bool = { _ in true }
     ) -> [Destination] {
         agents.filter { $0.standing.isReady && carriesFragment($0.id) }
-            .map { Destination(harness: $0.id, label: $0.name) }
+            .map { Destination(harness: SavedAccountStore.shared.backend($0.id), label: $0.name, targetID: $0.id) }
     }
 
     /// What a person calls the harness, from the roster; the id itself for

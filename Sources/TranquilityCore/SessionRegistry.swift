@@ -28,6 +28,8 @@ import Foundation
 public enum SessionRegistry {
 
     public struct Entry: Sendable, Equatable {
+        public var accountTargetID: String? = nil
+        public var configDirectory: String? = nil
         public let pid: Int
         public let sessionId: String
         public let cwd: String?
@@ -104,9 +106,8 @@ public enum SessionRegistry {
         }
     }
 
-    /// Where the harness keeps the registry. Not configurable: it is the
-    /// harness's own path, and guessing a different one would silently read
-    /// nothing forever.
+    /// The original profile's registry. Default reads aggregate this and
+    /// explicitly saved account roots; an explicit directory remains injectable.
     public static var directory: URL {
         FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".claude/sessions", isDirectory: true)
@@ -116,7 +117,7 @@ public enum SessionRegistry {
     /// rather than failing the sweep — a session rewriting its file while we
     /// read is ordinary, and one bad file must not blind us to fifteen good
     /// ones.
-    public static func all(in directory: URL = SessionRegistry.directory) -> [Entry] {
+    public static func all(in directory: URL? = nil) -> [Entry] {
         read(in: directory) ?? []
     }
 
@@ -125,17 +126,38 @@ public enum SessionRegistry {
     /// asked), [] when it is absent or empty (nobody is home). Liveness is
     /// built on this rather than on `all()` because the two answers send the
     /// panel in opposite directions — hold everything, or retire everything.
-    public static func read(in directory: URL = SessionRegistry.directory) -> [Entry]? {
+    public static func read(in directory: URL? = nil) -> [Entry]? {
+        guard let directory else {
+            let store = SavedAccountStore.shared
+            guard store.isReadable, SessionAccountStore.shared.isReadable else { return nil }
+            return read(roots: Dictionary(uniqueKeysWithValues: store.roots.compactMap { root in
+                store.targetID(root: root).map { ($0, root) }
+            }))
+        }
         let fm = FileManager.default
         var isDirectory: ObjCBool = false
-        guard fm.fileExists(atPath: directory.path, isDirectory: &isDirectory), isDirectory.boolValue
-        else { return [] }
+        guard fm.fileExists(atPath: directory.path, isDirectory: &isDirectory) else { return [] }
+        guard isDirectory.boolValue else { return nil }
         guard let names = try? fm.contentsOfDirectory(atPath: directory.path) else { return nil }
         return names.filter { $0.hasSuffix(".json") }.compactMap { name in
             guard let data = try? Data(contentsOf: directory.appendingPathComponent(name))
             else { return nil }
             return decode(data)
         }
+    }
+
+    public static func read(roots: [String: URL]) -> [Entry]? {
+        var result: [Entry] = []
+        for (target, root) in roots {
+            guard let entries = read(in: root.appendingPathComponent("sessions")) else { return nil }
+            result += entries.map { entry in
+                var entry = entry; entry.accountTargetID = target; entry.configDirectory = root.path
+                return entry
+            }
+        }
+        let origins = Dictionary(grouping: result, by: \.sessionId)
+        guard !origins.values.contains(where: { Set($0.compactMap(\.configDirectory)).count > 1 }) else { return nil }
+        return result
     }
 
     /// The pure half, so the parsing is testable without a home directory.
@@ -232,6 +254,9 @@ public enum SessionRegistry {
                                       waitingFor: Readiness.agentView, kind: "interactive",
                                       startedAt: parent.startedAt)
             standIn.parkedJob = parked
+            standIn.accountTargetID = parent.accountTargetID
+            standIn.configDirectory = parent.configDirectory
+            standIn.registryTmux = parent.tmux
             out.append(standIn)
             trace?("liveness: \(parent.sessionId.prefix(8)) is parked in the agent view; "
                    + "standing in for job \(job) (\(dropped) row(s) dropped)")
@@ -243,7 +268,7 @@ public enum SessionRegistry {
     /// dead pid still names the same session — which happens, because the
     /// registry is keyed by pid and a resumed session gets a new one.
     public static func entry(forSessionId id: String,
-                             in directory: URL = SessionRegistry.directory) -> Entry? {
+                             in directory: URL? = nil) -> Entry? {
         all(in: directory)
             .filter { $0.sessionId == id }
             .max { ($0.updatedAt ?? 0) < ($1.updatedAt ?? 0) }

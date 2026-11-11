@@ -689,7 +689,7 @@ extension StatusHUD {
         harnessPicker = HarnessPickerRow(
             width: Self.gridWidth,
             harnesses: KnownHarnesses.all.map { ($0.id, $0.id == CodexAdapter().id ? "CODEX" : "CLAUDE") },
-            selected: AgentDefaults.defaultHarness, defaultHarness: AgentDefaults.defaultHarness)
+            selected: AgentDefaults.defaultTarget, defaultHarness: AgentDefaults.defaultTarget)
         harnessPicker.onSelect = { [weak self] harness in
             guard let self else { return }
             self.viewingHarness = harness
@@ -709,7 +709,7 @@ extension StatusHUD {
         agentGrid = AgentGridRow(
             width: Self.gridWidth,
             agents: Self.agentTiles(),
-            selected: AgentDefaults.defaultHarness)
+            selected: AgentDefaults.defaultTarget)
         agentGrid.onSelect = { [weak self] agent in
             guard let self else { return }
             self.viewingHarness = agent
@@ -717,7 +717,7 @@ extension StatusHUD {
             // Selecting IS choosing, ruled 14 Sep: "to the user it's just which
             // agent do I want to use." The separate make-default click the old
             // row carried was judged not worth its own step.
-            AgentDefaults.defaultHarness = agent
+            AgentDefaults.defaultTarget = agent
             Track.record("setting_changed", ["key": "default_harness", "value": .token(agent)])
             self.agentGrid.update(agents: Self.agentTiles(), selected: agent)
             self.onDefaultHarnessChanged?()
@@ -727,11 +727,11 @@ extension StatusHUD {
         }
         // Viewing a harness's settings and making it the one New Agent
         // launches are different questions (see HarnessPickerRow's own doc
-        // comment) — this is the only place `AgentDefaults.defaultHarness`
+        // comment) — this is the only place `AgentDefaults.defaultTarget`
         // is ever written from this pane.
         harnessPicker.onMakeDefault = { [weak self] harness in
             guard let self else { return }
-            AgentDefaults.defaultHarness = harness
+            AgentDefaults.defaultTarget = harness
             Track.record("setting_changed", ["key": "default_harness", "value": .token(harness)])
             self.harnessPicker.update(selected: harness, defaultHarness: harness)
             self.onDefaultHarnessChanged?()

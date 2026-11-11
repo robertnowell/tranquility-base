@@ -19,7 +19,7 @@ import Foundation
 ///
 /// MicMachine's pattern: a value type tests copy freely, replaced atomically
 /// by its holder under a lock. No AppKit, no side effects.
-public struct AttachmentTray: Equatable, Sendable {
+public struct AttachmentTray: Codable, Equatable, Sendable {
     /// Staged message fragments by session, in insertion order. A fragment is
     /// already the text that should be typed: a dropped file producer supplies
     /// a quoted path, while handoff and future paste producers supply prose.
@@ -45,12 +45,28 @@ public struct AttachmentTray: Equatable, Sendable {
     /// utterance id so a late outcome for a superseded reply can never clear
     /// (or restore) another reply's fragments — same generation discipline as
     /// MicMachine's opens.
-    private var riding: [String: (session: String, fragments: [String])] = [:]
+    private struct Delivery: Codable, Equatable, Sendable {
+        var session: String
+        var fragments: [String]
+    }
+    private var riding: [String: Delivery] = [:]
+    private var uncertain: [String: Delivery] = [:]
+
+    public mutating func markUncertain(utteranceId: String) {
+        if let delivery = riding.removeValue(forKey: utteranceId) { uncertain[utteranceId] = delivery }
+    }
+    public mutating func recoverAfterRestart() {
+        // A crash may occur after injection and before its acknowledgement.
+        for (id, delivery) in riding { uncertain[id] = delivery }
+        riding = [:]
+    }
+    public var recoveryKeys: [String] { Array(staged.keys).sorted() }
+    public var uncertainDeliveries: [String: [String]] { uncertain.mapValues(\.fragments) }
 
     public init() {}
 
     public static func == (a: AttachmentTray, b: AttachmentTray) -> Bool {
-        a.staged == b.staged
+        a.uncertain == b.uncertain && a.staged == b.staged
             && a.adopted == b.adopted
             && a.riding.mapValues { [$0.session] + $0.fragments }
                 == b.riding.mapValues { [$0.session] + $0.fragments }
@@ -144,7 +160,7 @@ public struct AttachmentTray: Equatable, Sendable {
         let fragments = staged[target] ?? []
         guard !fragments.isEmpty else { return [] }
         staged[target] = nil
-        riding[utteranceId] = (target, fragments)
+        riding[utteranceId] = Delivery(session: target, fragments: fragments)
         return fragments
     }
 
@@ -161,12 +177,12 @@ public struct AttachmentTray: Equatable, Sendable {
         if let already = riding[utteranceId] { return already.fragments }
         let target = realSession(session)
         var fragments: [String] = []
-        for key in staged.keys.sorted() {
+        for key in staged.keys.sorted() where !key.hasPrefix("launch:") {
             for f in staged[key] ?? [] where !fragments.contains(f) { fragments.append(f) }
         }
         guard !fragments.isEmpty else { return [] }
-        staged = [:]
-        riding[utteranceId] = (target, fragments)
+        staged = staged.filter { $0.key.hasPrefix("launch:") }
+        riding[utteranceId] = Delivery(session: target, fragments: fragments)
         return fragments
     }
 
@@ -185,7 +201,7 @@ public struct AttachmentTray: Equatable, Sendable {
         let before = existing?.fragments ?? []
         let combined = before + additions.filter { !before.contains($0) }
         staged[target] = nil
-        riding[utteranceId] = (target, combined)
+        riding[utteranceId] = Delivery(session: target, fragments: combined)
         return combined
     }
 
@@ -246,12 +262,45 @@ public struct AttachmentTray: Equatable, Sendable {
 public final class AttachmentStore: @unchecked Sendable {
     private let lock = NSLock()
     private var tray = AttachmentTray()
+    private let fileURL: URL?
+    private var failure: String?
+    public var persistenceError: String? {
+        lock.lock(); defer { lock.unlock() }; return failure
+    }
 
-    public init() {}
+    /// Tests remain memory-only; the production coordinator opts into disk.
+    public init(fileURL: URL? = nil) {
+        self.fileURL = fileURL
+        if let fileURL, FileManager.default.fileExists(atPath: fileURL.path) {
+            do {
+                tray = try JSONDecoder().decode(AttachmentTray.self, from: Data(contentsOf: fileURL))
+                tray.recoverAfterRestart()
+            } catch { failure = error.localizedDescription }
+        }
+    }
+    public static func persistent() -> AttachmentStore {
+        AttachmentStore(fileURL: QueueStore.supportDirectory.appendingPathComponent("pending-fragments.json"))
+    }
+    private func persist() {
+        guard let fileURL, failure == nil else { return }
+        do { try SavedAccountStore.write(tray, to: fileURL) }
+        catch { failure = error.localizedDescription }
+    }
+    public var recoveryKeys: [String] {
+        lock.lock(); defer { lock.unlock() }; return tray.recoveryKeys
+    }
+    public var uncertainDeliveries: [String: [String]] {
+        lock.lock(); defer { lock.unlock() }; return tray.uncertainDeliveries
+    }
+    public func markUncertain(utteranceId: String) {
+        lock.lock(); defer { lock.unlock() }
+        tray.markUncertain(utteranceId: utteranceId); persist()
+    }
 
     @discardableResult
     public func stage(_ fragment: String, session: String) -> Bool {
         lock.lock(); defer { lock.unlock() }
+        defer { persist() }
         return tray.stage(fragment, session: session)
     }
 
@@ -270,26 +319,31 @@ public final class AttachmentStore: @unchecked Sendable {
 
     public func unstage(_ fragment: String, session: String) {
         lock.lock(); defer { lock.unlock() }
+        defer { persist() }
         tray.unstage(fragment, session: session)
     }
 
     public func clearStaged(session: String) {
         lock.lock(); defer { lock.unlock() }
+        defer { persist() }
         tray.clearStaged(session: session)
     }
 
     public func sessionEnded(_ session: String) {
         lock.lock(); defer { lock.unlock() }
+        defer { persist() }
         tray.sessionEnded(session)
     }
 
     public func adopt(stagingKey: String, asSession session: String) {
         lock.lock(); defer { lock.unlock() }
+        defer { persist() }
         tray.adopt(stagingKey: stagingKey, asSession: session)
     }
 
     public func snapshot(session: String, utteranceId: String) -> [String] {
         lock.lock(); defer { lock.unlock() }
+        defer { persist() }
         return tray.snapshot(session: session, utteranceId: utteranceId)
     }
 
@@ -301,6 +355,7 @@ public final class AttachmentStore: @unchecked Sendable {
 
     public func snapshotAll(into session: String, utteranceId: String) -> [String] {
         lock.lock(); defer { lock.unlock() }
+        defer { persist() }
         return tray.snapshotAll(into: session, utteranceId: utteranceId)
     }
 
@@ -311,11 +366,13 @@ public final class AttachmentStore: @unchecked Sendable {
 
     public func absorbStaged(session: String, utteranceId: String) -> [String] {
         lock.lock(); defer { lock.unlock() }
+        defer { persist() }
         return tray.absorbStaged(session: session, utteranceId: utteranceId)
     }
 
     public func resolve(utteranceId: String, landed: Bool) {
         lock.lock(); defer { lock.unlock() }
+        defer { persist() }
         tray.resolve(utteranceId: utteranceId, landed: landed)
     }
 }

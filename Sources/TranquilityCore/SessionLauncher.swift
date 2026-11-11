@@ -40,12 +40,18 @@ import Foundation
 public struct HarnessLaunch: Sendable {
     public let adapter: any HarnessAdapter
     public let command: String
+    public let account: SavedAccount?
+    public let resolutionError: String?
 
     /// Both halves from one id — the only way to build one, unless a caller
     /// genuinely needs a command the settings do not hold (see below).
     public init(harness: String) {
-        self.adapter = KnownHarnesses.adapter(for: harness)
+        self.account = SavedAccountStore.shared.account(harness)
+        let backend = SavedAccountStore.shared.backend(harness)
+        self.adapter = KnownHarnesses.adapter(for: backend)
         self.command = AgentDefaults.load(for: harness)
+        self.resolutionError = KnownHarnesses.all.contains { $0.id == backend }
+            ? nil : "The saved launch account is unavailable. Select or reconnect it first."
     }
 
     /// An explicit pair, for a caller that genuinely needs a command the
@@ -59,7 +65,9 @@ public struct HarnessLaunch: Sendable {
     /// resume stopped on a hooks-review menu. Resume takes the configured
     /// command now, like everything else. Nothing in the app uses this
     /// initializer today; it stays for a caller that can justify itself.
-    public init(adapter: any HarnessAdapter, command: String) {
+    public init(adapter: any HarnessAdapter, command: String, account: SavedAccount? = nil, resolutionError: String? = nil) {
+        self.account = account
+        self.resolutionError = resolutionError
         self.adapter = adapter
         self.command = command
     }
@@ -67,7 +75,7 @@ public struct HarnessLaunch: Sendable {
     /// The Settings default, for a NEW agent, which by definition has no
     /// session of its own to take a harness from.
     public static var settingsDefault: HarnessLaunch {
-        HarnessLaunch(harness: AgentDefaults.defaultHarness)
+        HarnessLaunch(harness: AgentDefaults.defaultTarget)
     }
 
     /// The harness an EXISTING session belongs to, from disk.
@@ -78,7 +86,32 @@ public struct HarnessLaunch: Sendable {
     /// when `SessionDiscovery` comes up empty. Deliberately not the Settings
     /// default: what a NEW agent would be has nothing to do with what THIS
     /// session is, and confusing the two is what ended a live session.
-    public static func forExistingSession(_ sessionId: String) -> HarnessLaunch {
+    public static func forExistingSession(_ sessionId: String, accounts: SavedAccountStore = .shared, bindings: SessionAccountStore = .shared) -> HarnessLaunch {
+        guard accounts.isReadable, bindings.isReadable else {
+            return HarnessLaunch(adapter: ClaudeCodeAdapter(), command: "", resolutionError: "Saved account provenance is unreadable. Repair it before resuming.")
+        }
+        let roots = accounts.roots.filter {
+            TranscriptArchive.transcriptPath(forSessionId: sessionId, projects: $0.appendingPathComponent("projects")) != nil
+                || SessionRegistry.entry(forSessionId: sessionId, in: $0.appendingPathComponent("sessions")) != nil
+        }
+        if roots.count > 1 {
+            return HarnessLaunch(adapter: ClaudeCodeAdapter(), command: "", resolutionError: "More than one account contains this conversation. Resolve its origin before resuming.")
+        }
+        if let binding = bindings.binding(sessionId) {
+            if binding.targetID == ClaudeCodeAdapter().id { return HarnessLaunch(harness: binding.targetID) }
+            if let account = accounts.account(binding.targetID), account.root.path == binding.configDirectory {
+                return HarnessLaunch(adapter: ClaudeCodeAdapter(), command: account.command, account: account)
+            }
+            return HarnessLaunch(adapter: ClaudeCodeAdapter(), command: "", resolutionError: "This session’s saved account is missing or has moved. Reconnect it before resuming.")
+        }
+        if let root = roots.first, let target = accounts.targetID(root: root) {
+            do { try bindings.bind(sessionId, targetID: target, root: root) }
+            catch { return HarnessLaunch(adapter: ClaudeCodeAdapter(), command: "", resolutionError: error.localizedDescription) }
+            if let account = accounts.account(target) {
+                return HarnessLaunch(adapter: ClaudeCodeAdapter(), command: account.command, account: account)
+            }
+            return HarnessLaunch(harness: target)
+        }
         let isCodex = CodexRollout.rolloutPath(forSessionId: sessionId) != nil
         return HarnessLaunch(harness: isCodex ? CodexAdapter().id : ClaudeCodeAdapter().id)
     }
@@ -182,7 +215,27 @@ public enum SessionLauncher {
         sessionId: String? = nil,
         ledger: any SessionOwnershipStore = FileSessionOwnershipStore.shared
     ) -> Result<TmuxPaneAddress, ScriptError> {
-        let command = launch.command
+        if let error = launch.resolutionError { return .failure(ScriptError(message: error)) }
+        if let account = launch.account {
+            do {
+                let identity = try SavedAccountIdentity.read(account: account, directory: URL(fileURLWithPath: directory))
+                if account.email == nil {
+                    var identified = account
+                    identified.email = identity.email; identified.organization = identity.organization
+                    try SavedAccountStore.shared.save(identified)
+                }
+                try account.installIntegration()
+            }
+            catch { return .failure(ScriptError(message: error.localizedDescription)) }
+        }
+        var command = launch.command
+        if let account = launch.account {
+            guard ["claude", AgentDefaults.fallback].contains(account.command),
+                  command.hasPrefix(account.command), let binary = ClaudeAgentsCLI.resolveBinary() else {
+                return .failure(ScriptError(message: "Saved accounts require the standard executable. Keep custom launch commands in the original launcher."))
+            }
+            command = account.scopedCommand(Self.shellQuoted(binary) + String(command.dropFirst("claude".count)))
+        }
         let adapter = launch.adapter
         let name = "tb-" + String(UUID().uuidString.prefix(8)).lowercased()
         let path = adapter.pathCandidates.joined(separator: ":")
@@ -198,7 +251,7 @@ public enum SessionLauncher {
         // own arrangements in ~/.codex. `trust` is a no-op when the folder is
         // already trusted, which is every launch after the first.
         if adapter.id == ClaudeCodeAdapter().id,
-           ClaudeTrust.trust(directory: directory) {
+           ClaudeTrust.trust(directory: directory, at: launch.account?.trustFile) {
             Self.trace?("newSession: recorded trust for \(directory) in ~/.claude.json "
                 + "before launching — user-commanded launch")
         }
@@ -433,10 +486,11 @@ public enum SessionLauncher {
         // rollout's own JSON, which is not guaranteed shell-safe just
         // because it looks like a uuid), not from a constant, and it lands
         // in the same raw `/bin/zsh -c "..."` string `directory` does.
+        if let error = launch.resolutionError { return .failure(ScriptError(message: error)) }
         let quotedArgs = resumeArgs.map(Self.shellQuoted)
         let fullCommand = ([command] + quotedArgs).joined(separator: " ")
         return launchTmux(directory: directory,
-                          launch: HarnessLaunch(adapter: adapter, command: fullCommand),
+                          launch: HarnessLaunch(adapter: adapter, command: fullCommand, account: launch.account, resolutionError: launch.resolutionError),
                           acceptTrustPrompt: acceptTrustPrompt,
                           resuming: true,
                           sessionId: sessionId)
@@ -465,7 +519,7 @@ public enum SessionLauncher {
         launch: HarnessLaunch
     ) -> String {
         let adapter = launch.adapter
-        let command = launch.command
+        let command = launch.account?.scopedCommand(launch.command) ?? launch.command
         // Quote only what needs it. A human has to read this line and decide
         // whether to trust it before pasting it, and a line where every token
         // wears quotes — `codex 'resume' 'abc'` — reads like something is
@@ -743,12 +797,17 @@ public enum SessionLauncher {
             directory: String? = nil,
             agents: any ClaudeAgentsReading = ClaudeAgentsCLI()
         ) -> Outcome {
+            if let error = launch.resolutionError { return .refused(error) }
             let live = (agents.sessions() ?? []).first(where: { $0.sessionId == sessionId })
             guard let resolvedDirectory = directory ?? live?.cwd else {
                 let why = "no directory to resume into — neither the caller nor a live lookup "
                     + "supplied one"
                 SessionLauncher.trace?("transfer: \(sessionId.prefix(8)) \(why)")
                 return .refused(why)
+            }
+            if let account = launch.account {
+                do { _ = try SavedAccountIdentity.read(account: account, directory: URL(fileURLWithPath: resolvedDirectory)) }
+                catch { return .refused(error.localizedDescription) }
             }
             // The last gate before something irreversible, and the one that
             // was missing on 27 Aug.

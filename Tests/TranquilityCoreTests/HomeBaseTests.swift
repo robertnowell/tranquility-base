@@ -5,6 +5,20 @@ import XCTest
 /// must never do to that data: lose the cap, lose the escaping, or claim a
 /// session is idle when it has simply never been summarized.
 final class HomeBaseTests: XCTestCase {
+    private var previousThemePath: String?
+    override func setUp() {
+        super.setUp()
+        previousThemePath = ProcessInfo.processInfo.environment["HQ_THEMES"]
+        // These rendering assertions describe the compiled fallback. File overrides
+        // have their own real-file fixtures in ThemeFileTests.
+        setenv("HQ_THEMES", NSTemporaryDirectory() + UUID().uuidString + "/absent.json", 1)
+    }
+    override func tearDown() {
+        if let previousThemePath { setenv("HQ_THEMES", previousThemePath, 1) }
+        else { unsetenv("HQ_THEMES") }
+        super.tearDown()
+    }
+
 
     private func turn(_ n: Int, topic: String = "the poller") -> HomeBase.Turn {
         HomeBase.Turn(at: Date(timeIntervalSince1970: 1_000_000 + Double(n) * 600),

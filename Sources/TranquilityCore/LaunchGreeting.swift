@@ -102,7 +102,7 @@ public enum LaunchGreeting {
     public static func record(
         sessionId: String, directory: String, line: String, voice: String? = nil,
         tty: String? = nil, store: QueueStore, at: Date = Date(),
-        projects: URL = TranscriptArchive.projectsDirectory
+        projects: URL? = nil
     ) throws -> Int64? {
         if let voice { try store.assignVoice(voice, to: sessionId, at: at) }
         let event = QueuedEvent(
@@ -149,6 +149,7 @@ public enum LaunchGreeting {
     public static func awaitRegistration(
         directory: String,
         excluding known: Set<String>,
+        matches: (LiveSession) -> Bool = { _ in true },
         agents: any ClaudeAgentsReading = ClaudeAgentsCLI(),
         timeout: TimeInterval = 30,
         interval: TimeInterval = 1,
@@ -167,7 +168,7 @@ public enum LaunchGreeting {
             // "not registered yet" — keep waiting rather than concluding.
             if let live = agents.sessions(),
                let fresh = live.first(where: {
-                   $0.cwd == directory && !known.contains($0.sessionId)
+                   $0.cwd == directory && !known.contains($0.sessionId) && matches($0)
                }) {
                 return fresh.sessionId
             }

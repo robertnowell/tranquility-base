@@ -181,6 +181,7 @@ public enum AgentDefaults {
     private struct Stored: Codable {
         var byHarness: [String: HarnessEntry]?
         var defaultHarness: String?
+        var defaultTarget: String?
 
         // The pre-25-Aug shape: one global command/directory, no harness
         // concept. Decoded only so `normalized()` can migrate it; never
@@ -198,7 +199,7 @@ public enum AgentDefaults {
         try? FileManager.default.createDirectory(
             at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         guard let data = try? JSONEncoder().encode(
-            Stored(byHarness: byHarness, defaultHarness: defaultHarness))
+            Stored(byHarness: byHarness, defaultHarness: defaultHarness, defaultTarget: stored()?.defaultTarget))
         else { return }
         try? data.write(to: fileURL)
     }
@@ -268,6 +269,7 @@ public enum AgentDefaults {
     /// useful meaning for "launch agents with no command", and a blank field
     /// saved by accident would otherwise break every launch on the machine.
     public static func load(for harness: String) -> String {
+        if let account = SavedAccountStore.shared.account(harness) { return account.command }
         guard let entry = normalized().byHarness[harness],
               !entry.command.trimmingCharacters(in: .whitespaces).isEmpty
         else { return fallback(for: harness) }
@@ -276,9 +278,14 @@ public enum AgentDefaults {
 
     /// The current default harness's command — every pre-25-Aug call site
     /// reads this, and keeps working unchanged against "whatever's default."
-    public static func load() -> String { load(for: normalized().defaultHarness) }
+    public static func load() -> String { load(for: defaultTarget) }
 
     public static func save(_ command: String, for harness: String) {
+        if var account = SavedAccountStore.shared.account(harness) {
+            account.command = command
+            try? SavedAccountStore.shared.save(account)
+            return
+        }
         var (map, defaultHarness) = normalized()
         var entry = map[harness] ?? HarnessEntry(command: fallback(for: harness), directory: nil)
         entry.command = command
@@ -286,7 +293,7 @@ public enum AgentDefaults {
         write(byHarness: map, defaultHarness: defaultHarness)
     }
 
-    public static func save(_ command: String) { save(command, for: normalized().defaultHarness) }
+    public static func save(_ command: String) { save(command, for: defaultTarget) }
 
     /// The configured start directory for a harness, or home when nothing is
     /// set.
@@ -297,6 +304,9 @@ public enum AgentDefaults {
     /// the panel cannot see into any more easily than a Terminal window it
     /// once failed in. Home always exists.
     public static func directory(for harness: String) -> String {
+        if let account = SavedAccountStore.shared.account(harness) {
+            return account.directory.flatMap { usableDirectory(URL(fileURLWithPath: $0)) } ?? fallbackDirectory
+        }
         guard let path = normalized().byHarness[harness]?.directory?
             .trimmingCharacters(in: .whitespaces), !path.isEmpty
         else { return fallbackDirectory }
@@ -307,19 +317,24 @@ public enum AgentDefaults {
         return expanded
     }
 
-    public static func directory() -> String { directory(for: normalized().defaultHarness) }
+    public static func directory() -> String { directory(for: defaultTarget) }
 
     /// What the settings pane shows for a harness: what was typed, not what
     /// it resolved to, so a path that has gone missing is visible as itself
     /// rather than silently replaced by home in the field the user is
     /// editing.
     public static func directoryAsTyped(for harness: String) -> String {
-        normalized().byHarness[harness]?.directory ?? ""
+        SavedAccountStore.shared.account(harness)?.directory ?? normalized().byHarness[harness]?.directory ?? ""
     }
 
     public static func directoryAsTyped() -> String { directoryAsTyped(for: normalized().defaultHarness) }
 
     public static func save(directory: String, for harness: String) {
+        if var account = SavedAccountStore.shared.account(harness) {
+            account.directory = directory
+            try? SavedAccountStore.shared.save(account)
+            return
+        }
         var (map, defaultHarness) = normalized()
         var entry = map[harness] ?? HarnessEntry(command: fallback(for: harness), directory: nil)
         entry.directory = directory
@@ -327,7 +342,7 @@ public enum AgentDefaults {
         write(byHarness: map, defaultHarness: defaultHarness)
     }
 
-    public static func save(directory: String) { save(directory: directory, for: normalized().defaultHarness) }
+    public static func save(directory: String) { save(directory: directory, for: defaultTarget) }
 
     /// Which harness a bare `New Agent` press launches. Settings only ever
     /// changes this through an explicit action — viewing or editing a
@@ -336,8 +351,18 @@ public enum AgentDefaults {
     public static var defaultHarness: String {
         get { normalized().defaultHarness }
         set {
-            let (map, _) = normalized()
-            write(byHarness: map, defaultHarness: newValue)
+            defaultTarget = newValue
         }
     }
+    /// Target choice is separate from the integration kind; old settings migrate on read.
+    public static var defaultTarget: String {
+        get { stored()?.defaultTarget ?? defaultHarness }
+        set {
+            let (map, _) = normalized()
+            let backend = SavedAccountStore.shared.backend(newValue)
+            let value = Stored(byHarness: map, defaultHarness: backend, defaultTarget: newValue)
+            try? SavedAccountStore.write(value, to: fileURL)
+        }
+    }
+
 }

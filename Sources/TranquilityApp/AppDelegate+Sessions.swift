@@ -166,7 +166,9 @@ extension AppDelegate {
             case "new":
                 // The same call the button and the menu item make; nothing
                 // is decided here that they do not decide.
-                newSession()
+                let target = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?
+                    .first(where: { $0.name == "account" })?.value
+                newSession(targetID: target)
             case "connect":
                 // "Begin", and nothing else: the link carries no token and no
                 // address, so this is the same flow the Setup row starts. The
@@ -1256,8 +1258,9 @@ extension AppDelegate {
     /// (Claude Code unless changed — see `AgentDefaults.defaultHarness`). Its
     /// turns enter the loop — and the grid — as soon as the session first
     /// stops.
-    func newSession() {
-        let selected = AgentDefaults.defaultHarness
+    func newSession(targetID: String? = nil) {
+        let selected = targetID ?? AgentDefaults.defaultTarget
+        let selectedBackend = SavedAccountStore.shared.backend(selected)
 
         // A PROVIDER FIRST. Settings offers OpenCode and crobot as tiles, and
         // until 15 Sep picking one and pressing New Agent looked the tile up as
@@ -1274,16 +1277,16 @@ extension AppDelegate {
         // fails open to Claude Code for callers that predate a third harness;
         // this one has just checked the registry and the harness table both,
         // so an id neither knows is a card, never a different agent.
-        guard KnownHarnesses.all.contains(where: { $0.id == selected }) else {
+        guard KnownHarnesses.all.contains(where: { $0.id == selectedBackend }) else {
             let card = "No launcher for \(selected): it is not an installed agent or a terminal harness."
             Failures.report(.launchFailed, reason: card, card: card)
             hud.showResult(card)
             return
         }
-        let adapter = KnownHarnesses.adapter(for: selected)
+        let adapter = KnownHarnesses.adapter(for: selectedBackend)
         newSession(directory: AgentDefaults.directory(for: selected),
                    command: AgentDefaults.load(for: selected),
-                   adapter: adapter)
+                   adapter: adapter, account: SavedAccountStore.shared.account(selected))
     }
 
     /// A provider agent, started the way a terminal one is: the greeting card
@@ -1420,7 +1423,7 @@ extension AppDelegate {
                 return
             }
             guard destinationProvider != nil
-                    || KnownHarnesses.all.contains(where: { $0.id == harness }) else {
+                    || KnownHarnesses.all.contains(where: { $0.id == SavedAccountStore.shared.backend(harness) }) else {
                 await MainActor.run {
                     self?.hud.showResult("No launcher for \(harness): it is not an installed agent or a terminal harness.")
                 }
@@ -1433,7 +1436,9 @@ extension AppDelegate {
                     ?? CodexRollout.sessionsDirectory.path
             } else if sourceHarness == ClaudeCodeAdapter().id {
                 logLocation = TranscriptArchive.transcriptPath(forSessionId: sourceSessionId)
-                    ?? TranscriptArchive.projectsDirectory.path
+                    ?? SessionAccountStore.shared.binding(sourceSessionId).map {
+                        URL(fileURLWithPath: $0.configDirectory).appendingPathComponent("projects").path
+                    } ?? TranscriptArchive.projectsDirectory.path
             } else if let provider {
                 // A provider's transcript is not a file of ours; its own
                 // id, named, is what the destination can look up.
@@ -1452,20 +1457,20 @@ extension AppDelegate {
                 logLocation: logLocation,
                 reportsDirectory: reportsDirectory)
             let command = AgentDefaults.load(for: harness)
-            let adapter = KnownHarnesses.adapter(for: harness)
+            let adapter = KnownHarnesses.adapter(for: SavedAccountStore.shared.backend(harness))
 
             await MainActor.run { [weak self] in
                 Track.record("agent_handoff_requested", [
                     "source_agent_id": Track.hash(sourceSessionId),
                     "source_harness": .token(sourceHarness),
-                    "destination_harness": .token(harness),
+                    "destination_harness": .token(SavedAccountStore.shared.backend(harness)),
                     "has_reports": .bool(reportsDirectory != nil),
                 ])
                 if let destinationProvider {
                     self?.startProviderAgent(destinationProvider, brief: Brief(prompt: fragment))
                 } else {
                     self?.newSession(directory: directory, command: command,
-                                     adapter: adapter, initialFragments: [fragment])
+                                     adapter: adapter, initialFragments: [fragment], account: SavedAccountStore.shared.account(harness))
                 }
             }
         }
@@ -1995,8 +2000,28 @@ extension AppDelegate {
             }
         }
 
+        let accountLaunch = HarnessLaunch.forExistingSession(sessionId)
+        if let reason = accountLaunch.resolutionError {
+            await MainActor.run { self.hud.finishGoToSession(reason, about: sessionId) }
+            return
+        }
+        var environment = ProcessInfo.processInfo.environment
+        if let account = accountLaunch.account {
+            do { _ = try SavedAccountIdentity.read(account: account, directory: live.cwd.map { URL(fileURLWithPath: $0) }) }
+            catch {
+                await MainActor.run { self.hud.finishGoToSession(error.localizedDescription, about: sessionId) }
+                return
+            }
+            for key in SavedAccount.authenticationOverrides { environment.removeValue(forKey: key) }
+            environment["CLAUDE_CONFIG_DIR"] = account.root.path
+            do { try SessionAccountStore.shared.bind(resumeId, targetID: account.id, root: account.root) }
+            catch {
+                await MainActor.run { self.hud.finishGoToSession(error.localizedDescription, about: sessionId) }
+                return
+            }
+        }
         if let binary = ClaudeAgentsCLI.resolveBinary() {
-            switch Subprocess.run(binary, ["stop", job.jobId], timeout: 20) {
+            switch Subprocess.run(binary, ["stop", job.jobId], environment: environment, timeout: 20) {
             case .success(let out):
                 Permissions.log("recover: claude stop \(job.jobId): "
                     + out.trimmingCharacters(in: .whitespacesAndNewlines).prefix(120))
@@ -2274,7 +2299,7 @@ extension AppDelegate {
             // the same unusable spelling, so the card said "copied the manual
             // revival command" and handed over something that could not work
             // for that agent. One default, two lies.
-            let launch = HarnessLaunch(harness: fresh.harness)
+            let launch = HarnessLaunch.forExistingSession(sessionId)
             switch SessionLauncher.resume(sessionId: sessionId, directory: command.cwd,
                                           launch: launch) {
             case .success(let revivedPane):
@@ -2520,7 +2545,7 @@ extension AppDelegate {
         // that offered it already said what; asking "how would you like to get
         // started?" over the top of an answered question is the app talking to
         // itself.
-        newSession(directory: directory, command: command, greet: false)
+        newSession(directory: directory, command: command, greet: false, adapter: HarnessLaunch.settingsDefault.adapter, account: HarnessLaunch.settingsDefault.account)
     }
 
     /// Off-main like `revive()`: `launch()` drives Terminal through AppleScript
@@ -2535,7 +2560,7 @@ extension AppDelegate {
     /// waiting agent, and it says so.
     func newSession(directory dir: String, command: String, greet: Bool = true,
                     adapter: any HarnessAdapter = ClaudeCodeAdapter(),
-                    initialFragments: [String] = []) {
+                    initialFragments: [String] = [], account: SavedAccount? = nil) {
         let label = (dir as NSString).lastPathComponent
         let line = LaunchGreeting.nextLine()
         Track.record("agent_launch_requested", ["via": greet ? "new_agent" : "invitation",
@@ -2567,6 +2592,9 @@ extension AppDelegate {
         let launch = greet ? PendingLaunch(label: label, directory: dir,
                                            conversationAtLaunch: conversationAtLaunch) : nil
         if let launch {
+            do { try LaunchRecoveryStore.shared.save(LaunchRecoveryRecord(
+                id: launch.stagingKey, targetID: account?.id ?? adapter.id, directory: dir, enforcesAccount: account != nil)) }
+            catch { hud.showResult("Could not save the pending launch: \(error.localizedDescription)"); return }
             // Newest launch wins immediately, not when registration eventually
             // finishes. Releasing the old promise wakes any answer already
             // waiting on it; the failure path above recognizes the replacement
@@ -2575,7 +2603,9 @@ extension AppDelegate {
             pendingLaunch = launch
             superseded?.abandon()
             if let superseded {
-                coordinator?.attachments.clearStaged(session: superseded.stagingKey)
+                try? LaunchRecoveryStore.shared.update(superseded.stagingKey) {
+                    if $0.state != "bound" && $0.state != "discarded" { $0.state = "unresolved" }
+                }
             }
             for fragment in initialFragments {
                 _ = coordinator?.attachments.stage(fragment, session: launch.stagingKey)
@@ -2584,6 +2614,7 @@ extension AppDelegate {
             // whole point of the staging key is the first seconds.
             refreshDropTarget()
         }
+        let speakGreeting = speakLaunchGreeting
         if greet, hud.showGreeting(line: line, label: label) {
             // Through the greeting cache, which is what it is for: one fixed
             // sentence per voice, synthesized once and replayed from disk
@@ -2591,7 +2622,7 @@ extension AppDelegate {
             // brief that has not been written yet. Detached because the audio
             // is not the panel's business and the panel is already up.
             Task.detached(priority: .userInitiated) {
-                await GreetingCache.speak(line, voiceId: voice)
+                await speakGreeting(line, voice)
             }
         }
 
@@ -2639,8 +2670,20 @@ extension AppDelegate {
             // parallel, immediately below. It blocks for at least two settled
             // polls and up to thirty seconds, and until now the registration
             // this greeting binds to queued behind it.
+            if let launch {
+                do {
+                    try LaunchRecoveryStore.shared.update(launch.stagingKey) { $0.state = "launching" }
+                    if let failure = await self?.coordinator?.attachments.persistenceError {
+                        throw AccountConfigurationError.invalid(failure)
+                    }
+                } catch {
+                    launch.abandon()
+                    await MainActor.run { self?.hud.showResult("Could not save the pending launch: \(error.localizedDescription)") }
+                    return
+                }
+            }
             let result = SessionLauncher.launch(
-                directory: dir, launch: HarnessLaunch(adapter: adapter, command: command),
+                directory: dir, launch: HarnessLaunch(adapter: adapter, command: command, account: account),
                 acceptTrustPrompt: false)
             guard case .success(let pane) = result else {
                 // Every exit from here on releases the promise. A waiter left
@@ -2648,7 +2691,7 @@ extension AppDelegate {
                 // is the one outcome worse than the misroute this replaces.
                 launch?.abandon()
                 if let launch {
-                    await self?.coordinator?.attachments.clearStaged(session: launch.stagingKey)
+                    try? LaunchRecoveryStore.shared.update(launch.stagingKey) { $0.state = "unresolved" }
                 }
                 if case .failure(let error) = result {
                     // The reason, then the one line that reproduces it in a
@@ -2664,7 +2707,7 @@ extension AppDelegate {
                         + "To see it yourself, run in a terminal: \(byHand)"
                     Failures.report(.launchFailed, reason: error.message, card: card,
                                     reproduction: byHand, harness: adapter.id)
-                    self?.diagnoseClaudeHealth(adapter: adapter, because: "launch_failed")
+                    if account == nil { self?.diagnoseClaudeHealth(adapter: adapter, because: "launch_failed") }
                     // The harness may have just changed under us (an update, a
                     // reinstall); the next record should describe it as it is now.
                     await MainActor.run { [weak self] in
@@ -2676,6 +2719,15 @@ extension AppDelegate {
                 return
             }
             let tty = pane.paneTty
+            if let launch {
+                do { try LaunchRecoveryStore.shared.update(launch.stagingKey) {
+                    $0.paneID = pane.paneId; $0.paneSession = pane.sessionName; $0.state = "process_started"
+                } } catch {
+                    launch.abandon()
+                    await MainActor.run { self?.hud.showResult("The process started, but its recovery receipt could not be saved. Open its terminal before retrying.") }
+                    return
+                }
+            }
             Task.detached(priority: .utility) {
                 SessionLauncher.watchForTrustPrompt(
                     pane: pane, adapter: adapter,
@@ -2705,11 +2757,16 @@ extension AppDelegate {
                 // slow launch from being called stuck.
                 : LaunchGreeting.awaitRegistration(
                     directory: dir, excluding: before,
+                    matches: { session in
+                        (account == nil || session.accountTargetID == account?.id)
+                            && session.registryTmux?.hasPrefix(pane.sessionName + ":") == true
+                            && session.registryTmux?.hasSuffix("." + pane.paneId) == true
+                    },
                     screen: { SessionLauncher.paneTail(pane: pane) })
             guard let sessionId = sessionIdOrNil else {
                 launch?.abandon()
                 if let launch {
-                    await self?.coordinator?.attachments.clearStaged(session: launch.stagingKey)
+                    try? LaunchRecoveryStore.shared.update(launch.stagingKey) { $0.state = "unresolved" }
                 }
                 // Did it actually fail, or did it just not have anything to
                 // register yet? Those are opposite facts and this branch was
@@ -2739,7 +2796,7 @@ extension AppDelegate {
                     return
                 }
                 let started = ProcessProbe.pid(
-                    onTty: tty, containing: command.split(separator: " ").first.map(String.init) ?? command)
+                    onTty: tty, containing: adapter.processCommandFragment)
                 // Alive is not started, and this branch treated them as one
                 // fact. Robert, 27 Aug, on the third broken launch in a row:
                 // "starting new agents still broken."
@@ -2866,6 +2923,14 @@ extension AppDelegate {
             // dropped on the greeting card has to be under that id already.
             if let launch, let attachments = await self?.coordinator?.attachments {
                 attachments.adopt(stagingKey: launch.stagingKey, asSession: sessionId)
+                do {
+                    if let failure = attachments.persistenceError { throw AccountConfigurationError.invalid(failure) }
+                    try LaunchRecoveryStore.shared.update(launch.stagingKey) { $0.sessionID = sessionId; $0.state = "bound" }
+                } catch {
+                    launch.abandon()
+                    await MainActor.run { self?.hud.showResult("The agent started, but its draft could not be saved. Recover the pending launch before sending.") }
+                    return
+                }
                 // And re-point the panel at the agent in the same breath.
                 // `adopt` moves the fragments; without this the card goes on
                 // naming the staging key until the next ambient tick, which

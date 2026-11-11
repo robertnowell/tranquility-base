@@ -429,12 +429,19 @@ do {
                 : "REFUSED — its directory is gone, so --resume would land nowhere.")
             exit(2)
         }
-        print("would run  \(AgentDefaults.load()) \(command.arguments.joined(separator: " "))")
+        let accountLaunch = HarnessLaunch.forExistingSession(session.sessionId)
+        if let error = accountLaunch.resolutionError {
+            print("REFUSED — \(error)")
+            exit(2)
+        }
+        let resumeCommand = SessionLauncher.manualRevival(sessionId: session.sessionId,
+                                                          directory: command.cwd, launch: accountLaunch)
+        print("would run  \(resumeCommand)")
         print("in         \(command.cwd)")
         if args.contains("--dry-run") { print(""); print("dry run — nothing launched"); break }
         print("")
         switch SessionLauncher.resume(sessionId: session.sessionId, directory: command.cwd,
-                                      launch: HarnessLaunch(harness: session.harness)) {
+                                      launch: accountLaunch) {
         case .success:
             print("resumed in a detached tmux pane — `tbase targets` finds it, "
                 + "or click Go to Agent")
@@ -901,6 +908,24 @@ case "reconcile":
         let n = try store.reapAudio(olderThan: hours * 3600)
         print("deleted \(n) audio file(s) older than \(Int(hours))h (confirmed/discarded only)")
 
+    case "accounts":
+        if args.count == 1 || args[1] == "list" {
+            print("claude-code\tClaude · Main")
+            for account in SavedAccountStore.shared.all() {
+                print("\(account.id)\tClaude · \(account.label)\t\(account.email ?? "needs sign-in")")
+            }
+        } else if args[1] == "import", args.count == 4 {
+            var account = SavedAccount(label: args[2], configDirectory: args[3])
+            let identity = try SavedAccountIdentity.read(account: account)
+            account.email = identity.email; account.organization = identity.organization
+            try SavedAccountStore.shared.save(account)
+            try account.installIntegration()
+            print(account.id)
+        } else {
+            print("Usage: tbase accounts list | tbase accounts import NAME PROFILE_DIRECTORY")
+            exit(2)
+        }
+
     case "new":
         // Kick off an investigation instead of reacting to one (ruled 05 Aug).
         // Optional argument overrides the directory; the command is fixed in v1.
@@ -914,26 +939,33 @@ case "reconcile":
         // FIRST TURN), so the old poll timed out on every single launch,
         // silently. Now polls CodexRollout.threadWriterLocksDirectory
         // instead, which Codex writes to immediately.
-        let useCodex = args.contains("--codex")
-        let adapter: any HarnessAdapter = useCodex ? CodexAdapter() : ClaudeCodeAdapter()
+        let selection = args.first(where: { $0.hasPrefix("--account=") }).map { String($0.dropFirst("--account=".count)) }
+            ?? (args.contains("--codex") ? CodexAdapter().id : AgentDefaults.defaultTarget)
+        let launch = HarnessLaunch(harness: selection)
+        let adapter = launch.adapter
+        let useCodex = adapter.id == CodexAdapter().id
         // Flags are not directories: `tbase new --wait-live` once cd'd into a
         // directory named "--wait-live" and died in a second (21 Sep).
         let dirArg = args.first(where: { !$0.hasPrefix("--") && $0 != "new" })
         let dir = dirArg.map { ($0 as NSString).expandingTildeInPath }
-            ?? AgentDefaults.directory(for: adapter.id)
-        let command = AgentDefaults.load(for: adapter.id)
+            ?? AgentDefaults.directory(for: selection)
+        let command = launch.command
         let before = useCodex ? Set(CodexRollout.liveThreadIds())
                               : Set((ClaudeAgentsCLI().sessions() ?? [])
                                     .filter { $0.cwd == dir }.map(\.sessionId))
         switch SessionLauncher.launch(
-            directory: dir, launch: HarnessLaunch(adapter: adapter, command: command)) {
+            directory: dir, launch: launch) {
         case .success(let pane):
             let tty = pane.paneTty
             print("detached tmux session (attach on demand): `\(command)` in \(dir)")
             print("waiting for it to register…")
             let sessionId = useCodex
                 ? LaunchGreeting.awaitCodexRegistration(excluding: before)
-                : LaunchGreeting.awaitRegistration(directory: dir, excluding: before)
+                : LaunchGreeting.awaitRegistration(directory: dir, excluding: before, matches: {
+                    (launch.account == nil || $0.accountTargetID == launch.account?.id)
+                        && $0.registryTmux?.hasPrefix(pane.sessionName + ":") == true
+                        && $0.registryTmux?.hasSuffix("." + pane.paneId) == true
+                })
             guard let sessionId else {
                 print("did not register within 30s (see the trace lines above)")
                 break
@@ -1443,7 +1475,7 @@ case "reconcile":
                 // Claude Code one by construction; Codex targets never reach
                 // this branch. Named rather than defaulted, because a default
                 // here is exactly what ended a session with the wrong binary.
-                launch: HarnessLaunch(harness: ClaudeCodeAdapter().id),
+                launch: HarnessLaunch.forExistingSession(sessionId),
                 directory: cwd) {
                 pane = transferred.pane
                 dispatchPid = transferred.pid

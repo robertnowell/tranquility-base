@@ -105,6 +105,7 @@ extension Coordinator {
             return .sessionNotReady(readiness)
         }
 
+        if let failure = attachments.persistenceError { throw AccountConfigurationError.invalid(failure) }
         switch await transport.send(text: text, to: dispatchTarget) {
         case .confirmed(let latencyMs):
             attachments.resolve(utteranceId: utterance.id, landed: true)
@@ -242,6 +243,9 @@ extension Coordinator {
                                  tray: TrayScope = .session,
                                  provider: String = "typed") async throws -> ReplyOutcome {
         let typed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if sessionId.hasPrefix("launch:") {
+            try LaunchRecoveryStore.shared.update(sessionId) { $0.instruction = typed }
+        }
         guard let target = try store.allKnownSessions().first(where: { $0.sessionId == sessionId })
         else {
             // The message dies here, and until 29 Sep it died without a trace:
@@ -699,6 +703,7 @@ extension Coordinator {
         // The tray's fate rides the same exhaustive switch as the utterance's
         // status — one clear-site, not five. Landed (or possibly landed)
         // clears; everything else returns the files to the chips.
+        if let failure = attachments.persistenceError { throw AccountConfigurationError.invalid(failure) }
         switch await tmuxTransport.send(text: text, to: dispatchTarget) {
         case .queued:
             // Delivered into a session that is mid-turn. It will send itself when
@@ -741,8 +746,11 @@ extension Coordinator {
             // The tray follows the same doctrine: a timeout's files count as
             // landed (keeping them staged would make the next reply a
             // possible double-send, and a duplicate is worse than a drop).
-            attachments.resolve(utteranceId: utterance.id,
-                                landed: failure == .verificationTimedOut)
+            if failure == .verificationTimedOut {
+                attachments.markUncertain(utteranceId: utterance.id)
+            } else {
+                attachments.resolve(utteranceId: utterance.id, landed: false)
+            }
             utterance.status = failure == .verificationTimedOut ? .dispatchedUnconfirmed : .dispatchFailed
             utterance.lastError = "\(failure)"
             try store.update(utterance: utterance)

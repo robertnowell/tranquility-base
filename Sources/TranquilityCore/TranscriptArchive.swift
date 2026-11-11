@@ -32,7 +32,17 @@ public enum TranscriptArchive {
     /// state — a session registers with `claude agents --json` a beat before its
     /// first line lands on disk.
     public static func transcriptPath(forSessionId id: String,
-                                      projects: URL = projectsDirectory) -> String? {
+                                      projects: URL? = nil) -> String? {
+        guard !id.contains("/"), !id.contains("..") else { return nil }
+        guard let projects else {
+            if let binding = SessionAccountStore.shared.binding(id) {
+                return transcriptPath(forSessionId: id, projects: URL(fileURLWithPath: binding.configDirectory).appendingPathComponent("projects"))
+            }
+            let paths = SavedAccountStore.shared.roots.compactMap {
+                transcriptPath(forSessionId: id, projects: $0.appendingPathComponent("projects"))
+            }
+            return paths.count == 1 ? paths[0] : nil
+        }
         let fm = FileManager.default
         guard let dirs = try? fm.contentsOfDirectory(at: projects,
                                                      includingPropertiesForKeys: nil)

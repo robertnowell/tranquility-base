@@ -189,7 +189,7 @@ public enum SessionDiscovery {
         /// waiting to be blamed on the classifier.
         static func key(_ window: TimeInterval, _ limit: Int,
                         _ projects: URL, _ sessions: URL) -> String {
-            "\(window)|\(limit)|\(projects.path)|\(sessions.path)"
+            "\(window)|\(limit)|\(projects.path)|\(sessions.path)|\(SavedAccountStore.shared.roots.map(\.path).joined(separator: ","))"
         }
         /// The last scan for this archive at ANY age, plus whether it is old
         /// enough to be worth redoing. Serving is not the same question as
@@ -424,8 +424,9 @@ public enum SessionDiscovery {
         var result = Result()
         let fm = FileManager.default
 
-        guard let projectDirs = try? fm.contentsOfDirectory(
-            at: projects, includingPropertiesForKeys: nil) else { return result }
+        let roots = projects == TranscriptArchive.projectsDirectory
+            ? SavedAccountStore.shared.roots.map { $0.appendingPathComponent("projects") } : [projects]
+        let projectDirs = roots.flatMap { (try? fm.contentsOfDirectory(at: $0, includingPropertiesForKeys: nil)) ?? [] }
 
         var candidates: [(URL, Date, Int)] = []
         for project in projectDirs {
@@ -449,6 +450,9 @@ public enum SessionDiscovery {
         }
 
         var kept: [Session] = []
+        let duplicateIDs = Set(Dictionary(grouping: candidates, by: { $0.0.lastPathComponent })
+            .filter { $0.value.count > 1 }.keys)
+        candidates.removeAll { duplicateIDs.contains($0.0.lastPathComponent) }
         for (url, modified, size) in candidates.sorted(by: { $0.1 > $1.1 }) {
             result.scanned += 1
             let path = url.path

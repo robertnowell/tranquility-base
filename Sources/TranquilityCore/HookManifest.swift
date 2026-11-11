@@ -223,7 +223,13 @@ public enum HookManifest {
         }
     }
 
-    public static var harnesses: [Harness] { [claudeCode, codex] }
+    public static var harnesses: [Harness] {
+        [claudeCode, codex] + SavedAccountStore.shared.all().map {
+            Harness(id: $0.id, label: "Claude · " + $0.label,
+                    settingsURL: $0.root.appendingPathComponent("settings.json"), homeURL: $0.root,
+                    approvalConfigURL: nil, expected: expected)
+        }
+    }
 
     /// The harnesses this machine actually has. Order is stable so a repair
     /// note reads the same way twice.
