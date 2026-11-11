@@ -20,6 +20,41 @@ import TranquilityCore
 /// and a generic rewrite would have been a much bigger redesign than
 /// "name the coupling before moving" ever asked for.
 extension StatusHUD {
+    // User-entered commands and search text are editable content, not chrome.
+    // Labels and button titles still require composed punctuation.
+    static func uncomposedChromeMarks(_ view: NSView) -> [String] {
+        func needsComposing(_ text: String) -> Bool {
+            text.contains(where: ChromeType.isMark) && text.contains(where: \.isLetter)
+        }
+        func uncomposedMarks(_ view: NSView) -> [String] {
+            var found: [String] = []
+            if let field = view as? NSTextField, !field.isEditable, needsComposing(field.stringValue) {
+                let text = field.attributedStringValue
+                let plain = field.stringValue
+                for (i, ch) in plain.enumerated() where ChromeType.isMark(ch) {
+                    let index = min(i, max(0, text.length - 1))
+                    let composed = text.length > 0
+                        && text.attribute(.baselineOffset, at: index,
+                                          effectiveRange: nil) != nil
+                    if !composed { found.append("\(ch)@\(type(of: view))") }
+                }
+            }
+            if let button = view as? NSButton, button.attributedTitle.length > 0,
+               needsComposing(button.attributedTitle.string) {
+                let text = button.attributedTitle
+                for (i, ch) in text.string.enumerated() where ChromeType.isMark(ch) {
+                    let index = min(i, max(0, text.length - 1))
+                    if text.attribute(.baselineOffset, at: index, effectiveRange: nil) == nil {
+                        found.append("\(ch)@\(type(of: view))")
+                    }
+                }
+            }
+            return found + view.subviews.flatMap(uncomposedMarks)
+        }
+        return uncomposedMarks(view)
+    }
+
+
 
     /// The top band is shared, and this is the only thing that says so.
     ///
@@ -1137,39 +1172,11 @@ extension StatusHUD {
         // is no cap line to sit on. The rule is about a mark that shares a line
         // with words, which is the only case where "level with the text" means
         // anything.
-        func needsComposing(_ text: String) -> Bool {
-            text.contains(where: ChromeType.isMark) && text.contains(where: \.isLetter)
-        }
-        func uncomposedMarks(_ view: NSView) -> [String] {
-            var found: [String] = []
-            if let field = view as? NSTextField, needsComposing(field.stringValue) {
-                let text = field.attributedStringValue
-                let plain = field.stringValue
-                for (i, ch) in plain.enumerated() where ChromeType.isMark(ch) {
-                    let index = min(i, max(0, text.length - 1))
-                    let composed = text.length > 0
-                        && text.attribute(.baselineOffset, at: index,
-                                          effectiveRange: nil) != nil
-                    if !composed { found.append("\(ch)@\(type(of: view))") }
-                }
-            }
-            if let button = view as? NSButton, button.attributedTitle.length > 0,
-               needsComposing(button.attributedTitle.string) {
-                let text = button.attributedTitle
-                for (i, ch) in text.string.enumerated() where ChromeType.isMark(ch) {
-                    let index = min(i, max(0, text.length - 1))
-                    if text.attribute(.baselineOffset, at: index, effectiveRange: nil) == nil {
-                        found.append("\(ch)@\(type(of: view))")
-                    }
-                }
-            }
-            return found + view.subviews.flatMap(uncomposedMarks)
-        }
         var loose: [String] = []
         for probe in ["grid", "speaking", "needsyou", "settings", "recent-audio", "greeting"] {
             _ = pose(probe)
             panel?.contentView?.layoutSubtreeIfNeeded()
-            if let root = panel?.contentView { loose += uncomposedMarks(root) }
+            if let root = panel?.contentView { loose += Self.uncomposedChromeMarks(root) }
         }
         let everyMarkComposed = loose.isEmpty
 

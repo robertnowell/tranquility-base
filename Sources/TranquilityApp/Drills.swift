@@ -1467,7 +1467,8 @@ extension StatusHUD {
     /// What it asserts is the promise the grid makes: every tile is an agent
     /// this app can actually drive, each wears its vendor's own mark, and a
     /// tile that needs setting up does NOT become the selection when tapped.
-    func agentGridDrill() {
+    @discardableResult
+    func agentGridDrill() -> Bool {
         let tiles = StatusHUD.agentTiles()
         let offerable = Set(AgentRoster.validated.filter { $0.reach.isOfferable }.map(\.id))
 
@@ -1476,12 +1477,16 @@ extension StatusHUD {
         let grid = AgentGridRow(width: 320, agents: tiles, selected: tiles.first?.id ?? "")
         grid.layoutSubtreeIfNeeded()
 
-        let everyTileIsDrivable = tiles.allSatisfy { offerable.contains($0.id) }
-        let everyTileHasAMark = tiles.allSatisfy { AgentMarks.png($0.id) != nil }
+        let everyTileIsDrivable = tiles.allSatisfy { offerable.contains(SavedAccountStore.shared.backend($0.id)) }
+        let buttons = grid.subviews.compactMap { $0 as? NSButton }
+        let everyTileHasAMark = tiles.allSatisfy { tile in
+            buttons.first { $0.identifier?.rawValue == tile.id }?.image != nil
+        }
         let itIsAGridNotARow = AgentGridRow.columns == 3 && tiles.count > AgentGridRow.columns
             ? grid.frame.height > AgentGridRow.tileHeight
             : grid.frame.height >= AgentGridRow.tileHeight
-        let fourAgents = tiles.count == 4
+        let expectedTargets = offerable.union(SavedAccountStore.shared.all().map(\.id))
+        let allTargetsOffered = Set(tiles.map(\.id)) == expectedTargets && tiles.count == expectedTargets.count
         let readyAgent = AgentRoster.Agent(id: "codex", name: "Codex", glyph: "◇", standing: .ready)
         let readyGrid = AgentGridRow(width: 320, agents: [readyAgent], selected: readyAgent.id)
         let readyNameIsPlain = readyGrid.subviews.compactMap { $0 as? NSButton }.first?
@@ -1583,7 +1588,7 @@ extension StatusHUD {
             + "grid=\(onScreen?.frame.height ?? -1) claimed=\(claimed) "
             + "screen=\(NSScreen.main?.visibleFrame.height ?? -1)")
 
-        SelfTest.report("agentGrid", [
+        let checks: [(String, Bool)] = [
             ("theSettingsPaneFitsItsPanel", paneFits),
             ("gridIsTheHeightItClaims", gridIsTheHeightItClaims),
             ("gridIsInThePanel", gridIsInThePanel),
@@ -1591,7 +1596,7 @@ extension StatusHUD {
             ("itsTilesAreDrawn", tilesAreVisible),
             ("everyTileIsAnAgentWeCanDrive", everyTileIsDrivable),
             ("everyTileWearsItsOwnMark", everyTileHasAMark),
-            ("fourAgentsOffered", fourAgents),
+            ("allConfiguredTargetsOfferedOnce", allTargetsOffered),
             ("itIsAGridNotARow", itIsAGridNotARow),
             ("aGreyedTileOffersItsStep", handedOut != nil),
             ("aGreyedTileDoesNotBecomeTheSelection", selectedInstead == nil),
@@ -1599,7 +1604,9 @@ extension StatusHUD {
             ("aSetupTileKeepsItsArrow", setupArrowRemains),
             ("harnessFieldsHaveInstructions", harnessFieldsHaveInstructions),
             ("providerDirectoryHasInstructions", providerDirectoryHasInstructions),
-        ])
+        ]
+        SelfTest.report("agentGrid", checks)
+        return checks.allSatisfy(\.1)
     }
 
 /// **A crobot task, driven through the real grid.** Robert, after too many

@@ -43,6 +43,20 @@ enum SavedAccountsDrill {
             let destinations = AgentHandoff.destinations(ready: updated)
             check("continue choices distinguish same-backend accounts", destinations.contains { $0.id == account.id && $0.harness == ClaudeCodeAdapter().id }
                 && destinations.contains { $0.id == ClaudeCodeAdapter().id })
+            let hud = StatusHUD()
+            hud.onOpenSettingsTab = { [weak hud] tab in
+                hud?.showSettings(voices: [], roster: [], note: "", tab: tab)
+            }
+            check("startup grid accepts all saved accounts", hud.agentGridDrill())
+            hud.hide()
+            let editable = NSTextField(string: "command --setting=value")
+            editable.isEditable = true
+            check("editable command punctuation is content", StatusHUD.uncomposedChromeMarks(editable).isEmpty)
+            editable.isEditable = false
+            check("uncomposed label punctuation still fails", !StatusHUD.uncomposedChromeMarks(editable).isEmpty)
+            editable.attributedStringValue = ChromeType.line(editable.stringValue,
+                font: StateLegend.Face.chrome(9), color: StateLegend.Palette.ink, tracking: 1.1)
+            check("composed label punctuation passes", StatusHUD.uncomposedChromeMarks(editable).isEmpty)
             window.orderFront(nil)
             window.layoutIfNeeded()
             check("all account tiles have usable bounds", buttons.allSatisfy { $0.frame.width > 0 && $0.frame.height > 0 && $0.frame.maxX <= grid.bounds.width + 1 })
