@@ -6,6 +6,14 @@
     <description>Updates for Tranquility Base.</description>
     <language>en</language>
     <item>
+      <title>Version 0.3.1503</title>
+      <sparkle:version>1503</sparkle:version>
+      <sparkle:shortVersionString>0.3.1503</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <pubDate>Wed, 11 Nov 2026 02:38:15 +0000</pubDate>
+      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1503-db4dd6353/TranquilityBase-0.3.1503.dmg" type="application/octet-stream" length="46805662" sparkle:edSignature="RnzZZ+filWmCBjlzv/lsCvCEtsRkf8SmltwftaCEgDiXo8oCvYpkyMYp8b1LEjXIVERYmglVl/M1jQPhHy+VDw==" />
+    </item>
+    <item>
       <title>Version 0.3.1502</title>
       <sparkle:version>1502</sparkle:version>
       <sparkle:shortVersionString>0.3.1502</sparkle:shortVersionString>
@@ -77,16 +85,8 @@
       <pubDate>Fri, 16 Oct 2026 19:30:51 +0000</pubDate>
       <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1493-1b5b2b975/TranquilityBase-0.3.1493.dmg" type="application/octet-stream" length="46176244" sparkle:edSignature="K91KNhg4G+5pR83GpKU5akR8jhwhQoEo7r6YgfqmjC0hZHzck2U19pN/ReNkX8McVfGIirL5LraQVtgSpYHNBw==" />
     </item>
-    <item>
-      <title>Version 0.3.1492</title>
-      <sparkle:version>1492</sparkle:version>
-      <sparkle:shortVersionString>0.3.1492</sparkle:shortVersionString>
-      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <pubDate>Fri, 16 Oct 2026 18:28:07 +0000</pubDate>
-      <enclosure url="https://github.com/robertnowell/tranquility-base/releases/download/v0.3.1492-4eae069e6/TranquilityBase-0.3.1492.dmg" type="application/octet-stream" length="46174755" sparkle:edSignature="CKFad7/yXB8X8XxPyGc3qEzWkTIAFq+CIOUZmRylpfXE1kHeSXg3X/0OI8kTC2sgkNpLlENnxhC1kp8zhO/FBQ==" />
-    </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: D1CYvRNwPeBSZxuHUpTkHNop+hIx2mcgY4j3TQ/Q5lh7Ne6aWrIQ+4rg3qSdSjdxykjSmawQ4KdEDbvla/9/Bg==
+edSignature: pljXVh9669g139l7Mv/E0f8OjAHs1sVFLYq9Bskv+F8tSJkJpeV3pctor12vXrofwE4r58f9FPdhg/tGKpkaDQ==
 length: 6457
 -->
