@@ -11,11 +11,11 @@ enum SavedAccountsLiveDrill {
         let env = ProcessInfo.processInfo.environment
         let support = QueueStore.supportDirectory.resolvingSymlinksInPath()
         guard env["VOICE_DISPATCH_SUPPORT_DIR"] != nil,
-              support.path.hasPrefix("/private/tmp/tb-account-app-drill-"),
+              ["/private/tmp/tb-account-app-drill-", "/tmp/tb-account-app-drill-"].contains(where: support.path.hasPrefix),
               let target = env["TB_ACCOUNT_DRILL_TARGET"],
               let account = SavedAccountStore.shared.account(target),
               let directory = env["TB_ACCOUNT_DRILL_PROJECT"],
-              directory.hasPrefix(support.deletingLastPathComponent().path + "/"),
+              URL(fileURLWithPath: directory).resolvingSymlinksInPath().path.hasPrefix(support.deletingLastPathComponent().path + "/"),
               env["CLAUDE_CONFIG_DIR"] == nil else {
             print("FAIL explicit isolated support, project and saved target are required")
             print("support=\(support.path), project=\(env["TB_ACCOUNT_DRILL_PROJECT"] ?? "missing"), saved=\(SavedAccountStore.shared.all().count), configUnset=\(env["CLAUDE_CONFIG_DIR"] == nil)")
