@@ -44,6 +44,9 @@ enum SavedAccountsDrill {
             check("continue choices distinguish same-backend accounts", destinations.contains { $0.id == account.id && $0.harness == ClaudeCodeAdapter().id }
                 && destinations.contains { $0.id == ClaudeCodeAdapter().id })
             let hud = StatusHUD()
+            hud.onOpenSettingsTab = { [weak hud] tab in
+                hud?.showSettings(voices: [], roster: [], note: "", tab: tab)
+            }
             check("startup grid accepts all saved accounts", hud.agentGridDrill())
             hud.hide()
             let editable = NSTextField(string: "command --setting=value")
