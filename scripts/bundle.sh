@@ -438,15 +438,6 @@ if [ -z "$IDENTITY" ]; then
   fi
 fi
 
-if [ -z "$IDENTITY" ]; then
-  # Reached only if identity creation itself failed. Still sign ad-hoc WITH
-  # entitlements — without them the hardened-runtime denials are silent — but say
-  # plainly what will go wrong, because the symptom is otherwise unrecognisable.
-  echo "⚠️  could not create a signing identity; falling back to ad-hoc."
-  echo "   Consequence: every rebuild voids your macOS permissions, while the"
-  echo "   Privacy pane keeps showing them as granted. If that happens, run"
-  echo "   scripts/reset-permissions.sh and grant again."
-  echo "   Retry the identity with: scripts/make-signing-identity.sh"
 # A local certificate has no Apple Team ID. Hardened-runtime library
 # validation cannot match its embedded frameworks even when all use that same
 # certificate. Permit that specific local Dev envelope, never production or
@@ -465,6 +456,15 @@ select_final_entitlements() {
   fi
 }
 
+if [ -z "$IDENTITY" ]; then
+  # Reached only if identity creation itself failed. Still sign ad-hoc WITH
+  # entitlements — without them the hardened-runtime denials are silent — but say
+  # plainly what will go wrong, because the symptom is otherwise unrecognisable.
+  echo "⚠️  could not create a signing identity; falling back to ad-hoc."
+  echo "   Consequence: every rebuild voids your macOS permissions, while the"
+  echo "   Privacy pane keeps showing them as granted. If that happens, run"
+  echo "   scripts/reset-permissions.sh and grant again."
+  echo "   Retry the identity with: scripts/make-signing-identity.sh"
 # `tbase` is a nested executable and signs like one: nested first, outer last,
 # with the SAME identity the app gets. Signed ad-hoc it would take the whole
 # bundle's designated requirement down to a cdhash that changes every build,
