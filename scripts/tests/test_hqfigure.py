@@ -161,20 +161,29 @@ class Grid(unittest.TestCase):
         self.assertEqual(why, [])
         self.assertEqual(what, "8 rows by 3 columns, 22 pass, 2 not run")
         # one mark a cell, and one more for each state in the key
-        self.assertEqual(svg.count('class="dim"'), 22 + 1)
-        self.assertEqual(svg.count('class="hollow"'), 2 + 1)
+        self.assertEqual(svg.count('class="ok"'), 22 + 1)
+        self.assertEqual(svg.count('class="unrun"'), 2 + 1)
         for wanted in ("Sold-out product: button is disabled", "single build only", "Overlay on", ">22</tspan> pass", ">2</tspan> not run"):
             self.assertIn(wanted, svg)
 
     def test_each_state_has_its_own_shape_so_colour_is_not_the_only_sign(self):
         svg = fig.draw(grid(["pass", "fail", "open", "na"]), 720)[0]
-        self.assertEqual([svg.count('class="%s"' % c) for c in ("dim", "x", "hollow", "na")], [3, 3, 3, 3])
+        self.assertEqual([svg.count('class="%s"' % c) for c in ("ok", "x", "unrun", "na")], [3, 3, 3, 3])
+
+    def test_a_pass_is_a_green_check_and_never_a_grey_dot_or_the_brand_accent(self):
+        # Ruled 12 Nov 2026 on the first published grid: grey read as nothing there.
+        svg = fig.draw(grid(["pass", "fail"]), 720)[0]
+        self.assertIn(".hqf .ok{stroke:var(--ok)", svg)
+        self.assertIn("--ok:#2a7a4b", svg)
+        self.assertIn(".hqf .x{stroke:var(--bad)", svg)
+        self.assertNotIn('class="dim"', svg)
 
     def test_marks_in_a_column_share_one_x(self):
         svg = fig.draw(grid(["pass", "open", "pass"]), 720)[0]
-        xs = re.findall(r'<circle cx="([\d.]+)" cy="(\d+)"', svg)[:6]
+        xs = re.findall(r'<path d="M([\d.]+),([\d.]+)l3.6', svg)[:4]
+        self.assertEqual(len(xs), 4)
         self.assertEqual(len(set(x for x, _ in xs)), 2)
-        self.assertEqual(len(set(y for _, y in xs)), 3)
+        self.assertEqual(len(set(y for _, y in xs)), 2)
 
     def test_all_the_same_is_a_sentence_and_one_exception_is_a_grid(self):
         self.assertIn("every cell is pass", " ".join(fig.draw(grid(["pass"] * 4), 720)[1]))
