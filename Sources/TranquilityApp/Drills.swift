@@ -1800,22 +1800,29 @@ extension StatusHUD {
     /// the same repaint keeps its own provider's answer: the Mac rebooting
     /// says nothing about an agent that does not run on it.
     func rebootGridDrill() {
-        func owed(_ id: String) -> WaitingSession {
-            var w = WaitingSession(sessionId: id, latestId: 1, createdAtMs: 0, hookEvent: .stop)
+        // Dated, because the grid now asks when a row with no process last
+        // spoke (`SessionRow.stillOpen`, 11 Nov 2026): the newest comes
+        // first and a row quiet for a month is not drawn at all.
+        let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
+        func owed(_ id: String, daysAgo: Int64 = 0) -> WaitingSession {
+            var w = WaitingSession(sessionId: id, latestId: 1,
+                                   createdAtMs: nowMs - daysAgo * 86_400_000, hookEvent: .stop)
             w.cwd = "/tmp"
             return w
         }
         let dead = "6d1a77e0-0000-4000-8000-00000000d0d0"
         let deadToo = "6d1a77e0-0000-4000-8000-00000000d0d1"
+        let lastMonth = "6d1a77e0-0000-4000-8000-00000000d0d2"
         let cloud = AgentSession.of("ses_drill_reboot_cloud", provider: "crobot",
                                     title: "Still in the cloud", state: .working)
         func assemble(livenessKnown: Bool) -> [SessionRow] {
             GridAssembler.rows(GridAssembler.RowInputs(
-                waiting: [owed(dead), owed(deadToo)], known: [], discovered: [],
+                waiting: [owed(lastMonth, daysAgo: 30), owed(deadToo, daysAgo: 2), owed(dead)],
+                known: [], discovered: [],
                 liveById: [:], boundaries: [:], switchedOff: [], switchedOn: [],
                 evidence: { _, _ in nil }, isHeadless: { _ in false }, family: { [$0] },
                 supersedesWaiting: { _, _ in false }, isInFlight: { _ in false },
-                recordedTurns: [dead, deadToo],
+                recordedTurns: [dead, deadToo, lastMonth],
                 remote: .init(agents: [cloud]), livenessKnown: livenessKnown)).rows
         }
         let after = assemble(livenessKnown: true)
@@ -1841,7 +1848,12 @@ extension StatusHUD {
             ("theCloudRowIsUntouched", lamp(after, cloud.id) == .working),
             ("aWitnessThatDidNotSpeakGreysNothing",
              lamp(held, dead) == .ready && lamp(held, deadToo) == .ready),
-            ("everyRowIsDrawn", built.count == after.count),
+            ("everyRowStillOpenIsDrawn", built.count == after.count - 1),
+            ("theNewestComesFirst",
+             built.compactMap { $0.identifier?.rawValue }.filter { $0 != cloud.id } == [dead, deadToo]),
+            ("aRowQuietForAMonthIsNotOnTheGrid",
+             !built.contains { $0.identifier?.rawValue == lastMonth }
+                && Self.pastAgents(after).contains { $0.id == lastMonth }),
             ("theLampTapRevivesThatSession", revived == [dead]),
         ])
     }
