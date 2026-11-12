@@ -60,6 +60,19 @@ public struct Coordinator: Sendable {
     public let resumeTwin: @Sendable (_ sessionId: String, _ directory: String,
                                       _ harness: String) -> TmuxPaneAddress?
 
+    /// Starts the process of an agent that has none, when a reply is bound
+    /// for it (`GoneStart`, ruled 11 Nov 2026). `nil` means the reply path
+    /// never starts anything and refuses as it always did, which is what
+    /// every test gets unless it asks: like `resumeTwin`, a real subprocess
+    /// has no place running unannounced inside a test's `dispatch()`. The
+    /// app passes `GoneStart.claude` behind its own off switch.
+    public let startGone: (@Sendable (_ sessionId: String) -> GoneStart.Outcome)?
+    /// How long a started process has to register, and then how long its
+    /// input box has to come up, before the reply gives up. A launch gets 30 s
+    /// to register (`PendingLaunch`); a resume is the same process start.
+    public let startWait: TimeInterval
+    public let startSettle: TimeInterval
+
     public let enrolment: EnrolmentRegistry
     public let agents: ClaudeAgentsReading
     /// The only source of Codex liveness `waiting()` has — Codex never
@@ -117,6 +130,9 @@ public struct Coordinator: Sendable {
         attachments: AttachmentStore = AttachmentStore(),
         replyWindow: TimeInterval = 15 * 60,
         readinessGrace: TimeInterval = 12,
+        startGone: (@Sendable (_ sessionId: String) -> GoneStart.Outcome)? = nil,
+        startWait: TimeInterval = 30,
+        startSettle: TimeInterval = 20,
         resumeTwin: @escaping @Sendable (_ sessionId: String, _ directory: String,
                                          _ harness: String) -> TmuxPaneAddress?
             = { sessionId, directory, harness in
@@ -151,6 +167,9 @@ public struct Coordinator: Sendable {
         self.attachments = attachments
         self.replyWindow = replyWindow
         self.readinessGrace = readinessGrace
+        self.startGone = startGone
+        self.startWait = startWait
+        self.startSettle = startSettle
         self.resumeTwin = resumeTwin
     }
 

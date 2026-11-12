@@ -1425,6 +1425,188 @@ final class CoordinatorTests: XCTestCase {
                      "you have not heard the thing you would be answering")
     }
 
+    // MARK: - A reply starts a process that is gone (ruled 11 Nov 2026)
+
+    /// Defers `deferrals` times, then answers `then`. `.deferred` is the
+    /// transport's pre-flight answer: nothing was typed.
+    final class SettlingTransport: DispatchTransport, @unchecked Sendable {
+        let kind = TransportKind.terminalApp
+        private let lock = NSLock()
+        private var remaining: Int
+        private var calls = 0
+        let then: DispatchOutcome
+        init(deferrals: Int, then: DispatchOutcome = .confirmed(latencyMs: 7)) {
+            remaining = deferrals; self.then = then
+        }
+        var sends: Int { lock.lock(); defer { lock.unlock() }; return calls }
+        func readiness(for target: DispatchTarget) async -> Readiness { .ready }
+        func send(text: String, to target: DispatchTarget) async -> DispatchOutcome { next() }
+        private func next() -> DispatchOutcome {
+            lock.lock(); defer { lock.unlock() }
+            calls += 1
+            if remaining > 0 { remaining -= 1; return .deferred(.notRegistered) }
+            return then
+        }
+    }
+
+    final class StartCounter: @unchecked Sendable {
+        private let lock = NSLock(); private var n = 0
+        func bump() { lock.lock(); n += 1; lock.unlock() }
+        var count: Int { lock.lock(); defer { lock.unlock() }; return n }
+    }
+
+    private static let startedPane = TmuxPaneAddress(
+        socketName: "tb", paneId: "%9", sessionName: "tb-fixture", paneTty: "/dev/ttys997")
+
+    private func startingCoordinator(
+        transport: any DispatchTransport, agents: ClaudeAgentsReading, name: String,
+        startWait: TimeInterval = 5, startSettle: TimeInterval = 5,
+        start: @escaping @Sendable (String) -> GoneStart.Outcome
+    ) throws -> Coordinator {
+        let registry = EnrolmentRegistry(url: tmpDir.appendingPathComponent("\(name).json"))
+        try registry.enrol(sessionId: "sess-1")
+        return Coordinator(
+            store: store,
+            summarizer: SummarizerChain(providers: [FixedSummary()]),
+            speech: SpeechChain(preferred: SilentSpeech(), fallback: SilentSpeech()),
+            gate: InterruptGate(minimumIdleSeconds: 0, signals: .quiescent),
+            tmuxTransport: transport, enrolment: registry, agents: agents,
+            recovery: RecoveryChain(
+                providers: [FixedTranscript(text: "yes go ahead")],
+                maxAttemptsPerProvider: 1, backoff: [0]),
+            // Zero: these tests are about the start, and the old grace must
+            // not be what rescues them.
+            readinessGrace: 0,
+            startGone: start, startWait: startWait, startSettle: startSettle,
+            // Fails the test if reached: a start made by dispatch must never
+            // be followed by an ownership transfer, which ends the process.
+            resumeTwin: { _, _, _ in XCTFail("resumeTwin ran after a start"); return nil })
+    }
+
+    private func liveFixture() -> [LiveSession] {
+        [LiveSession(pid: Int(ProcessInfo.processInfo.processIdentifier),
+                     sessionId: "sess-1", cwd: "/tmp/p", status: "idle",
+                     name: "p", waitingFor: nil)]
+    }
+
+    private func pendingSend(_ coordinator: Coordinator) async throws -> String? {
+        try append()
+        guard case .readyToSend(let utteranceId, _, _, _) =
+            try await coordinator.submitReply(pcm16: silence(), to: "sess-1")
+        else { XCTFail("expected a pending send"); return nil }
+        return utteranceId
+    }
+
+    func testAReplyToAnAgentWithNoProcessStartsItThenSendsOnce() async throws {
+        let transport = RecordingTransport()
+        let starts = StartCounter()
+        let coordinator = try startingCoordinator(
+            transport: transport, agents: LateAgents(appearsOnCall: 3, live: liveFixture()),
+            name: "start-sends",
+            start: { _ in starts.bump(); return .started(Self.startedPane) })
+        guard let id = try await pendingSend(coordinator) else { return }
+        guard case .dispatched = try await coordinator.confirmAndSend(utteranceId: id)
+        else { return XCTFail("a gone agent must be started and then sent to") }
+        XCTAssertEqual(starts.count, 1, "started once")
+        XCTAssertEqual(transport.sent.count, 1, "and the words were typed once")
+        XCTAssertEqual(transport.sentTargets.first?.pane, Self.startedPane,
+                       "into the pane the start returned")
+    }
+
+    func testALiveAgentIsNeverAskedToStart() async throws {
+        let transport = RecordingTransport()
+        let starts = StartCounter()
+        let registry = EnrolmentRegistry(url: tmpDir.appendingPathComponent("live-nostart.json"))
+        try registry.enrol(sessionId: "sess-1")
+        let coordinator = Coordinator(
+            store: store,
+            summarizer: SummarizerChain(providers: [FixedSummary()]),
+            speech: SpeechChain(preferred: SilentSpeech(), fallback: SilentSpeech()),
+            gate: InterruptGate(minimumIdleSeconds: 0, signals: .quiescent),
+            tmuxTransport: transport, enrolment: registry,
+            agents: FakeAgents(live: liveFixture()),
+            recovery: RecoveryChain(
+                providers: [FixedTranscript(text: "yes go ahead")],
+                maxAttemptsPerProvider: 1, backoff: [0]),
+            readinessGrace: 0,
+            startGone: { _ in starts.bump(); return .started(nil) },
+            resumeTwin: { _, _, _ in Self.startedPane })
+        guard let id = try await pendingSend(coordinator) else { return }
+        guard case .dispatched = try await coordinator.confirmAndSend(utteranceId: id)
+        else { return XCTFail("a live agent takes the reply as before") }
+        XCTAssertEqual(starts.count, 0, "nothing is started for a live agent")
+    }
+
+    /// `notGone` is "no proof": a failed probe, a live process the registry
+    /// dropped, a harness this path does not cover. The old refusal stands.
+    func testNoProofOfGoneRefusesExactlyAsBefore() async throws {
+        let transport = RecordingTransport()
+        let coordinator = try startingCoordinator(
+            transport: transport, agents: FailingAgents(), name: "start-noproof",
+            start: { _ in .notGone("the registry could not be read") })
+        guard let id = try await pendingSend(coordinator) else { return }
+        guard case .sessionNotReady = try await coordinator.confirmAndSend(utteranceId: id)
+        else { return XCTFail("no proof of gone must refuse, not start") }
+        XCTAssertTrue(transport.sent.isEmpty, "nothing typed")
+    }
+
+    func testAnAgentThatCannotBeStartedSaysWhyAndTypesNothing() async throws {
+        let transport = RecordingTransport()
+        let coordinator = try startingCoordinator(
+            transport: transport, agents: FakeAgents(live: []), name: "start-refused",
+            start: { _ in .refused("its directory is gone") })
+        guard let id = try await pendingSend(coordinator) else { return }
+        guard case .dispatchFailed(.couldNotStart(let why), _) =
+            try await coordinator.confirmAndSend(utteranceId: id)
+        else { return XCTFail("a refused start is its own failure") }
+        XCTAssertEqual(why, "its directory is gone")
+        XCTAssertTrue(transport.sent.isEmpty, "nothing typed")
+        XCTAssertFalse((try store.utterance(id: id))?.transcriptText?.isEmpty ?? true,
+                       "and the words are still in the store")
+    }
+
+    func testAStartThatNeverRegistersFailsWithoutTyping() async throws {
+        let transport = RecordingTransport()
+        let coordinator = try startingCoordinator(
+            transport: transport, agents: FakeAgents(live: []), name: "start-never",
+            startWait: 1,
+            start: { _ in .started(Self.startedPane) })
+        guard let id = try await pendingSend(coordinator) else { return }
+        guard case .dispatchFailed(.couldNotStart, _) =
+            try await coordinator.confirmAndSend(utteranceId: id)
+        else { return XCTFail("a start that never registers must fail, not hang or type") }
+        XCTAssertTrue(transport.sent.isEmpty, "nothing typed")
+    }
+
+    /// The input box of a process that registered a second ago may not be up.
+    /// The pre-flight answer is asked again; the words still go in once.
+    func testAFreshlyStartedAgentIsWaitedForUntilItCanTakeInput() async throws {
+        let transport = SettlingTransport(deferrals: 2)
+        let coordinator = try startingCoordinator(
+            transport: transport, agents: LateAgents(appearsOnCall: 3, live: liveFixture()),
+            name: "start-settles",
+            start: { _ in .started(Self.startedPane) })
+        guard let id = try await pendingSend(coordinator) else { return }
+        guard case .dispatched = try await coordinator.confirmAndSend(utteranceId: id)
+        else { return XCTFail("a deferral after a start is waited out") }
+        XCTAssertEqual(transport.sends, 3, "two pre-flight deferrals, then the one send")
+    }
+
+    /// An unclear result after a start is still never retried: a duplicate
+    /// message is worse than a dropped one.
+    func testAnUnclearSendAfterAStartIsNotRetried() async throws {
+        let transport = SettlingTransport(deferrals: 0, then: .failed(.verificationTimedOut))
+        let coordinator = try startingCoordinator(
+            transport: transport, agents: LateAgents(appearsOnCall: 3, live: liveFixture()),
+            name: "start-unclear",
+            start: { _ in .started(Self.startedPane) })
+        guard let id = try await pendingSend(coordinator) else { return }
+        guard case .dispatchFailed(.verificationTimedOut, _) =
+            try await coordinator.confirmAndSend(utteranceId: id)
+        else { return XCTFail("an unclear send stays unclear") }
+        XCTAssertEqual(transport.sends, 1, "typed once, never again")
+    }
+
     /// A new agent that has not appeared in `claude agents --json` yet is waited
     /// for, not refused.
     ///

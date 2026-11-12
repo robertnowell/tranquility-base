@@ -201,6 +201,18 @@ extension AppDelegate {
                     Failures.report(.deliveryFailed, reason: "tab not found or target gone", card: card,
                                     session: sessionId)
                     hud.showResult(card, about: (sessionId: sessionId, pid: pid, label: label))
+                case .dispatchFailed(.couldNotStart(let why), _):
+                    // The agent had no process and the reply could not start
+                    // one. The reason is the card: a directory that is gone
+                    // and a launch that exited are different things to fix.
+                    Track.replyOutcome("could_not_start", stage: "confirm", agent: sessionId,
+                                       extra: ["detail": .prose(why)])
+                    Earcons.play(.needsYou, gate: earconGate())
+                    let card = "Couldn't start \(label): \(why). "
+                        + wordsKept(utteranceId: utteranceId)
+                    Failures.report(.deliveryFailed, reason: "could not start: \(why)", card: card,
+                                    session: sessionId)
+                    hud.showResult(card, about: (sessionId: sessionId, pid: pid, label: label))
                 case .dispatchFailed(let failure, _):
                     Track.replyOutcome("dispatch_failed", stage: "confirm", agent: sessionId,
                                        extra: ["failure": .token(failure.trackName),

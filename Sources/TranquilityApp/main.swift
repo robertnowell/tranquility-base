@@ -694,7 +694,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // the registry instead would be asking what COULD be remote
                 // rather than what is.
                 isRemote: { [weak poller] id in poller?.snapshot.agent(id) != nil },
-                attachments: .persistent())
+                attachments: .persistent(),
+                // A reply to an agent with no process starts the process
+                // first (ruled 11 Nov 2026; `GoneStart`). Read on every
+                // reply, so the off switch needs no relaunch:
+                //   defaults write <bundle id> startOnReplyOff -bool YES
+                startGone: { id in
+                    UserDefaults.standard.bool(forKey: "startOnReplyOff")
+                        ? .notGone("start on reply is switched off")
+                        : GoneStart.claude(sessionId: id)
+                })
             // The mirror: every page and turn into the hub, while the panel
             // runs. Nil until this Mac is connected; nothing else changes.
             HubWindow.shared.log = { Permissions.log($0) }

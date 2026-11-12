@@ -282,6 +282,11 @@ public enum DispatchFailure: Error, Sendable, Equatable {
     /// We sent the keystrokes but never saw the text land. AMBIGUOUS — it may have
     /// arrived. Never auto-retried; a duplicate injection is worse than a drop.
     case verificationTimedOut
+    /// The agent had no process, the reply tried to start one, and it could
+    /// not (`GoneStart`). Nothing was typed. The payload is the reason in the
+    /// app's own words (a directory that is gone, a launch that exited), for
+    /// the card; never the user's.
+    case couldNotStart(String)
 
     /// The case, and only the case, for the record. The payloads name a tab,
     /// which is a directory, which is the user's; "\(failure)" carried them.
@@ -292,6 +297,7 @@ public enum DispatchFailure: Error, Sendable, Equatable {
         case .tabNotFound: return "tab_not_found"
         case .injectionFailed: return "injection_failed"
         case .verificationTimedOut: return "verification_timed_out"
+        case .couldNotStart: return "could_not_start"
         }
     }
 }
