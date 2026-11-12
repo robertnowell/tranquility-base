@@ -2320,6 +2320,20 @@ final class StatusHUD: NSObject {
     /// the two, so those drills report SKIP instead.
     var slateInterruptedByAGesture = false
     var drillRelease: DispatchWorkItem?
+    /// The user's own tray, set aside while the drills hold the panel.
+    ///
+    /// Every card asks `replyTargetForDrop` and `stagedFragments` when it
+    /// renders, and those answer from the user's real agents and the real
+    /// `pending-fragments.json`. So a drill that posed a card was measuring
+    /// whatever the user happened to have attached. On 11 Nov 2026 one chip
+    /// staged for a live agent put a tray row on every posed card, 22 points
+    /// taller and with Send standing in for Controls, and the chrome and
+    /// controls drills failed on every deploy, on builds that had passed
+    /// twelve minutes earlier. A drill cannot read shared state: the slate
+    /// starts from an empty tray, and a drill that wants chips installs its
+    /// own, as the tray drills always have.
+    var trayBeforeDrills: (target: (() -> (sessionId: String, label: String)?)?,
+                           staged: ((String) -> [String])?)?
 
     var isOnScreen: Bool { panel?.isVisible ?? false }
 

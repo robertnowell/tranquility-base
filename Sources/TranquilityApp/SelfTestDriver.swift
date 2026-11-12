@@ -183,6 +183,13 @@ extension StatusHUD {
     }
 
     func beginDrills() {
+        // Once per hold: beginDrills is idempotent, and a second call must
+        // not set aside the empty tray as if it were the user's.
+        if trayBeforeDrills == nil {
+            trayBeforeDrills = (replyTargetForDrop, stagedFragments)
+            replyTargetForDrop = { nil }
+            stagedFragments = { _ in [] }
+        }
         drillsHoldThePanel = true
         // A drill paints failures on purpose. They are counted (so a drill
         // can prove the wiring) and never written or forwarded: a record that
@@ -208,6 +215,11 @@ extension StatusHUD {
         Track.suppressed = false
         drillRelease?.cancel()
         drillRelease = nil
+        if let tray = trayBeforeDrills {
+            replyTargetForDrop = tray.target
+            stagedFragments = tray.staged
+            trayBeforeDrills = nil
+        }
         Permissions.log("selftest: drills released the panel; sinks: "
             + "failures \(Failures.hasSink ? "attached" : "none"), "
             + "track \(Track.hasSink ? "attached" : "none")")
