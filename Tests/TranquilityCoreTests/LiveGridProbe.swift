@@ -169,4 +169,40 @@ final class LiveGridProbe: XCTestCase {
         let crobot = verdict.rows.first { $0.harness == "crobot" }
         print("LIVE crobot row: \(crobot.map { "\($0.lamp) \($0.name.prefix(46))" } ?? "NOT IN THE GRID")")
     }
+
+    /// The grid this machine would draw straight after a restart: every
+    /// transcript on disk, nothing running, the user's real folders. Prints
+    /// the rule before 11 Nov 2026 (folder members first, whatever their
+    /// age) beside the rule now (`SessionRow.stillOpen`).
+    func testTheGridAfterARestart() throws {
+        let now = Date()
+        let found = SessionDiscovery.discover(window: 90 * 86_400, limit: 2_000, now: now, ttl: 0)
+        let rows = found.sessions.map {
+            SessionRow(id: $0.sessionId, name: $0.title ?? SessionRow.shortId($0.sessionId),
+                       aux: SessionRow.shortId($0.sessionId), lamp: .unlit,
+                       lastActivity: $0.lastActivityAt)
+        }
+        let real = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/VoiceDispatch/projects.json")
+        let book = ProjectStore(url: real).current
+        func days(_ row: SessionRow) -> String {
+            String(format: "%.1f", now.timeIntervalSince(row.lastActivity ?? now) / 86_400)
+        }
+        let rank = Dictionary(book.folders.enumerated().map { ($1.id, $0) },
+                              uniquingKeysWith: { first, _ in first })
+        let before = rows.enumerated().sorted { a, b in
+            let x = book.folder(of: a.element.id).flatMap { rank[$0.id] } ?? Int.max
+            let y = book.folder(of: b.element.id).flatMap { rank[$0.id] } ?? Int.max
+            return x == y ? a.offset < b.offset : x < y
+        }.map(\.element).prefix(8)
+        let after = ProjectLayout.gridRows(rows, capacity: 20, floor: 8, book: book, now: now)
+        print("RESTART rows on disk: \(rows.count), folders: \(book.folders.count)")
+        for row in before {
+            print("RESTART before \(row.aux) \(days(row))d \(book.folder(of: row.id)?.name ?? "-") | \(row.name.prefix(40))")
+        }
+        for row in after {
+            print("RESTART after  \(row.aux) \(days(row))d \(book.folder(of: row.id)?.name ?? "-") | \(row.name.prefix(40))")
+        }
+        XCTAssertTrue(after.allSatisfy { now.timeIntervalSince($0.lastActivity ?? now) <= SessionRow.openFor })
+    }
 }

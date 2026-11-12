@@ -117,6 +117,44 @@ final class ProjectFoldersTests: XCTestCase {
                        SessionRow.gridRows(rows, capacity: 3, floor: 2).map(\.id))
     }
 
+    // MARK: - After a restart the grid is the most recent agents (11 Nov 2026)
+
+    func testAfterARestartTheNewestAgentsTakeTheSlotsNotTheTopFolder() {
+        // The measured case: nothing is running, the top folder holds agents
+        // from weeks ago, and this morning's agents are loose.
+        let now = Date(timeIntervalSince1970: 100 * 86_400)
+        func dead(_ id: String, daysAgo: Double) -> SessionRow {
+            SessionRow(id: id, name: id, aux: "", lamp: .unlit,
+                       lastActivity: now.addingTimeInterval(-daysAgo * 86_400))
+        }
+        let b = book([("Old", ["o1", "o2"])])
+        let rows = [dead("o1", daysAgo: 40), dead("o2", daysAgo: 3),
+                    dead("today", daysAgo: 0.1), dead("yesterday", daysAgo: 1),
+                    dead("lastMonth", daysAgo: 30)]
+        XCTAssertEqual(ProjectLayout.gridRows(rows, capacity: 8, floor: 8, book: b, now: now).map(\.id),
+                       ["today", "yesterday", "o2"],
+                       "newest first, a folder is no pin here, and nothing quiet over seven days")
+        XCTAssertEqual(ProjectLayout.gridRows(rows, capacity: 2, floor: 2, book: b, now: now).map(\.id),
+                       ["today", "yesterday"], "when slots are short the oldest loses, folder or not")
+    }
+
+    func testARowThatCannotSayWhenKeepsItsSlotAfterTheDatedOnes() {
+        let now = Date(timeIntervalSince1970: 100 * 86_400)
+        let rows = [row("unknown", .unlit),
+                    SessionRow(id: "dated", name: "dated", aux: "", lamp: .unlit,
+                               lastActivity: now.addingTimeInterval(-60))]
+        XCTAssertEqual(SessionRow.gridRows(rows, capacity: 8, floor: 8, now: now).map(\.id),
+                       ["dated", "unknown"])
+    }
+
+    func testFoldersStillPinAmongAgentsThatAreDoingSomething() {
+        let now = Date(timeIntervalSince1970: 100 * 86_400)
+        let b = book([("F", ["f"])])
+        let rows = SessionRow.quietRowsLast([row("loose", .ready, at: 99), row("f", .ready, at: 1)])
+        XCTAssertEqual(ProjectLayout.gridRows(rows, capacity: 1, floor: 1, book: b, now: now).map(\.id),
+                       ["f"], "the 2 Oct ruling stands for lit rows")
+    }
+
     // MARK: - Rule 4: collapsed is one lamp and a count
 
     func testCollapsedFolderShowsItsMostUrgentLampAndLitCount() {
