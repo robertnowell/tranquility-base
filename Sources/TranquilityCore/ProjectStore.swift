@@ -82,6 +82,19 @@ public struct ProjectBook: Codable, Equatable, Sendable {
         if let left, left != folderId { dropIfEmpty(left) }
     }
 
+    /// An agent continued from another starts in that agent's folder
+    /// (12 Nov 2026): the continuation is the same work, so it sits beside
+    /// what it came from. Only a loose agent follows. One the user has
+    /// already filed stays where they put it. Returns the folder joined.
+    @discardableResult
+    public mutating func follow(_ sessionId: String, source sourceSessionId: String,
+                                origin: (String) -> String = { $0 }) -> String? {
+        guard folder(of: sessionId, origin: origin) == nil,
+              let home = folder(of: sourceSessionId, origin: origin) else { return nil }
+        assign(sessionId, to: home.id, origin: origin)
+        return home.id
+    }
+
     /// Dragged out onto the loose rows. Returns the folder that went away
     /// with it, if this was its last member: dragging the last agent out is
     /// one of the two ways a folder ends (rule 5).
