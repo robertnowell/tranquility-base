@@ -37,6 +37,24 @@ DRAFTS = {"form": "units", "of": 12, "rows": [{"label": "Hero button is orange, 
                                                {"label": "Hero is a light product shot", "value": 3}]}
 
 
+# The first real report after the forms shipped, 11 Nov 2026 (La Belle, "The combined copy passes"):
+# eight areas against two sizes and the overlay, 22 passes and the two cells nobody ran.
+CHECKS = {"form": "grid", "columns": ["Desktop 1440", "Phone 390", "Overlay on"], "rows": [
+    {"label": "Home: hero, tiles and quiz", "cells": ["pass", "pass", {"state": "pass", "note": "desktop"}]},
+    {"label": "Navigation: brands tile, scent menu, phone menu", "cells": ["pass", "pass", {"state": "pass", "note": "phone"}]},
+    {"label": "Product page: one add for each click", "cells": ["pass", "pass", {"state": "pass", "note": "phone"}]},
+    {"label": "Sold-out product: button is disabled", "cells": [{"state": "open", "note": "single build only"}, "pass", "open"]},
+    {"label": "Cart drawer: Seel line off and on", "cells": ["pass", "pass", {"state": "pass", "note": "desktop"}]},
+    {"label": "Cart page: summary card, total $81.68", "cells": ["pass", "pass", {"state": "pass", "note": "desktop"}]},
+    {"label": "Checkout: same total, $81.68", "cells": ["pass", "pass", "pass"]},
+    {"label": "No page errors beyond live", "cells": ["pass", "pass", "pass"]}]}
+
+
+def grid(states, cols=2, **more):
+    return dict({"form": "grid", "columns": ["Place %d" % i for i in range(cols)],
+                 "rows": [{"label": "Check %d" % i, "cells": [s] * cols} for i, s in enumerate(states)]}, **more)
+
+
 def bars(n, **more):
     return dict({"form": "bars", "rows": [{"label": "Row %d" % i, "value": i + 1} for i in range(n)]}, **more)
 
@@ -87,6 +105,23 @@ class Geometry(unittest.TestCase):
         self.assertLess(heading_y, label_y - 10)
         self.assertGreater(line_top, label_y)
 
+    def test_two_rows_with_one_label_and_one_value_keep_their_own_cells(self):
+        # Replay of 12 Nov 2026: the second row was drawn with the first row's cells, and the fit test passed.
+        runs = {"form": "bars", "columns": ["Hero shown"], "groups": [
+            {"label": "Run 3", "rows": [{"label": "Copy", "value": 11.8, "cells": ["not recorded"]}, {"label": "Live", "value": 6.4, "cells": [""]}]},
+            {"label": "Run 4", "rows": [{"label": "Copy", "value": 11.8, "cells": ["0.7 s"]}, {"label": "Live", "value": 13.2, "cells": [""]}]}]}
+        svg = fig.draw(runs, 720)[0]
+        self.assertEqual(svg.count(">not recorded<"), 1)
+        self.assertEqual(svg.count(">0.7 s<"), 1)
+        self.assertLess(svg.index(">not recorded<"), svg.index(">0.7 s<"))
+
+    def test_a_unit_is_drawn_with_or_without_an_axis_and_a_value_prints_as_written(self):
+        svg = fig.draw({"form": "bars", "unit": "seconds to largest paint", "rows": [
+            {"label": "Copy", "value": 18.0, "text": "18.0 s"}, {"label": "Live", "value": 6.9}]}, 720)[0]
+        self.assertIn(">seconds to largest paint<", svg)
+        self.assertIn(">18.0 s<", svg)
+        self.assertIn(">6.9<", svg)
+
     def test_large_numbers_print_with_commas(self):
         svg = fig.draw({"form": "bars", "rows": [{"label": "Week of Sep 7", "value": 4163}, {"label": "Week of Oct 5", "value": 2757}]})[0]
         self.assertIn(">4,163<", svg)
@@ -118,6 +153,53 @@ class Geometry(unittest.TestCase):
         self.assertEqual(why, [])
         self.assertNotIn("later", svg)
         self.assertNotIn("cut", what)
+
+
+class Grid(unittest.TestCase):
+    def test_the_real_check_table_passes_and_every_cell_has_its_mark(self):
+        svg, why, what = fig.draw(CHECKS, 720)
+        self.assertEqual(why, [])
+        self.assertEqual(what, "8 rows by 3 columns, 22 pass, 2 not run")
+        # one mark a cell, and one more for each state in the key
+        self.assertEqual(svg.count('class="dim"'), 22 + 1)
+        self.assertEqual(svg.count('class="hollow"'), 2 + 1)
+        for wanted in ("Sold-out product: button is disabled", "single build only", "Overlay on", ">22</tspan> pass", ">2</tspan> not run"):
+            self.assertIn(wanted, svg)
+
+    def test_each_state_has_its_own_shape_so_colour_is_not_the_only_sign(self):
+        svg = fig.draw(grid(["pass", "fail", "open", "na"]), 720)[0]
+        self.assertEqual([svg.count('class="%s"' % c) for c in ("dim", "x", "hollow", "na")], [3, 3, 3, 3])
+
+    def test_marks_in_a_column_share_one_x(self):
+        svg = fig.draw(grid(["pass", "open", "pass"]), 720)[0]
+        xs = re.findall(r'<circle cx="([\d.]+)" cy="(\d+)"', svg)[:6]
+        self.assertEqual(len(set(x for x, _ in xs)), 2)
+        self.assertEqual(len(set(y for _, y in xs)), 3)
+
+    def test_all_the_same_is_a_sentence_and_one_exception_is_a_grid(self):
+        self.assertIn("every cell is pass", " ".join(fig.draw(grid(["pass"] * 4), 720)[1]))
+        self.assertEqual(fig.draw(grid(["pass", "pass", "pass", "open"]), 720)[1], [])
+
+    def test_one_column_is_a_list_and_two_are_a_grid(self):
+        self.assertIn("one column is a list", " ".join(fig.draw(grid(["pass", "fail", "open"], cols=1), 720)[1]))
+        self.assertEqual(fig.draw(grid(["pass", "fail", "open"], cols=2), 720)[1], [])
+
+    def test_fourteen_rows_pass_and_fifteen_are_split(self):
+        self.assertEqual(fig.draw(grid(["pass"] * 13 + ["fail"]), 720)[1], [])
+        self.assertIn("15 rows", " ".join(fig.draw(grid(["pass"] * 14 + ["fail"]), 720)[1]))
+
+    def test_a_label_that_does_not_fit_beside_the_columns_is_refused(self):
+        long = grid(["pass", "open"])
+        long["rows"][0]["label"] = "Uncheck removes the Seel line, and the total goes from $40.98 to $40.00, in one request each way"
+        self.assertIn("does not fit beside 2 columns", " ".join(fig.draw(long, 720)[1]))
+        long["rows"][0]["label"] = "Uncheck removes the Seel line: $40.98 to $40.00"
+        self.assertEqual(fig.draw(long, 720)[1], [])
+
+    def test_a_cell_count_or_state_that_is_wrong_is_an_error(self):
+        bad = grid(["pass", "open"])
+        bad["rows"][0]["cells"] = ["pass"]
+        self.assertRaises(fig.Spec, fig.draw, bad, 720)
+        self.assertRaises(fig.Spec, fig.draw, grid(["pass", "maybe"]), 720)
 
 
 class FitTest(unittest.TestCase):

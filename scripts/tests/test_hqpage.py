@@ -61,7 +61,7 @@ class PagePublicationTests(unittest.TestCase):
         return namespace['_evidence_flags']('<section class="claim" data-shows="%s"><span class="c">A claim.</span>%s</section>' % (shows, inner))
 
     def test_a_size_an_order_or_a_share_without_a_figure_is_named_and_with_one_is_not(self):
-        for shows in ("ranking", "timeline", "share"):
+        for shows in ("ranking", "timeline", "share", "status"):
             self.assertEqual(self.flags(shows, "<table><tr><td>1</td></tr></table>"),
                              ['"A claim." shows %s but carries no figure (hq-figure)' % shows])
             self.assertEqual(self.flags(shows, "<svg></svg>"), [])
@@ -72,6 +72,16 @@ class PagePublicationTests(unittest.TestCase):
         self.assertEqual(self.flags("lookup", table(3)), ['"A claim." gives 3 shares as text in a table: hq-figure units draws them'])
         self.assertEqual(self.flags("lookup", table(2)), [])
         self.assertEqual(self.flags("lookup", table(3) + "<svg></svg>"), [])
+
+    def test_results_as_words_against_two_places_are_named_and_a_result_list_is_not(self):
+        # The La Belle reports of 11 Nov 2026: a check against desktop and phone, and a Check and Result list.
+        grid = lambda n: "<table><tr><th>Check</th><th>Desktop 1440</th><th>Phone 390</th></tr>" + (
+            "<tr><td>Quiz opens</td><td>Pass</td><td>Pass. A phone uses the dots.</td></tr>" * n) + "</table>"
+        self.assertEqual(self.flags("lookup", grid(3)), ['"A claim." gives 6 results as words in a table: hq-figure grid draws them'])
+        self.assertEqual(self.flags("lookup", grid(2)), [])
+        self.assertEqual(self.flags("lookup", grid(3) + "<svg></svg>"), [])
+        listed = "<table><tr><th>Check</th><th>Result</th></tr>%s</table>" % ("<tr><td>The tile opens its page</td><td>Pass. It showed 48 products.</td></tr>" * 10)
+        self.assertEqual(self.flags("lookup", listed), [])
 
     def test_a_time_column_is_not_named(self):
         # Replay of 11 Nov 2026: this advice sent a send calendar to a time strip, and it read worse.
