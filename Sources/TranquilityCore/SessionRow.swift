@@ -702,12 +702,47 @@ public struct SessionRow: Equatable, Sendable {
     /// exist and why the floor holds on a quiet machine. Folding
     /// membership into it collapsed the floor and shipped a regression
     /// earlier the same evening (18 Aug).
-    public static func gridRows(_ rows: [SessionRow], capacity: Int, floor: Int) -> [SessionRow] {
+    public static func gridRows(_ rows: [SessionRow], capacity: Int, floor: Int,
+                                now: Date = Date()) -> [SessionRow] {
         let eligible = rows.filter { !$0.switchedOff }
         let lit = eligible.filter { $0.lamp.isLit }
         let alive = eligible.filter { $0.lamp == .running }
-        let dead = eligible.filter { $0.lamp == .unlit }
+        let dead = stillOpen(eligible.filter { $0.lamp == .unlit }, now: now)
         return Array((lit + alive + dead).prefix(shownCount(rows, capacity: capacity, floor: floor)))
+    }
+
+    /// How long an agent with no process stays on the grid after its last
+    /// word. Seven days is this session's recommendation, built as the
+    /// default on 12 Nov 2026 and not yet ruled: change it here.
+    public static let openFor: TimeInterval = 7 * 24 * 60 * 60
+
+    /// The agents with no process that may still take a spare grid slot:
+    /// the ones that spoke within `openFor`, newest first.
+    ///
+    /// Ruled 11 Nov 2026, on the grid after a restart: "what you see in the
+    /// grid is actually not your most recent agents. It's whatever folders
+    /// are at the top with your dead agents that could have been from a
+    /// month ago." Measured the same day against the real machine: a restart
+    /// drew 8 rows aged 37 to 43 days and 0 of the 11 agents that had been
+    /// running. The cause was the order of this tier, which pinned folder
+    /// members first whatever their age (`ProjectLayout.gridRows`).
+    ///
+    /// So this tier orders by time and by nothing else. A folder is a pin
+    /// among agents that are doing something (2 Oct ruling, untouched: the
+    /// lit and alive tiers still pin). It is not a reason to draw an agent
+    /// from last month above one from this morning.
+    ///
+    /// A row that cannot say when it last spoke keeps its place after the
+    /// dated ones: "I don't know" is not "never", the same rule as the lit
+    /// bands.
+    public static func stillOpen(_ dead: [SessionRow], now: Date = Date()) -> [SessionRow] {
+        let dated = dead.enumerated()
+            .filter { $0.element.lastActivity.map { now.timeIntervalSince($0) <= openFor } ?? false }
+            .sorted { a, b in
+                let x = a.element.lastActivity!, y = b.element.lastActivity!
+                return x == y ? a.offset < b.offset : x > y
+            }.map(\.element)
+        return dated + dead.filter { $0.lastActivity == nil }
     }
 
     /// How many row-slots the panel is worth: every LIT session, or the
