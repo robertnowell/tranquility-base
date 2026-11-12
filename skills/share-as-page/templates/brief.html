@@ -119,7 +119,7 @@ figcaption .src{color:var(--muted)}
 .shot img{display:block;width:100%;height:auto}
 .shot .crop{aspect-ratio:var(--ar,16/9);overflow:hidden}
 .shot .crop img{width:100%;height:100%;object-fit:cover;object-position:var(--pos,50% 50%)}
-/* DIAGRAM: inline SVG from hq-diagram, which ran the draw test. Hairlines above and below, no box. */
+/* DIAGRAM or FIGURE: inline SVG from hq-diagram or hq-figure, which ran its test. Hairlines above and below, no box. */
 .fig .art{border-top:1px solid var(--line);border-bottom:1px solid var(--line);padding:16px 0}
 .fig svg{max-width:100%;height:auto;display:block}
 .pair{display:grid;grid-template-columns:1fr 1fr;gap:14px}
@@ -155,16 +155,21 @@ figcaption .src{color:var(--muted)}
 <!-- ONE ROW PER CLAIM, always open. The claim is a full sentence with a verb. The em is one line of how.
      The status: a filled dot for done or verified, a .w amber dot for partial, an .o hollow dot for not done.
      The figure: one number with its unit, or a count with its denominator; it names the row or log line it came from.
-     data-shows: flow | structure | states | change | ranking | screen | versions | lookup | text.
-     ONE piece of evidence per claim, two at most when the claim rests on literal code or rows. Pick by the draw test
-     (brief.md, Evidence rules): one sentence is a sentence; 20 numbers or fewer, a table; nothing branches, a list;
-     only a branch, merge or loop gets a diagram, and it replaces the table or paragraph it restates. -->
+     data-shows: flow | structure | states | change | ranking | timeline | share | screen | versions | lookup | text.
+     ONE piece of evidence per claim, two at most when the claim rests on literal code or rows. Pick by the question
+     the reader asks (brief.md, Evidence rules): what it says or looks like, the literal thing; the exact value, a table;
+     how much against what, how many of how many, or when and in what order, a figure from hq-figure; how the parts
+     connect, a diagram from hq-diagram. One fact stays a sentence. A figure replaces the table it restates. -->
 <section class="claim" data-shows="screen"><div class="head"><span class="n">1</span><span class="c"><!-- CLAIM --><em><!-- how, in one line --></em></span><span class="s"><i></i><!-- figure --></span></div><div class="d">
 
   <!-- SCREENSHOT, linked to the live thing it shows, never drawn on. To point at part of it, crop:
        --ar is the box's shape, --pos where in the image to look. No live address: no link, and the caption says so. -->
   <figure class="shot"><a href="FILL: the live page, PR or dashboard"><div class="frame crop" style="--ar:16/9;--pos:20% 70%"><img src="data:image/jpeg;base64,FILL" alt=""></div></a>
   <figcaption><!-- What the crop shows, in a sentence. --> <span class="src"><!-- Where and when: the page, signed in as whom, the date. --></span></figcaption></figure>
+
+  <!-- FIGURE, when the claim is a size, a share or an order in time: `hq-figure spec.json --png look.png > out.svg`
+       (forms: bars, units, time; `hq-figure -h`). Look at look.png, paste the SVG. It replaces the table it restates. -->
+  <figure class="fig"><div class="art"><!-- the SVG --></div><figcaption><!-- What to see, in a sentence. --> <span class="src"><!-- the rows it was drawn from --></span></figcaption></figure>
 
   <!-- DIAGRAM, only when the draw test passes: `hq-diagram in.dot --png look.png > out.svg`, look at look.png, paste the SVG.
        It replaces the table or paragraph it restates; put the numbers in its labels. -->
