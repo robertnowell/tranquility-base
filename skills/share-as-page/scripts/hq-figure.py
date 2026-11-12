@@ -28,8 +28,8 @@ claim asks. No mark is placed by hand: every position is computed from a row.
       "at" is HH:MM, or an ISO date or datetime. A gap far longer than the others is cut and labelled.
   Which passed, and where not? {"form": "grid", "columns": ["Desktop", "Phone"], "rows":
                                 [{"label": "Sold-out product", "cells": ["pass", {"state": "open", "note": "not run"}]}]}
-      a cell is pass, fail, open (nobody ran it) or na (it does not apply). A pass is quiet, so
-      the cells that are not a pass stand out. A cell may carry a "note" of a few words.
+      a cell is pass, fail, open (nobody ran it) or na (it does not apply). A pass is a green
+      check, a fail a red cross, an open cell an amber ring and na a grey dash. A cell may carry a "note" of a few words.
       "words": {"open": "not run"} renames a state in the key under the grid.
 
 tone is accent (the row that matters), dim (context, the default), warn, or hollow.
@@ -43,8 +43,8 @@ replaces the table it restates. If the table must stay, keep only the table.
 import datetime, glob, html, json, os, statistics, subprocess, sys, tempfile
 
 STYLE = (
-    "<style>.hqf{--d:#b9b4a8;--k:#ebe8e0}"
-    "@media (prefers-color-scheme:dark){.hqf{--d:#5c5952;--k:#26251f}}"
+    "<style>.hqf{--d:#b9b4a8;--k:#ebe8e0;--ok:#2a7a4b;--bad:#b3372b}"
+    "@media (prefers-color-scheme:dark){.hqf{--d:#5c5952;--k:#26251f;--ok:#5fb37d;--bad:#e0705f}}"
     ".hqf text{font-family:var(--sans,ui-sans-serif,-apple-system,'Helvetica Neue',sans-serif);font-size:13px;fill:var(--ink,#1f1e1c)}"
     ".hqf .m{fill:var(--muted,#57534c);font-size:12px}.hqf .b{font-weight:600;fill:var(--heading,#141312)}"
     ".hqf .n{font-variant-numeric:tabular-nums}"
@@ -53,7 +53,9 @@ STYLE = (
     ".hqf .empty{fill:none;stroke:var(--d);stroke-width:1.4}.hqf .track{fill:var(--k)}"
     ".hqf .ln{stroke:var(--line,#ddd9cf);stroke-width:1}.hqf .ax{stroke:var(--ink,#1f1e1c);stroke-width:1.2;fill:none}"
     ".hqf .band{fill:var(--accent,#4a5a2b);opacity:.08}"
-    ".hqf .x{stroke:var(--amber,#a8762a);stroke-width:2.6;stroke-linecap:round;fill:none}"
+    ".hqf .ok{stroke:var(--ok);stroke-width:2.6;stroke-linecap:round;stroke-linejoin:round;fill:none}"
+    ".hqf .x{stroke:var(--bad);stroke-width:2.6;stroke-linecap:round;fill:none}"
+    ".hqf .unrun{fill:none;stroke:var(--amber,#a8762a);stroke-width:2.2}"
     ".hqf .na{stroke:var(--d);stroke-width:2;stroke-linecap:round}</style>")
 TONES = ("accent", "dim", "warn", "hollow")
 MAX_BARS, MAX_UNIT_ROWS, MAX_UNITS, MAX_ROW_UNITS, MAX_EVENTS, MAX_LANES, MAX_LABEL = 12, 8, 30, 40, 12, 4, 40
@@ -393,17 +395,20 @@ def time(spec, W):
 def mark(state, cx, cy, tip=""):
     t = "<title>%s</title>" % esc(tip) if tip else ""
     if state == "pass":
-        return '<circle cx="%.1f" cy="%d" r="4.5" class="dim">%s</circle>' % (cx, cy, t)
+        return '<path d="M%.1f,%.1fl3.6,4l6.6,-8.6" class="ok">%s</path>' % (cx - 5, cy + 0.6, t)
     if state == "fail":
         return '<path d="M%.1f,%dl10,10M%.1f,%dl-10,10" class="x">%s</path>' % (cx - 5, cy - 5, cx + 5, cy - 5, t)
     if state == "open":
-        return '<circle cx="%.1f" cy="%d" r="5.5" class="hollow">%s</circle>' % (cx, cy, t)
+        return '<circle cx="%.1f" cy="%d" r="5" class="unrun">%s</circle>' % (cx, cy, t)
     return '<line x1="%.1f" y1="%d" x2="%.1f" y2="%d" class="na">%s</line>' % (cx - 5, cy, cx + 5, cy, t)
 
 
 def grid(spec, W):
     """A check against a place, one mark a cell. Earned 12 Nov 2026: the first two
-    real reports after hq-figure shipped held four tables of a check against places."""
+    real reports after hq-figure shipped held four tables of a check against places.
+    The states wear the signs a reader already knows. The first version drew a pass
+    as a grey dot so that the exceptions stood out; Robert read grey as nothing
+    there, the same day. Status colours are fixed and never the brand accent."""
     why, o = [], []
     cols, rows = spec.get("columns") or [], spec.get("rows") or []
     if not cols or not rows:
