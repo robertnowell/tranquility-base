@@ -73,12 +73,17 @@ class PagePublicationTests(unittest.TestCase):
         self.assertEqual(self.flags("lookup", table(2)), [])
         self.assertEqual(self.flags("lookup", table(3) + "<svg></svg>"), [])
 
-    def test_a_time_column_is_named_and_a_plain_lookup_is_not(self):
-        table = lambda head: "<table><tr><th>Task</th><th>%s</th></tr>%s</table>" % (head, "<tr><td>T</td><td>04:19</td></tr>" * 3)
-        self.assertEqual(len(self.flags("lookup", table("Started, UTC"))), 1)
-        self.assertIn("hq-figure time", self.flags("lookup", table("Started, UTC"))[0])
-        self.assertEqual(self.flags("lookup", table("Owner")), [])
-        self.assertEqual(self.flags("lookup", table("Status")), [])
+    def test_a_time_column_is_not_named(self):
+        # Replay of 11 Nov 2026: this advice sent a send calendar to a time strip, and it read worse.
+        table = "<table><tr><th>Task</th><th>Started, UTC</th></tr>%s</table>" % ("<tr><td>T</td><td>04:19</td></tr>" * 3)
+        self.assertEqual(self.flags("lookup", table), [])
+
+    def test_a_figure_with_a_table_under_it_is_named_and_alone_it_is_not(self):
+        figure, table = '<svg class="hqf"></svg>', "<table><tr><td>Missing</td></tr></table>"
+        self.assertEqual(self.flags("share", figure), [])
+        self.assertEqual(self.flags("lookup", table), [])
+        self.assertEqual(len(self.flags("share", figure + table)), 1)
+        self.assertIn("a figure replaces the table", self.flags("share", figure + table)[0])
 
 
 def _hook_namespace():
