@@ -1004,7 +1004,11 @@ _DRAWN = {"flow", "structure", "states", "change"}
 # read worse, so it is gone. A schedule that people look a day up in is a table.
 # The same replay is why a figure with a table under it is named: three claims
 # kept both and grew from 884 to 1,626 pixels.
-_FIGURED = {"ranking", "timeline", "share"}
+# 12 Nov 2026: the first two real reports after hq-figure shipped drew nothing,
+# and held seven tables of the word Pass against a place. A check that has two
+# or more result cells is a grid; a Check and Result list is still a table.
+_FIGURED = {"ranking", "timeline", "share", "status"}
+_VERDICT = re.compile(r"^(pass|passed|fail|failed|not run|not checked|does not apply|none)\b", re.I)
 _TYPES = _DRAWN | _FIGURED | {"screen", "versions", "lookup", "text"}
 def _table_flags(short, inner):
     out = []
@@ -1013,6 +1017,12 @@ def _table_flags(short, inner):
         shares = sum(1 for c in cells if re.match(r"^\d[\d,]* of \d[\d,]*$", c))
         if shares >= 3:
             out.append(short + " gives %d shares as text in a table: hq-figure units draws them" % shares)
+        verdicts = 0
+        for row in re.findall(r"<tr\b.*?</tr>", table, flags=re.S | re.I):
+            n = sum(1 for c in re.findall(r"<td\b[^>]*>(.*?)</td>", row, flags=re.S | re.I) if _VERDICT.match(re.sub(r"<[^>]+>", " ", c).strip()))
+            verdicts += n if n >= 2 else 0
+        if verdicts >= 6:
+            out.append(short + " gives %d results as words in a table: hq-figure grid draws them" % verdicts)
     return out[:1]
 def _evidence_flags(body):
     flags = []

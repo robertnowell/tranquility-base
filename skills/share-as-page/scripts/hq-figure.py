@@ -25,11 +25,16 @@ claim asks. No mark is placed by hand: every position is computed from a row.
                                 "marks": [{"at": "04:15", "label": "Merge"}],
                                 "band": {"from": "04:15", "to": "04:32", "label": "17 minutes with no proven read"}}
       "at" is HH:MM, or an ISO date or datetime. A gap far longer than the others is cut and labelled.
+  Which passed, and where not? {"form": "grid", "columns": ["Desktop", "Phone"], "rows":
+                                [{"label": "Sold-out product", "cells": ["pass", {"state": "open", "note": "not run"}]}]}
+      a cell is pass, fail, open (nobody ran it) or na (it does not apply). A pass is quiet, so
+      the cells that are not a pass stand out. A cell may carry a "note" of a few words.
+      "words": {"open": "not run"} renames a state in the key under the grid.
 
 tone is accent (the row that matters), dim (context, the default), warn, or hollow.
 
 The fit test, on stderr: a figure earns its space only when the reader must
-see a size, a share, an order or a gap. One value is a sentence. Too many rows
+see a size, a share, an order, a gap or the cells that are not a pass. One value is a sentence. Too many rows
 is a table. A label that collides is a redraw. When the rows do not fit the
 form it prints DO NOT SHIP AS DRAWN with the reason, and exits 2. A figure
 replaces the table it restates. If the table must stay, keep only the table.
@@ -46,9 +51,13 @@ STYLE = (
     ".hqf .hollow{fill:var(--bg,#fcfbf8);stroke:var(--ink,#1f1e1c);stroke-width:1.6}"
     ".hqf .empty{fill:none;stroke:var(--d);stroke-width:1.4}.hqf .track{fill:var(--k)}"
     ".hqf .ln{stroke:var(--line,#ddd9cf);stroke-width:1}.hqf .ax{stroke:var(--ink,#1f1e1c);stroke-width:1.2;fill:none}"
-    ".hqf .band{fill:var(--accent,#4a5a2b);opacity:.08}</style>")
+    ".hqf .band{fill:var(--accent,#4a5a2b);opacity:.08}"
+    ".hqf .x{stroke:var(--amber,#a8762a);stroke-width:2.6;stroke-linecap:round;fill:none}"
+    ".hqf .na{stroke:var(--d);stroke-width:2;stroke-linecap:round}</style>")
 TONES = ("accent", "dim", "warn", "hollow")
 MAX_BARS, MAX_UNIT_ROWS, MAX_UNITS, MAX_ROW_UNITS, MAX_EVENTS, MAX_LANES, MAX_LABEL = 12, 8, 30, 40, 12, 4, 40
+MAX_GRID_ROWS, MAX_GRID_COLS = 14, 6
+STATES = {"pass": "pass", "fail": "fail", "open": "not run", "na": "does not apply"}
 
 
 class Spec(Exception):
@@ -375,7 +384,85 @@ def time(spec, W):
             "%d events in %d lanes%s" % (len(events), len(lanes), ", %d gap cut" % sum(cut) if any(cut) else ""))
 
 
-FORMS = {"bars": bars, "units": units, "time": time}
+# ---- grid: which passed, and where not --------------------------------------
+def mark(state, cx, cy, tip=""):
+    t = "<title>%s</title>" % esc(tip) if tip else ""
+    if state == "pass":
+        return '<circle cx="%.1f" cy="%d" r="4.5" class="dim">%s</circle>' % (cx, cy, t)
+    if state == "fail":
+        return '<path d="M%.1f,%dl10,10M%.1f,%dl-10,10" class="x">%s</path>' % (cx - 5, cy - 5, cx + 5, cy - 5, t)
+    if state == "open":
+        return '<circle cx="%.1f" cy="%d" r="5.5" class="hollow">%s</circle>' % (cx, cy, t)
+    return '<line x1="%.1f" y1="%d" x2="%.1f" y2="%d" class="na">%s</line>' % (cx - 5, cy, cx + 5, cy, t)
+
+
+def grid(spec, W):
+    """A check against a place, one mark a cell. Earned 12 Nov 2026: the first two
+    real reports after hq-figure shipped held seven tables of the word Pass."""
+    why, o = [], []
+    cols, rows = spec.get("columns") or [], spec.get("rows") or []
+    if not cols or not rows:
+        raise Spec("grid needs columns, and rows that each have a label and one cell for each column")
+    words = dict(STATES, **(spec.get("words") or {}))
+    table = []
+    for r in rows:
+        if "label" not in r:
+            raise Spec("every row needs a label")
+        cs = r.get("cells") or []
+        if len(cs) != len(cols):
+            raise Spec('row "%s" has %d cells for %d columns' % (r["label"], len(cs), len(cols)))
+        cs = [c if isinstance(c, dict) else {"state": c} for c in cs]
+        for c in cs:
+            if c.get("state") not in STATES:
+                raise Spec("a cell is one of %s, got %r" % (", ".join(STATES), c.get("state")))
+        table.append(cs)
+    flat = [c for cs in table for c in cs]
+    if len(cols) < 2:
+        why.append("one column is a list: keep the table")
+    elif len(flat) < 4:
+        why.append("fewer than four cells: say it in a sentence")
+    if len(rows) > MAX_GRID_ROWS:
+        why.append("%d rows: past %d split the grid by area" % (len(rows), MAX_GRID_ROWS))
+    if len(cols) > MAX_GRID_COLS:
+        why.append("%d columns: past %d split the grid" % (len(cols), MAX_GRID_COLS))
+    if len(set(c["state"] for c in flat)) == 1 and not any(c.get("note") for c in flat):
+        why.append("every cell is %s: say that in one sentence, and list what the rows checked" % words[flat[0]["state"]])
+    col_w = [max([tw(h, 12)] + [14 + tw(c["note"], 12) + 7 for cs in table for c in [cs[i]] if c.get("note")]) + 22
+             for i, h in enumerate(cols)]
+    label_w = W - sum(col_w)
+    longest = max(rows, key=lambda r: tw(r["label"]))
+    if tw(longest["label"]) > label_w - 8:
+        why.append('label "%s..." does not fit beside %d columns: shorten it to about %d characters, or shorten the notes'
+                   % (str(longest["label"])[:24], len(cols), max(int((label_w - 8) / 7.15), 0)))
+    xs = [label_w + sum(col_w[:i]) + 6 for i in range(len(cols))]
+    for x, h in zip(xs, cols):
+        o.append(text(x, 13, h, "m"))
+    y = 22
+    for r, cs in zip(rows, table):
+        o.append('<line x1="0" y1="%d" x2="%d" y2="%d" class="ln"/>' % (y, W, y))
+        cy = y + 15
+        o.append(text(0, cy + 4.5, r["label"], "b" if any(c["state"] in ("fail", "open") for c in cs) else ""))
+        for x, h, c in zip(xs, cols, cs):
+            tip = "%s, %s: %s" % (r["label"], h, " ".join(filter(None, [words[c["state"]], c.get("note")])))
+            o.append(mark(c["state"], x + 6, cy, tip))
+            if c.get("note"):
+                o.append(text(x + 19, cy + 4, c["note"], "m"))
+        y += 30
+    o.append('<line x1="0" y1="%d" x2="%d" y2="%d" class="ln"/>' % (y, W, y))
+    x, y = 6, y + 20
+    count = [(s, sum(1 for c in flat if c["state"] == s)) for s in STATES]
+    for s, n in count:
+        if n:
+            o.append(mark(s, x, y - 4))
+            o.append('<text x="%.1f" y="%d" class="m"><tspan class="b n">%d</tspan> %s</text>' % (x + 12, y, n, esc(words[s])))
+            x += 12 + tw("%d %s" % (n, words[s]), 12) + 26
+    if x - 26 > W:
+        why.append("the key is wider than the figure: shorten the words")
+    return (wrap(W, y + 8, "".join(o), spec.get("title") or "Status grid"), why,
+            "%d rows by %d columns, %s" % (len(rows), len(cols), ", ".join("%d %s" % (n, words[s]) for s, n in count if n)))
+
+
+FORMS = {"bars": bars, "units": units, "time": time, "grid": grid}
 
 
 def browser():
