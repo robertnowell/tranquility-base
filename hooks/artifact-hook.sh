@@ -1005,7 +1005,7 @@ _DRAWN = {"flow", "structure", "states", "change"}
 # The same replay is why a figure with a table under it is named: three claims
 # kept both and grew from 884 to 1,626 pixels.
 # 12 Nov 2026: the first two real reports after hq-figure shipped drew nothing,
-# and held seven tables of the word Pass against a place. A check that has two
+# and held four tables of the word Pass against places. A check that has two
 # or more result cells is a grid; a Check and Result list is still a table.
 _FIGURED = {"ranking", "timeline", "share", "status"}
 _VERDICT = re.compile(r"^(pass|passed|fail|failed|not run|not checked|does not apply|none)\b", re.I)

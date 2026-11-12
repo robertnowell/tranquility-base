@@ -398,7 +398,7 @@ def mark(state, cx, cy, tip=""):
 
 def grid(spec, W):
     """A check against a place, one mark a cell. Earned 12 Nov 2026: the first two
-    real reports after hq-figure shipped held seven tables of the word Pass."""
+    real reports after hq-figure shipped held four tables of a check against places."""
     why, o = [], []
     cols, rows = spec.get("columns") or [], spec.get("rows") or []
     if not cols or not rows:
