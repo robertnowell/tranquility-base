@@ -548,7 +548,7 @@ public extension GridAssembler {
                 // The provider's own title, then the repository, then the id.
                 // Same precedence as every other band: the harness's own name
                 // for a thing beats anything this app can derive.
-                name: SessionRow.displayName(
+                name: GridAssembler.givenName(agent.id) ?? SessionRow.displayName(
                     liveName: agent.title.isEmpty ? nil : agent.title,
                     callsign: agent.repository,
                     fallback: SessionRow.shortId(agent.id)),

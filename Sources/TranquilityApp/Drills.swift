@@ -301,8 +301,9 @@ extension StatusHUD {
              codexChoices == ["Claude Code", "Codex", "OpenCode"]),
             ("handoffNamesTheSourceAndTheDestination",
              continued?.0 == "ready" && continued?.1 == "agent-ready" && continued?.2 == "opencode"),
+            ("renameSitsWithTheHarmlessVerbs", titles.dropFirst(2).first == "Rename"),
             ("destructiveIsLastAndSeparated",
-             items.count == 4 && items[2].isSeparatorItem),
+             items.count == 5 && items[3].isSeparatorItem),
             ("theItemNamesItsTarget", named == "End session \u{201C}agent-ready\u{201D}"),
         ])
     }

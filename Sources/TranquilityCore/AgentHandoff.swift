@@ -62,7 +62,7 @@ public enum AgentHandoff {
         reportsDirectory: String?
     ) -> String {
         var paragraphs = [
-            "Please continue the work of \u{201C}\(sourceName)\u{201D} "
+            opening + "\(sourceName)\u{201D} "
                 + "(\(sourceLabel(for: sourceHarness)), session \(sourceSessionId)).",
         ]
         if let directory {
@@ -78,7 +78,44 @@ public enum AgentHandoff {
         }
         paragraphs.append(
             "Any text following this handoff context is the user's current instruction.\n"
-            + "Propose a path forward after understanding the current state.")
+            + closing)
         return paragraphs.joined(separator: "\n\n")
+    }
+
+    /// How every handoff fragment begins. One constant, read by the writer
+    /// above and the reader below, so the two cannot drift apart.
+    static let opening = "Please continue the work of \u{201C}"
+    /// How every handoff fragment ends, before the user's own words.
+    static let closing = "Propose a path forward after understanding the current state."
+
+    /// A first message that began with a handoff, taken apart.
+    public struct Continuation: Equatable, Sendable {
+        /// The name the source wore when the user picked it.
+        public let sourceName: String
+        public let sourceSessionId: String
+        /// What the user said after the handoff context, which is what the
+        /// new agent is actually for. Empty when they sent the handoff alone.
+        public let instruction: String
+    }
+
+    /// Whether a sent message is a continued agent's first message, and what
+    /// it carried. Read from the message as sent, so it holds for every
+    /// harness and every way a launch can be bound to its session.
+    public static func continuation(in message: String) -> Continuation? {
+        guard message.hasPrefix(opening) else { return nil }
+        let afterOpening = message.dropFirst(opening.count)
+        // The name ends at the LAST closing quote before " (…, session ": a
+        // name may itself hold a quotation mark.
+        guard let marker = afterOpening.range(of: ", session "),
+              let close = afterOpening[..<marker.lowerBound].range(of: "\u{201D} (", options: .backwards)
+        else { return nil }
+        let name = String(afterOpening[..<close.lowerBound])
+        let id = afterOpening[marker.upperBound...].prefix { $0 != ")" && !$0.isNewline }
+        guard !name.isEmpty, !id.isEmpty else { return nil }
+        var instruction = ""
+        if let end = message.range(of: closing) {
+            instruction = message[end.upperBound...].trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return Continuation(sourceName: name, sourceSessionId: String(id), instruction: instruction)
     }
 }

@@ -46,8 +46,23 @@ to the grid rather than reversing anything.
    joins it; dropping on the loose rows leaves it. Rows are never reordered by
    hand: position is computed.
 
-7. **A fast model names it, and the user can rename it.** One or two words,
-   naming the project, not the topic. Double-click the name to edit it.
+7. **A fast model names it, and the user can rename it.** Two or three words
+   for the most specific thing the agents in the folder share. Never a name
+   another folder already wears, and a product or codebase name alone only
+   when the agents share nothing narrower. Double-click the name to edit it.
+
+   RE-RULED 11 Nov 2026, on a measurement. This rule read "one or two words,
+   naming the project, not the topic", and the namer was told to reuse an
+   existing folder name when one fit. Robert: "half the time it just gets
+   named Tranquility Base, which is dumb. It should choose just the best two
+   or three word name for the unique combination of things that those two
+   agents share." All 14 recorded naming calls were read back
+   (`model-calls.jsonl`): two folders were named for a directory, three for
+   an existing folder that did not fit, and three replies that were not names
+   at all were cut to their first two words and kept ("These sessions",
+   "Session A:"). The namer is now shown what each agent is working toward,
+   is told which names are taken, and a reply that is not one short line is
+   refused whole. See `ProjectNamer`.
 
 8. **Past Agents stays one flat list.** Each row carries its folder's chip.
    Reviving an agent returns it to its folder if the folder still exists.

@@ -183,7 +183,10 @@ extension StatusHUD {
                 rowDragged("l1", from: source, phase: .ended, event: over)
                 let made = store.current.folder(of: "l1")
                 dragMadeFolder = notYet && armed && made != nil
-                    && made?.id == store.current.folder(of: "l2")?.id && made?.name == "Kopi"
+                    && made?.id == store.current.folder(of: "l2")?.id
+                    // A folder called Kopi already exists, so the fallback
+                    // counts on: two folders never wear one name (11 Nov).
+                    && made?.name == "Kopi 2"
                 dropDidNotOpenACard = state == stateBefore
             }
         }

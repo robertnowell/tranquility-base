@@ -2462,6 +2462,15 @@ final class StatusHUD: NSObject {
     var namingFolders: Set<String> = []
     /// Whether a new folder asks the model for its name. Off in a drill.
     var nameFoldersWithModel = true
+    /// What an agent is working toward, for the folder namer. Set by the app
+    /// delegate; called off the main actor, because it reads the database.
+    var goalForNaming: (@Sendable (String) -> String?)?
+    /// The names this app has given agents. A property so a drill can swap
+    /// in a scratch file, the way `projects` is.
+    var agentNames: AgentNameStore = .shared
+    /// An agent was renamed, or given its automatic name back, on the grid.
+    /// The app rebuilds the rows from the store.
+    var onAgentRenamed: ((String) -> Void)?
     /// The last drop, while its notice is up: what it said and the book
     /// before it. The notice is the top band's receipt chip, never a row.
     var undoDrop: (text: String, before: ProjectBook, until: Date)?
@@ -4729,6 +4738,13 @@ final class StatusHUD: NSObject {
             handoff.submenu = choices
             menu.addItem(handoff)
         }
+        // RENAME sits with the harmless verbs, above the separator (11 Nov).
+        // It changes a name in this app's own file and nothing in the agent.
+        let rename = NSMenuItem(title: "Rename",
+                                action: #selector(renameAgentPicked(_:)), keyEquivalent: "")
+        rename.target = self
+        rename.representedObject = item.id
+        menu.addItem(rename)
         if let folder = projects.current.folder(of: item.id, origin: SessionLineage.lastKnownOrigin) {
             let out = NSMenuItem(title: "Remove from \u{201C}\(folder.name)\u{201D}",
                                  action: #selector(removeFromFolderPicked(_:)), keyEquivalent: "")

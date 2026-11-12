@@ -187,7 +187,8 @@ public enum GridAssembler {
     /// thing; ahead of `projectLabel` because a directory is the answer of
     /// last resort, and it is the answer Robert kept being shown.
     public static func tabDisplayName(for event: WaitingSession, live: LiveSession?) -> String {
-        SessionRow.displayName(
+        if let given = givenName(event.sessionId) { return given }
+        return SessionRow.displayName(
             liveName: harnessTitle(sessionId: event.sessionId,
                                    transcriptPath: event.transcriptPath, live: live),
             callsign: event.callsign, fallback: event.projectLabel)
@@ -196,7 +197,8 @@ public enum GridAssembler {
     /// The same name, for a row built from a LIVE session with no stored event
     /// behind it — the band that used to fall back to the literal "session".
     public static func tabDisplayName(live: LiveSession, callsign: String?) -> String {
-        SessionRow.displayName(
+        if let given = givenName(live.sessionId) { return given }
+        return SessionRow.displayName(
             liveName: harnessTitle(sessionId: live.sessionId, transcriptPath: nil, live: live),
             callsign: callsign, fallback: "session")
     }
@@ -204,7 +206,8 @@ public enum GridAssembler {
     /// And for a row built from DISK, where the title comes from discovery.
     public static func tabDisplayName(discovered title: String?, sessionId: String,
                                       callsign: String?, cwd: String?) -> String {
-        SessionRow.displayName(
+        if let given = givenName(sessionId) { return given }
+        return SessionRow.displayName(
             liveName: title ?? harnessName(sessionId),
             callsign: callsign,
             fallback: cwd.map { ($0 as NSString).lastPathComponent } ?? "session")
@@ -220,7 +223,23 @@ public enum GridAssembler {
     /// same Codex session differently for five days.
     public static func harnessTitle(sessionId: String, transcriptPath: String?,
                                     live: LiveSession?) -> String? {
-        tabTitle(transcriptPath: transcriptPath, live: live) ?? harnessName(sessionId)
+        givenName(sessionId)
+            ?? tabTitle(transcriptPath: transcriptPath, live: live) ?? harnessName(sessionId)
+    }
+
+    /// THE NAME THIS APP GAVE A SESSION, which outranks the harness's own
+    /// (11 Nov 2026): a rename typed on the grid, or the name chosen for an
+    /// agent started with "Continue work with". Asked for in here, at the top
+    /// of every function above, for the reason `harnessName` is: a name
+    /// supplied by the call site is a name a call site forgets.
+    public static func givenName(_ sessionId: String) -> String? {
+        let name = givenNames(sessionId)
+        return name?.isEmpty == false ? name : nil
+    }
+
+    /// The seam, for tests and drills. Production reads the store.
+    public nonisolated(unsafe) static var givenNames: @Sendable (String) -> String? = {
+        AgentNameStore.shared.name(for: $0)
     }
 
     /// What the harness itself calls this session, for a harness that keeps a
