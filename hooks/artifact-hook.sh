@@ -993,11 +993,29 @@ TAG_ASK = _tag_ask(path)
 # stay judgment, and the sentence says so by naming only what it measured.
 # THE EVIDENCE RULES (ruled 5 Oct 2026, hf-eit; share-as-page/references/brief.md,
 # Evidence rules). Advisory like the rest: it names the claim, it never blocks.
-# The draw test itself lives in hq-diagram, which refuses; this only checks that
-# a claim typed as needing a diagram has one. Words such as before and after
+# The draw test lives in hq-diagram and the fit test in hq-figure, which refuse;
+# this only checks that a claim typed as needing a diagram or a figure has one. Words such as before and after
 # cannot distinguish a timeline from a branch; the draw test is structural.
 _DRAWN = {"flow", "structure", "states", "change"}
-_TYPES = _DRAWN | {"ranking", "screen", "versions", "lookup", "text"}
+# 11 Nov 2026: a size, an order in time and a share are drawn too, by hq-figure.
+# The two table checks read what a parser can see: cells that are shares written
+# as text ("9 of 12"), and a header that names a time. Either is a question, not
+# a verdict: a schedule that people look a date up in is still a table.
+_FIGURED = {"ranking", "timeline", "share"}
+_TYPES = _DRAWN | _FIGURED | {"screen", "versions", "lookup", "text"}
+_TIME_HEAD = re.compile(r"^(when|date|day|time|started|ended|sent( at)?|read at|at)\b|\butc\b", re.I)
+def _table_flags(short, inner):
+    out = []
+    for table in re.findall(r"<table\b.*?</table>", inner, flags=re.S | re.I):
+        cells = [re.sub(r"<[^>]+>", " ", c).strip() for c in re.findall(r"<td\b[^>]*>(.*?)</td>", table, flags=re.S | re.I)]
+        heads = [re.sub(r"<[^>]+>", " ", c).strip() for c in re.findall(r"<th\b[^>]*>(.*?)</th>", table, flags=re.S | re.I)]
+        rows = len(re.findall(r"<tr\b", table, flags=re.I)) - (1 if heads else 0)
+        shares = sum(1 for c in cells if re.match(r"^\d[\d,]* of \d[\d,]*$", c))
+        if shares >= 3:
+            out.append(short + " gives %d shares as text in a table: hq-figure units draws them" % shares)
+        elif rows >= 3 and any(_TIME_HEAD.search(x) for x in heads):
+            out.append(short + " has a table with a time column: if the point is the order or the gap, hq-figure time draws it")
+    return out[:1]
 def _evidence_flags(body):
     flags = []
     if re.search(r"<details\b", body, re.I):
@@ -1012,6 +1030,10 @@ def _evidence_flags(body):
             named.append(short + " has no data-shows type")
         elif t in _DRAWN and "<svg" not in inner:
             named.append(short + " shows %s but carries no diagram (hq-diagram)" % t)
+        elif t in _FIGURED and "<svg" not in inner:
+            named.append(short + " shows %s but carries no figure (hq-figure)" % t)
+        elif "<svg" not in inner:
+            named += _table_flags(short, inner)
         if len(re.findall(r"<pre\b", inner, flags=re.I)) > 2:
             named.append(short + " carries %d literal blocks; one, two at most" % len(re.findall(r"<pre\b", inner, flags=re.I)))
     flags += named[:4]
