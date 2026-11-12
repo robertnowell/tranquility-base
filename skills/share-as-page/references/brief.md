@@ -8,7 +8,7 @@ Ruled 25 Sep 2026 after a deep research pass (agent a8e3f054, `2026-09-25-inform
 
 1. **The message.** Three to six words at seven times body size: "Two chips moved." Then the lede, whose first sentence, in bold, is the one-sentence claim with a verb; two more sentences at most. Then the dark block: what needs them, or "nothing to decide". The scale is measured, not felt: typesafe.ai sets a four-word headline at 140px over 17px body, an eight-to-one jump; a sentence at 54px over 16px was called "relatively indistinguished" (27 Sep).
 2. **The claims.** One row per claim, a full sentence each, with a status dot and one figure. Read only the rows and the argument survives. Five to seven rows; a second, smaller list for what deliberately did not change.
-3. **The artifacts.** Under their claim, never in a separate section, and never collapsed: no accordion, no toggle (ruled 5 Oct 2026; an accordion that starts open hides nothing, and a click on it hides what you were reading). The thing itself: the screenshot, the diff hunk, the raw rows, the literal prompt, or a diagram when the draw test says so. A one-line caption saying what to look at. See Evidence rules below.
+3. **The artifacts.** Under their claim, never in a separate section, and never collapsed: no accordion, no toggle (ruled 5 Oct 2026; an accordion that starts open hides nothing, and a click on it hides what you were reading). The thing itself: the screenshot, the diff hunk, the raw rows, the literal prompt, or a figure or diagram when the question asks for one. A one-line caption saying what to look at. See Evidence rules below.
 
 Start with `hq-page new <slug> --session=<your full session id>` (add `--brand=NAME` for a brand page). It writes `templates/brief.html` as a draft, `<hub>/_drafts/<slug>.html`, with the session line, the kicker and the `:root` tokens filled in, binds the brand to your session, and refuses to overwrite. Nothing publishes, announces or opens a draft. When the page is finished, `hq-page publish <slug> --session=<id>` moves it to `<hub>/<slug>.html` and opens it; it refuses unfilled placeholders and disclosure markup before moving the draft. Ruled 29 Sep 2026, after an empty scaffold was announced to Robert while its agent waited on a deploy. Use the generated draft as the current markup example. Older published reports can predate the section-only rule; do not copy their disclosure markup.
 
@@ -37,6 +37,7 @@ Ruled 27 Sep 2026 after the beige boxes were called "not doing it": the reader c
 | Screenshot | A hairline, no shadow, no device frame. Never drawn on: to point at a passage, crop to it (`.crop`, `--ar`, `--pos`), so what is shown is what was shot. The image is a link to the live thing it shows. A sentence caption below saying what the crop shows, where, when. |
 | Before and after | Two screenshots side by side, captions carrying Before and After, each linked to its source. |
 | Diagram | Inline SVG from `hq-diagram`, between hairlines, no box. Only when the draw test passes; see Evidence rules. |
+| Figure | Inline SVG from `hq-figure`, between hairlines, no box: bars, unit dots or a time strip. One accent for the row that matters, grey for the rest. Only when the fit test passes; see Evidence rules. |
 | Table | Hairlines only, title above as the caption, header sentence case at full weight, numbers right-aligned in tabular figures. Stripes only when rows are long. |
 | Caption, not label | Every artifact carries a caption below, in a sentence, at full ink. No label bar above. Uppercase tracked mono is for the kicker, the section labels and the status figure, nothing longer. |
 | Gap | Plain italic text with a faint left rule, where the artifact would sit. |
@@ -117,18 +118,26 @@ From the editorial pass (`2026-09-27-editorial-design-patterns`, agent a8e3f054)
 
 From three passes (`2026-10-03-diagrams-for-report-evidence`, `2026-10-03-diagram-calibration`, agent a8e3f054) and two replays: ten claims rebuilt with diagrams (four better, four mixed, two worse, and the draw test below accounts for all ten), then four reports rewritten from their agents' raw turns (the evidence improved, and three of the four originals were caught stating something the turn never showed). Robert ruled: ship it, with every number cited and one piece of literal evidence per claim.
 
-**Claims are sections.** `<section class="claim" data-shows="TYPE">`, TYPE one of flow, structure, states, change, ranking, screen, versions, lookup, text. Never `<details>`, even with `open`. Before authoring, read this brief and the generated draft in a separate tool call whose contents reach your context. Do not suppress helper output or combine scaffolding, writing and publication. `hq-page publish` refuses disclosures before moving or opening the draft.
+**Claims are sections.** `<section class="claim" data-shows="TYPE">`, TYPE one of flow, structure, states, change, ranking, timeline, share, screen, versions, lookup, text. Never `<details>`, even with `open`. Before authoring, read this brief and the generated draft in a separate tool call whose contents reach your context. Do not suppress helper output or combine scaffolding, writing and publication. `hq-page publish` refuses disclosures before moving or opening the draft.
 
-**The draw test decides the artifact.** Diagrams win where the reader has to relate several things at once (Larkin and Simon: a diagram keeps what one inference needs side by side) and lose everywhere else, so:
+**The question decides the artifact.** Ruled 11 Nov 2026, on a count. From 28 Oct to 11 Nov, 794 claims on 118 pages carried no drawn figure, and in a hand sample 7 of 31 claims with evidence put a time, a size or a share in a table (`report-forms-first-principles`, agent 35b77fe6). The test of 5 Oct asked how large the data was, so every small set of numbers became a table. Ask what the reader must see:
 
-1. The evidence is one sentence: write the sentence. A one-line rule drawn as a decision diamond lost to the sentence.
-2. It is numbers, twenty or fewer: a table. Tufte: "Tables usually outperform graphics in reporting on small data sets of 20 numbers or less." Never a hand-drawn chart; the one in the replay read backward.
-3. Nothing branches, merges or loops: a numbered list, or a table if the items do not connect at all. Three parallel sensors drawn as boxes lost to their table.
-4. Otherwise, and only otherwise: draw it.
+| The reader asks | Artifact | Made with |
+|---|---|---|
+| What does it say, or look like? | Quote, code, raw rows, screenshot | The literal thing |
+| What is the exact value? | Table | Hairlines, numbers right |
+| How much, and against what limit? | Bars on one scale | `hq-figure`, form `bars` |
+| How many of how many? | Unit dots | `hq-figure`, form `units` |
+| When, in what order, with what gap? | Time strip | `hq-figure`, form `time` |
+| How do the parts connect? | Diagram | `hq-diagram` |
 
-**Drawing it.** `hq-diagram in.dot --png look.png > out.svg`. Write plain Graphviz dot; the helper adds the house style. Mark the one important node or edge `tone=accent`, a broken part `tone=warn`; label every edge with what it carries or causes. It runs the draw test and prints `draw test passes` or `DO NOT SHIP AS DRAWN: why`, exiting 2. Obey it: redraw (rankdir=TB, shorter labels, split) or use what it names. The limits: one connected graph, a branch, merge or loop, at most 15 boxes, labels at 12px or more in the 700px column (ONS asks 14px for charts; 11.3px read fine in the replay, 9.6px did not), no crossing edges (Purchase 1997: "by far the most important aesthetic"). Look at look.png before embedding it.
+Three limits stay from 5 Oct. One fact is a sentence: a one-line rule drawn as a decision diamond lost to the sentence. A lookup is a table: nobody compares the cells, they find one. Nothing connected is not a diagram: three parallel sensors drawn as boxes lost to their table. And no agent places a mark by hand; the hand-drawn chart in the replay read backward. The helpers compute every position from the rows.
 
-**A diagram replaces what it restates.** Its numbers go in its labels, and the table or paragraph it redraws comes out. For an expert reader the same content twice costs time and adds nothing (expertise reversal); every replayed rebuild that stacked a diagram on its table got longer, 35% across ten claims. A table stays only for values the drawing does not carry.
+**Drawing a figure.** `hq-figure spec.json --png look.png > out.svg`. The spec is JSON: a `form` and the rows, exactly as the source gave them; `hq-figure -h` shows each form. Mark the row that matters `"tone": "accent"`; the rest stay grey. It runs the fit test and prints `fit test passes` or `DO NOT SHIP AS DRAWN: why`, exiting 2. Obey it: one value is a sentence, past 12 bars or 8 unit rows is a table, a colliding label is a shorter label or another lane. Bars take a whole (`of`), a limit line, a range, groups and exact columns beside the bar. A time strip cuts a gap far longer than the others and labels it. Look at look.png before embedding it. Use `--width 560` beside a table in a pair.
+
+**Drawing a diagram.** `hq-diagram in.dot --png look.png > out.svg`. Write plain Graphviz dot; the helper adds the house style. Mark the one important node or edge `tone=accent`, a broken part `tone=warn`; label every edge with what it carries or causes. It runs the draw test and prints `draw test passes` or `DO NOT SHIP AS DRAWN: why`, exiting 2. Obey it: redraw (rankdir=TB, shorter labels, split) or use what it names. The limits: one connected graph, a branch, merge or loop, at most 15 boxes, labels at 12px or more in the 700px column (ONS asks 14px for charts; 11.3px read fine in the replay, 9.6px did not), no crossing edges (Purchase 1997: "by far the most important aesthetic"). Look at look.png before embedding it.
+
+**A figure or diagram replaces what it restates.** Its numbers go in its labels, and the table or paragraph it redraws comes out. For an expert reader the same content twice costs time and adds nothing (expertise reversal); every replayed rebuild that stacked a diagram on its table got longer, 35% across ten claims. A table stays only for values the drawing does not carry.
 
 **One piece of literal evidence per claim.** Code, diff, rows, log or prompt: one block, two only when the claim rests on both. The rewrites that quoted everything ran 14% longer than the originals.
 
@@ -136,7 +145,7 @@ From three passes (`2026-10-03-diagrams-for-report-evidence`, `2026-10-03-diagra
 
 **Every image links to the live thing it shows**: the PR, the commit, the file at a commit, the page, the dashboard. Never to the image file. No live address: no link, and the caption says so. Never invent one.
 
-**The page check names breaks**, after every write: a claim typed flow, structure, states or change with no diagram;  an image that links nowhere; a claim with more than two literal blocks; any `<details>`. It advises; `hq-page publish` refuses disclosure markup. A straight timeline remains a list, even when its prose says before or after.
+**The page check names breaks**, after every write: a claim typed flow, structure, states or change with no diagram;  a claim typed ranking, timeline or share with no figure; a table that holds shares as text or a time column; an image that links nowhere; a claim with more than two literal blocks; any `<details>`. It advises; `hq-page publish` refuses disclosure markup. A straight timeline remains a list, even when its prose says before or after.
 
 **Measured weekly.** Three to five claims, one comprehension question each, answered from the prose and then with the diagram, plus better, mixed or worse; pooled, and read as a sign test once about twenty are not ties. Not an automated judge: the best model agrees with experts at 0.43 (VisJudge-Bench).
 

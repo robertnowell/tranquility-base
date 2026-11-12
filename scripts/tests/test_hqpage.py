@@ -51,6 +51,35 @@ class PagePublicationTests(unittest.TestCase):
         page = '<section class="claim" data-shows="text"><span class="c">Before launch, then after launch.</span><ol><li>Before</li><li>After</li></ol></section>'
         self.assertEqual(namespace['_evidence_flags'](page), [])
 
+    def flags(self, shows, inner):
+        import re
+        source = (ROOT / "hooks/artifact-hook.sh").read_text()
+        start = source.index('_DRAWN = ')
+        stop = source.index('\n    return flags', start) + len('\n    return flags')
+        namespace = {"re": re}
+        exec(source[start:stop], namespace)
+        return namespace['_evidence_flags']('<section class="claim" data-shows="%s"><span class="c">A claim.</span>%s</section>' % (shows, inner))
+
+    def test_a_size_an_order_or_a_share_without_a_figure_is_named_and_with_one_is_not(self):
+        for shows in ("ranking", "timeline", "share"):
+            self.assertEqual(self.flags(shows, "<table><tr><td>1</td></tr></table>"),
+                             ['"A claim." shows %s but carries no figure (hq-figure)' % shows])
+            self.assertEqual(self.flags(shows, "<svg></svg>"), [])
+
+    def test_shares_as_text_in_a_table_are_named_and_two_are_not(self):
+        table = lambda n: "<table><tr><th>Problem</th><th>Drafts</th></tr>" + "".join(
+            "<tr><td>P%d</td><td>%d of 12</td></tr>" % (i, i) for i in range(n)) + "</table>"
+        self.assertEqual(self.flags("lookup", table(3)), ['"A claim." gives 3 shares as text in a table: hq-figure units draws them'])
+        self.assertEqual(self.flags("lookup", table(2)), [])
+        self.assertEqual(self.flags("lookup", table(3) + "<svg></svg>"), [])
+
+    def test_a_time_column_is_named_and_a_plain_lookup_is_not(self):
+        table = lambda head: "<table><tr><th>Task</th><th>%s</th></tr>%s</table>" % (head, "<tr><td>T</td><td>04:19</td></tr>" * 3)
+        self.assertEqual(len(self.flags("lookup", table("Started, UTC"))), 1)
+        self.assertIn("hq-figure time", self.flags("lookup", table("Started, UTC"))[0])
+        self.assertEqual(self.flags("lookup", table("Owner")), [])
+        self.assertEqual(self.flags("lookup", table("Status")), [])
+
 
 def _hook_namespace():
     import re

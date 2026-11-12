@@ -35,6 +35,7 @@ python3 scripts/tests/test_run_stage.py
 python3 scripts/tests/test_prepared_dev.py
 python3 scripts/tests/test_door_answers.py
 python3 scripts/tests/test_hqpage.py
+python3 scripts/tests/test_hqfigure.py
 
 # Cheap, and it catches a class the panel's own drills cannot: a bare modifier
 # glyph in text a human reads. The existing drill guards ONE string; this
