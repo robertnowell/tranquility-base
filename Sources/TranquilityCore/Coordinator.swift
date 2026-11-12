@@ -161,6 +161,23 @@ public struct Coordinator: Sendable {
     /// otherwise leaves no evidence at all.
     public nonisolated(unsafe) static var trace: (@Sendable (String) -> Void)?
 
+    /// Set once by the app, at launch. A message that began with a handoff
+    /// has just reached its agent: that agent is a continuation, this is the
+    /// first moment its id and its instruction are known together, and it is
+    /// the moment it gets a name of its own (see `AgentNamer`).
+    ///
+    /// Here rather than at the app's send sites because there are four of
+    /// those (spoken, confirmed, typed, the manager's) and one of this: every
+    /// local send passes through `dispatch`.
+    public nonisolated(unsafe) static var onContinuationSent:
+        (@Sendable (_ sessionId: String, _ continuation: AgentHandoff.Continuation) -> Void)?
+
+    static func noteContinuation(_ message: String, sessionId: String) {
+        guard let hook = onContinuationSent,
+              let continuation = AgentHandoff.continuation(in: message) else { return }
+        hook(sessionId, continuation)
+    }
+
     @discardableResult
     public func intake() throws -> SpoolDrainer.DrainResult {
         let result = try SpoolDrainer(store: store, summaryOriginId: localSummaryOriginId).drain()

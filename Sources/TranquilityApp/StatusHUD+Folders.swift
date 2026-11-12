@@ -174,6 +174,9 @@ extension StatusHUD {
         where header.editorForTesting != nil {
             header.finishRename(keep: false)
         }
+        for row in shownGridRowViews where row.editorForTesting != nil {
+            row.finishRename(keep: false)
+        }
         rowsHeld = false
         Permissions.log("folders: released a held grid, \(reason)")
     }
@@ -394,12 +397,12 @@ extension StatusHUD {
         switch target {
         case let .makeFolder(with):
             let agents = [id, with].map(namingAgent)
-            let name = ProjectNamer.fallback(agents)
+            let name = ProjectNamer.fallback(agents, taken: before.folders.map(\.name))
             let folder = projects.update { $0.create(name: name, with: [with, id], origin: origin) }
             namingFolders.insert(folder)
             noteDrop("Made a folder", before: before)
             Track.record("folder_made", [:])
-            nameFolder(folder, agents: agents)
+            nameFolder(folder, agents: agents, sessionIds: [id, with])
         case let .join(folder):
             projects.update { $0.join(id, folder: folder, origin: origin) }
             noteDrop("Moved to \(projects.current.folder(id: folder)?.name.uppercased() ?? "folder")",
@@ -428,23 +431,39 @@ extension StatusHUD {
     /// Ask the model for a name, off the main actor. The fallback is already
     /// on the header, so a slow, missing or useless answer changes nothing
     /// but the shimmer.
-    func nameFolder(_ folderId: String, agents: [ProjectNamer.Agent]) {
-        let vocabulary = projects.current.names
+    ///
+    /// The model is shown what each agent is working toward as well as its
+    /// title (11 Nov): with two titles and two directory names, the
+    /// directory was the only thing the pair had in common, and that is how
+    /// folders came to be called "Tranquility Base" and "Projects". The goal
+    /// is a database read, so it is fetched in the detached task.
+    func nameFolder(_ folderId: String, agents: [ProjectNamer.Agent], sessionIds: [String] = []) {
         let store = projects
         let useModel = nameFoldersWithModel
+        let goal = goalForNaming
         Task.detached(priority: .utility) {
             var proposed: String?
+            var reason = "no model"
             // Whichever pasted key the summaries use: OpenRouter first, then
             // an Anthropic key stored before OpenRouter was offered.
             let openRouter = OpenRouterSummaryProvider(timeout: 6)
             let anthropic = AnthropicSummaryProvider(timeout: 6)
             if useModel, openRouter.isConfigured || anthropic.isConfigured {
+                // Every folder but this one: its own placeholder name is not
+                // a name somebody else has taken.
+                let taken = store.current.folders.filter { $0.id != folderId }.map(\.name)
+                let informed = zip(agents, sessionIds + Array(repeating: "", count: agents.count)).map {
+                    ProjectNamer.Agent(title: $0.title, folder: $0.folder,
+                                       goal: $1.isEmpty ? nil : goal?($1))
+                }
                 let system = ProjectNamer.system
-                let user = ProjectNamer.prompt(agents, vocabulary: vocabulary)
+                let user = ProjectNamer.prompt(informed, taken: taken)
                 let reply = openRouter.isConfigured
                     ? try? await openRouter.complete(system: system, user: user)
                     : try? await anthropic.complete(system: system, user: user)
-                proposed = reply.flatMap { ProjectNamer.clean($0.text) }
+                proposed = reply.flatMap { ProjectNamer.clean($0.text, taken: taken) }
+                reason = reply == nil ? "the model did not answer"
+                    : (proposed == nil ? "the reply was not a usable name" : "model")
             }
             await MainActor.run { [weak self] in
                 // The user may have renamed it, or deleted it, while we waited.
@@ -453,7 +472,8 @@ extension StatusHUD {
                     store.update { $0.rename(folderId, to: proposed) }
                 }
                 self?.namingFolders.remove(folderId)
-                Permissions.log("folder: named \(folderId) \(proposed == nil ? "by fallback" : "by model")")
+                Permissions.log("folder: named \(folderId) "
+                    + (proposed == nil ? "by fallback (\(reason))" : "by model"))
                 self?.refitGrid()
             }
         }

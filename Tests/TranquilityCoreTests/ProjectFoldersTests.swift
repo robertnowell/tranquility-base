@@ -249,16 +249,43 @@ final class ProjectFoldersTests: XCTestCase {
 
     // MARK: - Namer
 
-    func testNamerReplyIsCleanedToTwoWords() {
+    func testNamerReplyIsCleanedOfQuotesAndLabels() {
         XCTAssertEqual(ProjectNamer.clean("\"Mirai\"\n"), "Mirai")
-        XCTAssertEqual(ProjectNamer.clean("Name: U Vape Checkout."), "U Vape")
-        XCTAssertEqual(ProjectNamer.clean("Tranquility Base"), "Tranquility Base")
+        XCTAssertEqual(ProjectNamer.clean("Name: U Vape Checkout."), "U Vape Checkout")
+        XCTAssertEqual(ProjectNamer.clean("Agent Naming"), "Agent Naming")
     }
 
     func testNamerRefusesGenericNames() {
         XCTAssertNil(ProjectNamer.clean("Misc"))
         XCTAssertNil(ProjectNamer.clean("  "))
         XCTAssertNil(ProjectNamer.clean("Miscellaneous"))
+    }
+
+    /// The three replies that became folders on Robert's Mac, verbatim from
+    /// model-calls.jsonl. Each was cut to its first two words and kept.
+    func testNamerRefusesAReplyThatIsNotANameRatherThanCuttingItDown() {
+        XCTAssertNil(ProjectNamer.clean(
+            "These sessions don't fit your existing folders. Based on the content:\n\n"
+            + "- Session A (Mirai Clinical meeting) → **Mirai Clinical**\n"
+            + "- Session B (Shared expenses/utilities) → **Household**"))
+        XCTAssertNil(ProjectNamer.clean("Session A: Puerto Rico\nSession B: Tranquility Base"))
+        XCTAssertNil(ProjectNamer.clean("These sessions do not share a project"))
+        XCTAssertNil(ProjectNamer.clean("Session A: Puerto Rico"))
+    }
+
+    func testNamerRefusesANameAnotherFolderWears() {
+        XCTAssertNil(ProjectNamer.clean("Tranquility Base", taken: ["Tranquility Base", "Mirai"]))
+        XCTAssertNil(ProjectNamer.clean("tranquility-base", taken: ["Tranquility Base"]))
+        XCTAssertEqual(ProjectNamer.clean("Agent Naming", taken: ["Tranquility Base"]), "Agent Naming")
+    }
+
+    func testFallbackNeverRepeatsATakenName() {
+        let agents = [ProjectNamer.Agent(title: "Rename from the grid", folder: "tranquility-base"),
+                      ProjectNamer.Agent(title: "Folder namer", folder: "tranquility-base")]
+        XCTAssertEqual(ProjectNamer.fallback(agents, taken: []), "Tranquility Base")
+        XCTAssertEqual(ProjectNamer.fallback(agents, taken: ["Tranquility Base"]), "Tranquility Base 2")
+        XCTAssertEqual(ProjectNamer.fallback(agents, taken: ["Tranquility Base", "tranquility base 2"]),
+                       "Tranquility Base 3")
     }
 
     func testFallbackPrefersTheSharedDirectory() {
@@ -285,12 +312,16 @@ final class ProjectFoldersTests: XCTestCase {
         XCTAssertEqual(ProjectNamer.fallback(agents), "BlankShirts")
     }
 
-    func testPromptCarriesTheUsersVocabularyAndBothTitles() {
-        let text = ProjectNamer.prompt([.init(title: "Flows for BFCM", folder: "mirai"),
-                                        .init(title: "Segment audit", folder: nil)],
-                                       vocabulary: ["Mirai", "Kopi"])
-        XCTAssertTrue(text.contains("Mirai, Kopi"))
+    func testPromptSaysWhatIsTakenAndWhatEachAgentIsFor() {
+        let text = ProjectNamer.prompt(
+            [.init(title: "Flows for BFCM", folder: "mirai", goal: "We are forking the flows for the sale."),
+             .init(title: "Segment audit", folder: nil)],
+            taken: ["Mirai", "Kopi"])
+        XCTAssertTrue(text.contains("Folder names already taken: Mirai, Kopi."))
         XCTAssertTrue(text.contains("Session A: Flows for BFCM  (directory: mirai)"))
+        XCTAssertTrue(text.contains("It is working on: We are forking the flows for the sale."))
         XCTAssertTrue(text.contains("Session B: Segment audit"))
+        // The old instruction, which pulled answers toward names that did not fit.
+        XCTAssertFalse(ProjectNamer.system.lowercased().contains("reply with exactly that name"))
     }
 }

@@ -710,6 +710,7 @@ extension Coordinator {
             // that turn ends. Treated as answered, because it is: the words are in
             // the tab and nobody has to do anything else.
             attachments.resolve(utteranceId: utterance.id, landed: true)
+            Coordinator.noteContinuation(text, sessionId: target.sessionId)
             utterance.status = .confirmed
             utterance.confirmedAtMs = Int64(Date().timeIntervalSince1970 * 1000)
             utterance.lastError = "queued behind the current turn"
@@ -724,6 +725,7 @@ extension Coordinator {
 
         case .confirmed(let latencyMs):
             attachments.resolve(utteranceId: utterance.id, landed: true)
+            Coordinator.noteContinuation(text, sessionId: target.sessionId)
             utterance.status = .confirmed
             utterance.confirmedAtMs = Int64(Date().timeIntervalSince1970 * 1000)
             try store.update(utterance: utterance)
@@ -748,6 +750,9 @@ extension Coordinator {
             // possible double-send, and a duplicate is worse than a drop).
             if failure == .verificationTimedOut {
                 attachments.markUncertain(utteranceId: utterance.id)
+                // Probably landed, by the same doctrine. A name given to an
+                // agent whose first message did not arrive costs nothing.
+                Coordinator.noteContinuation(text, sessionId: target.sessionId)
             } else {
                 attachments.resolve(utteranceId: utterance.id, landed: false)
             }

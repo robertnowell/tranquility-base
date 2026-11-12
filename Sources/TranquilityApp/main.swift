@@ -1072,6 +1072,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
+        // One-shot: the agent-names drill on a real panel, printed, exit.
+        // Safe beside the running app for the same reasons: a scratch store,
+        // no hotkey tap, no model.
+        if CommandLine.arguments.contains("--selftest-agent-names") {
+            intakeTimer?.invalidate(); intakeTimer = nil
+            hud.agentNamesDrill()
+            NSApp.terminate(nil)
+            return
+        }
+
         // One-shot: pose a face, photograph it FROM the view hierarchy, exit.
         // No Screen Recording grant, no awake display — the pose renders its
         // own pixels, so this works from a lidded laptop or a headless agent.
@@ -1853,6 +1863,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.rebuildMenu()
         }
         Coordinator.trace = { Permissions.log("routing: \($0)") }
+        wireAgentNames()
         HubMirror.trace = { Permissions.log("hub: \($0)") }
         TmuxTransport.trace = { Permissions.log($0) }
         // The ownership lookup's own evidence. Without it, a session killed

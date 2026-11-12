@@ -9,7 +9,7 @@ import TranquilityCore
 /// A control with real frames, not a bezel-less NSButton: an attributed title
 /// can only flow its runs inline, and columns need columns. Hover paints the
 /// row in the palette's hover putty, exactly like the mock.
-final class GridRowView: NSControl {
+final class GridRowView: NSControl, NSTextFieldDelegate {
     // Variant C metrics (ruled 05 Aug, from the accepted draft render, scaled
     // from its 640px frame to the panel's 352): taller rows, the name in the
     // larger mono with NO added tracking, the callsign right-aligned and
@@ -383,6 +383,78 @@ final class GridRowView: NSControl {
         addCursorRect(bounds, cursor: .pointingHand)
     }
     override func cursorUpdate(with event: NSEvent) { PointerCursor.show() }
+
+    // MARK: - Rename in place (11 Nov 2026)
+
+    /// The name is about to be edited: the panel takes the keyboard and
+    /// holds the grid still, exactly as it does for a folder's name.
+    var onRenameBegan: (() -> Void)?
+    /// The edit ended. nil: cancelled, nothing changes. Empty: the user
+    /// cleared the field, which gives the agent back its automatic name.
+    var onRenameEnded: ((String?) -> Void)?
+    private var editor: NSTextField?
+    var editorForTesting: NSTextField? { editor }
+
+    /// Opened from the row menu. The same shape as `FolderHeaderView`'s, so
+    /// the two renames on the grid behave as one: Return keeps, Escape
+    /// cancels, and clicking away keeps.
+    func beginRename() {
+        guard editor == nil else { return }
+        let field = NSTextField(string: nameLabel.stringValue)
+        field.font = nameLabel.font
+        field.textColor = StateLegend.Palette.ink
+        field.backgroundColor = StateLegend.Palette.surface
+        field.drawsBackground = true
+        field.isBordered = true
+        field.focusRingType = .none
+        field.delegate = self
+        field.translatesAutoresizingMaskIntoConstraints = false
+        field.cell?.isScrollable = true
+        field.setAccessibilityLabel("Agent name")
+        addSubview(field)
+        NSLayoutConstraint.activate([
+            field.leadingAnchor.constraint(equalTo: nameLabel.leadingAnchor, constant: -3),
+            field.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
+            field.centerYAnchor.constraint(equalTo: centerYAnchor),
+        ])
+        nameLabel.isHidden = true
+        editor = field
+        onRenameBegan?()
+        window?.makeFirstResponder(field)
+        field.currentEditor()?.selectAll(nil)
+    }
+
+    func controlTextDidEndEditing(_ note: Notification) { finishRename(keep: true) }
+
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+        if selector == #selector(NSResponder.cancelOperation(_:)) {
+            finishRename(keep: false)
+            return true
+        }
+        if selector == #selector(NSResponder.insertNewline(_:)) {
+            finishRename(keep: true)
+            return true
+        }
+        return false
+    }
+
+    /// Driven directly by the drill; the same path Return and Escape take.
+    func finishRename(keep: Bool) {
+        guard let field = editor else { return }
+        editor = nil
+        let typed = AgentNameBook.tidy(field.stringValue)
+        field.delegate = nil
+        field.removeFromSuperview()
+        nameLabel.isHidden = false
+        // The new name is on the row at once. The grid's next assembly reads
+        // it back from the store, which is the real answer; this only spares
+        // the eye the old name in between.
+        if keep, !typed.isEmpty, typed != nameLabel.stringValue {
+            nameLabel.stringValue = typed
+            Self.paintName(nameLabel, color: nameLabel.textColor ?? StateLegend.Palette.ink)
+        }
+        onRenameEnded?(keep ? typed : nil)
+    }
 
     /// "Mischief managed" (ruled 06 Aug): clicking a lit lamp switches it off —
     /// marks the turn heard without inviting the session. Set only on rows
