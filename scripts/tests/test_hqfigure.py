@@ -105,6 +105,23 @@ class Geometry(unittest.TestCase):
         self.assertLess(heading_y, label_y - 10)
         self.assertGreater(line_top, label_y)
 
+    def test_two_rows_with_one_label_and_one_value_keep_their_own_cells(self):
+        # Replay of 12 Nov 2026: the second row was drawn with the first row's cells, and the fit test passed.
+        runs = {"form": "bars", "columns": ["Hero shown"], "groups": [
+            {"label": "Run 3", "rows": [{"label": "Copy", "value": 11.8, "cells": ["not recorded"]}, {"label": "Live", "value": 6.4, "cells": [""]}]},
+            {"label": "Run 4", "rows": [{"label": "Copy", "value": 11.8, "cells": ["0.7 s"]}, {"label": "Live", "value": 13.2, "cells": [""]}]}]}
+        svg = fig.draw(runs, 720)[0]
+        self.assertEqual(svg.count(">not recorded<"), 1)
+        self.assertEqual(svg.count(">0.7 s<"), 1)
+        self.assertLess(svg.index(">not recorded<"), svg.index(">0.7 s<"))
+
+    def test_a_unit_is_drawn_with_or_without_an_axis_and_a_value_prints_as_written(self):
+        svg = fig.draw({"form": "bars", "unit": "seconds to largest paint", "rows": [
+            {"label": "Copy", "value": 18.0, "text": "18.0 s"}, {"label": "Live", "value": 6.9}]}, 720)[0]
+        self.assertIn(">seconds to largest paint<", svg)
+        self.assertIn(">18.0 s<", svg)
+        self.assertIn(">6.9<", svg)
+
     def test_large_numbers_print_with_commas(self):
         svg = fig.draw({"form": "bars", "rows": [{"label": "Week of Sep 7", "value": 4163}, {"label": "Week of Oct 5", "value": 2757}]})[0]
         self.assertIn(">4,163<", svg)

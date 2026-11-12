@@ -16,6 +16,7 @@ claim asks. No mark is placed by hand: every position is computed from a row.
                "value": [31, 43] draws a range. "groups": [{"label", "tone", "rows"}] groups rows.
                "columns": ["Topics"] with "cells": [37] on each row keeps exact values beside the bar.
                "value_label": "Highlights returned, of 10" heads the bars.
+               "text": "18.0 s" on a row prints the value as the source wrote it.
   How many of how many?        {"form": "units", "of": 12, "rows": [{"label": "Orange button", "value": 12}]}
       a row may carry "note": "Honeydew Menthol missing", a few words set after its count,
       so the table can go. Filled dots are accent unless the row sets a tone.
@@ -125,7 +126,7 @@ def bars(spec, W):
         v = r.get("value")
         r["_lo"], r["_hi"] = (num(v[0]), num(v[1])) if isinstance(v, list) and len(v) == 2 else (0, num(v))
         r["_range"] = isinstance(v, list)
-        r["_text"] = ("%s to %s" % (fmt(r["_lo"]), fmt(r["_hi"]))) if r["_range"] else fmt(r["_hi"])
+        r["_text"] = str(r["text"]) if r.get("text") else ("%s to %s" % (fmt(r["_lo"]), fmt(r["_hi"]))) if r["_range"] else fmt(r["_hi"])
         if "label" not in r:
             raise Spec("every row needs a label")
     of, limit, cols = spec.get("of"), spec.get("limit"), spec.get("columns") or []
@@ -169,6 +170,10 @@ def bars(spec, W):
     if limit:
         y += 30
     first = y
+    # Rows are drawn in the order they were read. A lookup by label and value drew
+    # the first match for two rows that shared both, with the wrong cells beside
+    # the second (replay of 12 Nov 2026: 0.7 s was drawn as "not recorded").
+    drawn = iter(rows)
     for g in groups:
         if g.get("label"):
             if head or y > first:
@@ -176,8 +181,8 @@ def bars(spec, W):
             y += 18
             o.append(text(0, y + 4, g["label"], "b"))
             y += 12
-        for r0 in g.get("rows", []):
-            r = next(x for x in rows if x.get("label") == r0.get("label") and x.get("value") == r0.get("value"))
+        for _ in g.get("rows", []):
+            r = next(drawn)
             y += 14
             hot = r["_tone"] == "accent"
             o.append(text(0, y + 4.5, r["label"], "b" if hot and of is None and not axis else ""))
@@ -218,9 +223,9 @@ def bars(spec, W):
             if v <= top:
                 o.append(text(X(v), bottom + 17, fmt(v), "m n", "middle"))
         bottom += 22
-        if spec.get("unit"):
-            o.append(text(X(top), bottom + 13, spec["unit"], "m", "end"))
-            bottom += 16
+    if spec.get("unit"):
+        o.append(text(X(top) if axis else x0, bottom + 13, spec["unit"], "m", "end" if axis else "start"))
+        bottom += 16
     return wrap(W, bottom + 4, "".join(o), spec.get("title") or "Bars"), why, "%d rows" % len(rows)
 
 
@@ -432,8 +437,11 @@ def grid(spec, W):
     label_w = W - sum(col_w)
     longest = max(rows, key=lambda r: tw(r["label"]))
     if tw(longest["label"]) > label_w - 8:
-        why.append('label "%s..." does not fit beside %d columns: shorten it to about %d characters, or shorten the notes'
-                   % (str(longest["label"])[:24], len(cols), max(int((label_w - 8) / 7.15), 0)))
+        notes = any(c.get("note") for c in flat)
+        why.append('label "%s..." does not fit beside %d columns: %sshorten each label to about %d characters (%d %s longer)'
+                   % (str(longest["label"])[:24], len(cols), "shorten the notes first, then " if notes else "",
+                      max(int((label_w - 8) / 7.15), 0), sum(1 for r in rows if tw(r["label"]) > label_w - 8),
+                      "is" if sum(1 for r in rows if tw(r["label"]) > label_w - 8) == 1 else "are"))
     xs = [label_w + sum(col_w[:i]) + 6 for i in range(len(cols))]
     for x, h in zip(xs, cols):
         o.append(text(x, 13, h, "m"))
