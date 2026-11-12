@@ -17,6 +17,8 @@ claim asks. No mark is placed by hand: every position is computed from a row.
                "columns": ["Topics"] with "cells": [37] on each row keeps exact values beside the bar.
                "value_label": "Highlights returned, of 10" heads the bars.
   How many of how many?        {"form": "units", "of": 12, "rows": [{"label": "Orange button", "value": 12}]}
+      a row may carry "note": "Honeydew Menthol missing", a few words set after its count,
+      so the table can go. Filled dots are accent unless the row sets a tone.
       or one row of groups:    {"form": "units", "groups": [{"label": "wrong form", "value": 7, "tone": "accent"}]}
   When did each thing happen?  {"form": "time", "lanes": [{"label": "Check tasks", "events":
                                 [{"at": "04:32", "label": "Coframe, 4 calls", "tone": "accent"}]}],
@@ -30,7 +32,7 @@ The fit test, on stderr: a figure earns its space only when the reader must
 see a size, a share, an order or a gap. One value is a sentence. Too many rows
 is a table. A label that collides is a redraw. When the rows do not fit the
 form it prints DO NOT SHIP AS DRAWN with the reason, and exits 2. A figure
-replaces the table it restates.
+replaces the table it restates. If the table must stay, keep only the table.
 """
 import datetime, glob, html, json, os, statistics, subprocess, sys, tempfile
 
@@ -73,7 +75,8 @@ def num(v):
 
 
 def fmt(v):
-    return ("%d" % v) if float(v).is_integer() else ("%g" % v)
+    """A number as a report prints it: 4,163 and not 4163 (replay of 11 Nov 2026)."""
+    return "{:,}".format(int(v)) if float(v).is_integer() else "{:,}".format(v)
 
 
 def tone(row, default="dim"):
@@ -144,8 +147,8 @@ def bars(spec, W):
     X = lambda v: x0 + full * v / top
     o, y = [], 0
     head = bool(cols) or bool(spec.get("value_label"))
-    if limit:
-        y += 30
+    # The heading row sits above the limit label. Drawn the other way round, the
+    # limit line ran through the heading and the fit test passed (replay, 11 Nov 2026).
     if head:
         y += 14
         for i, c in enumerate(cols):
@@ -153,6 +156,9 @@ def bars(spec, W):
         if spec.get("value_label"):
             o.append(text(x0, y, spec["value_label"], "m"))
         y += 12
+    limit_y = y + 16
+    if limit:
+        y += 30
     first = y
     for g in groups:
         if g.get("label"):
@@ -195,8 +201,8 @@ def bars(spec, W):
         half = tw(lab) / 2
         if tw(lab) > W:
             why.append("the limit label is wider than the figure: shorten it")
-        o.append('<line x1="%.1f" y1="%d" x2="%.1f" y2="%d" class="ax"/>' % (lx, first - 2 if not head else 26, lx, bottom))
-        o.append(text(min(max(lx, half), W - half), 16, lab, "b", "middle"))
+        o.append('<line x1="%.1f" y1="%d" x2="%.1f" y2="%d" class="ax"/>' % (lx, limit_y + 8, lx, bottom))
+        o.append(text(min(max(lx, half), W - half), limit_y, lab, "b", "middle"))
     if axis:
         o.append('<line x1="%.1f" y1="%d" x2="%.1f" y2="%d" class="ln"/>' % (x0, bottom, X(top), bottom))
         for v in tk:
@@ -246,7 +252,12 @@ def units(spec, W):
     count_w = max(tw("%s of %s" % (r["value"], r.get("of", spec.get("of")))) for r in rows) + 14
     step = 17.0
     dots_w = most * step
-    label_w = W - dots_w - count_w - 10
+    note_w = max(tw(r.get("note", ""), 12) for r in rows)
+    note_w += 16 if note_w else 0
+    label_w = W - dots_w - count_w - note_w - 10
+    if note_w and label_w < max(tw(r.get("label", "")) for r in rows):
+        why.append("the notes do not fit beside the dots: shorten them, or keep the table and drop the figure")
+        note_w, label_w = 0, W - dots_w - count_w - 10
     for r in rows:
         if num(r["value"]) > num(r.get("of", spec.get("of"))):
             why.append('"%s" counts more than its whole' % r.get("label"))
@@ -259,7 +270,9 @@ def units(spec, W):
         t = tone(r, "accent")
         for k in range(of):
             o.append('<circle cx="%.1f" cy="%d" r="5.5" class="%s"/>' % (label_w + 6 + k * step, y, t if k < n else "empty"))
-        o.append(text(W, y + 4.5, "%d of %d" % (n, of), "n b", "end"))
+        o.append(text(W - note_w, y + 4.5, "%d of %d" % (n, of), "n b", "end"))
+        if note_w and r.get("note"):
+            o.append(text(W - note_w + 16, y + 4.5, r["note"], "m"))
     return wrap(W, 16 + len(rows) * 32 - 8, "".join(o), spec.get("title") or "Units"), why, "%d rows of %d" % (len(rows), most)
 
 
@@ -391,7 +404,7 @@ def look(svg, png, W):
     if not os.path.isfile(png):
         sys.stderr.write("the browser wrote no picture: open the page and look at the figure there\n")
         return False
-    sys.stderr.write("look at %s before it ships\n" % png)
+    sys.stderr.write("look at %s before it ships (the page wears its brand colour; never name a colour in the caption)\n" % png)
     return True
 
 

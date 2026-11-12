@@ -78,6 +78,33 @@ class Geometry(unittest.TestCase):
         self.assertLess(starts[0], limit)
         self.assertGreater(starts[1], limit)
 
+    def test_a_heading_and_a_limit_never_share_a_line(self):
+        # Replay of 11 Nov 2026: the limit line ran through the bar heading and the fit test passed.
+        svg = fig.draw(dict(REVENUE, value_label="Revenue per send, never-bought path"), 560)[0]
+        heading_y = float(re.search(r'y="([\d.]+)" class="m" text-anchor="start">Revenue per send', svg).group(1))
+        label_y = float(re.search(r'y="([\d.]+)" class="b" text-anchor="middle">Pass line', svg).group(1))
+        line_top = float(re.search(r'<line x1="[\d.]+" y1="(\d+)"[^>]*class="ax"', svg).group(1))
+        self.assertLess(heading_y, label_y - 10)
+        self.assertGreater(line_top, label_y)
+
+    def test_large_numbers_print_with_commas(self):
+        svg = fig.draw({"form": "bars", "rows": [{"label": "Week of Sep 7", "value": 4163}, {"label": "Week of Oct 5", "value": 2757}]})[0]
+        self.assertIn(">4,163<", svg)
+        self.assertNotIn(">4163<", svg)
+        self.assertIn(">43<", fig.draw({"form": "bars", "rows": [{"label": "A", "value": 43}, {"label": "B", "value": 2.5}]})[0])
+
+    def test_a_unit_row_carries_a_short_note_and_refuses_a_long_one(self):
+        rows = lambda note: {"form": "units", "rows": [{"label": "STLTH pods", "value": 3, "of": 4, "note": note},
+                                                       {"label": "Sunday stock-up", "value": 6, "of": 6}]}
+        svg, why, _ = fig.draw(rows("Honeydew Menthol missing"))
+        self.assertEqual(why, [])
+        self.assertIn("Honeydew Menthol missing", svg)
+        count_x = float(re.search(r'x="([\d.]+)" y="[\d.]+" class="n b" text-anchor="end">3 of 4', svg).group(1))
+        note_x = float(re.search(r'x="([\d.]+)" y="[\d.]+" class="m" text-anchor="start">Honeydew', svg).group(1))
+        self.assertGreater(note_x, count_x)
+        long = "Lemon Drop Freebase Blue Raspberry 100ml, Lemon Drop Salt Nic Peach 60ml, and two more products"
+        self.assertIn("keep the table", " ".join(fig.draw(rows(long))[1]))
+
     def test_time_runs_left_to_right_and_the_long_gap_is_cut_and_named(self):
         svg = fig.draw(TASKS)[0]
         xs = [float(x) for x in re.findall(r'<circle cx="([\d.]+)"', svg)]
