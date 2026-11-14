@@ -1134,6 +1134,27 @@ case "reconcile":
             exit(1)
         }
 
+    case "handoff-text":
+        // The first message a pasted-log continuation receives, exactly as
+        // the app composes it. `scripts/handoff-retrieval-check.py` feeds
+        // this to a real agent, so the check reads the artifact, not a copy.
+        guard args.count > 3 else {
+            print("usage: tbase handoff-text <sessionId> <harness> <logPath> [--tokens N] [--hq-log PATH]")
+            exit(2)
+        }
+        func value(_ flag: String) -> String? {
+            args.firstIndex(of: flag).flatMap { $0 + 1 < args.count ? args[$0 + 1] : nil }
+        }
+        let tokens = value("--tokens").flatMap(Int.init) ?? AgentHandoff.recentLogTokens
+        let command = value("--hq-log") ?? SkillManifest.binDirectory.appendingPathComponent("hq-log").path
+        guard let recent = AgentHandoff.recentLog(logPath: args[3], tokens: tokens, command: command) else {
+            print("no log could be read at \(args[3]) with \(command)")
+            exit(1)
+        }
+        print(AgentHandoff.fragment(
+            sourceName: "the earlier agent", sourceHarness: args[2], sourceSessionId: args[1],
+            logLocation: args[3], recentLog: recent, reportsDirectory: nil))
+
     case "turns":
         guard args.count > 1 else { print("usage: tbase turns <sessionId>"); break }
         let id = args[1]
