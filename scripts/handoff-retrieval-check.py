@@ -5,7 +5,7 @@ Continue with pastes the end of the old log and names three hq-log commands
 for the rest. This asks a real, headless agent questions whose answers are
 ONLY in the part that was not pasted, and passes a case when the agent both
 ran hq-log and gave the answer. It costs model calls, so it is run by hand,
-never by CI.
+never by CI. The message is given as the transport sends it: on one line.
 
     scripts/handoff-retrieval-check.py cases.json [--dest claude|codex] [--tokens N]
 
@@ -86,7 +86,7 @@ def main(argv):
     tbase = os.path.join(ROOT, ".build", "debug", "tbase")
     fragment = subprocess.run(
         [tbase, "handoff-text", spec["session"], spec["harness"], spec["log"],
-         "--tokens", tokens, "--hq-log", os.path.join(BIN, "hq-log")],
+         "--tokens", tokens, "--hq-log", os.path.join(BIN, "hq-log"), "--as-sent"],
         capture_output=True, text=True, check=True).stdout.rstrip("\n")
     print("first message: %d characters, destination %s" % (len(fragment), dest))
     runner = run_codex if dest == "codex" else run_claude
