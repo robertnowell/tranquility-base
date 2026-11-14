@@ -10,6 +10,15 @@ import Foundation
 /// `respondToPermission`, one method silently meaning different things per
 /// backend) is the shape every capability here is written to avoid: each
 /// value is a fact about ONE harness, named for what it is, not inferred.
+public extension HarnessAdapter {
+    /// No fork unless a harness says so. Codex has `codex fork <id>`, and it
+    /// is deliberately not offered yet: nobody has run it under this app,
+    /// and a rollout that carries `forked_from_id` is joined to its parent
+    /// by `CodexLineage`, which a continuation into a separate agent must
+    /// not be. Until that is measured, Codex takes the pasted log.
+    func forkArguments(sessionId: String) -> [String]? { nil }
+}
+
 public protocol HarnessAdapter: Sendable {
     /// Stable, human-legible: "claude-code", "codex". Persisted nowhere yet;
     /// exists so a log line or a card can say which harness it means.
@@ -30,6 +39,13 @@ public protocol HarnessAdapter: Sendable {
     /// `AgentDefaults` and the literal `["--resume", sessionId]` written
     /// again, independently, in `SessionDiscovery.reviveCommand`.
     func resumeArguments(sessionId: String) -> [String]
+
+    /// The arguments that start a NEW session holding this one's
+    /// conversation, or nil when the harness has no fork this app has run.
+    /// Appended to the configured command exactly as `resumeArguments` are.
+    /// The source session is read, never written: forking two ended Claude
+    /// Code sessions on 11 Nov left both source files byte-identical.
+    func forkArguments(sessionId: String) -> [String]?
 
     /// The directory-trust prompt this harness's TUI shows on an unfamiliar
     /// cwd, if it has one — nil skips the watcher entirely rather than
@@ -381,6 +397,10 @@ public struct ClaudeCodeAdapter: HarnessAdapter {
 
     public func resumeArguments(sessionId: String) -> [String] {
         ["--resume", sessionId]
+    }
+
+    public func forkArguments(sessionId: String) -> [String]? {
+        ["--resume", sessionId, "--fork-session"]
     }
 
     public var trustPrompt: TrustPromptSpec? {

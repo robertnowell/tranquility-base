@@ -736,7 +736,7 @@ public enum SessionLauncher {
         Tmux.run(["set", "-t", name, "remain-on-exit", "off"], socket: Tmux.socketName)
     }
 
-    static func shellQuoted(_ s: String) -> String {
+    public static func shellQuoted(_ s: String) -> String {
         "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
