@@ -32,6 +32,8 @@ CLIP = 4000
 # that is too generous overflows the destination's context window.
 CHARS_PER_TOKEN = 3.5
 DEFAULT_TOKENS = 100_000
+# The session id or path the command was given, for the commands it prints.
+TARGET = "<log>"
 
 
 # ---------------------------------------------------------------- locating
@@ -175,8 +177,10 @@ def entries(path):
 def clip(text, number, full=False):
     if full or len(text) <= CLIP:
         return text
-    return (text[:CLIP] + "\n[... %d more characters. hq-log show <log> %d --full prints all of it.]"
-            % (len(text) - CLIP, number))
+    # The command is printed whole, with the log it was asked about: a
+    # placeholder here is a command the reader has to finish before it runs.
+    return (text[:CLIP] + "\n[... %d more characters. hq-log show %s %d --full prints all of it.]"
+            % (len(text) - CLIP, TARGET, number))
 
 
 def render(entry, full=False):
@@ -263,7 +267,7 @@ def cmd_search(path, pattern, context, limit, ignore_case):
         printed = 0
         for j in sorted(shown):
             if printed >= 40:
-                print("    [... more matching lines in this entry. hq-log show <log> %d]" % number)
+                print("    [... more matching lines in this entry. hq-log show %s %d]" % (TARGET, number))
                 break
             if j != last + 1 and last >= 0:
                 print("    --")
@@ -309,7 +313,9 @@ def main(argv):
     if len(argv) < 2 or argv[0] in ("-h", "--help", "help"):
         print(__doc__.strip())
         return 0 if argv else 2
+    global TARGET
     command, target, rest = argv[0], argv[1], argv[2:]
+    TARGET = target
     path = locate(target)
     if not path:
         print("no session log found for %s" % target, file=sys.stderr)
