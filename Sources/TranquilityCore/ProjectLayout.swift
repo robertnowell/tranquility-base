@@ -111,13 +111,14 @@ public enum ProjectLayout {
     ///
     /// The tiers are `SessionRow.gridRows`'s, unchanged: lit rows, then the
     /// merely alive, then the dead, and only as many as `shownCount` allows.
-    /// Within each tier, rows in folders come first, in the folders' order,
+    /// Within the first two tiers, rows in folders come first, in the folders' order,
     /// and loose rows last; inside one folder the incoming lamp order stands.
     /// So the slots are given away from the bottom of the grid upward: loose
     /// rows first, then the lowest folder's blue rows, then its green ones.
     public static func gridRows(_ rows: [SessionRow], capacity: Int, floor: Int,
                                 book: ProjectBook,
-                                origin: (String) -> String = { $0 }) -> [SessionRow] {
+                                origin: (String) -> String = { $0 },
+                                now: Date = Date()) -> [SessionRow] {
         let eligible = rows.filter { !$0.switchedOff }
         let rank = Dictionary(book.folders.enumerated().map { ($1.id, $0) },
                               uniquingKeysWith: { first, _ in first })
@@ -130,7 +131,10 @@ public enum ProjectLayout {
         }
         let ordered = pinned(eligible.filter { $0.lamp.isLit })
             + pinned(eligible.filter { $0.lamp == .running })
-            + pinned(eligible.filter { $0.lamp == .unlit })
+            // Not pinned: an agent with no process takes a spare slot by
+            // how recently it spoke, and not at all after `openFor`
+            // (`SessionRow.stillOpen`, 11 Nov 2026).
+            + SessionRow.stillOpen(eligible.filter { $0.lamp == .unlit }, now: now)
         return Array(ordered.prefix(SessionRow.shownCount(rows, capacity: capacity, floor: floor)))
     }
 
