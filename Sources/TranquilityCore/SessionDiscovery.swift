@@ -330,6 +330,61 @@ public enum SessionDiscovery {
         scans.endRefresh(key: key)
     }
 
+    // MARK: - The archive: every log on disk, with no window
+
+    /// Ten years. A window, because `scan` takes one, and wider than any
+    /// harness keeps a log: Claude Code deletes them after `cleanupPeriodDays`.
+    public static let archiveWindow: TimeInterval = 10 * 365 * 24 * 60 * 60
+
+    private final class ArchiveHold: @unchecked Sendable {
+        private let lock = NSLock()
+        private var held: (result: Result, at: Date)?
+        func get() -> (result: Result, at: Date)? { lock.lock(); defer { lock.unlock() }; return held }
+        func put(_ result: Result, at: Date) { lock.lock(); held = (result, at); lock.unlock() }
+    }
+    private static let archive = ArchiveHold()
+
+    /// Every interactive session whose log still exists, however old.
+    ///
+    /// Past Agents search reads this. The grid does not, and must not: the
+    /// 30-day scan is walked every thirty seconds for the life of the app, and
+    /// widening that one would make every grid refresh pay for a year of logs.
+    /// So the archive has its own hold, outside `ScanCache`, which keeps a
+    /// single entry and would thrash between the two windows.
+    ///
+    /// Never call this on the main actor. A cold walk reads the head of every
+    /// log on disk.
+    public static func discoverArchive(
+        now: Date = Date(),
+        live: ClaudeAgentsReading = ClaudeAgentsCLI(),
+        projects: URL = TranscriptArchive.projectsDirectory,
+        sessions: URL = CodexRollout.sessionsDirectory,
+        titles: TranscriptTitles = TranscriptTitles.shared,
+        ttl: TimeInterval = 600,
+        temporaryRoots: [String] = defaultTemporaryRoots
+    ) -> Result {
+        if let held = archive.get(), now.timeIntervalSince(held.at) < ttl {
+            return join(held.result, live: live)
+        }
+        let scanned = scan(window: archiveWindow, limit: defaultLimit, now: now,
+                           projects: projects, titles: titles, sessions: sessions,
+                           temporaryRoots: temporaryRoots)
+        archive.put(scanned, at: now)
+        return join(scanned, live: live)
+    }
+
+    /// One session from the last archive walk, with its liveness joined now.
+    /// Nil when no walk has run yet or the session is not in it.
+    public static func archived(sessionId: String,
+                                live: ClaudeAgentsReading = ClaudeAgentsCLI()) -> Session? {
+        guard let held = archive.get(),
+              let found = held.result.sessions.first(where: { $0.sessionId == sessionId })
+        else { return nil }
+        var one = Result()
+        one.sessions = [found]
+        return join(one, live: live).sessions.first
+    }
+
     public static func discover(
         window: TimeInterval = defaultWindow,
         limit: Int = defaultLimit,

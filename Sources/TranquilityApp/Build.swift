@@ -788,7 +788,9 @@ extension StatusHUD {
         pastList.onPick = { [weak self] row, revivable in
             guard let self else { return }
             let id = row.id, lamp = row.lamp
-            let name = pastListName(id)
+            // The row's own name: an agent found by search may be on neither
+            // face's row list, and its receipt should not read as an id.
+            let name = row.name
             onBreadcrumbHome?()
             guard !revivable else { onRevive?(id, name); return }
             // The door for amber, and for a row that has never finished a
@@ -830,6 +832,13 @@ extension StatusHUD {
         }
         pastList.onTerminate = { [weak self] id, name in
             self?.onTerminateSession?(id, name)
+        }
+        // How search is used, never what was searched for: the words are the
+        // person's own and stay on this machine.
+        pastList.onSearched = { results, order, milliseconds in
+            Track.record("past_agents_searched", [
+                "results": .int(results), "order": .token(order.rawValue),
+                "milliseconds": .int(milliseconds)])
         }
         pastList.onFilterChanged = { [weak self] in
             guard let self, case .pastAgents = state else { return }

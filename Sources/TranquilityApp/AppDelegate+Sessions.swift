@@ -1498,79 +1498,219 @@ extension AppDelegate {
     /// actor in one shot.
     func openPastAgents() {
         let warm = SessionDiscovery.hasScanned()
-        let initial = warm ? pastAgentItems() : []
+        let rows = warm ? sessionRowsNow() : []
+        let initial = pastAgentItems(StatusHUD.pastAgents(rows))
         hud.pastList?.archiveRead = warm
         hud.showPastAgents(items: initial)
         guard case .pastAgents = hud.state, let list = hud.pastList else { return }
         let opening = list.openingGeneration
         let index = pastAgentSearch
-        let store = store
-        let now = Date()
-        let since = now.addingTimeInterval(-SessionDiscovery.defaultWindow)
+        // The search answers at once, from the index on disk. Nothing is
+        // prepared here: the index is kept up to date in the background, and
+        // an opening only asks it questions (ruled 15 Nov 2026).
+        let owners = PastAgentOwners()
+        list.installSearch({ query, order, everyExcerpt in
+            // A family folds into one row, so a page of rows can need a few
+            // more passages than it has rows.
+            let found = try index.search(query, order: order, limit: PastAgentsList.searchLimit,
+                                         excerpts: everyExcerpt ? .max : PastAgentsList.resultPage * 2)
+            return SessionKeywordIndex.merge(found, order: order, owner: owners.owner)
+        }, opening: opening)
+        list.indexProgress(pastAgentIndexProgress)
+        if warm { Track.record("past_agents_opened", ["rows": .int(initial.count)]) }
+        refreshPastAgentIndex()
+
         pastAgentPreparation?.cancel()
         pastAgentPreparation = Task.detached(priority: .userInitiated) { [weak self] in
-            do {
-                let scanned = SessionDiscovery.discover().sessions
-                try Task.checkCancellation()
-                let documents: [SessionKeywordIndex.Document]? = await MainActor.run {
-                    guard let self, case .pastAgents = self.hud.state,
-                          self.hud.pastList.openingGeneration == opening else { return nil }
-                    let items = warm ? initial : self.pastAgentItems()
-                    if !warm { self.hud.pastList.finishArchive(items: items, opening: opening) }
-                    let byID = Dictionary(scanned.map { ($0.sessionId, $0) },
-                                          uniquingKeysWith: { first, _ in first })
+            if !warm {
+                _ = SessionDiscovery.discover()
+                guard !Task.isCancelled else { return }
+            }
+            // What a search may answer with, beyond the list itself: the
+            // agents the grid is showing, and agents older than thirty days.
+            let archive = SessionDiscovery.discoverArchive().sessions
+            let lineage = SessionLineage.current()
+            guard !Task.isCancelled else { return }
+            let all: [PastAgentsList.Item]? = await MainActor.run {
+                guard let self, case .pastAgents = self.hud.state,
+                      self.hud.pastList.openingGeneration == opening else { return nil }
+                let rows = warm ? rows : self.sessionRowsNow()
+                if !warm {
+                    let items = self.pastAgentItems(StatusHUD.pastAgents(rows))
+                    self.hud.pastList.finishArchive(items: items, opening: opening)
                     Track.record("past_agents_opened", ["rows": .int(items.count)])
-                    return items.map { item in
-                        let session = byID[item.row.id]
-                        return SessionKeywordIndex.Document(id: item.row.id, title: item.row.name,
-                            metadata: item.haystack,
-                            activity: session?.lastActivityAt ?? .distantPast)
-                    }
                 }
-                guard let documents else { return }
-                let sources = try SessionKeywordIndex.sources(documents: documents,
-                    discovered: scanned, store: store, since: since, reportsRoot: HomeBase.root)
-                let preparation = try await index.prepare(sources: sources, since: since)
-                try Task.checkCancellation()
-                await MainActor.run {
-                    guard let self, case .pastAgents = self.hud.state else { return }
-                    self.hud.pastList.installSearch({ query in try await index.search(query) },
-                        opening: opening, partial: preparation.unreadableSources > 0)
-                    Permissions.log("past agents keyword index: \(preparation.documents) sessions, "
-                        + "\(preparation.unreadableSources) unreadable sources")
+                return self.pastAgentItems(rows)
+            }
+            guard let all else { return }
+            var owner: [String: String] = [:]
+            for item in all {
+                for member in SessionLineage.family(of: item.row.id, in: lineage) + [item.row.id]
+                where owner[member] == nil { owner[member] = item.row.id }
+            }
+            // One conversation, one row: a session that continues an agent
+            // already listed is that agent, not a second result.
+            var older: [SessionDiscovery.Session] = []
+            for session in archive where owner[session.sessionId] == nil && session.liveness != .live {
+                let family = SessionLineage.family(of: session.sessionId, in: lineage) + [session.sessionId]
+                if let taken = family.compactMap({ owner[$0] }).first {
+                    owner[session.sessionId] = taken
+                    continue
                 }
-            } catch is CancellationError { }
-            catch {
-                await MainActor.run {
-                    guard let self, case .pastAgents = self.hud.state else { return }
-                    self.hud.pastList.searchFailed(opening: opening)
-                    Permissions.log("past agents keyword preparation failed: \(error)")
+                older.append(session)
+                for member in family { owner[member] = session.sessionId }
+            }
+            owners.set(owner)
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                guard let self, case .pastAgents = self.hud.state else { return }
+                self.hud.pastList.setSearchable(all + self.pastAgentItems(archived: older),
+                                                opening: opening)
+            }
+        }
+    }
+
+    /// Keep the search index current, off the main thread, one pass at a time.
+    ///
+    /// Called at launch and then about once a minute. A pass walks every log
+    /// on disk, reads the bytes each one has grown by, and appends them. The
+    /// first pass on a machine reads everything; measured on 15 Nov 2026 that
+    /// was 86,295 messages from 791 sessions in 13 seconds. After that a pass
+    /// is a `stat` for each log that has not moved.
+    func refreshPastAgentIndex() {
+        guard pastAgentIndexing == nil else { return }
+        pastAgentIndexKicked = Date()
+        let index = pastAgentSearch
+        let store = store
+        let unchangedSince = pastAgentIndexedAt
+        let began = Date()
+        let progress: @Sendable (Int, Int) -> Void = { [weak self] done, total in
+            guard done % 10 == 0, done < total else { return }
+            Task { @MainActor in
+                guard let self, self.pastAgentIndexing != nil else { return }
+                self.pastAgentIndexProgress = (done, total)
+                if case .pastAgents = self.hud.state {
+                    self.hud.pastList.indexProgress((done, total))
                 }
             }
+        }
+        pastAgentIndexing = Task.detached(priority: .utility) { [weak self] in
+            let pass = await Self.pastAgentIndexPass(index: index, store: store,
+                                                     unchangedSince: unchangedSince, progress: progress)
+            await MainActor.run {
+                guard let self else { return }
+                self.pastAgentIndexing = nil
+                self.pastAgentIndexProgress = nil
+                if let result = pass.refresh {
+                    // A minute of overlap, so a session that moved while the
+                    // pass ran has its summary read again on the next one.
+                    self.pastAgentIndexedAt = began.addingTimeInterval(-60)
+                    // Quiet passes are not news: one line when something was
+                    // read, or the log would gain a line a minute for ever.
+                    if result.filesRead > 0 || result.unreadableSources > 0 {
+                        Permissions.log(pass.line)
+                    }
+                } else {
+                    Permissions.log(pass.line)
+                }
+                if case .pastAgents = self.hud.state { self.hud.pastList.indexProgress(nil) }
+            }
+        }
+    }
+
+    /// One pass of the index, entirely off the main thread.
+    nonisolated private static func pastAgentIndexPass(
+        index: SessionKeywordIndex, store: QueueStore?, unchangedSince: Date?,
+        progress: @escaping @Sendable (Int, Int) -> Void
+    ) async -> (line: String, refresh: SessionKeywordIndex.Refresh?) {
+        do {
+            // The index this one replaced: 62 MB, four fifths of it free
+            // pages left by deleting and reinserting every row per opening.
+            for suffix in ["", "-journal"] {
+                try? FileManager.default.removeItem(at: QueueStore.supportDirectory
+                    .appendingPathComponent("session-search.sqlite" + suffix))
+            }
+            let before = try? index.counts()
+            let first = (before?.messages ?? 0) == 0
+            let archive = SessionDiscovery.discoverArchive().sessions
+            let book = ProjectStore.shared.current
+            let sources = try SessionKeywordIndex.sources(
+                discovered: archive, store: store, reportsRoot: HomeBase.root,
+                unchangedSince: first ? nil : unchangedSince,
+                folder: { book.folder(of: $0, origin: SessionLineage.lastKnownOrigin)?.name })
+            let refresh = try await index.refresh(sources: sources, progress: first ? progress : nil)
+            let counted = try? index.counts()
+            let sessions = counted?.sessions ?? 0, messages = counted?.messages ?? 0
+            let line = "past agents index: \(sessions) sessions, \(messages) messages; read "
+                + "\(refresh.filesRead) files, +\(refresh.messagesAdded) messages, "
+                + "\(refresh.unreadableSources) unreadable, "
+                + String(format: "%.1fs (logs %.1fs, pages %.1fs, writes %.1fs)", refresh.seconds,
+                         refresh.readSeconds, refresh.reportSeconds, refresh.writeSeconds)
+                + (first ? " (first build)" : "")
+            if first || refresh.messagesAdded > 0 || refresh.seconds > 2 {
+                Track.record("past_agents_index_refreshed", [
+                    "sessions": .int(sessions), "messages": .int(messages),
+                    "files_read": .int(refresh.filesRead),
+                    "messages_added": .int(refresh.messagesAdded),
+                    "milliseconds": .int(Int(refresh.seconds * 1000)),
+                    "first_build": .bool(first)])
+            }
+            return (line, refresh)
+        } catch is CancellationError {
+            return ("past agents index: refresh cancelled", nil)
+        } catch {
+            return ("past agents index: refresh failed: \(error)", nil)
         }
     }
 
     /// Use the grid's own partition and names. The archive and index never
     /// invent a competing set of row identities or navigation actions.
-    private func pastAgentItems() -> [PastAgentsList.Item] {
-        let hidden = Array(StatusHUD.pastAgents(sessionRowsNow()))
+    private func pastAgentItems(_ rows: [SessionRow]) -> [PastAgentsList.Item] {
         let scanned = SessionDiscovery.discoverIfScanned()?.sessions ?? []
         let byID = Dictionary(scanned.map { ($0.sessionId, $0) },
                               uniquingKeysWith: { first, _ in first })
         let now = Date()
         let book = ProjectStore.shared.current
-        return hidden.map { row in
+        return rows.map { row in
             let session = byID[row.id]
             let folder = book.folder(of: row.id, origin: SessionLineage.lastKnownOrigin)?.name
             // The folder's name is searchable: typing "mirai" finds every
             // agent that was filed under Mirai.
             let haystack = [row.name, row.id, session?.cwd ?? "", folder ?? ""].joined(separator: " ")
-            let when = session.map { SessionActivity.lastMovedLabel($0.lastActivityAt, now: now) }
+            let moved = session?.lastActivityAt ?? row.lastActivity
+            let when = moved.map { SessionActivity.lastMovedLabel($0, now: now) }
             let hover = [SessionRow.hoverText(for: row), SessionRow.shortId(row.id)]
                 .compactMap { $0 }.joined(separator: "\n")
             return PastAgentsList.Item(row: row, revivable: row.revivable,
                                        haystack: haystack, aux: when, tooltip: hover,
                                        folder: folder)
+        }
+    }
+
+    /// Rows for agents older than the grid's thirty days, which only a search
+    /// can reach. Built the way the grid builds a row for a session that is
+    /// not awake, so an old agent looks and revives like any other dead one.
+    private func pastAgentItems(archived sessions: [SessionDiscovery.Session]) -> [PastAgentsList.Item] {
+        let now = Date()
+        let book = ProjectStore.shared.current
+        return sessions.map { found in
+            let row = SessionRow(
+                id: found.sessionId,
+                name: GridAssembler.tabDisplayName(discovered: found.title, sessionId: found.sessionId,
+                                                   callsign: nil, cwd: found.cwd),
+                aux: found.activity?.shortReason ?? SessionRow.shortId(found.sessionId),
+                lamp: .unlit, revivable: found.revivable,
+                detail: found.activity?.fullReason
+                    ?? (found.harness == CodexAdapter().id ? "Codex session" : nil),
+                harness: found.harness, lastActivity: found.lastActivityAt)
+            let folder = book.folder(of: row.id, origin: SessionLineage.lastKnownOrigin)?.name
+            let hover = [SessionRow.hoverText(for: row), SessionRow.shortId(row.id)]
+                .compactMap { $0 }.joined(separator: "\n")
+            return PastAgentsList.Item(
+                row: row, revivable: row.revivable,
+                haystack: [row.name, row.id, found.cwd ?? "", folder ?? ""].joined(separator: " "),
+                aux: SessionActivity.lastMovedLabel(found.lastActivityAt, now: now),
+                tooltip: hover, folder: folder)
         }
     }
 
@@ -1745,7 +1885,8 @@ extension AppDelegate {
                 // come back here with `reviveIfGone: false` to open it.
                 if reviveIfGone,
                    let known = SessionDiscovery.discover().sessions
-                       .first(where: { $0.sessionId == sessionId }),
+                       .first(where: { $0.sessionId == sessionId })
+                       ?? SessionDiscovery.archived(sessionId: sessionId),
                    known.revivable {
                     let name = known.title
                         ?? CodexThreadNames.all()[sessionId]
@@ -2100,8 +2241,11 @@ extension AppDelegate {
         hud.showReceipt(.reviving(name))
         Task.detached {
             defer { ResumeGuard.endIntent(sessionId) }
+            // An agent older than the grid's thirty days is reached only by a
+            // Past Agents search, and only the archive walk knows it.
             let fresh = SessionDiscovery.discover(ttl: 0).sessions
                 .first { $0.sessionId == sessionId }
+                ?? SessionDiscovery.archived(sessionId: sessionId)
             // BRANCH ON THE HARNESS, never on absence.
             //
             // This read `guard let fresh else { ...Codex... }`, which worked
@@ -3054,4 +3198,20 @@ final class LaunchQuestionSeen: @unchecked Sendable {
     func mark() { lock.lock(); asked = true; lock.unlock() }
 
     var wasAsked: Bool { lock.lock(); defer { lock.unlock() }; return asked }
+}
+
+/// Which row each session belongs to, for one opening of Past Agents.
+///
+/// Built off the main thread a moment after the list opens, and read by every
+/// search of that opening. Until it lands a session answers as itself, which
+/// is right for every agent that was never continued under a new id.
+final class PastAgentOwners: @unchecked Sendable {
+    private let lock = NSLock()
+    private var map: [String: String]?
+    func set(_ owners: [String: String]) { lock.lock(); map = owners; lock.unlock() }
+    func owner(_ session: String) -> String? {
+        lock.lock(); defer { lock.unlock() }
+        guard let map else { return session }
+        return map[session] ?? session
+    }
 }
