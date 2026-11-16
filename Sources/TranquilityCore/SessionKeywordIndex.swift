@@ -128,9 +128,46 @@ public actor SessionKeywordIndex {
             lock.lock(); defer { lock.unlock() }
             if let writer { return writer }
             let opened: any DatabaseWriter
+            do { opened = try open() } catch let error as DatabaseError where Self.damaged(error) {
+                // The index is a copy of the logs. A damaged copy is deleted
+                // and built again, never left to fail every pass for ever.
+                try removeFiles()
+                opened = try open()
+            }
+            writer = opened
+            return opened
+        }
+
+        /// Forget a damaged index, so the next pass builds a new one.
+        func discard(after error: Error) {
+            guard let error = error as? DatabaseError, Self.damaged(error) else { return }
+            lock.lock(); defer { lock.unlock() }
+            writer = nil
+            try? removeFiles()
+        }
+
+        private static func damaged(_ error: DatabaseError) -> Bool {
+            error.resultCode == .SQLITE_CORRUPT || error.resultCode == .SQLITE_NOTADB
+        }
+
+        private func removeFiles() throws {
+            guard let url else { return }
+            for suffix in ["-wal", "-shm", ""] {
+                let file = URL(fileURLWithPath: url.path + suffix)
+                guard FileManager.default.fileExists(atPath: file.path) else { continue }
+                try FileManager.default.removeItem(at: file)
+            }
+        }
+
+        private func open() throws -> any DatabaseWriter {
+            let opened: any DatabaseWriter
             if let url {
                 try PrivateStorage.createDirectory(at: url.deletingLastPathComponent())
-                opened = try DatabasePool(path: url.path)
+                // Two builds of the app can run at once and share this file.
+                // The second writer waits for the first, it does not fail.
+                var configuration = Configuration()
+                configuration.busyMode = .timeout(10)
+                opened = try DatabasePool(path: url.path, configuration: configuration)
                 for suffix in ["", "-wal", "-shm"] {
                     PrivateStorage.protect(URL(fileURLWithPath: url.path + suffix))
                 }
@@ -156,7 +193,6 @@ public actor SessionKeywordIndex {
                     END;
                     """)
             }
-            writer = opened
             return opened
         }
     }
@@ -218,6 +254,16 @@ public actor SessionKeywordIndex {
     @discardableResult
     public func refresh(sources: [Source],
                         progress: (@Sendable (_ done: Int, _ total: Int) -> Void)? = nil) throws -> Refresh {
+        do { return try pass(sources: sources, progress: progress) } catch {
+            // Damage found part-way through a pass: this pass fails, and the
+            // next one starts from an empty index.
+            store.discard(after: error)
+            throw error
+        }
+    }
+
+    private func pass(sources: [Source],
+                      progress: (@Sendable (_ done: Int, _ total: Int) -> Void)?) throws -> Refresh {
         let began = Date()
         let db = try store.database()
         var result = Refresh()

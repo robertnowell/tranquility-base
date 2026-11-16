@@ -254,6 +254,71 @@ final class SessionKeywordIndexTests: XCTestCase {
         XCTAssertEqual(page.map(\.count), [1, 1, 1, 1, 1], "every result is still counted")
     }
 
+    func testADamagedIndexFileIsReplacedAndBuiltAgain() async throws {
+        let dir = try folder()
+        let file = dir.appendingPathComponent("index.sqlite")
+        let sources = [try session("safari", title: "Safari", in: dir, [
+            ("user", "It loses focus after every keystroke.", now)])]
+        // Not a database at all.
+        try Data(repeating: 0x5a, count: 40_000).write(to: file)
+        let first = SessionKeywordIndex(cacheURL: file)
+        let built = try await first.refresh(sources: sources)
+        XCTAssertEqual(built.filesRead, 1)
+        XCTAssertEqual(try first.search("keystroke").map(\.id), ["safari"])
+
+        // A real index cut short: the header is good and the pages are gone.
+        let torn = dir.appendingPathComponent("torn.sqlite")
+        let whole = try Data(contentsOf: file)
+        try whole.prefix(whole.count / 2).write(to: torn)
+        let second = SessionKeywordIndex(cacheURL: torn)
+        _ = try? await second.refresh(sources: sources)
+        let again = try await second.refresh(sources: sources)
+        let found = try second.search("keystroke").map(\.id)
+        XCTAssertEqual(found, ["safari"], "after at most one failed pass: \(again)")
+    }
+
+    func testRolloutFactsReadByLineAgreeWithTheWholeParse() throws {
+        // Every real rollout on this machine, when there are any: the line
+        // reader must say what the whole parse says. Large files are left
+        // out, because the whole parse of one is what the reader replaces.
+        var files: [URL] = []
+        let dir = try folder()
+        let made = dir.appendingPathComponent("rollout-made.jsonl")
+        let rows: [[String: Any]] = [
+            ["type": "session_meta", "payload": ["id": "first", "cwd": "/tmp/a"]],
+            ["type": "response_item", "payload": ["type": "message", "role": "user",
+                "content": [["text": "<environment_context>x</environment_context>"]]]],
+            ["type": "event_msg", "payload": ["type": "token_count", "note": "\"response_item\""]],
+            ["type": "response_item", "payload": ["type": "message", "role": "assistant",
+                "content": [["text": "Done."]]]],
+            ["type": "session_meta", "payload": ["id": "second"]],
+            ["type": "response_item", "payload": ["type": "message", "role": "user",
+                "content": [["text": "And one more thing"]]]]]
+        // No newline after the last record, as a log caught mid-write.
+        try rows.map { String(data: try! JSONSerialization.data(withJSONObject: $0), encoding: .utf8)! }
+            .joined(separator: "\n").write(to: made, atomically: true, encoding: .utf8)
+        files.append(made)
+        if let walker = FileManager.default.enumerator(at: CodexRollout.sessionsDirectory,
+                                                       includingPropertiesForKeys: [.fileSizeKey]) {
+            for case let url as URL in walker where url.pathExtension == "jsonl" {
+                let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? .max
+                if size < 2_000_000 { files.append(url) }
+                if files.count > 120 { break }
+            }
+        }
+        for url in files {
+            guard let text = try? String(contentsOf: url, encoding: .utf8) else { continue }
+            let whole = CodexRollout.parse(text)
+            let byLine = try XCTUnwrap(CodexRollout.facts(at: url))
+            XCTAssertEqual(byLine.meta?.sessionId, whole.meta?.sessionId, url.lastPathComponent)
+            XCTAssertEqual(byLine.meta?.cwd, whole.meta?.cwd, url.lastPathComponent)
+            XCTAssertEqual(byLine.lastRole, whole.messages.last?.role, url.lastPathComponent)
+        }
+        let facts = try XCTUnwrap(CodexRollout.facts(at: made))
+        XCTAssertEqual(facts.meta?.sessionId, "first")
+        XCTAssertEqual(facts.lastRole, "user")
+    }
+
     func testALineIsParsedOnlyWhenItCanHoldAMessage() throws {
         let at = ISO8601DateFormatter().string(from: now)
         func holds(_ json: String) -> Bool { SessionSearchText.mayHoldMessage(Data(json.utf8)) }

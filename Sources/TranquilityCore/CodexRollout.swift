@@ -441,6 +441,43 @@ public enum CodexRollout {
                       isBusy: !openTurns.isEmpty, skippedLines: skipped)
     }
 
+    /// What the archive walk needs from one rollout, read a line at a time.
+    ///
+    /// `parse` holds every record of the file at once. One real rollout on
+    /// this machine is 643 MB, and parsing it whole took 4.6 GB of memory.
+    /// The walk needs two facts: the first `session_meta`, and who spoke
+    /// last. So the file is mapped, each line is decoded and released, and a
+    /// line that names neither record type is never decoded at all.
+    public static func facts(at url: URL) -> (meta: SessionMeta?, lastRole: String?)? {
+        guard let data = try? Data(contentsOf: url, options: [.alwaysMapped]) else { return nil }
+        var meta: SessionMeta?
+        var lastRole: String?
+        let wanted = [Array("\"session_meta\"".utf8), Array("\"response_item\"".utf8)]
+        data.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
+            guard let base = raw.baseAddress else { return }
+            let count = raw.count
+            var start = 0
+            while start < count {
+                let end = memchr(base + start, 10, count - start)
+                    .map { base.distance(to: UnsafeRawPointer($0)) } ?? count
+                let length = end - start
+                if length > 0, wanted.contains(where: { memmem(base + start, length, $0, $0.count) != nil }) {
+                    autoreleasepool {
+                        let line = String(decoding: UnsafeRawBufferPointer(start: base + start, count: length),
+                                          as: UTF8.self)
+                        switch record(line) {
+                        case .meta(let found): if meta == nil { meta = found }
+                        case .content(let message): lastRole = message.role
+                        default: break
+                        }
+                    }
+                }
+                start = end + 1
+            }
+        }
+        return (meta, lastRole)
+    }
+
     // MARK: - Filesystem
 
     public static var sessionsDirectory: URL {

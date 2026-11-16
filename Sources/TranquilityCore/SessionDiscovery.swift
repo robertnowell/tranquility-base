@@ -555,14 +555,20 @@ public enum SessionDiscovery {
             // Liveness and revivability are deliberately absent here: they are
             // process facts, they go stale in seconds, and `discover` joins
             // them on afterwards so this whole walk can be cached.
+            // Both read JSON, and what that leaves behind is released per
+            // file: the archive walk passes through here a thousand times.
+            let title = autoreleasepool { titles.latestTitle(transcriptPath: path) }
+            let activity = autoreleasepool {
+                SessionActivity.classify(tail: tail, modified: modified, now: now)
+            }
             kept.append(Session(
                 sessionId: sessionId,
                 cwd: cwd,
                 transcriptPath: path,
-                title: titles.latestTitle(transcriptPath: path),
+                title: title,
                 lastActivityAt: moved,
                 answered: moving.answered,
-                activity: SessionActivity.classify(tail: tail, modified: modified, now: now),
+                activity: activity,
                 liveness: .unknown,
                 revivable: false))
         }
