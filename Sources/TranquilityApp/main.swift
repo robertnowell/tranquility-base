@@ -702,9 +702,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // no relaunch:
                 //   defaults write <bundle id> startOnReply -bool YES
                 startGone: { id in
-                    UserDefaults.standard.bool(forKey: "startOnReply")
-                        ? AgentStart.forReply(sessionId: id)
-                        : .notGone("start on reply is switched off")
+                    guard UserDefaults.standard.bool(forKey: "startOnReply") else {
+                        return .notGone("start on reply is switched off")
+                    }
+                    let outcome = AgentStart.ensureRunningJoining(sessionId: id, unasked: true)
+                    AgentStartRecord.record(outcome, via: .reply, sessionId: id)
+                    return outcome.forReply
                 })
             // The mirror: every page and turn into the hub, while the panel
             // runs. Nil until this Mac is connected; nothing else changes.

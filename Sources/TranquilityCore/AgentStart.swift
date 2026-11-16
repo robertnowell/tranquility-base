@@ -63,7 +63,7 @@ public enum AgentStart {
         /// when one was captured, holds the reason.
         case exited(lastScreen: String?)
         /// The start itself failed. `worthRetrying` is the launcher's own.
-        case failed(message: String, worthRetrying: Bool)
+        case failed(message: String, worthRetrying: Bool, harness: String)
     }
 
     public enum Outcome: Sendable, Equatable {
@@ -224,11 +224,12 @@ public enum AgentStart {
 
         willStart()
         return registers
-            ? resume(sessionId, in: cwd, witness: witness)
-            : attach(sessionId, in: cwd, witness: witness)
+            ? resume(sessionId, in: cwd, harness: found.harness, witness: witness)
+            : attach(sessionId, in: cwd, harness: found.harness, witness: witness)
     }
 
-    private static func resume(_ sessionId: String, in cwd: String, witness: Witness) -> Outcome {
+    private static func resume(_ sessionId: String, in cwd: String, harness: String,
+                               witness: Witness) -> Outcome {
         switch witness.resume(sessionId, cwd) {
         case .success(let pane):
             return .started(how: .resumed, pane: pane, pid: witness.awaitPid(sessionId), cwd: cwd)
@@ -239,12 +240,13 @@ public enum AgentStart {
             // The process table could not be read. That is no proof of
             // anything, and it must never reach a person as a refusal.
             if error.scanUnreadable { return .unknown("the process table could not be read") }
-            return .refused(.failed(message: error.message, worthRetrying: error.worthRetrying),
-                            cwd: cwd)
+            return .refused(.failed(message: error.message, worthRetrying: error.worthRetrying,
+                                    harness: harness), cwd: cwd)
         }
     }
 
-    private static func attach(_ sessionId: String, in cwd: String, witness: Witness) -> Outcome {
+    private static func attach(_ sessionId: String, in cwd: String, harness: String,
+                               witness: Witness) -> Outcome {
         let outcome = witness.attach(sessionId, cwd)
         if case .success(.attached) = outcome {
             return .started(how: .attached, pane: nil, pid: witness.awaitPid(sessionId), cwd: cwd)
@@ -265,8 +267,8 @@ public enum AgentStart {
             return .refused(.exited(lastScreen: lastScreen), cwd: cwd)
         case .failure(let error):
             if error.scanUnreadable { return .unknown("the process table could not be read") }
-            return .refused(.failed(message: error.message, worthRetrying: error.worthRetrying),
-                            cwd: cwd)
+            return .refused(.failed(message: error.message, worthRetrying: error.worthRetrying,
+                                    harness: harness), cwd: cwd)
         case .success(.attached), .success(.stoppedOnPrompt):
             return .unknown("the attach answered twice")   // unreachable: both returned above
         }
@@ -296,17 +298,17 @@ public enum AgentStart {
         case refused(String)
     }
 
-    /// A reply's own call: an unasked start, and one more look when another
-    /// door was already starting it.
-    public static func forReply(sessionId: String, witness: Witness = .live,
-                                willStart: @Sendable () -> Void = {}) -> ForReply {
-        var outcome = ensureRunning(sessionId: sessionId, unasked: true,
-                                    witness: witness, willStart: willStart)
-        if outcome == .joined, settle(sessionId) {
-            outcome = ensureRunning(sessionId: sessionId, unasked: true,
-                                    witness: witness, willStart: willStart)
-        }
-        return outcome.forReply
+    /// For a caller that will wait: when another door was already starting
+    /// the id, wait for that start to finish and look once more.
+    public static func ensureRunningJoining(
+        sessionId: String, unasked: Bool, witness: Witness = .live,
+        willStart: @Sendable () -> Void = {}
+    ) -> Outcome {
+        let first = ensureRunning(sessionId: sessionId, unasked: unasked,
+                                  witness: witness, willStart: willStart)
+        guard first == .joined, settle(sessionId) else { return first }
+        return ensureRunning(sessionId: sessionId, unasked: unasked,
+                             witness: witness, willStart: willStart)
     }
 }
 
@@ -328,7 +330,7 @@ extension AgentStart.Outcome {
             case .exited(let lastScreen):
                 return .refused(lastScreen.map { SessionLauncher.pointOfFailure(in: $0) }
                                 ?? "it exited without resuming")
-            case .failed(let message, _): return .refused(message)
+            case .failed(let message, _, _): return .refused(message)
             }
         }
     }
