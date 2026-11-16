@@ -96,7 +96,11 @@ final class CapabilityLivenessTests: XCTestCase {
     /// `LocalOpenCodeProvider`, and this test is what made that visible rather
     /// than something anyone had to remember to check.
     ///
-    /// COMPAT(pendingCapabilities): consumed by #368-#374, remove after 2026-11-15
+    /// Moved on 16 Nov from 15 Nov by ruling: the three below are still
+    /// unread, and the expired date failed the source audit on every pull
+    /// request. The next move needs the same ruling.
+    ///
+    /// COMPAT(pendingCapabilities): consumed by #368-#374, remove after 2026-12-15
     private static let pendingUntilTheCheckpoint: Set<String> = [
         // No abort route in the client's surface yet, and the provider refuses
         // rather than pretending. #368 or a later pass consumes it.
