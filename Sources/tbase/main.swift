@@ -1144,6 +1144,25 @@ case "reconcile":
         let order: SessionKeywordIndex.Order = args.contains("--relevant") ? .relevant : .recent
         let words = args.dropFirst(2).filter { !$0.hasPrefix("--") }.joined(separator: " ")
         let pastIndex = SessionKeywordIndex(cacheURL: URL(fileURLWithPath: args[1]))
+        // An evaluation asks many questions of one index and reads the
+        // answers by machine: no walk, no pass, one line per question and
+        // order, with the agents in the order the list would draw them.
+        if let flag = args.firstIndex(of: "--queries"), flag + 1 < args.count {
+            let questions = try String(contentsOfFile: args[flag + 1], encoding: .utf8)
+                .split(separator: "\n").map(String.init)
+            for question in questions {
+                for order in [SessionKeywordIndex.Order.recent, .relevant] {
+                    let began = Date()
+                    let found = try pastIndex.search(question, order: order, limit: 300, excerpts: 50)
+                    let quoted = found.prefix(50).filter { !$0.excerpt.isEmpty }.count
+                    print([question, order.rawValue,
+                           String(format: "%.1f", Date().timeIntervalSince(began) * 1000),
+                           String(quoted), found.map(\.id).joined(separator: ",")]
+                        .joined(separator: "\t"))
+                }
+            }
+            break
+        }
         let walkBegan = Date()
         let archive = SessionDiscovery.discoverArchive().sessions
         let walked = Date().timeIntervalSince(walkBegan)
