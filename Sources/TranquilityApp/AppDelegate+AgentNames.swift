@@ -18,8 +18,22 @@ extension AppDelegate {
         }
         // Single writer, set once here: see `Coordinator.onContinuationSent`.
         Coordinator.onContinuationSent = { [weak self] sessionId, continuation in
-            Task { @MainActor in self?.nameContinuedAgent(sessionId, continuation) }
+            Task { @MainActor in
+                self?.fileContinuedAgent(sessionId, continuation)
+                self?.nameContinuedAgent(sessionId, continuation)
+            }
         }
+    }
+
+    /// An agent started with "Continue work with" has just received its
+    /// first message. Put it in its source's folder, if the source has one.
+    /// The first message is the first moment the new agent's id and its
+    /// source are known together, so the row sits loose until then.
+    func fileContinuedAgent(_ sessionId: String, _ continuation: AgentHandoff.Continuation) {
+        guard let joined = hud.fileContinuedAgent(sessionId, continuation) else { return }
+        Permissions.log("folders: continued agent \(sessionId.prefix(8)) joined folder \(joined)")
+        Track.record("folder_followed", ["agent_id": Track.hash(sessionId)])
+        if case .idle = hud.state { showIdleGrid() }
     }
 
     /// An agent started with "Continue work with" has just received its

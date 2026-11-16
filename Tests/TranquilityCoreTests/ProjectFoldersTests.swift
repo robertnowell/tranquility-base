@@ -32,6 +32,39 @@ final class ProjectFoldersTests: XCTestCase {
 
     // MARK: - Rules 1 and 2: folders on top, lamps inside
 
+    // MARK: A continued agent starts in its source's folder (12 Nov 2026)
+
+    func testAContinuedAgentJoinsItsSourcesFolder() {
+        var book = ProjectBook()
+        let folder = book.create(name: "Kopi", with: ["a", "b"])
+        XCTAssertEqual(book.follow("clone", source: "a"), folder)
+        XCTAssertEqual(book.folder(of: "clone")?.id, folder)
+        XCTAssertEqual(book.memberCount(of: folder), 3)
+    }
+
+    func testAContinuedAgentStaysLooseWhenItsSourceIsLoose() {
+        var book = ProjectBook()
+        book.create(name: "Kopi", with: ["a", "b"])
+        XCTAssertNil(book.follow("clone", source: "loose"))
+        XCTAssertNil(book.folder(of: "clone"))
+    }
+
+    func testAContinuedAgentTheUserAlreadyFiledIsNotMoved() {
+        var book = ProjectBook()
+        let kopi = book.create(name: "Kopi", with: ["a", "b"])
+        let mirai = book.create(name: "Mirai", with: ["c", "clone"])
+        XCTAssertNil(book.follow("clone", source: "a"))
+        XCTAssertEqual(book.folder(of: "clone")?.id, mirai)
+        XCTAssertEqual(book.memberCount(of: kopi), 2)
+    }
+
+    func testFollowingFindsASourceFiledUnderItsOrigin() {
+        var book = ProjectBook()
+        let origin: (String) -> String = { $0 == "a-continued" ? "a" : $0 }
+        let folder = book.create(name: "Kopi", with: ["a", "b"])
+        XCTAssertEqual(book.follow("clone", source: "a-continued", origin: origin), folder)
+    }
+
     func testFoldersSitAboveLooseRows() {
         let shown = SessionRow.quietRowsLast([row("loose1", .ready, at: 50), row("m1", .working, at: 10),
                                               row("loose2", .working, at: 40)])

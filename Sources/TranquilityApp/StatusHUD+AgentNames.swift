@@ -76,6 +76,18 @@ extension StatusHUD {
     ///
     /// Against a scratch store, never the user's `agent-names.json`. Driven
     /// through the menu item's own target and action, never a posted event.
+    /// The folder half of a continuation's first message: the new agent
+    /// joins its source's folder. Returns the folder joined, or nil when the
+    /// source is loose or the user already filed the new agent.
+    @discardableResult
+    func fileContinuedAgent(_ sessionId: String,
+                            _ continuation: AgentHandoff.Continuation) -> String? {
+        let origin = SessionLineage.lastKnownOrigin
+        return projects.update {
+            $0.follow(sessionId, source: continuation.sourceSessionId, origin: origin)
+        }
+    }
+
     func agentNamesDrill() {
         let scratch = FileManager.default.temporaryDirectory
             .appendingPathComponent("tb-agent-names-drill-\(UUID().uuidString)", isDirectory: true)
@@ -151,6 +163,30 @@ extension StatusHUD {
         clearing?.finishRename(keep: true)
         let clearingGivesTheAutomaticNameBack = names.current.entry(for: "drill-names-b") == nil
 
+        // A continued agent joins its source's folder, read from the real
+        // handoff message. A loose source leaves it loose, and one the user
+        // already filed is not moved.
+        func handoff(from id: String, _ name: String) -> AgentHandoff.Continuation? {
+            AgentHandoff.continuation(in: AgentHandoff.fragment(
+                sourceName: name, sourceHarness: "claude", sourceSessionId: id,
+                logLocation: "/dev/null", reportsDirectory: nil) + "\n\nFix the footer too")
+        }
+        let fromFolder = handoff(from: "drill-names-c", "Mirai button colour")
+        let joined = fromFolder.flatMap { fileContinuedAgent("drill-names-d", $0) }
+        showIdle(rows: [row("drill-names-a", "YouVape email flows"),
+                        row("drill-names-c", "Mirai button colour"),
+                        row("drill-names-d", "Mirai footer")])
+        let cloneJoinsTheFolder = joined == "mirai"
+            && folders.current.memberCount(of: "mirai") == 2
+            && gridRowView(for: "drill-names-d") != nil
+        let fromLoose = handoff(from: "drill-names-a", "YouVape email flows")
+        let looseSourceLeavesItLoose = fromLoose != nil
+            && fromLoose.flatMap { fileContinuedAgent("drill-names-e", $0) } == nil
+            && folders.current.folder(of: "drill-names-e") == nil
+        folders.update { $0.create(name: "Kopi", with: ["drill-names-f"], id: "kopi") }
+        let filedCloneIsNotMoved = fromFolder.flatMap { fileContinuedAgent("drill-names-f", $0) } == nil
+            && folders.current.folder(of: "drill-names-f")?.id == "kopi"
+
         // And it survives the process: a second store on the same file.
         let survivesARelaunch = AgentNameStore(url: names.url).current.name(for: "drill-names-c")
             == "Mirai button colour"
@@ -168,6 +204,9 @@ extension StatusHUD {
             ("anAutomaticNameNeverReplacesATypedOne", autoRefused),
             ("clearingGivesTheAutomaticNameBack", clearingGivesTheAutomaticNameBack),
             ("theNameSurvivesARelaunch", survivesARelaunch),
+            ("aContinuedAgentJoinsItsSourcesFolder", cloneJoinsTheFolder),
+            ("aLooseSourceLeavesItLoose", looseSourceLeavesItLoose),
+            ("aCloneTheUserFiledIsNotMoved", filedCloneIsNotMoved),
         ])
     }
 }
