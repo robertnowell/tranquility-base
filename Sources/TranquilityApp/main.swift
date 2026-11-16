@@ -696,13 +696,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 isRemote: { [weak poller] id in poller?.snapshot.agent(id) != nil },
                 attachments: .persistent(),
                 // A reply to an agent with no process starts the process
-                // first (ruled 11 Nov 2026; `GoneStart`). Read on every
-                // reply, so the off switch needs no relaunch:
-                //   defaults write <bundle id> startOnReplyOff -bool YES
+                // first (ruled 11 Nov 2026), through the one start function
+                // every door uses (ruled 14 Nov; `AgentStart`). OFF unless
+                // switched on, and read on every reply, so the switch needs
+                // no relaunch:
+                //   defaults write <bundle id> startOnReply -bool YES
                 startGone: { id in
-                    UserDefaults.standard.bool(forKey: "startOnReplyOff")
-                        ? .notGone("start on reply is switched off")
-                        : GoneStart.claude(sessionId: id)
+                    UserDefaults.standard.bool(forKey: "startOnReply")
+                        ? AgentStart.forReply(sessionId: id)
+                        : .notGone("start on reply is switched off")
                 })
             // The mirror: every page and turn into the hub, while the panel
             // runs. Nil until this Mac is connected; nothing else changes.

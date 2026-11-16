@@ -1461,7 +1461,7 @@ final class CoordinatorTests: XCTestCase {
     private func startingCoordinator(
         transport: any DispatchTransport, agents: ClaudeAgentsReading, name: String,
         startWait: TimeInterval = 5, startSettle: TimeInterval = 5,
-        start: @escaping @Sendable (String) -> GoneStart.Outcome
+        start: @escaping @Sendable (String) -> AgentStart.ForReply
     ) throws -> Coordinator {
         let registry = EnrolmentRegistry(url: tmpDir.appendingPathComponent("\(name).json"))
         try registry.enrol(sessionId: "sess-1")

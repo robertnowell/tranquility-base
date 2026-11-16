@@ -477,7 +477,8 @@ public enum SessionLauncher {
             // way the caller can find that session's pane.
             return .failure(ScriptError(message: why, worthRetrying: false,
                                         alreadyRunning: verdict.holders,
-                                        duplicateResume: verdict == .inFlight))
+                                        duplicateResume: verdict == .inFlight,
+                                        scanUnreadable: verdict == .alreadyResuming([])))
         }
         defer { claim.release() }
         // Quoted individually, same discipline as `directory` a few lines
