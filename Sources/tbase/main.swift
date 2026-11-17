@@ -1134,6 +1134,41 @@ case "reconcile":
             exit(1)
         }
 
+    case "fork-arguments":
+        // What Continue with appends to the launch command for a same-harness
+        // continuation, shell-quoted as the launcher quotes it.
+        guard args.count > 2,
+              let fork = KnownHarnesses.adapter(for: args[1]).forkArguments(sessionId: args[2]) else {
+            print("usage: tbase fork-arguments <harness> <sessionId>  (prints nothing for a harness with no fork)")
+            exit(1)
+        }
+        print(fork.map(SessionLauncher.shellQuoted).joined(separator: " "))
+
+    case "handoff-text":
+        // The first message a pasted-log continuation receives, exactly as
+        // the app composes it. `scripts/handoff-retrieval-check.py` feeds
+        // this to a real agent, so the check reads the artifact, not a copy.
+        guard args.count > 3 else {
+            print("usage: tbase handoff-text <sessionId> <harness> <logPath> [--tokens N] [--hq-log PATH] [--as-sent]")
+            exit(2)
+        }
+        func value(_ flag: String) -> String? {
+            args.firstIndex(of: flag).flatMap { $0 + 1 < args.count ? args[$0 + 1] : nil }
+        }
+        let tokens = value("--tokens").flatMap(Int.init) ?? AgentHandoff.recentLogTokens
+        let command = value("--hq-log") ?? SkillManifest.binDirectory.appendingPathComponent("hq-log").path
+        guard let recent = AgentHandoff.recentLog(logPath: args[3], tokens: tokens, command: command) else {
+            print("no log could be read at \(args[3]) with \(command)")
+            exit(1)
+        }
+        let composed = AgentHandoff.fragment(
+            sourceName: "the earlier agent", sourceHarness: args[2], sourceSessionId: args[1],
+            logLocation: args[3], recentLog: recent, reportsDirectory: nil)
+        // `--as-sent`: the one line the transport actually pastes. A terminal
+        // agent never sees the line breaks, so a check that feeds it the
+        // broken-out text is checking a message no agent receives.
+        print(args.contains("--as-sent") ? DispatchText.flatten(composed) : composed)
+
     case "turns":
         guard args.count > 1 else { print("usage: tbase turns <sessionId>"); break }
         let id = args[1]
