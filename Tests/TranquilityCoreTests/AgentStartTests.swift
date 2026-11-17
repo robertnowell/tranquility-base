@@ -218,6 +218,10 @@ final class AgentStartTests: XCTestCase {
         XCTAssertEqual(AgentStart.Outcome.joined.forReply, .started(nil, registered: false))
         XCTAssertEqual(AgentStart.Outcome.refused(.directoryGone, cwd: nil).forReply,
                        .refused("its directory is gone"))
+        // A process in the way is named on the card, never a silent refusal.
+        let holder = ResumeGuard.Holder(pid: 777, command: "claude --dangerously-skip-permissions")
+        XCTAssertEqual(AgentStart.Outcome.heldBy([holder], cwd: "/").forReply,
+                       .refused("claude (pid 777) is already running there, and this app did not start it"))
     }
 
     // MARK: - The directory guard's pure halves

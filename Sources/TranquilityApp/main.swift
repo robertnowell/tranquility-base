@@ -705,7 +705,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     guard UserDefaults.standard.bool(forKey: "startOnReply") else {
                         return .notGone("start on reply is switched off")
                     }
-                    let outcome = AgentStart.ensureRunningJoining(sessionId: id, unasked: true)
+                    // The moment a start begins, the panel says so: the same
+                    // chip the tap shows. Without it the words leave and
+                    // nothing changes until the agent is up.
+                    let outcome = AgentStart.ensureRunningJoining(sessionId: id, unasked: true) {
+                        Task { @MainActor [weak self] in
+                            guard let self else { return }
+                            self.hud.showReceipt(.reviving(self.describe(session: id).label))
+                        }
+                    }
                     AgentStartRecord.record(outcome, via: .reply, sessionId: id)
                     return outcome.forReply
                 })

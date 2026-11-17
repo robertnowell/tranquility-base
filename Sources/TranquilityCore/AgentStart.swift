@@ -323,7 +323,14 @@ extension AgentStart.Outcome {
         case .joined: return .started(nil, registered: false)
         case .waitingOnQuestion(let says, _, _):
             return .refused("it is waiting on a question in its terminal. \(says)")
-        case .heldBy: return .notGone("a process already holds it")
+        case .heldBy(let holders, _):
+            // Name it. Until 16 Nov this was "no proof", so the card gave the
+            // old refusal with no reason, and one unlisted process could stop
+            // every reply start in a shared folder without a word.
+            guard let holder = holders.first else { return .notGone("a process already holds it") }
+            let command = holder.command.split(separator: " ").first.map(String.init) ?? "a process"
+            return .refused("\(command) (pid \(holder.pid)) is already running there, "
+                            + "and this app did not start it")
         case .unknown(let why): return .notGone(why)
         case .refused(let refusal, _):
             switch refusal {
