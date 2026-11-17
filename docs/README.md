@@ -61,6 +61,7 @@ touching the panel, the arrival path, or the announcement path.
 | `ruling-the-collapsed-strip.md` | RULED, NOT BUILT | The grid collapses to a ~40px lamp strip; the user owns the width; three states (expanded / collapsed / minimized). Names its own open questions — do not guess them. |
 | `docs/rulings/ruling-an-arrival-does-not-move-the-panel.md` | RULED, NOT BUILT | An arrival never changes the panel's shape or visibility; a live microphone vetoes the spoken hail; the courtesy check listens before speaking and keeps nothing. |
 | `docs/rulings/ruling-no-date-fails-the-build.md` | BUILT | Nothing in preflight, the source audit or a workflow may pass or fail because a date arrived (16 Nov 2026, after an expired date in a compatibility marker failed every pull request). Reverses the date half of the provider seam's rule 3. Read before writing any check that compares today with a date in the tree. |
+| `docs/rulings/ruling-one-start-function-and-no-open-agents-file.md` | RULED, NOT BUILT | Every start of an agent's process goes through one function (the tap, Go to Agent, a reply, the microphone, `tbase revive`); no persisted list of open agents, open stays derived. Names four open questions and three repairs owed. Read before touching `AppDelegate.revive`, `ResumeGuard`, or the reply dispatch. |
 | `courtesy-check-evidence-plan.md` | RULED, PARTLY BUILT | How we would know the courtesy check works. `LiveAudioCapture` has landed; the gate itself has not. Ship log-only before it suppresses anything. |
 
 ## Rulings — built
