@@ -187,6 +187,14 @@ extension StatusHUD {
         let filedCloneIsNotMoved = fromFolder.flatMap { fileContinuedAgent("drill-names-f", $0) } == nil
             && folders.current.folder(of: "drill-names-f")?.id == "kopi"
 
+        // A provider's continuation carries the handoff alone, as its brief.
+        // It still reads as a continuation and still joins the folder.
+        let alone = AgentHandoff.continuation(in: AgentHandoff.fragment(
+            sourceName: "Mirai button colour", sourceHarness: "opencode",
+            sourceSessionId: "drill-names-c", logLocation: "/dev/null", reportsDirectory: nil))
+        let handoffAloneStillFiles = alone?.instruction == ""
+            && alone.flatMap { fileContinuedAgent("drill-names-g", $0) } == "mirai"
+
         // And it survives the process: a second store on the same file.
         let survivesARelaunch = AgentNameStore(url: names.url).current.name(for: "drill-names-c")
             == "Mirai button colour"
@@ -207,6 +215,7 @@ extension StatusHUD {
             ("aContinuedAgentJoinsItsSourcesFolder", cloneJoinsTheFolder),
             ("aLooseSourceLeavesItLoose", looseSourceLeavesItLoose),
             ("aCloneTheUserFiledIsNotMoved", filedCloneIsNotMoved),
+            ("aHandoffSentAloneStillFiles", handoffAloneStillFiles),
         ])
     }
 }
