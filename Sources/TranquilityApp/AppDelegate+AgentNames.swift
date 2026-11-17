@@ -29,6 +29,16 @@ extension AppDelegate {
     /// first message. Put it in its source's folder, if the source has one.
     /// The first message is the first moment the new agent's id and its
     /// source are known together, so the row sits loose until then.
+    /// An agent a provider started (OpenCode, any protocol agent) from
+    /// "Continue work with". Its handoff went as the brief, alone, so there
+    /// is no instruction to name it by yet: it takes its source's folder and
+    /// its source's name with a number.
+    func noteProviderContinuation(_ sessionId: String, brief: Brief) {
+        guard let continuation = AgentHandoff.continuation(in: brief.prompt) else { return }
+        fileContinuedAgent(sessionId, continuation)
+        nameContinuedAgent(sessionId, continuation)
+    }
+
     func fileContinuedAgent(_ sessionId: String, _ continuation: AgentHandoff.Continuation) {
         guard let joined = hud.fileContinuedAgent(sessionId, continuation) else { return }
         Permissions.log("folders: continued agent \(sessionId.prefix(8)) joined folder \(joined)")

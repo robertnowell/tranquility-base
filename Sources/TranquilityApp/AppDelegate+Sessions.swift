@@ -1341,6 +1341,11 @@ extension AppDelegate {
             do {
                 let id = try await provider.start(brief)
                 Permissions.log("new agent: \(provider.id) started \(id)")
+                // A provider's continuation never passes through local
+                // dispatch: the handoff IS the brief, and the id exists now.
+                // So it is filed and named here, as `onContinuationSent` does
+                // for a terminal launch at its first message.
+                self.noteProviderContinuation(id, brief: brief)
                 self.agents?.kick()
                 // The destination follows the launch, unless you moved on
                 // since pressing the button (ruled 19 Aug, same rule as above).
