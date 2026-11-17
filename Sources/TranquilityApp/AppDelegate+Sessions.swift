@@ -1341,6 +1341,11 @@ extension AppDelegate {
             do {
                 let id = try await provider.start(brief)
                 Permissions.log("new agent: \(provider.id) started \(id)")
+                // A provider's continuation never passes through local
+                // dispatch: the handoff IS the brief, and the id exists now.
+                // So it is filed and named here, as `onContinuationSent` does
+                // for a terminal launch at its first message.
+                self.noteProviderContinuation(id, brief: brief)
                 self.agents?.kick()
                 // The destination follows the launch, unless you moved on
                 // since pressing the button (ruled 19 Aug, same rule as above).
@@ -1449,15 +1454,40 @@ extension AppDelegate {
             }
             let reportsDirectory = HomeBase.existingPage(sessionId: sourceSessionId)
                 .map { ($0 as NSString).deletingLastPathComponent }
-            let fragment = AgentHandoff.fragment(
-                sourceName: sourceName,
-                sourceHarness: sourceHarness,
-                sourceSessionId: sourceSessionId,
-                directory: directory,
-                logLocation: logLocation,
-                reportsDirectory: reportsDirectory)
             let command = AgentDefaults.load(for: harness)
             let adapter = KnownHarnesses.adapter(for: SavedAccountStore.shared.backend(harness))
+            // The conversation itself, one of two ways (ruled 14 Nov). The
+            // same harness on the same store forks the session, and the new
+            // agent holds what the old one holds. Anything else gets the end
+            // of the log in its first message and `hq-log` for the rest.
+            let carry: AgentHandoff.Carry = destinationProvider != nil ? .pastedLog
+                : AgentHandoff.carry(
+                    sourceBackend: sourceHarness, destination: adapter,
+                    sourceSessionId: sourceSessionId,
+                    sourceConfigDirectory: SessionAccountStore.shared.binding(sourceSessionId)?.configDirectory,
+                    destinationConfigDirectory: SavedAccountStore.shared.account(harness)?.configDirectory)
+            var fragments: [String] = []
+            var launchCommand = command
+            var pastedCharacters = 0
+            switch carry {
+            case .nativeFork(let arguments):
+                launchCommand = ([command] + arguments.map(SessionLauncher.shellQuoted))
+                    .joined(separator: " ")
+            case .pastedLog:
+                let recentLog = FileManager.default.fileExists(atPath: logLocation)
+                    ? AgentHandoff.recentLog(logPath: logLocation) : nil
+                pastedCharacters = recentLog?.count ?? 0
+                fragments = [AgentHandoff.fragment(
+                    sourceName: sourceName,
+                    sourceHarness: sourceHarness,
+                    sourceSessionId: sourceSessionId,
+                    directory: directory,
+                    logLocation: logLocation,
+                    recentLog: recentLog,
+                    reportsDirectory: reportsDirectory)]
+            }
+            Permissions.log("handoff: \(sourceSessionId.prefix(8)) to \(harness), "
+                + (fragments.isEmpty ? "native fork" : "pasted log, \(pastedCharacters) characters"))
 
             await MainActor.run { [weak self] in
                 Track.record("agent_handoff_requested", [
@@ -1465,12 +1495,14 @@ extension AppDelegate {
                     "source_harness": .token(sourceHarness),
                     "destination_harness": .token(SavedAccountStore.shared.backend(harness)),
                     "has_reports": .bool(reportsDirectory != nil),
+                    "carry": .token(fragments.isEmpty ? "native_fork" : "pasted_log"),
+                    "pasted_characters": .int(pastedCharacters),
                 ])
                 if let destinationProvider {
-                    self?.startProviderAgent(destinationProvider, brief: Brief(prompt: fragment))
+                    self?.startProviderAgent(destinationProvider, brief: Brief(prompt: fragments.first ?? ""))
                 } else {
-                    self?.newSession(directory: directory, command: command,
-                                     adapter: adapter, initialFragments: [fragment], account: SavedAccountStore.shared.account(harness))
+                    self?.newSession(directory: directory, command: launchCommand,
+                                     adapter: adapter, initialFragments: fragments, account: SavedAccountStore.shared.account(harness))
                 }
             }
         }
