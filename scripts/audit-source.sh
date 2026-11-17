@@ -36,6 +36,7 @@ python3 scripts/tests/test_prepared_dev.py
 python3 scripts/tests/test_door_answers.py
 python3 scripts/tests/test_hqpage.py
 python3 scripts/tests/test_hqfigure.py
+python3 scripts/tests/test_compat_comments.py
 
 # Cheap, and it catches a class the panel's own drills cannot: a bare modifier
 # glyph in text a human reads. The existing drill guards ONE string; this
@@ -58,8 +59,10 @@ echo "→ borrowed descriptors"
 python3 scripts/check-borrowed-descriptors.sh
 
 # And the provider seam's rule 3 (13 Sep, docs/rulings/ruling-the-provider-seam.md):
-# every compatibility shim carries a dated removal comment. Same shape as the
-# three above, and the only one of the ten rules a grep can answer -- rule 5,
+# every compatibility shim names itself and says what ends it. It never reads
+# the clock (ruled 16 Nov, after an expired date failed every pull request).
+# Same shape as the three above, and the only one of the ten rules a grep can
+# answer -- rule 5,
 # "every declared capability is read by production code", is a test instead
 # because it has to read Swift rather than comment text.
 echo "→ compat comments"

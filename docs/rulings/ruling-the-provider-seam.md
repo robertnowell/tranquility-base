@@ -28,7 +28,11 @@ provider protocol version and there will not be one.
 Paseo: "New fields are `.optional()` with a sensible default. Never flip
 optional to required, remove a field, or narrow a type."
 
-## 3. Every compatibility shim carries a dated removal comment
+## 3. Every compatibility shim carries a named removal comment
+
+**Amended 16 Nov 2026: the date is no longer enforced.** See
+`docs/rulings/ruling-no-date-fails-the-build.md`. The paragraph below is the
+rule as first adopted, kept for the record.
 
 Paseo's form, adopted verbatim:
 
@@ -141,7 +145,7 @@ second entry in the registry.
 
 | Rule | Mechanism | Where |
 |---|---|---|
-| 3 | `scripts/check-compat-comments.sh` — every `COMPAT(` must name itself and carry a parseable removal date, and a date in the past fails the build | `scripts/preflight.sh`, beside the other source checks |
+| 3 | `scripts/check-compat-comments.sh` — every `COMPAT(` must name itself and say what ends it. Until 16 Nov 2026 a date in the past also failed the build; that part is withdrawn (`ruling-no-date-fails-the-build.md`) | `scripts/preflight.sh`, beside the other source checks |
 | 5 | `CapabilityLivenessTests` — a declared capability no production file reads fails the suite | `Tests/TranquilityCoreTests` |
 
 Rule 5's check carries a debt list that may only SHRINK: a listed field that
@@ -152,7 +156,7 @@ documentation confesses to being unread. **It found four.** `echoesPaste`,
 production code consults, and the last of those is the one most likely to be a
 genuine bug rather than dead weight: a harness without hooks would still get a
 hooks row today, because `HookManifest` answers that question by another route.
-All three carry a 2026-12-01 date, as real `COMPAT` markers rather than as
+All three carried a 2026-12-01 date until 16 Nov 2026, as real `COMPAT` markers rather than as
 prose, so the checker above can see them: debt created by this ruling is
 governed by this ruling's own machinery, which was not true of the first
 draft. `hasHooks` is also filed as #394, because a finding recorded only in a

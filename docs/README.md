@@ -60,6 +60,7 @@ touching the panel, the arrival path, or the announcement path.
 | `docs/rulings/ruling-capture-returns-to-its-card.md` | RULED, NOT BUILT | A capture that sends nothing returns to the card it interrupted, and no outcome reopens the microphone. **Was indexed BUILT `d106206` in error** — that commit added the doc and nothing else. Read the strip ruling first: it dissolves this doc's face-restore design and keeps only §C's lost-address rescue, §D, and §E. |
 | `ruling-the-collapsed-strip.md` | RULED, NOT BUILT | The grid collapses to a ~40px lamp strip; the user owns the width; three states (expanded / collapsed / minimized). Names its own open questions — do not guess them. |
 | `docs/rulings/ruling-an-arrival-does-not-move-the-panel.md` | RULED, NOT BUILT | An arrival never changes the panel's shape or visibility; a live microphone vetoes the spoken hail; the courtesy check listens before speaking and keeps nothing. |
+| `docs/rulings/ruling-no-date-fails-the-build.md` | BUILT | Nothing in preflight, the source audit or a workflow may pass or fail because a date arrived (16 Nov 2026, after an expired date in a compatibility marker failed every pull request). Reverses the date half of the provider seam's rule 3. Read before writing any check that compares today with a date in the tree. |
 | `courtesy-check-evidence-plan.md` | RULED, PARTLY BUILT | How we would know the courtesy check works. `LiveAudioCapture` has landed; the gate itself has not. Ship log-only before it suppresses anything. |
 
 ## Rulings — built
