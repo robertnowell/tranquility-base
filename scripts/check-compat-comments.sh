@@ -1,36 +1,39 @@
 #!/usr/bin/env python3
-"""Every compatibility shim carries a dated removal comment.
+"""Every compatibility shim names itself and says what ends it.
 
-Rule 3 of docs/rulings/ruling-the-provider-seam.md, adopted verbatim from
-Paseo's `docs/protocol-compatibility.md`, whose own docs call grepping for
-`COMPAT(` "the full cleanup backlog".
+Rule 3 of docs/rulings/ruling-the-provider-seam.md, as amended 16 Nov 2026.
 
-    // COMPAT(name): added in vX, remove after 2027-03-01
+    // COMPAT(name): why it is here, and what ends it
 
-It is the only debt-tracking system in the whole provider research that
-visibly worked, and it works for one reason: the date is machine-readable,
-so the debt expires on its own instead of waiting for somebody to notice it.
-A marker with no date is a TODO wearing a uniform.
+Grepping for the marker is the whole cleanup backlog, and this check keeps the
+grep honest. It refuses two things:
 
-So this refuses three things, and the third is the point:
+  1. a COMPAT marker with no name    -- unattributable
+  2. a COMPAT marker with no reason  -- nobody can tell when it may go
 
-  1. a COMPAT marker with no name          -- unattributable
-  2. a COMPAT marker with no parseable date -- never expires
-  3. a COMPAT marker whose date has PASSED  -- expired, delete the shim
+**This check never reads the clock.** Its first version (13 Sep 2026) also
+refused a marker whose "remove after" date had passed. On 16 Nov 2026 a date
+of 2026-11-15 passed, and every pull request to main failed its source audit,
+whatever it changed. Three more markers carried 2026-12-01. A verdict that
+depends on the day is not a verdict about the commit: the same commit passes
+on Sunday and fails on Monday, and the session it stops is never the one that
+owes the work. Ruled the same day: nothing in the delivery path may fail
+because a date arrived.
 
-(3) is what makes the other two worth having. A check that only validates
-the form would let every shim sit forever in perfect syntax.
+What ends a shim is now an event in the tree, and a test watches for it.
+`CapabilityLivenessTests` does that for every marker that exists today: a
+listed field that becomes live fails the suite, and so does a new dead one. A
+date in a marker is allowed as a note and is never read.
 
-`COMPAT(` appeared zero times in the tree when this landed (13 Sep 2026), so
-there is no grandfathered backlog and the check is strict from its first
-commit.
+    check-compat-comments.sh [--root DIR]
 """
-import datetime
 import pathlib
 import re
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
+if "--root" in sys.argv:
+    ROOT = pathlib.Path(sys.argv[sys.argv.index("--root") + 1]).resolve()
 
 # The WORD, not the word-plus-paren. `COMPAT(name` with an unclosed paren and
 # `COMPAT name:` without one both read as the marker to a person and both
@@ -39,24 +42,20 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 # cleanup backlog, and a marker the checker cannot see is worse than no marker:
 # it looks tracked.
 MARKER = re.compile(r"\bCOMPAT\b(.*)")
-NAMED = re.compile(r"^\(([^)\n]*)\)")
-# ANCHORED to "remove after", never just the first date on the line. A shim
-# that records when the vendor broke it -- "broken since 2020-01-01, remove
-# after 2027-01-01" -- read as expired under the first version, which is the
-# failure that makes a checker something people route around.
-DUE = re.compile(r"remove\s+after\s+(\d{4})-(\d{2})-(\d{2})")
+NAMED = re.compile(r"^\(([^)\n]*)\)(.*)")
 
 # Everything a human wrote. Docs included: the ruling itself carries the
 # literal form, and a shim documented in prose and never written in code is
 # the same debt. The ruling and this script are exempt -- they are ABOUT the
 # marker, so their examples are not shims. Naming them explicitly beats a
 # clever pattern that would also exempt a real file one day.
-EXEMPT = {"docs/rulings/ruling-the-provider-seam.md", "scripts/check-compat-comments.sh"}
+EXEMPT = {"docs/rulings/ruling-the-provider-seam.md",
+          "docs/rulings/ruling-no-date-fails-the-build.md",
+          "scripts/check-compat-comments.sh"}
 GLOBS = ("Sources/**/*.swift", "Tests/**/*.swift", "scripts/**/*.sh", "docs/**/*.md")
 
-today = datetime.date.today()
 bad = []
-seen = 0
+seen = []
 
 for glob in GLOBS:
     for path in sorted(ROOT.glob(glob)):
@@ -78,9 +77,7 @@ for glob in GLOBS:
             match = MARKER.search(line)
             if not match:
                 continue
-            seen += 1
-            rest = match.group(1)
-            named = NAMED.match(rest)
+            named = NAMED.match(match.group(1))
             if not named:
                 bad.append((rel, n, "COMPAT marker is not COMPAT(name): ...", line.strip()))
                 continue
@@ -88,28 +85,18 @@ for glob in GLOBS:
             if not name:
                 bad.append((rel, n, "COMPAT marker has no name", line.strip()))
                 continue
-            found = DUE.search(rest)
-            if not found:
-                bad.append((rel, n,
-                            f"COMPAT({name}) has no 'remove after YYYY-MM-DD'",
-                            line.strip()))
+            if not named.group(2).lstrip(": \t").strip():
+                bad.append((rel, n, f"COMPAT({name}) does not say what ends it", line.strip()))
                 continue
-            try:
-                due = datetime.date(*(int(g) for g in found.groups()))
-            except ValueError:
-                bad.append((rel, n, f"COMPAT({name}) has an impossible date {found.group(0)}",
-                            line.strip()))
-                continue
-            if due < today:
-                bad.append((rel, n,
-                            f"COMPAT({name}) expired {due.isoformat()} -- delete the shim "
-                            f"or move the date deliberately",
-                            line.strip()))
+            seen.append((rel, n, name))
 
 for rel, n, why, text in bad:
     print(f"{rel}:{n}: {why}\n    {text[:100]}")
 
 if bad:
-    print(f"\n{len(bad)} COMPAT problem(s) in {seen} marker(s)")
+    print(f"\n{len(bad)} COMPAT problem(s), {len(seen)} well-formed marker(s)")
     sys.exit(1)
-print(f"compat comments: clean ({seen} marker(s))")
+# The backlog, printed on every run: the same lines for the same commit.
+for rel, n, name in seen:
+    print(f"  COMPAT({name})  {rel}:{n}")
+print(f"compat comments: clean ({len(seen)} marker(s))")

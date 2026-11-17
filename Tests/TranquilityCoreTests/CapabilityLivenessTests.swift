@@ -23,7 +23,7 @@ final class CapabilityLivenessTests: XCTestCase {
     ///
     /// An allowlist that can grow is a rubber stamp, so this one works the way
     /// `scripts/test.sh` works with its test floor: a field in here is known
-    /// debt with a reason and a date, a field NOT in here that goes dead fails
+    /// debt with a reason, a field NOT in here that goes dead fails
     /// the suite, and a field in here that becomes live ALSO fails, so the list
     /// cannot quietly describe a past that no longer exists.
     ///
@@ -31,11 +31,10 @@ final class CapabilityLivenessTests: XCTestCase {
     /// which is the finding rather than an inconvenience: `HarnessCapabilities`
     /// has four dead fields and not the one its documentation confesses to.
     ///
-    /// **Every entry carries a real marker**, so the expiry checker  compat:exempt
-    /// this branch also ships can see it. The first draft wrote the dates in
-    /// plain prose, which meant the debt created by the ruling was not governed
-    /// by the ruling's own machinery. That is the precise failure the ruling
-    /// was written to end, committed in the same pull request.
+    /// **Every entry carries a real marker**, so the marker check can see  compat:exempt
+    /// it. What ends an entry is an event this test watches for, never a date:
+    /// until 16 Nov 2026 each marker carried one, the first to pass failed
+    /// every pull request to main, and the dates were ruled out that day.
     private static let knownDead: [String: String] = [
         // The 21 Aug measurement, kept as a measurement. Coordinator's adoption
         // logic stopped branching on it on 23 Aug when the dual-live premise
@@ -45,7 +44,7 @@ final class CapabilityLivenessTests: XCTestCase {
         // is the whole reason it is not consulted. Deleting it would delete the
         // finding: 8,443 records stranded on unreachable branches, 3,982 in one
         // session. The one entry here that is arguably correct as it stands.
-        // COMPAT(allowsConcurrentResume): kept measurement, remove after 2027-03-01
+        // COMPAT(allowsConcurrentResume): a kept measurement, it goes when the finding is recorded elsewhere
         "allowsConcurrentResume": "a kept measurement, deliberately not a switch",
 
         // The next three are NOT deliberate, and were not known before this
@@ -58,12 +57,12 @@ final class CapabilityLivenessTests: XCTestCase {
         // landing checks that care about paste echo read `pasteChipPrefix`
         // instead, which IS live, so this is the half of a two-part
         // measurement that got left behind.
-        // COMPAT(echoesPaste): superseded by pasteChipPrefix, remove after 2026-12-01
+        // COMPAT(echoesPaste): superseded by pasteChipPrefix, delete the field or read it
         "echoesPaste": "measured, superseded in practice by pasteChipPrefix",
         // Whether a harness queues input typed mid-turn. The reply pipeline
         // decides this by waiting rather than by asking, so the flag records
         // an answer nothing needs yet.
-        // COMPAT(queuesInputMidTurn): pipeline waits instead, remove after 2026-12-01
+        // COMPAT(queuesInputMidTurn): the pipeline waits instead, delete the field or read it
         "queuesInputMidTurn": "recorded, and the pipeline decides by waiting instead",
         // Whether a harness has hooks at all. `HookManifest` enumerates
         // harnesses directly and `Prerequisites.Item.hooks` carries the id, so
@@ -71,7 +70,7 @@ final class CapabilityLivenessTests: XCTestCase {
         // a genuine bug rather than dead weight: a harness WITHOUT hooks would
         // still get a hooks row today. FILED AS #394 rather than left here: a
         // finding recorded only in a test allowlist is a finding nobody reads.
-        // COMPAT(hasHooks): see #394, remove after 2026-12-01
+        // COMPAT(hasHooks): ends when #394 makes HookManifest read it
         "hasHooks": "declared, and HookManifest answers the same question another way",
     ]
 
@@ -81,10 +80,10 @@ final class CapabilityLivenessTests: XCTestCase {
     /// the two are different states and merging them would let genuine rot hide
     /// among work that has not happened yet.
     ///
-    /// **This list must be empty when the checkpoint lands**, and it carries a
-    /// date so that is enforced rather than remembered. The first draft left it
-    /// undated, which would have made it the one debt list in this file with no
-    /// expiry at all.
+    /// **This list must be empty when the checkpoint lands.** It carried a
+    /// date of 15 Nov 2026 to enforce that. The date passed with three fields
+    /// still unread, and what it stopped was every unrelated pull request, so
+    /// the date is gone and the three fields are an open issue instead.
     ///
     /// Seven on 13 Sep, four after the first real provider (#402), **three
     /// once the reply path landed** (#373): `sendWhileWorking` is consulted by
@@ -96,7 +95,7 @@ final class CapabilityLivenessTests: XCTestCase {
     /// `LocalOpenCodeProvider`, and this test is what made that visible rather
     /// than something anyone had to remember to check.
     ///
-    /// COMPAT(pendingCapabilities): consumed by #368-#374, remove after 2026-11-15
+    /// COMPAT(pendingCapabilities): each field leaves when a production file reads it, or is deleted
     private static let pendingUntilTheCheckpoint: Set<String> = [
         // No abort route in the client's surface yet, and the provider refuses
         // rather than pretending. #368 or a later pass consumes it.
