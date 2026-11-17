@@ -290,8 +290,9 @@ public enum AgentStart {
     /// The reply's three questions: go on and wait for it, go on as before,
     /// or stop and keep the words.
     public enum ForReply: Sendable, Equatable {
-        /// A process is up or coming up. The reply waits for it to be ready.
-        case started(TmuxPaneAddress?)
+        /// A start was made. `registered` is the answer of the one wait
+        /// (`registrationWait`): the reply never waits for it a second time.
+        case started(TmuxPaneAddress?, registered: Bool)
         /// No proof the process is gone. Dispatch goes on as it did before.
         case notGone(String)
         /// It cannot be started. The words are kept; the sentence is the card's.
@@ -316,8 +317,10 @@ extension AgentStart.Outcome {
     public var forReply: AgentStart.ForReply {
         switch self {
         case .running: return .notGone("its process is running")
-        case .started(_, let pane, _, _): return .started(pane)
-        case .joined: return .started(nil)
+        case .started(_, let pane, let pid, _): return .started(pane, registered: pid != nil)
+        // Another door still held the id after `settle`. Nothing proves a
+        // process is up, so the reply keeps its words and says so.
+        case .joined: return .started(nil, registered: false)
         case .waitingOnQuestion(let says, _, _):
             return .refused("it is waiting on a question in its terminal. \(says)")
         case .heldBy: return .notGone("a process already holds it")

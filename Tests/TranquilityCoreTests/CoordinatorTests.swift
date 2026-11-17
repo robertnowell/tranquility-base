@@ -1460,7 +1460,7 @@ final class CoordinatorTests: XCTestCase {
 
     private func startingCoordinator(
         transport: any DispatchTransport, agents: ClaudeAgentsReading, name: String,
-        startWait: TimeInterval = 5, startSettle: TimeInterval = 5,
+        startSettle: TimeInterval = 5,
         start: @escaping @Sendable (String) -> AgentStart.ForReply
     ) throws -> Coordinator {
         let registry = EnrolmentRegistry(url: tmpDir.appendingPathComponent("\(name).json"))
@@ -1477,7 +1477,7 @@ final class CoordinatorTests: XCTestCase {
             // Zero: these tests are about the start, and the old grace must
             // not be what rescues them.
             readinessGrace: 0,
-            startGone: start, startWait: startWait, startSettle: startSettle,
+            startGone: start, startSettle: startSettle,
             // Fails the test if reached: a start made by dispatch must never
             // be followed by an ownership transfer, which ends the process.
             resumeTwin: { _, _, _ in XCTFail("resumeTwin ran after a start"); return nil })
@@ -1503,7 +1503,7 @@ final class CoordinatorTests: XCTestCase {
         let coordinator = try startingCoordinator(
             transport: transport, agents: LateAgents(appearsOnCall: 3, live: liveFixture()),
             name: "start-sends",
-            start: { _ in starts.bump(); return .started(Self.startedPane) })
+            start: { _ in starts.bump(); return .started(Self.startedPane, registered: true) })
         guard let id = try await pendingSend(coordinator) else { return }
         guard case .dispatched = try await coordinator.confirmAndSend(utteranceId: id)
         else { return XCTFail("a gone agent must be started and then sent to") }
@@ -1529,7 +1529,7 @@ final class CoordinatorTests: XCTestCase {
                 providers: [FixedTranscript(text: "yes go ahead")],
                 maxAttemptsPerProvider: 1, backoff: [0]),
             readinessGrace: 0,
-            startGone: { _ in starts.bump(); return .started(nil) },
+            startGone: { _ in starts.bump(); return .started(nil, registered: true) },
             resumeTwin: { _, _, _ in Self.startedPane })
         guard let id = try await pendingSend(coordinator) else { return }
         guard case .dispatched = try await coordinator.confirmAndSend(utteranceId: id)
@@ -1569,13 +1569,17 @@ final class CoordinatorTests: XCTestCase {
         let transport = RecordingTransport()
         let coordinator = try startingCoordinator(
             transport: transport, agents: FakeAgents(live: []), name: "start-never",
-            startWait: 1,
-            start: { _ in .started(Self.startedPane) })
+            start: { _ in .started(Self.startedPane, registered: false) })
         guard let id = try await pendingSend(coordinator) else { return }
+        let began = Date()
         guard case .dispatchFailed(.couldNotStart, _) =
             try await coordinator.confirmAndSend(utteranceId: id)
         else { return XCTFail("a start that never registers must fail, not hang or type") }
         XCTAssertTrue(transport.sent.isEmpty, "nothing typed")
+        // Ruling 1 (14 Nov 2026): one registration wait, and it is the start
+        // function's. Until 16 Nov the reply waited 30 s more of its own.
+        XCTAssertLessThan(Date().timeIntervalSince(began), 3,
+                          "the reply adds no second wait for the registration")
     }
 
     /// The input box of a process that registered a second ago may not be up.
@@ -1585,7 +1589,7 @@ final class CoordinatorTests: XCTestCase {
         let coordinator = try startingCoordinator(
             transport: transport, agents: LateAgents(appearsOnCall: 3, live: liveFixture()),
             name: "start-settles",
-            start: { _ in .started(Self.startedPane) })
+            start: { _ in .started(Self.startedPane, registered: true) })
         guard let id = try await pendingSend(coordinator) else { return }
         guard case .dispatched = try await coordinator.confirmAndSend(utteranceId: id)
         else { return XCTFail("a deferral after a start is waited out") }
@@ -1599,7 +1603,7 @@ final class CoordinatorTests: XCTestCase {
         let coordinator = try startingCoordinator(
             transport: transport, agents: LateAgents(appearsOnCall: 3, live: liveFixture()),
             name: "start-unclear",
-            start: { _ in .started(Self.startedPane) })
+            start: { _ in .started(Self.startedPane, registered: true) })
         guard let id = try await pendingSend(coordinator) else { return }
         guard case .dispatchFailed(.verificationTimedOut, _) =
             try await coordinator.confirmAndSend(utteranceId: id)

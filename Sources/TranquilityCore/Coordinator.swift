@@ -67,10 +67,9 @@ public struct Coordinator: Sendable {
     /// has no place running unannounced inside a test's `dispatch()`. The
     /// app passes `AgentStart.forReply` behind its own off switch.
     public let startGone: (@Sendable (_ sessionId: String) -> AgentStart.ForReply)?
-    /// How long a started process has to register, and then how long its
-    /// input box has to come up, before the reply gives up. A launch gets 30 s
-    /// to register (`PendingLaunch`); a resume is the same process start.
-    public let startWait: TimeInterval
+    /// How long the input box of a process started for a reply has to come
+    /// up before the reply gives up. The wait for the process to register is
+    /// the start function's alone (`AgentStart.registrationWait`).
     public let startSettle: TimeInterval
 
     public let enrolment: EnrolmentRegistry
@@ -131,7 +130,6 @@ public struct Coordinator: Sendable {
         replyWindow: TimeInterval = 15 * 60,
         readinessGrace: TimeInterval = 12,
         startGone: (@Sendable (_ sessionId: String) -> AgentStart.ForReply)? = nil,
-        startWait: TimeInterval = 30,
         startSettle: TimeInterval = 20,
         resumeTwin: @escaping @Sendable (_ sessionId: String, _ directory: String,
                                          _ harness: String) -> TmuxPaneAddress?
@@ -168,7 +166,6 @@ public struct Coordinator: Sendable {
         self.replyWindow = replyWindow
         self.readinessGrace = readinessGrace
         self.startGone = startGone
-        self.startWait = startWait
         self.startSettle = startSettle
         self.resumeTwin = resumeTwin
     }

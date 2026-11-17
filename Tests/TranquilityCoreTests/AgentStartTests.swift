@@ -215,7 +215,7 @@ final class AgentStartTests: XCTestCase {
             guard case .notGone = outcome.forReply
             else { return XCTFail("\(outcome) must not stop or start a reply") }
         }
-        XCTAssertEqual(AgentStart.Outcome.joined.forReply, .started(nil))
+        XCTAssertEqual(AgentStart.Outcome.joined.forReply, .started(nil, registered: false))
         XCTAssertEqual(AgentStart.Outcome.refused(.directoryGone, cwd: nil).forReply,
                        .refused("its directory is gone"))
     }

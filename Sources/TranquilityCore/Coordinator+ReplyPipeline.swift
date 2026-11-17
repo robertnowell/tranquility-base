@@ -513,29 +513,32 @@ extension Coordinator {
         // Read fresh, not from `resolved`: `agents.sessions() ?? []` above has
         // already folded "could not read the registry" into "nobody is home".
         var startedHere = false
+        var startRegistered = false
         var startedPane: TmuxPaneAddress?
         let startedAt = Date()
         if resolved == nil, let startGone {
             switch startGone(target.sessionId) {
-            case .started(let pane):
+            case .started(let pane, let registered):
                 startedHere = true
                 startedPane = pane
+                startRegistered = registered
                 Coordinator.trace?("dispatch: \(target.sessionId.prefix(8)) had no process; "
-                    + "started one for this reply")
-                let deadline = Date().addingTimeInterval(startWait)
-                while resolved == nil, Date() < deadline {
-                    try? await Task.sleep(nanoseconds: 500_000_000)
-                    resolved = (agents.sessions() ?? [])
-                        .preferringTmuxOwned(sessionId: target.sessionId, trace: Coordinator.trace)
+                    + "started one for this reply (registered: \(registered))")
+                // One look, no loop. The start function already waited for
+                // the registration (`AgentStart.registrationWait`), and ruling
+                // 1 (14 Nov 2026) allows one such wait. Until 16 Nov this
+                // waited 30 s more for the answer the function had given.
+                resolved = (agents.sessions() ?? [])
+                    .preferringTmuxOwned(sessionId: target.sessionId, trace: Coordinator.trace)
+                if resolved == nil, let codex = codexResolved(target.sessionId) {
+                    resolved = codex
+                    isCodex = true
                 }
             case .notGone(let why):
                 Coordinator.trace?("dispatch: \(target.sessionId.prefix(8)) not started: \(why)")
             case .refused(let why):
                 Coordinator.trace?("dispatch: \(target.sessionId.prefix(8)) has no process and "
                     + "could not be started: \(why)")
-                Track.record("reply_started_process", [
-                    "agent_id": Track.hash(target.sessionId),
-                    "outcome": "refused", "reason": .prose(why)])
                 attachments.resolve(utteranceId: utterance.id, landed: false)
                 utterance.status = .dispatchFailed
                 utterance.lastError = "could not start: \(why)"
@@ -543,20 +546,18 @@ extension Coordinator {
                 return .dispatchFailed(.couldNotStart(why), utteranceId: utterance.id)
             }
         }
-        if startedHere, resolved == nil {
+        if startedHere, !startRegistered, resolved == nil {
             // Started, and it never registered. Not "try again in a moment":
             // the same start would end the same way, and the pane is where
-            // the reason is.
-            Track.record("reply_started_process", [
-                "agent_id": Track.hash(target.sessionId),
-                "outcome": "never_registered",
-                "seconds": .int(Int(Date().timeIntervalSince(startedAt)))])
+            // the reason is. The start function's own event carries this
+            // result (`started_unregistered`, via reply): one event, not two.
             attachments.resolve(utteranceId: utterance.id, landed: false)
             utterance.status = .dispatchFailed
             utterance.lastError = "started but never registered"
             try store.update(utterance: utterance)
             return .dispatchFailed(
-                .couldNotStart("it started but did not come up within \(Int(startWait)) seconds"),
+                .couldNotStart("it started but did not come up within "
+                               + "\(Int(AgentStart.registrationWait)) seconds"),
                 utteranceId: utterance.id)
         }
         if resolved == nil {
