@@ -96,3 +96,53 @@ From the page `liveness-progress-audit` (session 8f96df4b):
 The 12 Nov page said the grid after a restart draws "newest first". That is
 true of which agents are picked (`ProjectLayout.gridRows`). The panel then
 draws them in the user's folder order (`ProjectLayout.arrange`).
+
+## Two more rulings, 16 Nov 2026, and one on delivery, 17 Nov 2026
+
+These reached the building session on 17 Nov. They were ruled on a review page
+and stayed there for a day, which is the failure the last section of this file
+names.
+
+### Ruling 3: 7 days is the limit, and it must be changeable later
+
+Robert: "Yes, 7 days ... sure i guess but i'd like to be able to change at
+some point."
+
+`SessionRow.openFor` stays at 7 days. It becomes a stored value that the grid
+reads, so he can change it without a code change. No screen is asked for.
+
+### Ruling 4: an agent whose turn a Mac restart stopped wears amber
+
+A restart or shutdown of the Mac while an agent works ends its process in the
+middle of a turn. That cannot be prevented in general.
+
+Robert: "if green we wld need to generate summary from the stopped turn which
+could be misleading, so i lean amber if we can't avoid", and "we want to make
+it easy for user to resume it".
+
+- The lamp is amber. It is not green and not blue.
+- The app writes no summary from the unfinished turn. The card states the
+  fact: the restart stopped this turn.
+- One act resumes it: a reply such as "continue", or a tap. That act starts
+  the process through the one start function.
+- This applies only where the transcript shows a turn that began and did not
+  finish. An agent that was idle at the restart keeps its lamp.
+
+The review first recommended green. Robert's reason against it, that a summary
+of half a turn misleads, stands, and the recommendation was withdrawn.
+
+### Ruling 5: the rest of the goal ships in one pull request
+
+Robert, 17 Nov, on a plan of six pull requests: "do it in one pr, make sure it
+all fucking works correctly please".
+
+The start function, the reply start, the start at microphone open, the lamp
+after a restart, the stored limit, and the removal of the words "revive" and
+"gone" land together in pull request 798. Each part keeps its own proof: a
+live run for each door, a restart drill for the grid, and a drill or
+screenshot for each card and chip.
+
+### Still not ruled
+
+- What the app reads aloud after a restart of the Mac. The review recommends
+  nothing: each row shows an unread turn and a tap reads it.
