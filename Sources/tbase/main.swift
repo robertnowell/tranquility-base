@@ -1134,6 +1134,68 @@ case "reconcile":
             exit(1)
         }
 
+    case "past-search":
+        // Past Agents search against the real logs on this machine, with an
+        // index file of the caller's choosing, so nothing the running app owns
+        // is touched. Prints what a pass read and what a query answers.
+        guard args.count > 2 else {
+            print("usage: tbase past-search <index.sqlite> <words...> [--relevant]"); break
+        }
+        let order: SessionKeywordIndex.Order = args.contains("--relevant") ? .relevant : .recent
+        let words = args.dropFirst(2).filter { !$0.hasPrefix("--") }.joined(separator: " ")
+        let pastIndex = SessionKeywordIndex(cacheURL: URL(fileURLWithPath: args[1]))
+        // An evaluation asks many questions of one index and reads the
+        // answers by machine: no walk, no pass, one line per question and
+        // order, with the agents in the order the list would draw them.
+        if let flag = args.firstIndex(of: "--queries"), flag + 1 < args.count {
+            let questions = try String(contentsOfFile: args[flag + 1], encoding: .utf8)
+                .split(separator: "\n").map(String.init)
+            for question in questions {
+                for order in [SessionKeywordIndex.Order.recent, .relevant] {
+                    let began = Date()
+                    let found = try pastIndex.search(question, order: order, limit: 300, excerpts: 50)
+                    let quoted = found.prefix(50).filter { !$0.excerpt.isEmpty }.count
+                    print([question, order.rawValue,
+                           String(format: "%.1f", Date().timeIntervalSince(began) * 1000),
+                           String(quoted), found.map(\.id).joined(separator: ",")]
+                        .joined(separator: "\t"))
+                }
+            }
+            break
+        }
+        let walkBegan = Date()
+        let archive = SessionDiscovery.discoverArchive().sessions
+        let walked = Date().timeIntervalSince(walkBegan)
+        // The same walk again in the same process, which is what the app pays
+        // on every pass after its first.
+        let againBegan = Date()
+        _ = SessionDiscovery.discoverArchive(ttl: 0)
+        let walkedAgain = Date().timeIntervalSince(againBegan)
+        let pastSources = try SessionKeywordIndex.sources(
+            discovered: archive, store: nil, reportsRoot: HomeBase.root)
+        let pass = try await pastIndex.refresh(sources: pastSources)
+        let held = try pastIndex.counts()
+        print(String(format: "archive: %d sessions, walked in %.1fs, again in %.1fs",
+                     archive.count, walked, walkedAgain))
+        print(String(format: "pass: read %d files, +%d messages, %d unreadable, %.1fs (logs %.1fs, pages %.1fs, writes %.1fs)",
+                     pass.filesRead, pass.messagesAdded, pass.unreadableSources, pass.seconds,
+                     pass.readSeconds, pass.reportSeconds, pass.writeSeconds))
+        print("index: \(held.sessions) sessions, \(held.messages) messages")
+        let titles = Dictionary(pastSources.map { ($0.id, $0.title) }, uniquingKeysWith: { a, _ in a })
+        let askBegan = Date()
+        // As the list asks: three hundred agents, passages for the first page.
+        let found = try pastIndex.search(words, order: order, limit: 300, excerpts: 50)
+        print(String(format: "query \"%@\" (%@): %d agents in %.1f ms", words, order.rawValue,
+                     found.count, Date().timeIntervalSince(askBegan) * 1000))
+        let day = DateFormatter(); day.dateFormat = "d MMM yyyy"
+        for match in found.prefix(8) {
+            let quote = match.excerpt
+                .replacingOccurrences(of: String(SessionKeywordIndex.Match.open), with: "[")
+                .replacingOccurrences(of: String(SessionKeywordIndex.Match.close), with: "]")
+            print("  \(match.id.prefix(8))  \(day.string(from: match.at))  \(titles[match.id] ?? "?")")
+            print("      \(match.role.rawValue) x\(match.count): \(quote.isEmpty ? "(name or identity)" : quote)")
+        }
+
     case "turns":
         guard args.count > 1 else { print("usage: tbase turns <sessionId>"); break }
         let id = args[1]

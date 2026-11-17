@@ -25,12 +25,58 @@ import Foundation
 public enum RolloutClock {
     public static func date(_ value: Any?) -> Date? {
         guard let text = value as? String, !text.isEmpty else { return nil }
+        if let known = utc(text) { return known }
         let fractional = ISO8601DateFormatter()
         fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         if let d = fractional.date(from: text) { return d }
         let plain = ISO8601DateFormatter()
         plain.formatOptions = [.withInternetDateTime]
         return plain.date(from: text)
+    }
+}
+
+extension RolloutClock {
+    /// The one shape both harnesses write, read without a formatter:
+    /// `2026-11-15T22:28:27Z`, with or without a fraction of a second.
+    ///
+    /// `date(_:)` built two `ISO8601DateFormatter`s for every call. Sampled on
+    /// 15 Nov 2026 while indexing every log on one machine, formatter
+    /// construction was the hot path: 65 seconds for 105,000 messages. Any
+    /// other shape returns nil here and takes the formatter, as before.
+    static func utc(_ text: String) -> Date? {
+        var text = text
+        return text.withUTF8 { u -> Date? in
+            let n = u.count
+            guard n >= 20, u[n - 1] == 90, u[4] == 45, u[7] == 45, u[10] == 84,
+                  u[13] == 58, u[16] == 58 else { return nil }
+            func number(_ from: Int, _ count: Int) -> Int? {
+                var value = 0
+                for i in from..<(from + count) {
+                    let digit = Int(u[i]) - 48
+                    guard digit >= 0, digit <= 9 else { return nil }
+                    value = value * 10 + digit
+                }
+                return value
+            }
+            guard let year = number(0, 4), let month = number(5, 2), let day = number(8, 2),
+                  let hour = number(11, 2), let minute = number(14, 2), let second = number(17, 2),
+                  (1...12).contains(month), (1...31).contains(day), hour < 24, minute < 60, second < 60
+            else { return nil }
+            var fraction = 0.0
+            if n > 20 {
+                guard u[19] == 46, n >= 22, let digits = number(20, n - 21) else { return nil }
+                fraction = Double(digits) / pow(10, Double(n - 21))
+            }
+            // Days since 1970-01-01 in the proleptic Gregorian calendar.
+            let y = month <= 2 ? year - 1 : year
+            let era = (y >= 0 ? y : y - 399) / 400
+            let yearOfEra = y - era * 400
+            let dayOfYear = (153 * (month + (month > 2 ? -3 : 9)) + 2) / 5 + day - 1
+            let dayOfEra = yearOfEra * 365 + yearOfEra / 4 - yearOfEra / 100 + dayOfYear
+            let days = era * 146_097 + dayOfEra - 719_468
+            let whole = days * 86_400 + hour * 3_600 + minute * 60 + second
+            return Date(timeIntervalSince1970: Double(whole) + fraction)
+        }
     }
 }
 
@@ -393,6 +439,43 @@ public enum CodexRollout {
         }
         return Parsed(meta: meta, completions: completions, messages: messages,
                       isBusy: !openTurns.isEmpty, skippedLines: skipped)
+    }
+
+    /// What the archive walk needs from one rollout, read a line at a time.
+    ///
+    /// `parse` holds every record of the file at once. One real rollout on
+    /// this machine is 643 MB, and parsing it whole took 4.6 GB of memory.
+    /// The walk needs two facts: the first `session_meta`, and who spoke
+    /// last. So the file is mapped, each line is decoded and released, and a
+    /// line that names neither record type is never decoded at all.
+    public static func facts(at url: URL) -> (meta: SessionMeta?, lastRole: String?)? {
+        guard let data = try? Data(contentsOf: url, options: [.alwaysMapped]) else { return nil }
+        var meta: SessionMeta?
+        var lastRole: String?
+        let wanted = [Array("\"session_meta\"".utf8), Array("\"response_item\"".utf8)]
+        data.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
+            guard let base = raw.baseAddress else { return }
+            let count = raw.count
+            var start = 0
+            while start < count {
+                let end = memchr(base + start, 10, count - start)
+                    .map { base.distance(to: UnsafeRawPointer($0)) } ?? count
+                let length = end - start
+                if length > 0, wanted.contains(where: { memmem(base + start, length, $0, $0.count) != nil }) {
+                    autoreleasepool {
+                        let line = String(decoding: UnsafeRawBufferPointer(start: base + start, count: length),
+                                          as: UTF8.self)
+                        switch record(line) {
+                        case .meta(let found): if meta == nil { meta = found }
+                        case .content(let message): lastRole = message.role
+                        default: break
+                        }
+                    }
+                }
+                start = end + 1
+            }
+        }
+        return (meta, lastRole)
     }
 
     // MARK: - Filesystem

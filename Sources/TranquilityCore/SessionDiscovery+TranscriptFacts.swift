@@ -63,9 +63,15 @@ extension SessionDiscovery {
             }
             lock.unlock()
 
-            guard let lines = SessionDiscovery.classifiableHead(of: path) else { return nil }
-            let head = Head(entrypoint: SessionDiscovery.entrypoint(head: lines),
+            // The bytes read from the file are released before the next file.
+            // The archive walk reads every log on disk in one loop, and what
+            // each read left behind added up to 1.8 GB on a real archive.
+            let found: Head? = autoreleasepool {
+                guard let lines = SessionDiscovery.classifiableHead(of: path) else { return nil }
+                return Head(entrypoint: SessionDiscovery.entrypoint(head: lines),
                             cwd: SessionDiscovery.firstCwd(head: lines))
+            }
+            guard let head = found else { return nil }
             lock.lock()
             entries[path] = Entry(size: size, modified: modified, head: head,
                                   tail: nil, usedAt: Date())
@@ -84,12 +90,14 @@ extension SessionDiscovery {
             }
             lock.unlock()
 
-            let lines = SessionActivity.tail(of: path) ?? []
-            let tail = Tail(
-                tail: lines,
-                cwd: SessionDiscovery.firstCwd(head: [], tail: lines) ?? head.cwd,
-                lastMoved: SessionDiscovery.lastMoved(tail: lines),
-                answered: SessionDiscovery.isAnswered(tail: lines))
+            let tail: Tail = autoreleasepool {
+                let lines = SessionActivity.tail(of: path) ?? []
+                return Tail(
+                    tail: lines,
+                    cwd: SessionDiscovery.firstCwd(head: [], tail: lines) ?? head.cwd,
+                    lastMoved: SessionDiscovery.lastMoved(tail: lines),
+                    answered: SessionDiscovery.isAnswered(tail: lines))
+            }
             lock.lock()
             if var entry = entries[path], entry.size == size, entry.modified == modified {
                 entry.tail = tail
@@ -128,12 +136,13 @@ extension SessionDiscovery {
             }
             lock.unlock()
 
-            guard let text = try? String(contentsOfFile: path, encoding: .utf8) else { return nil }
-            let parsed = autoreleasepool { CodexRollout.parse(text) }
-            let facts = Facts(sessionId: parsed.meta?.sessionId,
-                              isSubagent: parsed.meta?.isSubagent == true,
-                              cwd: parsed.meta?.cwd,
-                              answered: parsed.messages.last?.role == "user")
+            // Read a line at a time. A rollout parsed whole holds every
+            // record at once, which reached 4.6 GB on one 643 MB file.
+            let read: Facts? = CodexRollout.facts(at: URL(fileURLWithPath: path)).map {
+                Facts(sessionId: $0.meta?.sessionId, isSubagent: $0.meta?.isSubagent == true,
+                      cwd: $0.meta?.cwd, answered: $0.lastRole == "user")
+            }
+            guard let facts = read else { return nil }
             lock.lock()
             entries[path] = (size, modified, facts, Date())
             entries = entries.filter {

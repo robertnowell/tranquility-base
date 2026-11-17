@@ -26,9 +26,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var hotkey: HotkeyMonitor!
     let recorder = Recorder()
     var store: QueueStore?
+    /// One row per message, kept on disk and appended to. A new file name,
+    /// because the index it replaced has a different shape under the old one.
     let pastAgentSearch = SessionKeywordIndex(cacheURL:
-        QueueStore.supportDirectory.appendingPathComponent("session-search.sqlite"))
+        QueueStore.supportDirectory.appendingPathComponent("session-index.sqlite"))
     var pastAgentPreparation: Task<Void, Never>?
+    var pastAgentIndexing: Task<Void, Never>?
+    var pastAgentIndexKicked = Date.distantPast
+    var pastAgentIndexedAt: Date?
+    var pastAgentIndexProgress: (done: Int, total: Int)?
     var coordinator: Coordinator?
     var managedCredits: ManagedCreditSession?
     /// The voice and the transcript, bought on the account. Held so the
@@ -931,6 +937,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // refused. The deploy check reads that refusal as a panel stuck
                 // holding the stage.
                 Task.detached(priority: .utility) { SessionDiscovery.warm() }
+                // The search index rides the same beat, once a minute: Past
+                // Agents never prepares anything when it opens.
+                if Date().timeIntervalSince(self.pastAgentIndexKicked) > 60 {
+                    self.refreshPastAgentIndex()
+                }
 
                 // Write the summary before it is asked for. Doing it on demand meant
                 // every use opened with a model call you had to sit through.

@@ -48,15 +48,57 @@ final class PastAgentsList: NSView {
         /// The list stays flat (ruling-project-folders, rule 8); the chip only
         /// says where it came from, and where a revive will put it back.
         let folder: String?
+        /// Why this row answered the search: the passage that matched. Nil
+        /// when nothing is being searched for.
+        let match: MatchLine?
 
         init(row: SessionRow, revivable: Bool, haystack: String,
-             aux: String? = nil, tooltip: String? = nil, folder: String? = nil) {
+             aux: String? = nil, tooltip: String? = nil, folder: String? = nil,
+             match: MatchLine? = nil) {
             self.row = row
             self.revivable = revivable
             self.haystack = haystack
             self.aux = aux
             self.tooltip = tooltip
             self.folder = folder
+            self.match = match
+        }
+    }
+
+    /// The reason a result is in the list, shown ON the row.
+    ///
+    /// It lived in the tooltip until 15 Nov 2026, with no highlight, and it
+    /// could be a session id or a path. Robert: *"I want to be able to see why
+    /// each is ranking, because often the title alone is not a good
+    /// description of the relevant context that has been matched."*
+    struct MatchLine: Equatable, Sendable {
+        /// Who said it: YOU, AGENT, REPORT, SUMMARY. Empty for a name match.
+        let speaker: String
+        /// The passage, with `SessionKeywordIndex.Match.open` and `.close`
+        /// around each matched word.
+        let excerpt: String
+        /// Matching passages beyond the one shown.
+        let more: Int
+
+        init(_ match: SessionKeywordIndex.Match) {
+            switch match.role {
+            case .user: speaker = "YOU"
+            case .assistant: speaker = "AGENT"
+            case .report: speaker = "REPORT"
+            case .summary: speaker = "SUMMARY"
+            case .title, .metadata: speaker = ""
+            }
+            excerpt = match.excerpt.isEmpty
+                ? (match.tier <= 1 ? "The name matches." : "The folder, directory or id matches.")
+                : match.excerpt
+            more = max(0, match.count - 1)
+        }
+        init(speaker: String, excerpt: String, more: Int = 0) {
+            self.speaker = speaker; self.excerpt = excerpt; self.more = more
+        }
+
+        var plain: String {
+            excerpt.filter { $0 != SessionKeywordIndex.Match.open && $0 != SessionKeywordIndex.Match.close }
         }
     }
 
@@ -65,8 +107,36 @@ final class PastAgentsList: NSView {
     private let filterField = FilterRowView()
     private var items: [Item] = []
     private var shown: [Item] = []
-    typealias Search = @Sendable (String) async throws -> [SessionKeywordIndex.Match]
+    /// Everything a search may answer with: the list's own rows, the agents
+    /// the grid is showing, and agents older than the list's 30 days. The
+    /// list with no search text shows `items` alone (ruled 15 Nov 2026).
+    private var searchable: [Item] = []
+    /// The words, the order, and whether every result needs its passage or
+    /// only the first page of them.
+    typealias Search = @Sendable (String, SessionKeywordIndex.Order, _ everyExcerpt: Bool) async throws
+        -> [SessionKeywordIndex.Match]
     private var search: Search?
+    /// Newest first, or best match first. Remembered between launches.
+    private(set) var order: SessionKeywordIndex.Order = PastAgentsList.storedOrder {
+        didSet { ProductDefaults.shared.set(order.rawValue, forKey: Self.orderKey) }
+    }
+    static let orderKey = "pastAgentsSearchOrder"
+    /// Recent unless the user chose otherwise (ruled 15 Nov 2026).
+    static var storedOrder: SessionKeywordIndex.Order {
+        ProductDefaults.shared.string(forKey: orderKey)
+            .flatMap(SessionKeywordIndex.Order.init(rawValue:)) ?? .recent
+    }
+    /// How many results a search draws before it is asked for the rest. Every
+    /// row is a view, and a common word matches hundreds of agents.
+    nonisolated static let resultPage = 50
+    /// The most agents one search asks the index for. Past this the summary
+    /// says "300+": the count is a floor, and saying so is the honest form.
+    nonisolated static let searchLimit = 300
+    private var matched: [Item] = []
+    private var showsAll = false
+    /// Set while the index is still reading logs for the first time.
+    private var indexing: (done: Int, total: Int)?
+    private var tall = false
     private var searchTask: Task<Void, Never>?
     private var filterGeneration = 0
     private var query = ""
@@ -85,6 +155,8 @@ final class PastAgentsList: NSView {
     /// does, or the same dot means two things on two faces.
     var onLamp: ((_ row: SessionRow) -> Void)?
     var onFilterChanged: (() -> Void)?
+    /// A search answered. For telemetry: how many, in which order, how long.
+    var onSearched: ((_ results: Int, _ order: SessionKeywordIndex.Order, _ milliseconds: Int) -> Void)?
     /// Right-click → "Terminate" on a LIVE row (ruled 13 Aug). Dead sessions
     /// have no process to end and get no menu — an empty menu would promise a
     /// verb this row cannot perform.
@@ -143,6 +215,12 @@ final class PastAgentsList: NSView {
             self?.filter(text)
             self?.onFilterChanged?()
         }
+        filterField.setOrder(order)
+        filterField.onOrder = { [weak self] picked in
+            guard let self, picked != order else { return }
+            order = picked
+            if !query.isEmpty { filter(query) }
+        }
 
         addSubview(filterField)
         addSubview(scroll)
@@ -176,8 +254,52 @@ final class PastAgentsList: NSView {
         search = nil
         partial = false
         self.items = items
+        searchable = items
         filterField.reset()
         filter("")
+    }
+
+    /// The wider set a search may answer with. Arrives once per opening, a
+    /// moment after the list, because building it reads the archive.
+    func setSearchable(_ items: [Item], opening: Int) {
+        guard opening == openingGeneration else { return }
+        searchable = items
+        if !query.isEmpty { filter(query) }
+    }
+
+    /// The index is reading logs for the first time, or has finished. A search
+    /// already answers from the part that exists; when the rest lands, the
+    /// same query is asked again.
+    func indexProgress(_ progress: (done: Int, total: Int)?) {
+        let finished = indexing != nil && progress == nil
+        indexing = progress
+        guard !query.isEmpty else { return }
+        if finished { filter(query) } else { summary = resultSummary(); onFilterChanged?() }
+    }
+
+    func setOrderForTesting(_ picked: SessionKeywordIndex.Order) { filterField.pick(picked) }
+    var rowHeightsForTesting: [CGFloat] {
+        stack.arrangedSubviews.compactMap { ($0 as? PastRowView)?.frame.height }
+    }
+    var excerptsForTesting: [String] {
+        stack.arrangedSubviews.compactMap { ($0 as? PastRowView)?.excerptForTesting }
+    }
+    var chipsForTesting: [String?] {
+        stack.arrangedSubviews.compactMap { $0 as? PastRowView }.map(\.chipForTesting)
+    }
+    var showAllTitleForTesting: String? { showAllButton?.title }
+    func showAllForTesting() { showAllTapped() }
+
+    private func resultSummary() -> String {
+        let count = matched.count
+        let total = count >= Self.searchLimit ? "\(count)+" : "\(count)"
+        var text = shown.count < count ? "\(shown.count) of \(total) agents"
+                                       : "\(total) agent\(count == 1 ? "" : "s")"
+        text += order == .recent ? " · newest first" : " · best match first"
+        if let indexing, indexing.total > 0 {
+            text = "Indexing \(indexing.done) of \(indexing.total) · " + text
+        }
+        return text + (partial ? " · some text unavailable" : "")
     }
 
     /// A cold archive finishes once per opening. Preserve any text already typed.
@@ -214,10 +336,18 @@ final class PastAgentsList: NSView {
         query = text.trimmingCharacters(in: .whitespacesAndNewlines)
         filterGeneration += 1
         searchTask?.cancel()
+        // Typing starts a new answer at its first page. Only the SHOW ALL tap,
+        // which calls `filter` with the same words, keeps the whole list.
+        if text.trimmingCharacters(in: .whitespacesAndNewlines) != lastAsked { showsAll = false }
+        lastAsked = query
         guard !query.isEmpty else {
+            matched = []
+            showsAll = false
+            tall = false
             shown = items
             summary = archiveRead
-                ? "\(items.count) session\(items.count == 1 ? "" : "s") · 30 days"
+                ? "\(items.count) session\(items.count == 1 ? "" : "s") · "
+                    + "\(Int(SessionDiscovery.defaultWindow / 86_400)) days"
                 : "Reading the archive…"
             rebuild()
             setHovered(nil)
@@ -226,33 +356,53 @@ final class PastAgentsList: NSView {
             return
         }
         guard let search else {
-            summary = "Preparing search…"
+            // The app installs the search in the same turn that opens the
+            // list, so this is a state no opening should reach. It read
+            // "Preparing search…" on every opening until 15 Nov 2026, while
+            // the index was rebuilt from nothing each time.
+            summary = "Search is not ready"
             onFilterChanged?()
             return
         }
-        summary = "Searching…"
-        onFilterChanged?()
+        // Keep the previous answer's summary: a search takes milliseconds,
+        // and a line that flickers to "Searching…" on every key reads as work.
+        if matched.isEmpty { summary = "Searching…"; onFilterChanged?() }
         let generation = filterGeneration
         let opening = openingGeneration
         let requested = query
+        let wanted = order
+        let everything = showsAll
         searchTask = Task { [weak self] in
             do {
-                try await Task.sleep(for: .milliseconds(70))
-                let matches = try await search(requested)
+                try await Task.sleep(for: .milliseconds(everything ? 0 : 70))
+                let began = Date()
+                let matches = try await search(requested, wanted, everything)
                 try Task.checkCancellation()
                 guard let self, self.filterGeneration == generation,
                       self.openingGeneration == opening else { return }
-                let byID = Dictionary(self.items.map { ($0.row.id, $0) },
+                let byID = Dictionary((self.searchable + self.items).map { ($0.row.id, $0) },
                                       uniquingKeysWith: { first, _ in first })
-                self.shown = matches.compactMap { match in
+                let now = Date()
+                self.matched = matches.compactMap { match in
                     guard let item = byID[match.id] else { return nil }
-                    let tooltip = [item.tooltip, match.excerpt.isEmpty ? nil : match.excerpt]
+                    let line = MatchLine(match)
+                    // The time column says when the shown passage was said,
+                    // which is what "newest first" is ordered by.
+                    let when = match.count > 0
+                        ? SessionActivity.lastMovedLabel(match.at, now: now) : item.aux
+                    let tooltip = [item.tooltip, match.excerpt.isEmpty ? nil : line.plain]
                         .compactMap { $0 }.joined(separator: "\n\n")
                     return Item(row: item.row, revivable: item.revivable,
-                                haystack: item.haystack, aux: item.aux, tooltip: tooltip)
+                                haystack: item.haystack, aux: when, tooltip: tooltip,
+                                folder: item.folder, match: line)
                 }
-                self.summary = "\(self.shown.count) of \(self.items.count)"
-                    + (self.partial ? " · some text unavailable" : "")
+                self.showsAll = everything
+                self.tall = true
+                self.shown = everything ? self.matched
+                                        : Array(self.matched.prefix(Self.resultPage))
+                self.summary = self.resultSummary()
+                self.onSearched?(self.matched.count, wanted,
+                                 Int(Date().timeIntervalSince(began) * 1000))
                 self.searchPublications += 1
                 self.rebuild()
                 self.setHovered(nil)
@@ -276,9 +426,10 @@ final class PastAgentsList: NSView {
 
     private func rebuild() {
         stack.removeAllArrangedSubviews()
+        showAllButton = nil
         for (index, item) in shown.enumerated() {
             let row = PastRowView(item: item, target: self,
-                                  action: #selector(rowTapped(_:)))
+                                  action: #selector(rowTapped(_:)), tall: tall)
             // Set on EVERY row, not only the ones with something to switch.
             // The grid's original set it on green alone, which is why the
             // column read as inert everywhere else and a dark lamp sent you to
@@ -320,6 +471,31 @@ final class PastAgentsList: NSView {
                 rule.widthAnchor.constraint(equalTo: row.widthAnchor).isActive = true
             }
         }
+        // The rest of a long answer, one tap away. After the last row, so the
+        // rows above keep the fixed pitch `rowIndex(at:)` divides by.
+        if tall, shown.count < matched.count {
+            let button = ConsoleButton(title: "", target: self, action: #selector(showAllTapped))
+            button.isBordered = false
+            button.title = "SHOW ALL \(matched.count)"
+            button.attributedTitle = Widgets.letterspaced(
+                "SHOW ALL \(matched.count) ›", size: 9.5, tracking: 1.33,
+                color: StateLegend.Palette.accent)
+            button.translatesAutoresizingMaskIntoConstraints = false
+            button.heightAnchor.constraint(equalToConstant: GridRowView.height).isActive = true
+            stack.addArrangedSubview(button)
+            showAllButton = button
+        }
+    }
+
+    private var showAllButton: NSButton?
+    private var lastAsked = ""
+
+    /// The rest of the answer. Asked of the index again, because only the
+    /// first page was given its passages.
+    @objc private func showAllTapped() {
+        guard shown.count < matched.count, !query.isEmpty else { return }
+        showsAll = true
+        filter(query)
     }
 
     /// One tracking area over the whole list, so exactly one row can be lit.
@@ -360,12 +536,15 @@ final class PastAgentsList: NSView {
     /// Rows and their separators alternate, so row `i` is arranged subview
     /// `i * 2` and occupies one pitch from the top of the flipped stack.
     private func rowIndex(at y: CGFloat) -> Int? {
-        let pitch = GridRowView.height + 1
+        // One height for every row of a face: a search result is taller than a
+        // plain row, and all of them are, so the pitch is still one constant.
+        let height = tall ? PastRowView.resultHeight : GridRowView.height
+        let pitch = height + 1
         guard y >= 0 else { return nil }
         let index = Int(y / pitch)
         // Inside the row itself rather than on the hairline under it: a pointer
         // resting on a separator belongs to neither row.
-        guard index < shown.count, y - CGFloat(index) * pitch <= GridRowView.height
+        guard index < shown.count, y - CGFloat(index) * pitch <= height
         else { return nil }
         return index
     }
@@ -501,6 +680,34 @@ private final class FilterRowView: NSView, NSTextFieldDelegate {
     static let height: CGFloat = 36
     let input = FilterField()
     var onChange: ((String) -> Void)?
+    /// Recent or Relevant. Two words, drawn the way the harness picker draws
+    /// its choices: the chosen one in ink, the other in hint. Not a segmented
+    /// control, whose bezel is AppKit chrome this panel refuses everywhere.
+    var onOrder: ((SessionKeywordIndex.Order) -> Void)?
+    private var orderButtons: [SessionKeywordIndex.Order: ConsoleButton] = [:]
+    private var order: SessionKeywordIndex.Order = .recent
+
+    func setOrder(_ picked: SessionKeywordIndex.Order) {
+        order = picked
+        for (kind, button) in orderButtons {
+            button.attributedTitle = Widgets.letterspaced(
+                kind == .recent ? "RECENT" : "RELEVANT", size: 9.5, tracking: 1.33,
+                color: kind == picked ? StateLegend.Palette.ink : StateLegend.Palette.hint)
+            button.toolTip = kind == .recent ? "Newest matching message first"
+                                             : "Best match first: the name, then your words, then the agent's"
+        }
+    }
+
+    func pick(_ picked: SessionKeywordIndex.Order) {
+        setOrder(picked)
+        onOrder?(picked)
+    }
+
+    @objc private func orderTapped(_ sender: NSButton) {
+        guard let raw = sender.identifier?.rawValue,
+              let picked = SessionKeywordIndex.Order(rawValue: raw) else { return }
+        pick(picked)
+    }
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -524,12 +731,29 @@ private final class FilterRowView: NSView, NSTextFieldDelegate {
         input.translatesAutoresizingMaskIntoConstraints = false
 
         addSubview(glyph); addSubview(input)
+        var trailing = trailingAnchor
+        for kind in [SessionKeywordIndex.Order.relevant, .recent] {
+            let button = ConsoleButton(title: "", target: self, action: #selector(orderTapped(_:)))
+            button.isBordered = false
+            button.identifier = NSUserInterfaceItemIdentifier(kind.rawValue)
+            button.translatesAutoresizingMaskIntoConstraints = false
+            button.setContentCompressionResistancePriority(.required, for: .horizontal)
+            addSubview(button)
+            orderButtons[kind] = button
+            NSLayoutConstraint.activate([
+                button.centerYAnchor.constraint(equalTo: centerYAnchor),
+                button.trailingAnchor.constraint(equalTo: trailing,
+                                                 constant: kind == .relevant ? 0 : -14),
+            ])
+            trailing = button.leadingAnchor
+        }
+        setOrder(order)
         NSLayoutConstraint.activate([
             heightAnchor.constraint(equalToConstant: Self.height),
             glyph.leadingAnchor.constraint(equalTo: leadingAnchor),
             glyph.centerYAnchor.constraint(equalTo: centerYAnchor),
             input.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 20),
-            input.trailingAnchor.constraint(equalTo: trailingAnchor),
+            input.trailingAnchor.constraint(equalTo: trailing, constant: -12),
             input.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
     }
@@ -624,6 +848,48 @@ final class PastRowView: NSControl {
 
     private let idLabel: NSTextField
     private let verbLabel: NSTextField
+    /// A search result: the usual line, then two lines of the passage that
+    /// matched. One fixed height, so the list's hover arithmetic still divides
+    /// by a constant.
+    static let resultHeight: CGFloat = 78
+    private var excerptLabel: NSTextField?
+    var excerptForTesting: String? { excerptLabel?.stringValue }
+
+    /// The matched passage as drawn: who said it in small capitals, the words
+    /// in the muted ink, and each matched word in full ink and a heavier
+    /// weight. Emphasis by weight and contrast, never by a colour of its own.
+    static func excerptText(_ line: PastAgentsList.MatchLine, alpha: CGFloat) -> NSAttributedString {
+        let out = NSMutableAttributedString()
+        if !line.speaker.isEmpty {
+            out.append(Widgets.letterspaced(line.speaker, size: 9, tracking: 1.4,
+                                            color: StateLegend.Palette.hint.withAlphaComponent(alpha)))
+            out.append(NSAttributedString(string: "  "))
+        }
+        let plain: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 11.5),
+            .foregroundColor: StateLegend.Palette.muted.withAlphaComponent(alpha)]
+        let marked: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 11.5, weight: .semibold),
+            .foregroundColor: StateLegend.Palette.ink.withAlphaComponent(alpha)]
+        var run = "", inMark = false
+        func flush() {
+            guard !run.isEmpty else { return }
+            out.append(NSAttributedString(string: run, attributes: inMark ? marked : plain))
+            run = ""
+        }
+        for character in line.excerpt {
+            if character == SessionKeywordIndex.Match.open { flush(); inMark = true }
+            else if character == SessionKeywordIndex.Match.close { flush(); inMark = false }
+            else { run.append(character) }
+        }
+        flush()
+        if line.more > 0 {
+            out.append(NSAttributedString(string: "  +\(line.more) more", attributes: [
+                .font: GridRowView.auxFont,
+                .foregroundColor: StateLegend.Palette.hint.withAlphaComponent(alpha)]))
+        }
+        return out
+    }
 
     /// The verb this row is promising, read off the label itself rather than
     /// recomputed — a drill that recomputes the answer cannot catch a label
@@ -643,7 +909,7 @@ final class PastRowView: NSControl {
     private var nameLabel: NSTextField!
     private var restingName: NSColor = StateLegend.Palette.ink
 
-    init(item: PastAgentsList.Item, target: AnyObject, action: Selector) {
+    init(item: PastAgentsList.Item, target: AnyObject, action: Selector, tall: Bool = false) {
         idLabel = NSTextField(labelWithString: item.aux ?? item.row.aux)
         // Green for a resurrection, advisory grey for a door — the same two
         // channels the card uses for the same two meanings.
@@ -738,6 +1004,14 @@ final class PastRowView: NSControl {
         verbLabel.isHidden = true
         verbLabel.translatesAutoresizingMaskIntoConstraints = false
 
+        // Everything that sat on the row's centre sits on the centre of its
+        // first line instead, so a plain row and a result row share one layout.
+        let line = NSLayoutGuide()
+        addLayoutGuide(line)
+        NSLayoutConstraint.activate([
+            line.topAnchor.constraint(equalTo: topAnchor),
+            line.heightAnchor.constraint(equalToConstant: GridRowView.height),
+        ])
         addSubview(highlight)
         nameLabel = name
         restingName = name.textColor ?? StateLegend.Palette.ink
@@ -758,7 +1032,7 @@ final class PastRowView: NSControl {
             chipLabel = chip
             addSubview(chip)
             NSLayoutConstraint.activate([
-                chip.centerYAnchor.constraint(equalTo: centerYAnchor),
+                chip.centerYAnchor.constraint(equalTo: line.centerYAnchor),
                 chip.trailingAnchor.constraint(equalTo: idLabel.leadingAnchor, constant: -10),
                 chip.widthAnchor.constraint(lessThanOrEqualToConstant: 110),
             ])
@@ -767,7 +1041,7 @@ final class PastRowView: NSControl {
             nameEnd = idLabel.leadingAnchor
         }
         NSLayoutConstraint.activate([
-            heightAnchor.constraint(equalToConstant: GridRowView.height),
+            heightAnchor.constraint(equalToConstant: tall ? Self.resultHeight : GridRowView.height),
             highlight.leadingAnchor.constraint(equalTo: leadingAnchor,
                                                constant: -GridRowView.hoverBleed),
             highlight.trailingAnchor.constraint(equalTo: trailingAnchor,
@@ -777,22 +1051,42 @@ final class PastRowView: NSControl {
             lamp.widthAnchor.constraint(equalToConstant: Lamp.diameter),
             lamp.heightAnchor.constraint(equalToConstant: Lamp.diameter),
             lamp.leadingAnchor.constraint(equalTo: leadingAnchor),
-            lamp.centerYAnchor.constraint(equalTo: centerYAnchor),
+            lamp.centerYAnchor.constraint(equalTo: line.centerYAnchor),
             name.leadingAnchor.constraint(equalTo: leadingAnchor,
                                           constant: GridRowView.lampColumn),
-            name.centerYAnchor.constraint(equalTo: centerYAnchor),
+            name.centerYAnchor.constraint(equalTo: line.centerYAnchor),
             name.trailingAnchor.constraint(lessThanOrEqualTo: nameEnd,
                                            constant: -12),
             idLabel.trailingAnchor.constraint(equalTo: trailingAnchor),
-            idLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
+            idLabel.centerYAnchor.constraint(equalTo: line.centerYAnchor),
             idLabel.widthAnchor.constraint(equalToConstant: Self.auxColumn),
             verbLabel.trailingAnchor.constraint(equalTo: trailingAnchor),
-            verbLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
+            verbLabel.centerYAnchor.constraint(equalTo: line.centerYAnchor),
             // The verb stands in the time's box rather than beside it. Without
             // a width it sized to its own text and drew over the title, because
             // the title's only right-hand limit is `idLabel`'s leading edge.
             verbLabel.widthAnchor.constraint(equalToConstant: Self.auxColumn),
         ])
+        if tall, let match = item.match {
+            let excerpt = NSTextField(wrappingLabelWithString: "")
+            excerpt.attributedStringValue = Self.excerptText(match, alpha: ink)
+            excerpt.maximumNumberOfLines = 2
+            excerpt.cell?.wraps = true
+            excerpt.cell?.truncatesLastVisibleLine = true
+            excerpt.cell?.lineBreakMode = .byWordWrapping
+            excerpt.isSelectable = false
+            excerpt.translatesAutoresizingMaskIntoConstraints = false
+            excerpt.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+            addSubview(excerpt)
+            excerptLabel = excerpt
+            NSLayoutConstraint.activate([
+                excerpt.leadingAnchor.constraint(equalTo: leadingAnchor,
+                                                 constant: GridRowView.lampColumn),
+                excerpt.trailingAnchor.constraint(equalTo: trailingAnchor),
+                excerpt.topAnchor.constraint(equalTo: line.bottomAnchor, constant: -5),
+                excerpt.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor, constant: -6),
+            ])
+        }
     }
 
     @available(*, unavailable)
