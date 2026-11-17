@@ -2137,7 +2137,7 @@ extension AppDelegate {
 
     /// What the tap says back. One receipt or card per answer, and no answer
     /// here starts or adopts anything.
-    private func say(_ outcome: AgentStart.Outcome, for sessionId: String, name: String,
+    func say(_ outcome: AgentStart.Outcome, for sessionId: String, name: String,
                      thenGoTo: Bool) async {
         let short = sessionId.prefix(8)
         switch outcome {

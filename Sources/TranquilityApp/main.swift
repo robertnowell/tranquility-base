@@ -1104,6 +1104,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
+        // One-shot: what the tap says for each answer of the one start
+        // function, on a real panel, printed, exit. Safe beside the running
+        // app: it starts no process, opens no terminal, writes no clipboard.
+        if CommandLine.arguments.contains("--selftest-start-answers") {
+            intakeTimer?.invalidate(); intakeTimer = nil
+            Task { @MainActor in
+                await self.startAnswersDrill()
+                NSApp.terminate(nil)
+            }
+            return
+        }
+
         // One-shot: pose a face, photograph it FROM the view hierarchy, exit.
         // No Screen Recording grant, no awake display — the pose renders its
         // own pixels, so this works from a lidded laptop or a headless agent.
