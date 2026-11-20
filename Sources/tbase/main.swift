@@ -32,7 +32,7 @@ func usage() -> Never {
       tbase agent-command [cmd] how new AND revived sessions are launched
       tbase revive <id> [--dry-run]
                                 bring a dead session back, same path as the panel;
-                                falls back to Codex (attemptCodexResume) if the id
+                                uses the harness's own attach if the id
                                 isn't a Claude Code session
       tbase end <id|prefix|name>
                                 end a live session, same path as the grid's
@@ -395,118 +395,78 @@ do {
             + "   \(litByFile == 0 ? "clean" : "LYING — a lamp is dated by an mtime")")
 
     case "revive":
-        // The SAME path the panel's row takes, so exercising this exercises
-        // what ships rather than a reimplementation of it: the fresh liveness
-        // probe, the directory check, then SessionLauncher.resume — Claude
-        // Code first, Codex as a fallback if the needle isn't a Claude Code
-        // session (see below; a genuinely different mechanism, not a
-        // reimplementation of the same one).
+        // The SAME function the panel's row calls (ruled 14 Nov 2026:
+        // `AgentStart.ensureRunning` is the one place a process is started),
+        // so exercising this exercises what ships.
         guard args.count > 1 else {
             print("usage: tbase revive <sessionId>   (8 chars is enough)")
             exit(1)
         }
         let needle = args[1]
-        let found = SessionDiscovery.discover(ttl: 0).sessions
-        // Harness, not "did the lookup find anything". `discover` used to
-        // answer for Claude Code alone, so a hit here meant a Claude session
-        // and the Codex branch below was the else. Since discovery unified
-        // (f4d3cd6) a hit means EITHER harness, and a Codex session was
-        // walking into `SessionLauncher.resume` — the wrong mechanism, which
-        // then refused it in Claude's words. Same shape as 8b8cdb9 in the app.
-        if let session = found.first(where: {
-            $0.sessionId.hasPrefix(needle) && $0.harness == ClaudeCodeAdapter().id
-        }) {
-        print("session    \(session.sessionId)")
-        print("title      \(truncate(session.title, 60))")
-        print("cwd        \(session.cwd ?? "—")")
-        print("liveness   \(session.liveness.rawValue)")
-        guard let command = session.reviveCommand else {
-            // The refusal that keeps the app alive: resuming a session that is
-            // still running puts two processes under one id.
-            print("")
-            print(session.liveness == .live
-                ? "REFUSED — it is already running. Go to its tab instead."
-                : "REFUSED — its directory is gone, so --resume would land nowhere.")
-            exit(2)
-        }
-        let accountLaunch = HarnessLaunch.forExistingSession(session.sessionId)
-        if let error = accountLaunch.resolutionError {
-            print("REFUSED — \(error)")
-            exit(2)
-        }
-        let resumeCommand = SessionLauncher.manualRevival(sessionId: session.sessionId,
-                                                          directory: command.cwd, launch: accountLaunch)
-        print("would run  \(resumeCommand)")
-        print("in         \(command.cwd)")
-        if args.contains("--dry-run") { print(""); print("dry run — nothing launched"); break }
-        print("")
-        switch SessionLauncher.resume(sessionId: session.sessionId, directory: command.cwd,
-                                      launch: accountLaunch) {
-        case .success:
-            print("resumed in a detached tmux pane — `tbase targets` finds it, "
-                + "or click Go to Agent")
-        case .failure(let error):
-            print("failed — \(error.message)")
-            exit(3)
-        }
-        break
-        }
-
-        // Not a Claude Code session — check Codex history. A separate
-        // branch, not a merged lookup: Codex rows carry no liveness verdict
-        // to print (the settled design never guesses one, 2026-08-22-tb-
-        // codex-hand-started-adoption), and attaching one is a genuinely
-        // different mechanism — attemptCodexResume, not SessionLauncher.
-        // resume — because Codex's own single-writer lock is what answers
-        // "already live", not a probe run beforehand.
-        let codexFound = SessionDiscovery.discover().sessions
-        guard let codexSession = codexFound.first(where: { $0.sessionId.hasPrefix(needle) }) else {
+        guard let session = (SessionDiscovery.discover(ttl: 0).sessions
+            + SessionDiscovery.discover().sessions).first(where: { $0.sessionId.hasPrefix(needle) })
+        else {
             print("no session in the window starts with \(needle)")
             print("(tbase discover 7 lists them)")
             exit(1)
         }
-        print("session    \(codexSession.sessionId)  (codex)")
-        print("cwd        \(codexSession.cwd ?? "—")")
-        guard codexSession.revivable, let cwd = codexSession.cwd else {
-            print("")
-            print("REFUSED — its directory is gone, so `codex resume` would land nowhere.")
-            exit(2)
-        }
+        print("session    \(session.sessionId)  (\(session.harness))")
+        print("title      \(truncate(session.title, 60))")
+        print("cwd        \(session.cwd ?? "—")")
+        print("liveness   \(session.liveness.rawValue)")
         if args.contains("--dry-run") {
-            print("")
-            print("would attempt  codex resume \(codexSession.sessionId)")
-            print("in             \(cwd)")
+            if let command = session.reviveCommand {
+                let launch = HarnessLaunch.forExistingSession(session.sessionId)
+                print("would run  " + (session.harness == ClaudeCodeAdapter().id
+                    ? SessionLauncher.manualRevival(sessionId: session.sessionId,
+                                                    directory: command.cwd, launch: launch)
+                    : "codex resume \(session.sessionId)"))
+                print("in         \(command.cwd)")
+            } else {
+                print("would refuse: it is running, or its directory is gone")
+            }
             print("")
             print("dry run — nothing launched")
             break
         }
         print("")
-        print("attempting codex resume \(codexSession.sessionId.prefix(8)) …")
-        let codexOutcome = SessionLauncher.attemptCodexResume(
-            sessionId: codexSession.sessionId, directory: cwd)
-        if case .success(.attached(let tty)) = codexOutcome {
-            print("attached — tmux pane is live on tty \(tty)")
-            print("  tmux attach to continue the conversation directly")
-            break
-        }
-        // Refused because it is already running? Then it does not need
-        // starting, it needs finding. See `adoptRunningCodex`.
-        if let pane = SessionLauncher.adoptRunningCodex(
-            sessionId: codexSession.sessionId, cwd: cwd) {
-            print("adopted — it was already running; TB now has its address")
-            print("  pane \(pane.paneId) on tty \(pane.paneTty)")
-            break
-        }
-        switch codexOutcome {
-        case .success(.alreadyLive):
-            print("REFUSED — it is already running somewhere TB does not control.")
-            print("  End it in that terminal, then run this again.")
+        switch AgentStart.ensureRunning(sessionId: session.sessionId, unasked: false) {
+        case .started(let how, let pane, let pid, _):
+            print("\(how.rawValue)" + (pane.map { " in tmux pane \($0.paneId) on \($0.paneTty)" } ?? "")
+                + (pid.map { ", live as pid \($0)" } ?? ", but it has not registered yet"))
+            print("  `tbase targets` finds it, or click Go to Agent")
+        case .running:
+            print("REFUSED — it is already running. Go to its tab instead.")
             exit(2)
-        case .failure(let error):
-            print("failed — \(error.message)")
-            exit(3)
-        default:
-            break
+        case .joined:
+            print("REFUSED — the app is already starting it.")
+            exit(2)
+        case .waitingOnQuestion(let says, _, let pane):
+            print("it came up and is waiting on a question in tmux pane \(pane.paneId): \(says)")
+            exit(2)
+        case .heldBy(let holders, _):
+            print("REFUSED — a process already holds it: "
+                + holders.map { "pid \($0.pid)" }.joined(separator: ", "))
+            exit(2)
+        case .unknown(let why):
+            print("not started — \(why), so nothing proves it is gone")
+            exit(2)
+        case .refused(let refusal, _):
+            switch refusal {
+            case .notOnDisk: print("REFUSED — no transcript on disk for it.")
+            case .directoryGone: print("REFUSED — its directory is gone, so a resume would land nowhere.")
+            case .liveElsewhere:
+                print("REFUSED — it is already running somewhere TB does not control.")
+                print("  End it in that terminal, then run this again.")
+            case .exited(let lastScreen):
+                print("failed — it exited without resuming"
+                    + (lastScreen.map { ": " + SessionLauncher.pointOfFailure(in: $0) } ?? "."))
+                exit(3)
+            case .failed(let message, _, _):
+                print("failed — \(message)")
+                exit(3)
+            }
+            exit(2)
         }
 
     case "agent-command":

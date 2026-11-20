@@ -150,16 +150,6 @@ extension StatusHUD {
     /// a summons. If you dismissed the panel, a send landing does not bring
     /// it back — the menu bar and the log carry it.
     func showReceipt(_ receipt: Receipt) {
-        // The revive outcomes have no other single door: three code paths
-        // in `revive` end at one of these receipts, so the receipt is the
-        // record. `agent_revive_requested` carries the id; this carries the verdict.
-        switch receipt {
-        case .revived: Track.record("agent_revived", ["outcome": "revived"])
-        case .alreadyAwake: Track.record("agent_revived", ["outcome": "already_awake"])
-        case .notRevived(let why): Track.record("agent_revived", ["outcome": "not_revived",
-                                                                   "reason": Track.token(from: why)])
-        default: break
-        }
         guard panel?.isVisible == true, let host = surfaceView else { return }
         let chip: NSTextField
         if let existing = receiptChip {

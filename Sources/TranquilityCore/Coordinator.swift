@@ -60,6 +60,18 @@ public struct Coordinator: Sendable {
     public let resumeTwin: @Sendable (_ sessionId: String, _ directory: String,
                                       _ harness: String) -> TmuxPaneAddress?
 
+    /// Starts the process of an agent that has none, when a reply is bound
+    /// for it (`AgentStart`, ruled 11 Nov 2026). `nil` means the reply path
+    /// never starts anything and refuses as it always did, which is what
+    /// every test gets unless it asks: like `resumeTwin`, a real subprocess
+    /// has no place running unannounced inside a test's `dispatch()`. The
+    /// app passes `AgentStart.forReply` behind its own off switch.
+    public let startGone: (@Sendable (_ sessionId: String) -> AgentStart.ForReply)?
+    /// How long the input box of a process started for a reply has to come
+    /// up before the reply gives up. The wait for the process to register is
+    /// the start function's alone (`AgentStart.registrationWait`).
+    public let startSettle: TimeInterval
+
     public let enrolment: EnrolmentRegistry
     public let agents: ClaudeAgentsReading
     /// The only source of Codex liveness `waiting()` has — Codex never
@@ -117,6 +129,8 @@ public struct Coordinator: Sendable {
         attachments: AttachmentStore = AttachmentStore(),
         replyWindow: TimeInterval = 15 * 60,
         readinessGrace: TimeInterval = 12,
+        startGone: (@Sendable (_ sessionId: String) -> AgentStart.ForReply)? = nil,
+        startSettle: TimeInterval = 20,
         resumeTwin: @escaping @Sendable (_ sessionId: String, _ directory: String,
                                          _ harness: String) -> TmuxPaneAddress?
             = { sessionId, directory, harness in
@@ -151,6 +165,8 @@ public struct Coordinator: Sendable {
         self.attachments = attachments
         self.replyWindow = replyWindow
         self.readinessGrace = readinessGrace
+        self.startGone = startGone
+        self.startSettle = startSettle
         self.resumeTwin = resumeTwin
     }
 

@@ -26,7 +26,8 @@ enum SelfTest {
         let fields = checks.map { "\($0.0)=\($0.1)" }.joined(separator: " ")
         Permissions.log("selftest \(name): \(verdict) — \(fields)")
         if CommandLine.arguments.contains("--selftest-folders")
-            || CommandLine.arguments.contains("--selftest-agent-names") {
+            || CommandLine.arguments.contains("--selftest-agent-names")
+            || CommandLine.arguments.contains("--selftest-start-answers") {
             print("selftest \(name): \(verdict) — \(fields)")
         }
     }

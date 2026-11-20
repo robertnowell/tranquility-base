@@ -694,7 +694,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // the registry instead would be asking what COULD be remote
                 // rather than what is.
                 isRemote: { [weak poller] id in poller?.snapshot.agent(id) != nil },
-                attachments: .persistent())
+                attachments: .persistent(),
+                // A reply to an agent with no process starts the process
+                // first (ruled 11 Nov 2026), through the one start function
+                // every door uses (ruled 14 Nov; `AgentStart`). OFF unless
+                // switched on, and read on every reply, so the switch needs
+                // no relaunch:
+                //   defaults write <bundle id> startOnReply -bool YES
+                startGone: { id in
+                    guard UserDefaults.standard.bool(forKey: "startOnReply") else {
+                        return .notGone("start on reply is switched off")
+                    }
+                    // The moment a start begins, the panel says so: the same
+                    // chip the tap shows. Without it the words leave and
+                    // nothing changes until the agent is up.
+                    let outcome = AgentStart.ensureRunningJoining(sessionId: id, unasked: true) {
+                        Task { @MainActor [weak self] in
+                            guard let self else { return }
+                            self.hud.showReceipt(.reviving(self.describe(session: id).label))
+                        }
+                    }
+                    AgentStartRecord.record(outcome, via: .reply, sessionId: id)
+                    return outcome.forReply
+                })
             // The mirror: every page and turn into the hub, while the panel
             // runs. Nil until this Mac is connected; nothing else changes.
             HubWindow.shared.log = { Permissions.log($0) }
@@ -1079,6 +1101,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             intakeTimer?.invalidate(); intakeTimer = nil
             hud.agentNamesDrill()
             NSApp.terminate(nil)
+            return
+        }
+
+        // One-shot: what the tap says for each answer of the one start
+        // function, on a real panel, printed, exit. Safe beside the running
+        // app: it starts no process, opens no terminal, writes no clipboard.
+        if CommandLine.arguments.contains("--selftest-start-answers") {
+            intakeTimer?.invalidate(); intakeTimer = nil
+            Task { @MainActor in
+                await self.startAnswersDrill()
+                NSApp.terminate(nil)
+            }
             return
         }
 

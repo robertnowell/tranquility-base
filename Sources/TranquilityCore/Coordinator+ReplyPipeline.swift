@@ -503,6 +503,63 @@ extension Coordinator {
             resolved = codex
             isCodex = true
         }
+        // NO PROCESS IS NOT A REFUSAL (ruled 11 Nov 2026). Asked BEFORE the
+        // grace below, because the grace exists for a process that is coming
+        // and this is the case where none is: waiting twelve seconds to learn
+        // that would be twelve seconds of the old failure. `startGone` answers
+        // `notGone` whenever it has no proof (a failed probe, a live process,
+        // a harness it does not cover), and then nothing here has changed.
+        //
+        // Read fresh, not from `resolved`: `agents.sessions() ?? []` above has
+        // already folded "could not read the registry" into "nobody is home".
+        var startedHere = false
+        var startRegistered = false
+        var startedPane: TmuxPaneAddress?
+        let startedAt = Date()
+        if resolved == nil, let startGone {
+            switch startGone(target.sessionId) {
+            case .started(let pane, let registered):
+                startedHere = true
+                startedPane = pane
+                startRegistered = registered
+                Coordinator.trace?("dispatch: \(target.sessionId.prefix(8)) had no process; "
+                    + "started one for this reply (registered: \(registered))")
+                // One look, no loop. The start function already waited for
+                // the registration (`AgentStart.registrationWait`), and ruling
+                // 1 (14 Nov 2026) allows one such wait. Until 16 Nov this
+                // waited 30 s more for the answer the function had given.
+                resolved = (agents.sessions() ?? [])
+                    .preferringTmuxOwned(sessionId: target.sessionId, trace: Coordinator.trace)
+                if resolved == nil, let codex = codexResolved(target.sessionId) {
+                    resolved = codex
+                    isCodex = true
+                }
+            case .notGone(let why):
+                Coordinator.trace?("dispatch: \(target.sessionId.prefix(8)) not started: \(why)")
+            case .refused(let why):
+                Coordinator.trace?("dispatch: \(target.sessionId.prefix(8)) has no process and "
+                    + "could not be started: \(why)")
+                attachments.resolve(utteranceId: utterance.id, landed: false)
+                utterance.status = .dispatchFailed
+                utterance.lastError = "could not start: \(why)"
+                try store.update(utterance: utterance)
+                return .dispatchFailed(.couldNotStart(why), utteranceId: utterance.id)
+            }
+        }
+        if startedHere, !startRegistered, resolved == nil {
+            // Started, and it never registered. Not "try again in a moment":
+            // the same start would end the same way, and the pane is where
+            // the reason is. The start function's own event carries this
+            // result (`started_unregistered`, via reply): one event, not two.
+            attachments.resolve(utteranceId: utterance.id, landed: false)
+            utterance.status = .dispatchFailed
+            utterance.lastError = "started but never registered"
+            try store.update(utterance: utterance)
+            return .dispatchFailed(
+                .couldNotStart("it started but did not come up within "
+                               + "\(Int(AgentStart.registrationWait)) seconds"),
+                utteranceId: utterance.id)
+        }
         if resolved == nil {
             let deadline = Date().addingTimeInterval(readinessGrace)
             while resolved == nil, Date() < deadline {
@@ -563,6 +620,9 @@ extension Coordinator {
         // single-row path never paid that lookup, so it resolves fresh here.
         var pane = resolvedPane
             ?? TmuxOwnership.pane(forSessionId: live.sessionId, pid: live.pid)
+            // The pane the start itself returned: the same address, first-hand,
+            // for the moment before the ownership lookup can see the new pid.
+            ?? startedPane
 
         // No tmux-owned row for this sessionId at all: a hand-started session
         // TB has never touched, on its FIRST dispatch. Resume it under tmux
@@ -600,7 +660,9 @@ extension Coordinator {
         // concept and has no Codex meaning (Codex sessions are always
         // tmux-launched from the start; see `TmuxTransport.swift`'s own
         // audit note on this, 26 Aug).
-        if pane == nil, !isCodex, let cwd = live.cwd {
+        // Never after a start made here: that process is already under tmux,
+        // and a transfer ENDS the process it is handed before resuming it.
+        if pane == nil, !isCodex, !startedHere, let cwd = live.cwd {
             pane = resumeTwin(target.sessionId, cwd,
                               isCodex ? CodexAdapter().id : ClaudeCodeAdapter().id)
             if pane != nil {
@@ -704,7 +766,31 @@ extension Coordinator {
         // status — one clear-site, not five. Landed (or possibly landed)
         // clears; everything else returns the files to the chips.
         if let failure = attachments.persistenceError { throw AccountConfigurationError.invalid(failure) }
-        switch await tmuxTransport.send(text: text, to: dispatchTarget) {
+        var sent = await tmuxTransport.send(text: text, to: dispatchTarget)
+        if startedHere {
+            // A process that registered a moment ago may not have its input
+            // box up yet. `.deferred` is the transport's pre-flight answer and
+            // nothing has been typed when it gives it, so asking again cannot
+            // send twice. Every other answer stands: an unclear result is
+            // never retried (`DispatchFailure.verificationTimedOut`).
+            let deadline = Date().addingTimeInterval(startSettle)
+            while case .deferred = sent, Date() < deadline {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                sent = await tmuxTransport.send(text: text, to: dispatchTarget)
+            }
+            let landed: String
+            switch sent {
+            case .confirmed: landed = "sent"
+            case .queued: landed = "queued"
+            case .deferred: landed = "not_ready"
+            case .failed(let failure): landed = failure.trackName
+            }
+            Track.record("reply_started_process", [
+                "agent_id": Track.hash(target.sessionId),
+                "outcome": .token(landed),
+                "seconds": .int(Int(Date().timeIntervalSince(startedAt)))])
+        }
+        switch sent {
         case .queued:
             // Delivered into a session that is mid-turn. It will send itself when
             // that turn ends. Treated as answered, because it is: the words are in

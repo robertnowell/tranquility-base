@@ -2115,429 +2115,199 @@ extension AppDelegate {
     /// says so instead of hopping.
     func revive(_ sessionId: String, name: String, thenGoTo: Bool = false) {
         Track.record("agent_revive_requested", ["agent_id": Track.hash(sessionId)])
-        // The door claims the id HERE, before discovery and the announce,
-        // not at `resumeTmux` where the guard's own claim begins. A second
-        // tap 3.6 s after the first (21 Sep) ran the whole flow again: its
-        // announce cancelled the first tap's brief mid-sentence, and its
-        // resume reached the guard only to be refused, which the card then
-        // rendered as "Couldn't reopen … paste the manual revival command"
-        // over a resume that landed three seconds later. A second tap is
-        // the same receipt the first one already showed, and nothing else.
-        guard ResumeGuard.beginIntent(sessionId) else {
-            Permissions.log("revive: \(sessionId.prefix(8)) tapped again while the first "
-                + "tap is still reopening it; nothing started, nothing announced")
-            hud.showReceipt(.reviving(name))
-            return
-        }
         hud.showReceipt(.reviving(name))
+        let via: AgentStart.Via = thenGoTo ? .goToAgent : .tap
         Task.detached {
-            defer { ResumeGuard.endIntent(sessionId) }
-            let fresh = SessionDiscovery.discover(ttl: 0).sessions
-                .first { $0.sessionId == sessionId }
-            // BRANCH ON THE HARNESS, never on absence.
+            // The one start function (ruled 14 Nov 2026). Everything that
+            // decides whether a process starts is in `AgentStart`: the
+            // reservation a second tap meets (21 Sep), the row's own harness
+            // (31 Aug), the launch record, the start itself and the wait for
+            // it to register. This door keeps only what it says.
             //
-            // This read `guard let fresh else { ...Codex... }`, which worked
-            // only while `discover()` returned Claude Code alone: a Codex id
-            // was missing from that list, and missing meant "try Codex". The
-            // 31 Aug unification put both harnesses in one list, so every
-            // Codex session is now FOUND, the guard stopped firing, and Codex
-            // revives fell through to the Claude Code path.
-            //
-            // That path launches the command and then waits for a NEW thread
-            // id to appear (`awaitCodexRegistration`), which is right for a
-            // fresh launch and impossible for a resume: the thread already
-            // exists, its lock file is already there, and only its mtime
-            // moves. So the pane came up correctly, Codex ran, and the panel
-            // said "started but hasn't come back yet" and handed over a manual
-            // command. Measured: the lock for 01a05338 is stamped 15:03,
-            // exactly the moment of the revive that reported failure.
-            //
-            // A nil that meant "not Claude Code" quietly became a nil that
-            // means "not found at all". Asking the row what harness it is
-            // cannot rot that way.
-            guard let fresh, fresh.harness == ClaudeCodeAdapter().id else {
-                // Codex, or a session no list knows: check Codex history
-                // before refusing outright. A genuinely different mechanism below,
-                // not a reimplementation: Codex attach goes through
-                // `attemptCodexResume`, never `SessionLauncher.resume`,
-                // because Codex's own single-writer lock is what answers
-                // "already live", not a probe run beforehand (the settled
-                // design, 2026-08-22-tb-codex-hand-started-adoption — the
-                // same branch `tbase revive` already has and already
-                // proved live).
-                let codexFound = fresh ?? SessionDiscovery.discover().sessions
-                    .filter { $0.harness == CodexAdapter().id }
-                    .first { $0.sessionId == sessionId }
-                guard let codexFound, codexFound.revivable, let cwd = codexFound.cwd else {
-                    Permissions.log("revive: refused \(sessionId.prefix(8)) — "
-                        + (codexFound == nil ? "no longer on disk"
-                           : "its directory is gone"))
-                    await MainActor.run { [weak self] in
-                        self?.hud.showReceipt(.notRevived(
-                            codexFound == nil ? "no longer on disk" : "its directory is gone"))
-                    }
-                    return
+            // The brief is announced the moment a start begins, not after it
+            // (ruled 18 Aug): a revived agent already has a brief, so there
+            // is nothing to wait for.
+            let outcome = AgentStart.ensureRunning(sessionId: sessionId, unasked: false) {
+                Task { @MainActor [weak self] in self?.announceNext(only: sessionId) }
+            }
+            AgentStartRecord.record(outcome, via: via, sessionId: sessionId)
+            await self.say(outcome, for: sessionId, name: name, thenGoTo: thenGoTo)
+        }
+    }
+
+    /// What the tap says back. One receipt or card per answer, and no answer
+    /// here starts or adopts anything.
+    func say(_ outcome: AgentStart.Outcome, for sessionId: String, name: String,
+                     thenGoTo: Bool) async {
+        let short = sessionId.prefix(8)
+        switch outcome {
+        case .joined:
+            // The other tap owns it and will report. A second tap is the
+            // receipt the first one already showed, and nothing else.
+            Permissions.log("revive: \(short) tapped again while the first tap is still "
+                + "reopening it; nothing started, nothing announced")
+            await MainActor.run { self.hud.showReceipt(.reviving(name)) }
+
+        case .running:
+            Permissions.log("revive: \(short) already has a process; nothing started")
+            await MainActor.run {
+                self.hud.showReceipt(.alreadyAwake)
+                if thenGoTo { self.goToSession(sessionId, reviveIfGone: false) }
+            }
+
+        case .unknown(let why):
+            Permissions.log("revive: \(short) not started, \(why)")
+            await MainActor.run { self.hud.showReceipt(.notRevived("can't tell if it's running")) }
+
+        case .started(let how, let pane, let pid, let cwd):
+            Permissions.log("revive: \(short) \(how.rawValue)"
+                + (pid.map { ", live as pid \($0)" } ?? ", and it never registered"))
+            if let pid {
+                // "Revived" means confirmed live (26 Aug: a revive said
+                // RESUMED over a process that never registered). The pid is
+                // what grows GO TO AGENT on the card (31 Aug).
+                await MainActor.run {
+                    self.hud.attachLivePid(pid, sessionId: sessionId)
+                    self.hud.showReceipt(.revived(name))
+                    if thenGoTo { self.goToSession(sessionId, reviveIfGone: false) }
                 }
-                await MainActor.run { [weak self] in self?.announceNext(only: sessionId) }
-                let outcome = SessionLauncher.attemptCodexResume(
-                    sessionId: sessionId, directory: cwd)
-                if case .success(.attached) = outcome {
-                    Permissions.log("revive: attached codex \(sessionId.prefix(8))")
-                    // The same finish as Claude's branch, by the same call: the
-                    // card that says RESUMED needs the pid to grow its door.
-                    let pid = await self.confirmRevivedPid(sessionId: sessionId)
-                    if pid == nil {
-                        Permissions.log("revive: codex \(sessionId.prefix(8)) attached but "
-                            + "never showed up as a live process — the card keeps its "
-                            + "receipt and loses its door")
-                    }
-                    await MainActor.run { [weak self] in
-                        self?.hud.showReceipt(.revived(name))
-                        if thenGoTo, pid != nil { self?.goToSession(sessionId, reviveIfGone: false) }
-                    }
-                    return
+            } else if how == .resumed, let pane {
+                await self.sayNeverRegistered(sessionId: sessionId, name: name, pane: pane, cwd: cwd)
+            } else {
+                // Attached or adopted, and no pid to show for it: the card
+                // keeps its receipt and loses its door.
+                await MainActor.run { self.hud.showReceipt(.revived(name)) }
+            }
+
+        case .waitingOnQuestion(let says, let screen, let pane):
+            // Alive, ours, and not resumed. Show the pane and say what it
+            // asks; never adopt it (11 Sep: the next dictation chose "Update
+            // now" on Codex's update chooser).
+            Permissions.log("revive: \(short) is waiting on a question, not resumed. "
+                + "Its screen says: " + screen)
+            let opened = SessionLauncher.showPane(
+                pane: pane, why: "the revive stopped on a question only a person answers")
+            await MainActor.run {
+                self.hud.showResult(
+                    "\(name) is waiting for you. \(says)"
+                    + (opened ? " I opened its terminal."
+                              : " I couldn't open its terminal; it is in tmux pane "
+                                + pane.paneId + "."))
+            }
+
+        case .heldBy(let holders, _):
+            // The opposite of a launch failure: the agent is up, in a pane,
+            // one keypress from whatever it waits on (21 Sep: pid 31293 on a
+            // dialog, and the card said to paste a command). Send the reader
+            // to the process that exists.
+            let adapter = HarnessLaunch.forExistingSession(sessionId).adapter
+            let pane = ResumeGuard.routablePane(among: holders)
+            let asked = pane.map { SessionLauncher.paneQuestion(pane: $0, adapter: adapter) }
+                ?? (says: nil, tail: "")
+            let opened = pane.map {
+                SessionLauncher.showPane(pane: $0, why: "a revive found it already running")
+            } ?? false
+            Permissions.log("revive: \(short) is already running"
+                + (holders.first.map { " as pid \($0.pid)" } ?? "")
+                + (pane.map { " at \($0.paneTty)" } ?? ", in no pane this app can raise")
+                + (asked.says.map { ". It is on a question: \($0)" } ?? "")
+                + (asked.tail.isEmpty ? "" : ". Its screen says: \(asked.tail)")
+                + (opened ? "" : ". No window was opened"))
+            await MainActor.run {
+                self.hud.showResult(
+                    "\(name) is already running"
+                    + (asked.tail.isEmpty ? "." : " and its screen shows this: \(asked.tail)")
+                    + (pane == nil ? " I can't find its terminal to open." : ""),
+                    about: holders.first.map { (sessionId: sessionId, pid: $0.pid, label: name) })
+            }
+
+        case .refused(let refusal, let cwd):
+            switch refusal {
+            case .notOnDisk, .directoryGone:
+                let why = refusal == .notOnDisk ? "no longer on disk" : "its directory is gone"
+                Permissions.log("revive: refused \(short), \(why)")
+                await MainActor.run { self.hud.showReceipt(.notRevived(why)) }
+            case .liveElsewhere:
+                Permissions.log("revive: refused \(short), already live elsewhere")
+                await MainActor.run {
+                    self.hud.showReceipt(.notRevived(
+                        "it's already running somewhere I don't control. End it in that terminal"))
                 }
-                // The pane came up and STOPPED on a screen only a person
-                // answers (the hooks-review consent, the update chooser). It
-                // is alive, it is ours, and it is not resumed. Until 11 Sep
-                // this was a `.failure`, which fell through to the adoption
-                // below: the process on the chooser was adopted as RESUMED,
-                // the next dictation was typed into the menu, and its Return
-                // chose "Update now". Show the pane and say what it asks;
-                // never adopt it.
-                if case .success(.stoppedOnPrompt(let says, let screen, let pane)) = outcome {
-                    Permissions.log("revive: codex \(sessionId.prefix(8)) is waiting on a "
-                        + "question, not resumed. Its screen says: " + screen)
-                    let opened = SessionLauncher.showPane(
-                        pane: pane,
-                        why: "the revive stopped on a question only a person answers")
-                    await MainActor.run { [weak self] in
-                        self?.hud.showResult(
-                            "\(name) is waiting for you. \(says)"
-                            + (opened ? " I opened its terminal."
-                                      : " I couldn't open its terminal; it is in tmux pane "
-                                        + pane.paneId + "."))
-                    }
-                    return
-                }
-                // Both remaining answers mean "already running", and BOTH of
-                // them used to end here in a receipt that told Robert to go
-                // find a terminal. He had already done the only thing that
-                // could have worked: the process was alive the whole time, TB
-                // had simply never recorded where. Adopt it. (31 Aug: pid
-                // 46356 running for thirteen minutes behind a "COULDN'T
-                // ATTACH", the record still naming yesterday's dead pid.)
-                if let pane = SessionLauncher.adoptRunningCodex(
-                    sessionId: sessionId, cwd: cwd) {
-                    Permissions.log("revive: adopted running codex "
-                                    + "\(sessionId.prefix(8)) at \(pane.paneId)")
-                    // Adoption has just written the ownership record, so this
-                    // finds the pid on its first look — but it is the same call
-                    // either way, because two ways to finish a revive is how
-                    // one of them ends up missing a door.
-                    let pid = await self.confirmRevivedPid(sessionId: sessionId)
-                    await MainActor.run { [weak self] in
-                        self?.hud.showReceipt(.revived(name))
-                        if thenGoTo, pid != nil { self?.goToSession(sessionId, reviveIfGone: false) }
-                    }
-                    return
-                }
-                switch outcome {
-                case .success(.alreadyLive):
-                    Permissions.log("revive: refused \(sessionId.prefix(8)) — already live elsewhere")
-                    await MainActor.run { [weak self] in
-                        self?.hud.showReceipt(.notRevived(
-                            "it's already running somewhere I don't control. End it in that terminal"))
-                    }
-                case .success(.exitedWithoutResuming(let lastScreen)):
-                    // The answer that used to be spelled "already running
-                    // somewhere I don't control". It sent Robert to hunt for
-                    // a terminal three times in three minutes on 1 Sep, for
-                    // three sub-agent threads that had never had one — while
-                    // Codex's actual reason sat on a pane nobody captured.
-                    // A card, not a chip: the reason is a sentence, and the
-                    // chip truncates at about thirty characters.
-                    let why = lastScreen.map { SessionLauncher.pointOfFailure(in: $0) }
-                    Permissions.log("revive: codex \(sessionId.prefix(8)) exited without "
-                        + "resuming — " + (why ?? "nothing on its screen to read"))
-                    await MainActor.run { [weak self] in
-                        self?.hud.showResult(why.map {
-                            "\(name) didn't come back. Codex said: \($0)"
-                        } ?? "\(name) didn't come back, and Codex exited without leaving "
+            case .exited(let lastScreen):
+                // A card, not a chip: the reason is a sentence (1 Sep: this
+                // was "already running somewhere", three times, for threads
+                // that had never had a terminal).
+                let why = lastScreen.map { SessionLauncher.pointOfFailure(in: $0) }
+                Permissions.log("revive: \(short) exited without resuming, "
+                    + (why ?? "nothing on its screen to read"))
+                await MainActor.run {
+                    self.hud.showResult(why.map { "\(name) didn't come back. It said: \($0)" }
+                        ?? "\(name) didn't come back, and it exited without leaving "
                             + "anything on screen to explain why.")
-                    }
-                case .failure(let error):
-                    Permissions.log("revive: failed codex \(sessionId.prefix(8)) — \(error.message)")
-                    Failures.report(.reviveFailed,
-                                    reason: "revive failed (codex): \(error.message)",
-                                    harness: "codex", session: sessionId)
-                    await MainActor.run { [weak self] in
-                        self?.hud.showReceipt(.notRevived("couldn't attach"))
-                    }
-                default:
-                    break
                 }
-                return
-            }
-            guard let command = fresh.reviveCommand else {
-                // One receipt per reason (18 Aug). `alreadyAwake` used to answer
-                // for all four, and it is only true for the first — so the
-                // panel's single word on a refusal was false in the three cases
-                // that are not "it came back on its own". That was survivable
-                // while REVIVE was a hover verb on a list; it is not, now that
-                // the lamp is the switch and this is what the switch says back.
-                let why = fresh.liveness
-                Permissions.log("revive: refused \(sessionId.prefix(8)) — liveness \(why.rawValue)")
-                await MainActor.run { [weak self] in
-                    switch why {
-                    case .live:
-                        self?.hud.showReceipt(.alreadyAwake)
-                    // `gone` with no revive command means the one other thing
-                    // `revivable` tests: the launch directory is no longer there,
-                    // so `--resume` would land nowhere.
-                    case .gone:
-                        self?.hud.showReceipt(.notRevived("its directory is gone"))
-                    case .unknown:
-                        self?.hud.showReceipt(.notRevived("can't tell if it's running"))
-                    }
+            case .failed(let message, let worthRetrying, let harness):
+                Permissions.log("revive: failed \(short), \(message)")
+                Failures.report(.reviveFailed, reason: "revive failed: \(message)",
+                                harness: harness, session: sessionId)
+                // The command that does not depend on this app's environment
+                // (24 Aug: every in-app launch died and this line worked all
+                // morning). In the agent's OWN harness spelling (26 Aug).
+                let launch = HarnessLaunch.forExistingSession(sessionId)
+                guard harness == ClaudeCodeAdapter().id, let cwd else {
+                    await MainActor.run { self.hud.showReceipt(.notRevived("couldn't attach")) }
+                    return
                 }
-                return
-            }
-            // Say what it was doing, the moment you ask for it back (ruled
-            // 18 Aug: "revive likewise should basically work the same — if
-            // you're reviving, it should reopen the agent message").
-            //
-            // Announced BEFORE the resume rather than after, and not waiting on
-            // it: unlike a launch, a revived session already has a brief, so
-            // there is nothing to synthesize and nothing to wait for. The same
-            // door a launch greeting uses, which means the same voice — this
-            // session's own, assigned long ago — and the same reply routing,
-            // under the same id, because `--resume` keeps it.
-            //
-            // A reply that beats the process back is not lost: dispatch checks
-            // readiness and says "can't take this yet, your words are kept."
-            await MainActor.run { [weak self] in self?.announceNext(only: sessionId) }
-            // The session's OWN harness, not the default one. `resume` and
-            // `manualRevival` both default to Claude Code, and a Codex session
-            // reviving through that default gets Claude Code's flag spelling
-            // with Codex's binary: `codex --dangerously-bypass-… --resume <id>`,
-            // which Codex rejects outright ("unexpected argument '--resume'
-            // found" — it is `codex resume <id>`, a subcommand). The pane then
-            // exits inside a second and the launch survival check reports it as
-            // "gone within a second", which is true and says nothing about why.
-            //
-            // Measured 26 Aug on f83191a4. The same default made the RESCUE
-            // wrong in the same breath: the command copied to the clipboard was
-            // the same unusable spelling, so the card said "copied the manual
-            // revival command" and handed over something that could not work
-            // for that agent. One default, two lies.
-            let launch = HarnessLaunch.forExistingSession(sessionId)
-            switch SessionLauncher.resume(sessionId: sessionId, directory: command.cwd,
-                                          launch: launch) {
-            case .success(let revivedPane):
-                // The receipt waits for the session to actually come back.
-                // It used to fire here, the instant `resume` returned — which
-                // means only that a command was issued and its pane did not
-                // die within a second. Measured 26 Aug: a revive said
-                // "✓ RESUMED" and the process it started sat five minutes
-                // without ever registering — no live row, no Go to Agent, no
-                // correction. "Revived" has to mean "confirmed live".
-                // The announce fired before this resume even started (see
-                // `attachLivePid`'s doc comment) — by the time `resume` has
-                // returned, the process has been up for however long the
-                // trust-prompt watch took, so `claude agents --json` should
-                // already know it. A few short retries, not a bare single
-                // shot, because that registration is still a separate
-                // process's own timing, not this call's.
-                // `agents` alone never carries a revived Codex session either
-                // (26 Aug) — attemptCodexResume already writes an ownership
-                // record on a successful attach, so liveNonRegistrySessions()
-                // has it from the first iteration, no retries needed for that
-                // harness, but the loop still costs nothing to share.
-                let registered = await self.confirmRevivedPid(sessionId: sessionId) != nil
-                await MainActor.run { [weak self] in
-                    guard let self else { return }
-                    if registered {
-                        self.hud.showReceipt(.revived(name))
-                        if thenGoTo { self.goToSession(sessionId, reviveIfGone: false) }
-                    } else {
-                        // It launched and it is not answering. Say so, and
-                        // hand over the line that does not need us — the same
-                        // rescue the failure branch offers, for the same
-                        // reason: this is the state where the app cannot help.
-                        // What the pane SAYS, not merely that it said nothing
-                        // to us. The 27 Aug lesson applied to the second path
-                        // that has it: a revive stuck on an update prompt, an
-                        // auth screen, or a resume-depth question is a pane
-                        // with the answer on it, and this branch used to log
-                        // only the absence — the shape that cost an afternoon
-                        // on the launch path.
-                        // Unconditional, for the same reason the launch path
-                        // is: `paneState` asked whether the harness's banner
-                        // was up, and for Claude Code that question always
-                        // answered yes — `settledBannerNeedle` is the word
-                        // "Claude", which every dialog it can stop on
-                        // contains. So `.stopped` was unreachable here too,
-                        // and a revive that landed on the Bypass Permissions
-                        // gate fell through to the clipboard branch below and
-                        // told the reader to paste a command, over a pane
-                        // that was one keypress from running.
-                        //
-                        // Registration already failed. That is the finding.
-                        // Show the pane and quote it, whatever is on it.
-                        //
-                        // And NAME the question when the adapter knows it,
-                        // and carry the pid, because a card that says "needs
-                        // you" with no door and no question is the card
-                        // Robert got three times on 21 Sep: "needs me what?"
-                        // The pid is on the pane's own tty; registration is
-                        // what failed, not the process. With it the card
-                        // grows GO TO AGENT, and `goToSession` accepts an
-                        // unregistered-but-alive pane for the same reason.
-                        let asked = SessionLauncher.paneQuestion(pane: revivedPane,
-                                                                 adapter: launch.adapter)
-                        let screen = asked.tail
-                        let pid = ProcessProbe.pid(onTty: revivedPane.paneTty,
-                                                   containing: sessionId)
-                        Permissions.log("revive: \(sessionId.prefix(8)) launched but never "
-                            + "registered (pid \(pid.map(String.init) ?? "unknown")). "
-                            + (asked.says.map { "It is on a question this app knows: \($0) " }
-                               ?? "")
-                            + "Opening a window. Its screen says: "
-                            + (screen.isEmpty ? "(nothing readable)" : screen))
-                        let opened = SessionLauncher.showPane(
-                            pane: revivedPane,
-                            why: "the revive never registered, and its screen is the only "
-                                + "thing that knows why")
-                        // The clipboard rescue survives, but as the FALLBACK
-                        // it always should have been: it is what you need when
-                        // no window could be opened, not the first thing a
-                        // reader is handed while a live pane sits there with
-                        // the answer on it.
-                        if !opened {
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(
-                                SessionLauncher.manualRevival(
-                                    sessionId: sessionId, directory: command.cwd, launch: launch),
-                                forType: .string)
-                        }
-                        // The card states what was MEASURED and shows what
-                        // was seen. Not "is asking you a question": the
-                        // measurement is a live process that never started
-                        // and stopped redrawing, which is also what an auth
-                        // screen, an update prompt, or a hang looks like. A
-                        // recognised needle names the screen in the log; the
-                        // card carries the screen itself, which is true for
-                        // every harness and every dialog nobody has named
-                        // yet (ruled 21 Sep: "how is that gonna work for
-                        // every kind of question"). No pid means the process
-                        // is gone, which is the other card entirely.
-                        self.hud.showResult(
-                            (pid == nil
-                             ? "\(name) didn't start; its process is gone."
-                             : "\(name) is up but hasn't started. It's waiting on this:")
-                            + (screen.isEmpty ? "" : " " + screen)
-                            + (opened || pid == nil ? ""
-                               : " I couldn't open its terminal; the manual revival "
-                                 + "command is on your clipboard."),
-                            about: (sessionId: sessionId, pid: pid, label: name))
-                    }
-                }
-            case .failure(let error) where error.duplicateResume:
-                // The other tap owns it and will report; see `beginIntent`
-                // above for why this is nearly unreachable now. Not a
-                // failure, not a clipboard.
-                Permissions.log("revive: \(sessionId.prefix(8)) — \(error.message)")
-                await MainActor.run { [weak self] in self?.hud.showReceipt(.reviving(name)) }
-            case .failure(let error) where !error.alreadyRunning.isEmpty:
-                // The guard's refusal is the OPPOSITE of a launch failure:
-                // the session is up, in a pane, one keypress from whatever
-                // it is waiting on. Until 21 Sep this took the branch below
-                // and told Robert to paste a command, twice, over pid 31293
-                // sitting on a dialog. The reader is sent to the session
-                // that exists, which is what the guard's own doc says the
-                // caller's job is, and the card carries the pid so GO TO
-                // AGENT is there for the next time.
-                let holders = error.alreadyRunning
-                let pane = ResumeGuard.routablePane(among: holders)
-                let asked = pane.map { SessionLauncher.paneQuestion(pane: $0, adapter: launch.adapter) }
-                    ?? (says: nil, tail: "")
-                let opened = pane.map {
-                    SessionLauncher.showPane(pane: $0, why: "a revive found it already running")
-                } ?? false
-                Permissions.log("revive: \(sessionId.prefix(8)) is already running as pid "
-                    + "\(holders[0].pid)"
-                    + (pane.map { " at \($0.paneTty)" } ?? ", in no pane this app can raise")
-                    + (asked.says.map { ". It is on a question: \($0)" } ?? "")
-                    + (asked.tail.isEmpty ? "" : ". Its screen says: \(asked.tail)"))
-                await MainActor.run { [weak self] in
-                    guard let self else { return }
-                    self.hud.showResult(
-                        "\(name) is already running"
-                        + (asked.tail.isEmpty ? "." : " and its screen shows this: \(asked.tail)")
-                        + (pane == nil ? " I can't find its terminal to open." : ""),
-                        about: (sessionId: sessionId, pid: holders[0].pid, label: name))
-                }
-            case .failure(let error):
-                // The cause is a log line, not a card: an exit status means
-                // nothing to the person holding the mouse. What they get is
-                // the command that does not depend on this app's environment
-                // — which is exactly the axis the 24 Aug failure lived on,
-                // where every in-app launch died and this line worked all
-                // morning — and a retry offer only when a retry could differ.
-                Permissions.log("revive: failed \(sessionId.prefix(8)) — \(error.message)")
-                Failures.report(.reviveFailed,
-                                reason: "revive failed: \(error.message)", session: sessionId)
                 let manual = SessionLauncher.manualRevival(
-                    sessionId: sessionId, directory: command.cwd, launch: launch)
-                await MainActor.run { [weak self] in
-                    guard let self else { return }
+                    sessionId: sessionId, directory: cwd, launch: launch)
+                await MainActor.run {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(manual, forType: .string)
                     self.hud.showResult(
                         "Couldn't reopen \(name) here. Copied the manual revival command to "
                         + "your clipboard. Paste it in a terminal."
-                        + (error.worthRetrying ? " Or tap it again." : ""))
+                        + (worthRetrying ? " Or tap it again." : ""))
                 }
             }
         }
     }
 
-    /// Wait for a just-resumed session to become visible as a live process,
-    /// and hand its pid to the card on stage so GO TO AGENT appears.
-    ///
-    /// `revive()` announces the session's stored brief BEFORE resuming it
-    /// (ruled 18 Aug: a recap has nothing worth waiting on), so the live-pid
-    /// lookup inside that announce runs against a session that has not been
-    /// relaunched yet and the card paints without its door. Something has to
-    /// come back afterwards and finish the job.
-    ///
-    /// The Claude branch had this loop inline and its own comment said it
-    /// served both harnesses — "attemptCodexResume already writes an
-    /// ownership record on a successful attach, so liveNonRegistrySessions()
-    /// has it from the first iteration". True, and unreachable: the Codex
-    /// branch returns several hundred lines earlier and never arrived here.
-    /// Robert, 31 Aug, on a card reading "01A05338 · RESUMED": "go to agent
-    /// never appeared". So it is one function that both branches call, rather
-    /// than one branch's loop that the other is documented to share.
-    ///
-    /// Twenty tries at 400ms. Registration is another process's timing, not
-    /// this call's, and two seconds was a deadline chosen when nothing
-    /// depended on it.
-    @discardableResult
-    func confirmRevivedPid(sessionId: String, tries: Int = 20) async -> Int? {
-        for _ in 0..<tries {
-            if let pid = ((ClaudeAgentsCLI().sessions() ?? [])
-                + FileSessionOwnershipStore.shared.liveNonRegistrySessions())
-                .first(where: { $0.sessionId == sessionId })?.pid {
-                await MainActor.run { [weak self] in
-                    self?.hud.attachLivePid(pid, sessionId: sessionId)
-                }
-                return pid
+    /// It launched and it is not answering. Show the pane and quote it,
+    /// whatever is on it: registration failed, and its screen is the only
+    /// thing that knows why (27 Aug). Name the question when the adapter
+    /// knows it, and carry the pid so the card grows GO TO AGENT (21 Sep:
+    /// "needs me what?"). The card states what was measured, which is true
+    /// for every dialog nobody has named yet.
+    private func sayNeverRegistered(sessionId: String, name: String, pane: TmuxPaneAddress,
+                                    cwd: String) async {
+        let launch = HarnessLaunch.forExistingSession(sessionId)
+        let asked = SessionLauncher.paneQuestion(pane: pane, adapter: launch.adapter)
+        let screen = asked.tail
+        let pid = ProcessProbe.pid(onTty: pane.paneTty, containing: sessionId)
+        Permissions.log("revive: \(sessionId.prefix(8)) launched but never registered "
+            + "(pid \(pid.map(String.init) ?? "unknown")). "
+            + (asked.says.map { "It is on a question this app knows: \($0) " } ?? "")
+            + "Opening a window. Its screen says: "
+            + (screen.isEmpty ? "(nothing readable)" : screen))
+        let opened = SessionLauncher.showPane(
+            pane: pane,
+            why: "the revive never registered, and its screen is the only thing that knows why")
+        let manual = SessionLauncher.manualRevival(sessionId: sessionId, directory: cwd, launch: launch)
+        await MainActor.run {
+            // The clipboard is the fallback for when no window could open.
+            if !opened {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(manual, forType: .string)
             }
-            try? await Task.sleep(nanoseconds: 400_000_000)
+            self.hud.showResult(
+                (pid == nil
+                 ? "\(name) didn't start; its process is gone."
+                 : "\(name) is up but hasn't started. It's waiting on this:")
+                + (screen.isEmpty ? "" : " " + screen)
+                + (opened || pid == nil ? ""
+                   : " I couldn't open its terminal; the manual revival "
+                     + "command is on your clipboard."),
+                about: (sessionId: sessionId, pid: pid, label: name))
         }
-        return nil
     }
 
     /// The invitation's other half: a fresh agent in the artifact's own

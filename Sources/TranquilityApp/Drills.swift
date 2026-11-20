@@ -2842,6 +2842,58 @@ extension StatusHUD {
 /// The permission surfaces live on the app delegate, not the panel — the menu
 /// and the checklist are its windows, so this drill sits where its subjects do.
 extension AppDelegate {
+    /// What the tap says for each answer of the one start function.
+    ///
+    /// `AgentStart` decides whether a process starts, and unit tests hold it
+    /// to that. What the person then SEES is here in the app layer, one chip
+    /// or card per answer, and no unit test can reach it (rule 7). On 14 Nov
+    /// about 400 lines of the tap became one call and this mapping, so this
+    /// drill feeds the real `say` each answer and reads the real panel.
+    ///
+    /// Only answers whose words need nothing from the machine. A held process,
+    /// a pane on a question and a failed launch open a terminal or write the
+    /// clipboard, and a drill must do neither on a person's Mac.
+    func startAnswersDrill() async {
+        var checks: [(String, Bool)] = []
+        let id = "selftest-start-answers", name = "Drill agent"
+        hud.showIdle(rows: [])
+        func chip(after outcome: AgentStart.Outcome) async -> String {
+            hud.receiptChip?.stringValue = ""
+            await say(outcome, for: id, name: name, thenGoTo: false)
+            return hud.receiptChip?.stringValue ?? "(no chip)"
+        }
+        checks.append(("aSecondTapShowsTheFirstTapsChip",
+                       await chip(after: .joined) == "↺ DRILL AGENT · RESUMING"))
+        checks.append(("aRunningAgentSaysSo",
+                       await chip(after: .running) == "ALREADY RUNNING"))
+        checks.append(("anUnreadableMachineIsNotARefusal",
+                       await chip(after: .unknown("the registry could not be read"))
+                           == "↺ CAN'T TELL IF IT'S RUNNING"))
+        checks.append(("aConfirmedStartSaysResumed",
+                       await chip(after: .started(how: .resumed, pane: nil, pid: 4242, cwd: "/tmp"))
+                           == "✓ DRILL AGENT · RESUMED"))
+        checks.append(("anAttachWithNoPidStillSaysResumed",
+                       await chip(after: .started(how: .attached, pane: nil, pid: nil, cwd: "/tmp"))
+                           == "✓ DRILL AGENT · RESUMED"))
+        checks.append(("noTranscriptSaysNoLongerOnDisk",
+                       await chip(after: .refused(.notOnDisk, cwd: nil)) == "↺ NO LONGER ON DISK"))
+        checks.append(("aMissingDirectorySaysSo",
+                       await chip(after: .refused(.directoryGone, cwd: nil))
+                           == "↺ ITS DIRECTORY IS GONE"))
+        checks.append(("liveElsewhereNamesTheOtherTerminal",
+                       await chip(after: .refused(.liveElsewhere, cwd: "/tmp"))
+                           .contains("SOMEWHERE I DON'T CONTROL")))
+
+        // A launch that exited is a sentence, so it is a card and not a chip.
+        await say(.refused(.exited(lastScreen: nil), cwd: "/tmp"), for: id, name: name, thenGoTo: false)
+        var isCard = false
+        if case .result = hud.state { isCard = true }
+        checks.append(("anExitedLaunchIsACard", isCard))
+        hud.showIdle(rows: [])
+
+        SelfTest.report("startAnswers", checks)
+    }
+
     /// Every permission the app models has a row, a route and a reachable
     /// checklist.
     ///

@@ -282,6 +282,11 @@ public enum DispatchFailure: Error, Sendable, Equatable {
     /// We sent the keystrokes but never saw the text land. AMBIGUOUS — it may have
     /// arrived. Never auto-retried; a duplicate injection is worse than a drop.
     case verificationTimedOut
+    /// The agent had no process, the reply tried to start one, and it could
+    /// not (`AgentStart`). Nothing was typed. The payload is the reason in the
+    /// app's own words (a directory that is gone, a launch that exited), for
+    /// the card; never the user's.
+    case couldNotStart(String)
 
     /// The case, and only the case, for the record. The payloads name a tab,
     /// which is a directory, which is the user's; "\(failure)" carried them.
@@ -292,6 +297,7 @@ public enum DispatchFailure: Error, Sendable, Equatable {
         case .tabNotFound: return "tab_not_found"
         case .injectionFailed: return "injection_failed"
         case .verificationTimedOut: return "verification_timed_out"
+        case .couldNotStart: return "could_not_start"
         }
     }
 }
@@ -373,15 +379,23 @@ public struct ScriptError: Error, Sendable, CustomStringConvertible {
     /// the tap that owns the resume will report, and this one has nothing
     /// to add.
     public let duplicateResume: Bool
+    /// The guard could not read the process table. It refused because it had
+    /// no proof, not because it found a holder. Its own flag because the
+    /// verdict travels as "already resuming, zero holders", and a caller
+    /// that sees only empty `alreadyRunning` reads a launch failure and
+    /// shows a refusal card over a session nobody proved anything about.
+    public let scanUnreadable: Bool
     public var description: String { message }
 
     public init(message: String, timedOut: Bool = false, worthRetrying: Bool = true,
-                alreadyRunning: [ResumeGuard.Holder] = [], duplicateResume: Bool = false) {
+                alreadyRunning: [ResumeGuard.Holder] = [], duplicateResume: Bool = false,
+                scanUnreadable: Bool = false) {
         self.message = message
         self.timedOut = timedOut
         self.worthRetrying = worthRetrying
         self.alreadyRunning = alreadyRunning
         self.duplicateResume = duplicateResume
+        self.scanUnreadable = scanUnreadable
     }
 }
 
