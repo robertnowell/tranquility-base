@@ -64,10 +64,10 @@ mkdir -p "$SUPPORT_DIR" 2>/dev/null || exit 0
 OWN_TTY=$(ps -o tty= -p $$ 2>/dev/null | tr -d '[:space:]')
 export VOICE_DISPATCH_TTY="$OWN_TTY"
 
-python3 - "$SPOOL" "$PAYLOAD" <<'PY' 2>/dev/null || true
+python3 - "$SPOOL" 3< <(printf '%s' "$PAYLOAD") <<'PY' 2>/dev/null || true
 import json, os, sys, time, uuid
 
-spool_path, raw = sys.argv[1], sys.argv[2]
+spool_path, raw = sys.argv[1], os.fdopen(3, "rb").read().decode("utf-8", "surrogateescape")
 
 try:
     p = json.loads(raw)
