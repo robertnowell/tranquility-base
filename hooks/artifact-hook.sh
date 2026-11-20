@@ -62,11 +62,11 @@ fi
 # `cd` to poll a deploy log.
 #
 # A receipt cannot do that. It is written by the command that did the thing.
-python3 - "$PAYLOAD" <<'PY' 2>/dev/null || true
+python3 - 3< <(printf '%s' "$PAYLOAD") <<'PY' 2>/dev/null || true
 import json, os, re, sys, time
 
 try:
-    p = json.loads(sys.argv[1])
+    p = json.loads(os.fdopen(3, "rb").read().decode("utf-8", "surrogateescape"))
 except Exception:
     sys.exit(0)
 
@@ -114,10 +114,10 @@ PY
 # them"). A page is ours when it carries one of our fingerprints: it sits in
 # an agent folder, or has an intranet: tag, our footer, or the brief's lede
 # and needs-you block together. The same test is in the page check below.
-OPEN_ASK=$(python3 - "$PAYLOAD" <<'OPENPY' 2>/dev/null || true
+OPEN_ASK=$(python3 - 3< <(printf '%s' "$PAYLOAD") <<'OPENPY' 2>/dev/null || true
 import json, os, re, shlex, sys, time
 try:
-    p = json.loads(sys.argv[1])
+    p = json.loads(os.fdopen(3, "rb").read().decode("utf-8", "surrogateescape"))
 except Exception:
     sys.exit(0)
 cmd = (p.get("tool_input") or {}).get("command") or ""
@@ -175,10 +175,10 @@ if [ -n "$OPEN_ASK" ]; then
 fi
 
 read -r OWNER SESSION MISFILED MODE FILE <<EOF
-$(python3 - "$PAYLOAD" <<'PY' 2>/dev/null || true
+$(python3 - 3< <(printf '%s' "$PAYLOAD") <<'PY' 2>/dev/null || true
 import json, os, re, sys
 try:
-    p = json.loads(sys.argv[1])
+    p = json.loads(os.fdopen(3, "rb").read().decode("utf-8", "surrogateescape"))
 except Exception:
     sys.exit(0)
 session = p.get("session_id") or ""      # who ran the tool: the full id
@@ -667,10 +667,10 @@ fi
 #
 # Same source the app uses (TranscriptTitles): the last `ai-title` record in the
 # session transcript. Read straight from the file so this needs nothing running.
-TITLE=$(python3 - "$PAYLOAD" <<'PY' 2>/dev/null || true
-import json, sys
+TITLE=$(python3 - 3< <(printf '%s' "$PAYLOAD") <<'PY' 2>/dev/null || true
+import json, os, sys
 try:
-    p = json.loads(sys.argv[1])
+    p = json.loads(os.fdopen(3, "rb").read().decode("utf-8", "surrogateescape"))
 except Exception:
     sys.exit(0)
 path = p.get("transcript_path") or ""
